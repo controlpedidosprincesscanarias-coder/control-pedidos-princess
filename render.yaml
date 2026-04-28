@@ -1,0 +1,18 @@
+services:
+  - type: web
+    name: control-pedidos-princess
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 2 --timeout 120
+    envVars:
+      - key: DATABASE_URL
+        sync: false          # Lo pegas manualmente en Render → Environment
+      - key: SECRET_KEY
+        generateValue: true  # Render genera un valor aleatorio seguro automáticamente
+      - key: RESEND_API_KEY
+        sync: false          # Opcional: tu clave de Resend
+      - key: EMAIL_FROM
+        value: compras@princess.es
+      - key: EMAILS_INTERNOS
+        sync: false          # Opcional: emails separados por coma
+    healthCheckPath: /ping
