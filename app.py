@@ -34,6 +34,25 @@ app.secret_key = SECRET_KEY
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
+def _auto_migrate():
+    """Añade columnas nuevas a proveedores si no existen (idempotente)."""
+    try:
+        db = psycopg2.connect(
+            DATABASE_URL, cursor_factory=RealDictCursor,
+            connect_timeout=10,
+        )
+        db.autocommit = True
+        with db.cursor() as cur:
+            for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT")]:
+                cur.execute(f"ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+        db.close()
+        log.info("Auto-migración proveedores OK")
+    except Exception as e:
+        log.warning(f"Auto-migración omitida: {e}")
+
+with app.app_context():
+    _auto_migrate()
+
 # ── Base de datos (psycopg2 / PostgreSQL) ─────────────────────────────────────
 
 def get_db():
@@ -69,6 +88,15 @@ def init_db():
         with db.cursor() as cur:
             for stmt in SQL_STATEMENTS:
                 cur.execute(stmt)
+            # Migración: añadir columnas nuevas a proveedores si no existen
+            for col_def in [
+                ("codigo",        "TEXT"),
+                ("movil",         "TEXT"),
+                ("observaciones", "TEXT"),
+            ]:
+                cur.execute(f"""
+                    ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS {col_def[0]} {col_def[1]}
+                """)
         db.commit()
         log.info("Base de datos inicializada en PostgreSQL")
 
@@ -295,10 +323,11 @@ def get_maestros():
 def get_proveedores():
     q = request.args.get("q", "").strip()
     if q:
-        rows = query("SELECT * FROM proveedores WHERE activo=1 AND nombre ILIKE %s ORDER BY nombre",
-                     (f"%{q}%",))
+        rows = query(
+            "SELECT id,codigo,nombre,contacto,email,telefono,movil,observaciones FROM proveedores WHERE activo=1 AND nombre ILIKE %s ORDER BY nombre",
+            (f"%{q}%",))
     else:
-        rows = query("SELECT * FROM proveedores WHERE activo=1 ORDER BY nombre")
+        rows = query("SELECT id,codigo,nombre,contacto,email,telefono,movil,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre")
     return jsonify(rows_to_list(rows))
 
 @app.route("/api/proveedores", methods=["POST"])
@@ -310,25 +339,159 @@ def create_proveedor():
         return jsonify({"error": "Nombre requerido"}), 400
     db  = get_db()
     cur = execute(
-        "INSERT INTO proveedores (nombre,email,telefono,contacto) VALUES (%s,%s,%s,%s) RETURNING id",
-        (nombre, data.get("email",""), data.get("telefono",""), data.get("contacto",""))
+        "INSERT INTO proveedores (codigo,nombre,contacto,email,telefono,movil,observaciones) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+        (data.get("codigo",""), nombre, data.get("contacto",""),
+         data.get("email",""), data.get("telefono",""),
+         data.get("movil",""), data.get("observaciones",""))
     )
     new_id = cur.fetchone()["id"]
     db.commit()
     return jsonify({"ok": True, "id": new_id, "nombre": nombre}), 201
 
 @app.route("/api/proveedores/<int:pid>", methods=["PUT"])
-@admin_required
+@login_required
 def update_proveedor(pid):
     data = request.get_json(silent=True) or {}
     db   = get_db()
     execute(
-        "UPDATE proveedores SET nombre=%s,email=%s,telefono=%s,contacto=%s WHERE id=%s",
-        (data.get("nombre",""), data.get("email",""),
-         data.get("telefono",""), data.get("contacto",""), pid)
+        "UPDATE proveedores SET contacto=%s,email=%s,telefono=%s,movil=%s,observaciones=%s WHERE id=%s",
+        (data.get("contacto",""), data.get("email",""),
+         data.get("telefono",""), data.get("movil",""),
+         data.get("observaciones",""), pid)
     )
     db.commit()
     return jsonify({"ok": True})
+
+@app.route("/api/proveedores/exportar", methods=["GET"])
+@login_required
+def exportar_proveedores():
+    try:
+        import openpyxl, io
+        from openpyxl.styles import Font, PatternFill, Alignment
+        from flask import send_file
+
+        rows = rows_to_list(query(
+            "SELECT codigo,nombre,contacto,email,telefono,movil,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre"
+        ))
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "Proveedores"
+
+        headers = ["CODIGO", "PROVEEDOR", "CONTACTO", "EMAIL", "TELEFONO", "MOVIL", "OBSERVACIONES"]
+        header_fill = PatternFill("solid", fgColor="1B2A4A")
+        header_font = Font(bold=True, color="FFFFFF")
+
+        for col_idx, h in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_idx, value=h)
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        col_widths = [15, 45, 25, 35, 15, 15, 35]
+        for i, w in enumerate(col_widths, 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
+        for r_idx, row in enumerate(rows, 2):
+            ws.cell(row=r_idx, column=1, value=row.get("codigo") or "")
+            ws.cell(row=r_idx, column=2, value=row.get("nombre") or "")
+            ws.cell(row=r_idx, column=3, value=row.get("contacto") or "")
+            ws.cell(row=r_idx, column=4, value=row.get("email") or "")
+            ws.cell(row=r_idx, column=5, value=row.get("telefono") or "")
+            ws.cell(row=r_idx, column=6, value=row.get("movil") or "")
+            ws.cell(row=r_idx, column=7, value=row.get("observaciones") or "")
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        from datetime import datetime as dt
+        filename = f"PROVEEDORES_{dt.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        return send_file(buf, as_attachment=True, download_name=filename,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.route("/api/proveedores/importar", methods=["POST"])
+@login_required
+def importar_proveedores():
+    try:
+        import openpyxl
+        if "archivo" not in request.files:
+            return jsonify({"ok": False, "error": "No se recibió ningún archivo"}), 400
+        archivo = request.files["archivo"]
+        if not archivo.filename.endswith((".xlsx", ".xls")):
+            return jsonify({"ok": False, "error": "El archivo debe ser .xlsx"}), 400
+
+        wb = openpyxl.load_workbook(archivo, data_only=True)
+        ws = wb.active
+        headers = [str(c.value).strip().upper() if c.value else "" for c in ws[1]]
+
+        def col(row, name):
+            try:
+                idx = headers.index(name)
+                v = row[idx].value
+                return str(v).strip() if v is not None else None
+            except (ValueError, IndexError):
+                return None
+
+        db = get_db()
+
+        # Cargar proveedores existentes por codigo para comparar
+        existentes = {r["codigo"]: r["id"] for r in rows_to_list(
+            query("SELECT id, codigo FROM proveedores WHERE codigo IS NOT NULL AND codigo != ''")
+        )}
+
+        from psycopg2.extras import execute_values
+
+        nuevos_rows = []
+        update_rows = []
+        errores = []
+
+        for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
+            codigo  = col(row, "CODIGO")
+            nombre  = col(row, "PROVEEDOR")
+            if not nombre:
+                continue
+
+            contacto     = col(row, "CONTACTO") or ""
+            email        = col(row, "EMAIL") or ""
+            telefono     = col(row, "TELEFONO") or ""
+            movil        = col(row, "MOVIL") or ""
+            observaciones = col(row, "OBSERVACIONES") or ""
+
+            if codigo and codigo in existentes:
+                # Actualizar campos editables (no nombre, no codigo)
+                update_rows.append((contacto, email, telefono, movil, observaciones, existentes[codigo]))
+            else:
+                nuevos_rows.append((codigo or "", nombre, contacto, email, telefono, movil, observaciones))
+
+        # Bulk insert nuevos
+        insertados = 0
+        actualizados = 0
+
+        with db.cursor() as cur_i:
+            if nuevos_rows:
+                execute_values(cur_i, """
+                    INSERT INTO proveedores (codigo, nombre, contacto, email, telefono, movil, observaciones)
+                    VALUES %s
+                    ON CONFLICT DO NOTHING
+                """, nuevos_rows)
+                insertados = cur_i.rowcount
+
+            if update_rows:
+                from psycopg2.extras import execute_batch
+                execute_batch(cur_i, """
+                    UPDATE proveedores
+                    SET contacto=%s, email=%s, telefono=%s, movil=%s, observaciones=%s
+                    WHERE id=%s
+                """, update_rows)
+                actualizados = len(update_rows)
+
+        db.commit()
+        return jsonify({"ok": True, "insertados": insertados, "actualizados": actualizados, "errores": errores})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 # ── API Pedidos ────────────────────────────────────────────────────────────────
 
