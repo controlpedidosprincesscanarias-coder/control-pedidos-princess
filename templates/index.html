@@ -1279,7 +1279,7 @@ async function doImport() {
   fd.append('archivo', importFile);
 
   try {
-    const r = await fetch('/api/importar', { method: 'POST', body: fd });
+    const r = await fetch('/api/importar', { method: 'POST', body: fd, credentials: 'same-origin' });
     const d = await r.json();
     const res = document.getElementById('import-resultado');
     res.style.display = 'block';
