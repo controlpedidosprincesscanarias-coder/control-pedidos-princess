@@ -552,12 +552,15 @@ tbody tr:last-child{border-bottom:none}
         <div class="card">
           <div class="card-header">
             <span class="card-title">Proveedores</span>
-            <button class="btn btn-gold btn-sm" style="margin-left:auto" onclick="openProveedorModal()">+ Nuevo proveedor</button>
+            <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
+              <button class="btn btn-ghost btn-sm" onclick="exportarProveedores()" title="Descargar Excel">⬇ Excel</button>
+              <button class="btn btn-ghost btn-sm" onclick="openImportProvModal()" title="Importar desde Excel">⬆ Importar</button>
+            </div>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Nombre</th><th>Contacto</th><th>Email</th><th>Teléfono</th><th></th></tr>
+                <tr><th>Código</th><th>Nombre</th><th>Contacto</th><th>Email</th><th>Teléfono</th><th>Móvil</th><th>Observaciones</th><th></th></tr>
               </thead>
               <tbody id="proveedores-tbody"></tbody>
             </table>
@@ -675,17 +678,17 @@ tbody tr:last-child{border-bottom:none}
 
 <!-- ── MODAL PROVEEDOR ─────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-proveedor">
-  <div class="modal" style="max-width:480px">
+  <div class="modal" style="max-width:520px">
     <div class="modal-header">
-      <div class="modal-title" id="modal-prov-title">Nuevo proveedor</div>
+      <div class="modal-title" id="modal-prov-title">Editar proveedor</div>
       <button class="close-btn" onclick="closeModal('modal-proveedor')">✕</button>
     </div>
     <div class="modal-body">
-      <div class="form-grid" style="grid-template-columns:1fr">
-        <div class="form-group">
-          <label class="form-label">Nombre *</label>
-          <input class="form-control" id="pv-nombre" placeholder="Nombre del proveedor">
-        </div>
+      <div class="form-group" id="pv-nombre-group" style="margin-bottom:12px">
+        <label class="form-label" style="font-weight:700;color:var(--text-secondary)">Proveedor</label>
+        <div id="pv-nombre-display" style="font-size:1rem;font-weight:600;padding:6px 0;color:var(--text)"></div>
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr 1fr">
         <div class="form-group">
           <label class="form-label">Persona de contacto</label>
           <input class="form-control" id="pv-contacto">
@@ -698,11 +701,51 @@ tbody tr:last-child{border-bottom:none}
           <label class="form-label">Teléfono</label>
           <input class="form-control" id="pv-tel">
         </div>
+        <div class="form-group">
+          <label class="form-label">Móvil</label>
+          <input class="form-control" id="pv-movil">
+        </div>
+      </div>
+      <div class="form-group">
+        <label class="form-label">Observaciones</label>
+        <textarea class="form-control" id="pv-obs" rows="3" style="resize:vertical"></textarea>
       </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('modal-proveedor')">Cancelar</button>
-      <button class="btn btn-gold" onclick="saveProveedor()">Guardar proveedor</button>
+      <button class="btn btn-gold" onclick="saveProveedor()">Guardar cambios</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL IMPORTAR PROVEEDORES ─────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-import-prov">
+  <div class="modal" style="max-width:480px">
+    <div class="modal-header">
+      <div class="modal-title">⬆ Importar proveedores desde Excel</div>
+      <button class="close-btn" onclick="closeModal('modal-import-prov')">✕</button>
+    </div>
+    <div class="modal-body">
+      <p style="color:var(--text-secondary);font-size:.9rem;margin-bottom:12px">
+        El archivo debe tener las columnas del Excel exportado.<br>
+        Los proveedores existentes (por código) actualizarán sus datos de contacto.<br>
+        Los nuevos se añadirán automáticamente.
+      </p>
+      <div id="drop-prov" style="border:2px dashed var(--border);border-radius:10px;padding:32px;text-align:center;cursor:pointer;transition:border-color .2s"
+           onclick="document.getElementById('file-prov').click()"
+           ondragover="event.preventDefault();this.style.borderColor='var(--gold)'"
+           ondragleave="this.style.borderColor='var(--border)'"
+           ondrop="handleDropProv(event)">
+        <div style="font-size:2.5rem">📁</div>
+        <div style="font-weight:600;color:var(--gold);margin-top:8px">Haz clic o arrastra el archivo aquí</div>
+        <div id="prov-file-name" style="font-size:.8rem;color:var(--text-secondary);margin-top:4px"></div>
+      </div>
+      <input type="file" id="file-prov" accept=".xlsx,.xls" style="display:none" onchange="onFileProvSelected(this)">
+      <div id="prov-import-result" style="display:none;margin-top:12px;padding:10px 14px;border-radius:8px;font-size:.9rem"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-import-prov')">Cancelar</button>
+      <button class="btn btn-gold" id="btn-importar-prov" onclick="doImportProv()" disabled style="opacity:.5">Importar</button>
     </div>
   </div>
 </div>
@@ -1109,43 +1152,99 @@ async function loadProveedores() {
   empty.classList.add('section-hidden');
   tbody.innerHTML = d.map(p => `
     <tr>
+      <td style="color:var(--text-secondary);font-size:.85rem">${p.codigo||'—'}</td>
       <td><strong>${p.nombre}</strong></td>
       <td>${p.contacto||'—'}</td>
-      <td>${p.email||'—'}</td>
+      <td>${p.email ? `<a href="mailto:${p.email}" style="color:var(--gold)">${p.email}</a>` : '—'}</td>
       <td>${p.telefono||'—'}</td>
+      <td>${p.movil||'—'}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.observaciones||'')}">${p.observaciones||'—'}</td>
       <td>
-        <button class="btn btn-ghost btn-sm" onclick="openProveedorModal(${p.id},'${esc(p.nombre)}','${esc(p.contacto||'')}','${esc(p.email||'')}','${esc(p.telefono||'')}')">✏ Editar</button>
+        <button class="btn btn-ghost btn-sm" onclick="openProveedorModal(${JSON.stringify(p)})">✏ Editar</button>
       </td>
     </tr>`).join('');
 }
 
-function openProveedorModal(id=null, nombre='', contacto='', email='', tel='') {
-  G.editingProveedorId = id;
-  document.getElementById('modal-prov-title').textContent = id ? 'Editar proveedor':'Nuevo proveedor';
-  setVal('pv-nombre', nombre); setVal('pv-contacto', contacto);
-  setVal('pv-email', email); setVal('pv-tel', tel);
+function openProveedorModal(p) {
+  G.editingProveedorId = p.id;
+  document.getElementById('pv-nombre-display').textContent = p.nombre || '';
+  setVal('pv-contacto', p.contacto||'');
+  setVal('pv-email',    p.email||'');
+  setVal('pv-tel',      p.telefono||'');
+  setVal('pv-movil',    p.movil||'');
+  document.getElementById('pv-obs').value = p.observaciones||'';
   openModal('modal-proveedor');
 }
 
 async function saveProveedor() {
-  const nombre = val('pv-nombre').trim();
-  if (!nombre) { toast('Nombre requerido','error'); return; }
-  const body = { nombre, contacto:val('pv-contacto'), email:val('pv-email'), telefono:val('pv-tel') };
-  let r;
-  if (G.editingProveedorId) {
-    r = await api(`/api/proveedores/${G.editingProveedorId}`, 'PUT', body);
-  } else {
-    r = await api('/api/proveedores', 'POST', body);
-    if (r.ok) {
-      G.maestros.proveedores.push({id:r.id, nombre});
-      poblarSelectProveedores();
-    }
-  }
+  const body = {
+    contacto:     val('pv-contacto'),
+    email:        val('pv-email'),
+    telefono:     val('pv-tel'),
+    movil:        val('pv-movil'),
+    observaciones: document.getElementById('pv-obs').value.trim()
+  };
+  const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'PUT', body);
   if (r.error) { toast(r.error,'error'); return; }
-  toast('Proveedor guardado','success');
+  toast('Proveedor actualizado','success');
   closeModal('modal-proveedor');
   loadProveedores();
-  await loadMaestros();
+}
+
+async function exportarProveedores() {
+  const a = document.createElement('a');
+  a.href = '/api/proveedores/exportar';
+  a.click();
+}
+
+let _provFile = null;
+function openImportProvModal() {
+  _provFile = null;
+  document.getElementById('prov-file-name').textContent = '';
+  document.getElementById('btn-importar-prov').disabled = true;
+  document.getElementById('btn-importar-prov').style.opacity = '.5';
+  document.getElementById('prov-import-result').style.display = 'none';
+  document.getElementById('drop-prov').style.borderColor = 'var(--border)';
+  openModal('modal-import-prov');
+}
+function onFileProvSelected(input) {
+  if (input.files[0]) { _provFile = input.files[0]; setProvFile(_provFile); }
+}
+function handleDropProv(e) {
+  e.preventDefault();
+  document.getElementById('drop-prov').style.borderColor = 'var(--border)';
+  const f = e.dataTransfer.files[0];
+  if (f) { _provFile = f; setProvFile(f); }
+}
+function setProvFile(f) {
+  document.getElementById('prov-file-name').textContent = f.name;
+  document.getElementById('btn-importar-prov').disabled = false;
+  document.getElementById('btn-importar-prov').style.opacity = '1';
+}
+async function doImportProv() {
+  if (!_provFile) return;
+  const res = document.getElementById('prov-import-result');
+  res.style.display = 'none';
+  const fd = new FormData();
+  fd.append('archivo', _provFile);
+  try {
+    const r = await fetch('/api/proveedores/importar', { method:'POST', body:fd, credentials:'same-origin' });
+    const contentType = r.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) throw new Error(`Error del servidor (${r.status})`);
+    const d = await r.json();
+    if (d.ok) {
+      res.style.cssText = 'display:block;background:#d1fae5;color:#065f46;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
+      res.textContent = `✅ Importación completada: ${d.insertados} nuevos, ${d.actualizados} actualizados.`;
+      loadProveedores();
+      await loadMaestros();
+    } else {
+      res.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
+      res.textContent = '❌ ' + (d.error || 'Error desconocido');
+    }
+  } catch(e) {
+    res.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
+    res.textContent = '❌ ' + e.message;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
