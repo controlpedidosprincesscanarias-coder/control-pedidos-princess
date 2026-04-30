@@ -455,6 +455,7 @@ tbody tr:last-child{border-bottom:none}
           + Nuevo pedido
         </button>
         <button class="btn btn-ghost btn-sm" onclick="exportarExcel()" title="Exportar a Excel">⬇ Excel</button>
+        <button class="btn btn-ghost btn-sm" onclick="openImportModal()" title="Importar desde Excel">⬆ Importar</button>
       </div>
     </div>
 
@@ -1203,5 +1204,117 @@ function calcDias(s) {
   }
 })();
 </script>
+<!-- ── MODAL IMPORTAR EXCEL ──────────────────────────────────────────────── -->
+<div id="import-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:12px;padding:32px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.2);">
+    <h3 style="margin:0 0 8px;color:#0f2044;font-size:1.2rem;">⬆ Importar pedidos desde Excel</h3>
+    <p style="margin:0 0 20px;color:#666;font-size:.9rem;">
+      El archivo debe tener las mismas columnas que el Excel exportado.<br>
+      Los pedidos se <strong>añaden</strong> a los existentes, no se sustituyen.
+    </p>
+
+    <div id="import-dropzone"
+         style="border:2px dashed #1a3a6b;border-radius:8px;padding:32px;text-align:center;cursor:pointer;transition:.2s;margin-bottom:16px;"
+         onclick="document.getElementById('import-file-input').click()"
+         ondragover="event.preventDefault();this.style.background='#f0f4ff'"
+         ondragleave="this.style.background=''"
+         ondrop="handleImportDrop(event)">
+      <div style="font-size:2rem;">📂</div>
+      <div style="color:#1a3a6b;font-weight:600;margin-top:8px;">Haz clic o arrastra el archivo aquí</div>
+      <div id="import-filename" style="color:#888;font-size:.85rem;margin-top:4px;">Ningún archivo seleccionado</div>
+    </div>
+    <input type="file" id="import-file-input" accept=".xlsx" style="display:none" onchange="handleImportFile(this.files[0])">
+
+    <div id="import-resultado" style="display:none;margin-bottom:16px;padding:12px;border-radius:8px;font-size:.9rem;"></div>
+
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn btn-ghost btn-sm" onclick="closeImportModal()">Cancelar</button>
+      <button class="btn btn-gold" id="btn-importar" onclick="doImport()" disabled style="opacity:.5">Importar</button>
+    </div>
+  </div>
+</div>
+
+<script>
+let importFile = null;
+
+function openImportModal() {
+  importFile = null;
+  document.getElementById('import-filename').textContent = 'Ningún archivo seleccionado';
+  document.getElementById('import-resultado').style.display = 'none';
+  document.getElementById('import-file-input').value = '';
+  const btn = document.getElementById('btn-importar');
+  btn.disabled = true; btn.style.opacity = '.5';
+  document.getElementById('import-modal').style.display = 'flex';
+}
+
+function closeImportModal() {
+  document.getElementById('import-modal').style.display = 'none';
+}
+
+function handleImportDrop(e) {
+  e.preventDefault();
+  document.getElementById('import-dropzone').style.background = '';
+  const f = e.dataTransfer.files[0];
+  if (f) handleImportFile(f);
+}
+
+function handleImportFile(f) {
+  if (!f || !f.name.endsWith('.xlsx')) {
+    alert('Por favor selecciona un archivo .xlsx');
+    return;
+  }
+  importFile = f;
+  document.getElementById('import-filename').textContent = f.name;
+  document.getElementById('import-resultado').style.display = 'none';
+  const btn = document.getElementById('btn-importar');
+  btn.disabled = false; btn.style.opacity = '1';
+}
+
+async function doImport() {
+  if (!importFile) return;
+  const btn = document.getElementById('btn-importar');
+  btn.disabled = true; btn.textContent = 'Importando…';
+
+  const fd = new FormData();
+  fd.append('archivo', importFile);
+
+  try {
+    const r = await fetch('/api/importar', { method: 'POST', body: fd });
+    const d = await r.json();
+    const res = document.getElementById('import-resultado');
+    res.style.display = 'block';
+
+    if (d.ok) {
+      res.style.background = '#d4edda';
+      res.style.color = '#155724';
+      let msg = `✅ ${d.insertados} pedido${d.insertados !== 1 ? 's' : ''} importado${d.insertados !== 1 ? 's' : ''} correctamente.`;
+      if (d.errores && d.errores.length) {
+        msg += `<br><br>⚠️ <strong>${d.errores.length} fila${d.errores.length > 1 ? 's' : ''} con error:</strong><br>` +
+               d.errores.map(e => `• ${e}`).join('<br>');
+      }
+      res.innerHTML = msg;
+      loadPedidos(); loadStats();
+    } else {
+      res.style.background = '#f8d7da';
+      res.style.color = '#721c24';
+      res.textContent = '❌ Error: ' + d.error;
+    }
+  } catch(e) {
+    const res = document.getElementById('import-resultado');
+    res.style.display = 'block';
+    res.style.background = '#f8d7da';
+    res.style.color = '#721c24';
+    res.textContent = '❌ Error de conexión: ' + e.message;
+  }
+
+  btn.disabled = false; btn.textContent = 'Importar';
+}
+
+// Cerrar modal al hacer clic fuera
+document.getElementById('import-modal').addEventListener('click', function(e) {
+  if (e.target === this) closeImportModal();
+});
+</script>
+
 </body>
 </html>

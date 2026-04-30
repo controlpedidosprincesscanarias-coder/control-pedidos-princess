@@ -548,6 +548,130 @@ def get_stats():
         "num_alertas": len(alertas),
     })
 
+# ── API Importar Excel ─────────────────────────────────────────────────────────
+
+@app.route("/api/importar", methods=["POST"])
+@login_required
+def importar_excel():
+    try:
+        import openpyxl
+        from datetime import datetime as dt
+
+        if "archivo" not in request.files:
+            return jsonify({"ok": False, "error": "No se recibió ningún archivo"}), 400
+
+        archivo = request.files["archivo"]
+        if not archivo.filename.endswith((".xlsx", ".xls")):
+            return jsonify({"ok": False, "error": "El archivo debe ser .xlsx"}), 400
+
+        wb = openpyxl.load_workbook(archivo, data_only=True)
+        ws = wb.active
+
+        # Leer cabeceras de la primera fila
+        headers = [str(c.value).strip().upper() if c.value else "" for c in ws[1]]
+
+        def col(row, name):
+            """Devuelve el valor de la columna por nombre de cabecera."""
+            try:
+                idx = headers.index(name)
+                v = row[idx].value
+                return str(v).strip() if v is not None else None
+            except (ValueError, IndexError):
+                return None
+
+        def parse_date(val):
+            if not val:
+                return None
+            if isinstance(val, (dt,)):
+                return val.strftime("%Y-%m-%d")
+            try:
+                return dt.strptime(str(val).strip(), "%d/%m/%Y").strftime("%Y-%m-%d")
+            except Exception:
+                try:
+                    return dt.strptime(str(val).strip(), "%Y-%m-%d").strftime("%Y-%m-%d")
+                except Exception:
+                    return None
+
+        def bool_val(val):
+            if not val:
+                return 0
+            return 1 if str(val).strip().upper() in ("SÍ", "SI", "S", "1", "TRUE", "YES") else 0
+
+        db = get_db()
+        uid = current_user_id()
+
+        # Cachés para no consultar la BD en cada fila
+        hoteles_cache      = {r["codigo"]: r["id"] for r in rows_to_list(query("SELECT id, codigo FROM hoteles WHERE activo=1"))}
+        deptos_cache       = {r["nombre"].upper(): r["id"] for r in rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1"))}
+        proveedores_cache  = {r["nombre"].upper(): r["id"] for r in rows_to_list(query("SELECT id, nombre FROM proveedores WHERE activo=1"))}
+
+        insertados = 0
+        errores    = []
+
+        for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
+            hotel_codigo = col(row, "HOTEL")
+            if not hotel_codigo:
+                continue  # fila vacía
+
+            hotel_id = hoteles_cache.get(str(hotel_codigo).upper())
+            if not hotel_id:
+                errores.append(f"Fila {i}: hotel '{hotel_codigo}' no encontrado")
+                continue
+
+            depto_nombre = col(row, "DEPARTAMENTO")
+            depto_id = deptos_cache.get(str(depto_nombre).upper()) if depto_nombre else None
+
+            prov_nombre = col(row, "PROVEEDOR")
+            prov_id = proveedores_cache.get(str(prov_nombre).upper()) if prov_nombre else None
+
+            estado_raw = col(row, "ESTADO")
+            estado = estado_raw if estado_raw in ESTADOS_VALIDOS else "PENDIENTE FIRMA DIRECCION COMPRAS"
+
+            norden = _next_norden(db)
+
+            cur = execute("""
+                INSERT INTO pedidos (
+                    norden, hotel_id, departamento_id,
+                    fecha_solicitud, fecha_envio_visto_bueno, fecha_tramitacion,
+                    pedido_num, presupuesto_num, entrada_albaran_num,
+                    estado, comunicado_ab, comunicado_jefe_dep,
+                    parte_rotura, parte_ampliacion,
+                    proveedor_id, observaciones,
+                    creado_por_id, modificado_por_id
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
+            """, (
+                norden,
+                hotel_id, depto_id,
+                parse_date(col(row, "FECHA SOLICITUD")),
+                parse_date(col(row, "FECHA ENVÍO Vº Bº")),
+                parse_date(col(row, "FECHA TRAMITACIÓN")),
+                col(row, "PEDIDO Nº"),
+                col(row, "Nº PRESUPUESTO"),
+                col(row, "Nº ENTRADA ALBARÁN"),
+                estado,
+                bool_val(col(row, "COMUNICADO A&B")),
+                bool_val(col(row, "COMUNICADO JEFE DEP.")),
+                bool_val(col(row, "PARTE ROTURA")),
+                bool_val(col(row, "PARTE AMPLIACIÓN")),
+                prov_id,
+                col(row, "OBSERVACIONES"),
+                uid, uid,
+            ))
+            pedido_id = cur.fetchone()["id"]
+            execute(
+                "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,nota) VALUES (%s,%s,%s,%s)",
+                (pedido_id, estado, uid, "Importado desde Excel")
+            )
+            insertados += 1
+
+        db.commit()
+        return jsonify({"ok": True, "insertados": insertados, "errores": errores})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── API Exportar Excel ─────────────────────────────────────────────────────────
 
 @app.route("/api/exportar")
