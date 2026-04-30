@@ -38,6 +38,12 @@ log = logging.getLogger(__name__)
 
 def get_db():
     if "db" not in g:
+        if not DATABASE_URL:
+            raise RuntimeError(
+                "DATABASE_URL no está configurada. "
+                "Ve a Render → tu servicio → Environment y añade la variable DATABASE_URL "
+                "con la URI de tu base de datos PostgreSQL (Supabase → Settings → Database → URI)."
+            )
         g.db = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
         g.db.autocommit = False
     return g.db
@@ -762,6 +768,28 @@ def exportar_excel():
 @app.route("/ping")
 def ping():
     return "OK", 200
+
+# ── Error handlers globales (siempre JSON para rutas /api/) ───────────────────
+
+@app.errorhandler(404)
+def not_found(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": "Ruta no encontrada"}), 404
+    return send_from_directory("templates", "index.html")
+
+@app.errorhandler(500)
+def server_error(e):
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": f"Error interno del servidor: {str(e)}"}), 500
+    return jsonify({"ok": False, "error": str(e)}), 500
+
+@app.errorhandler(Exception)
+def unhandled_exception(e):
+    import traceback
+    app.logger.error("Excepción no capturada:\n" + traceback.format_exc())
+    if request.path.startswith("/api/"):
+        return jsonify({"ok": False, "error": f"Error inesperado: {str(e)}"}), 500
+    return jsonify({"ok": False, "error": str(e)}), 500
 
 # ── Arranque ───────────────────────────────────────────────────────────────────
 
