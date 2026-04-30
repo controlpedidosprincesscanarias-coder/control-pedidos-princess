@@ -44,7 +44,15 @@ def get_db():
                 "Ve a Render → tu servicio → Environment y añade la variable DATABASE_URL "
                 "con la URI de tu base de datos PostgreSQL (Supabase → Settings → Database → URI)."
             )
-        g.db = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+        g.db = psycopg2.connect(
+            DATABASE_URL,
+            cursor_factory=RealDictCursor,
+            connect_timeout=10,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=3,
+        )
         g.db.autocommit = False
     return g.db
 
