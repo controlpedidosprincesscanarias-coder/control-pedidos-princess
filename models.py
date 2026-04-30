@@ -25,13 +25,16 @@ SQL_STATEMENTS = [
     # ── Proveedores ───────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS proveedores (
-        id        SERIAL PRIMARY KEY,
-        nombre    TEXT NOT NULL,
-        email     TEXT,
-        telefono  TEXT,
-        contacto  TEXT,
-        activo    INTEGER NOT NULL DEFAULT 1,
-        creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        id           SERIAL PRIMARY KEY,
+        codigo       TEXT,
+        nombre       TEXT NOT NULL,
+        contacto     TEXT,
+        email        TEXT,
+        telefono     TEXT,
+        movil        TEXT,
+        observaciones TEXT,
+        activo       INTEGER NOT NULL DEFAULT 1,
+        creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
     # ── Usuarios ──────────────────────────────────────────────────────────────
