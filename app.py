@@ -206,7 +206,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         """
         for dest in EMAILS_INTERNOS:
             ok = _send_email(dest, subject, body)
-            _log_email(db, dest, "interno", dest, subject, ok)
+            _log_email(db, pedido_id, "interno", dest, subject, ok)
 
 # ── Helper norden ──────────────────────────────────────────────────────────────
 
