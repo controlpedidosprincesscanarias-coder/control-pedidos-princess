@@ -728,11 +728,17 @@ def exportar_excel():
             "ANULADO":                           "f8d7da",
         }
 
+        def strip_tz(val):
+            """Elimina tzinfo de datetimes para compatibilidad con openpyxl/Excel."""
+            if hasattr(val, "tzinfo") and val.tzinfo is not None:
+                return val.replace(tzinfo=None)
+            return val
+
         for p in pedidos:
             ws.append([
                 p.get("norden"), p.get("hotel_codigo"), p.get("departamento_nombre"),
-                p.get("fecha_solicitud"), p.get("fecha_envio_visto_bueno"),
-                p.get("pedido_num"), p.get("fecha_tramitacion"),
+                strip_tz(p.get("fecha_solicitud")), strip_tz(p.get("fecha_envio_visto_bueno")),
+                p.get("pedido_num"), strip_tz(p.get("fecha_tramitacion")),
                 p.get("presupuesto_num"), p.get("estado"),
                 p.get("entrada_albaran_num"),
                 "SÍ" if p.get("comunicado_ab") else "NO",
@@ -741,7 +747,7 @@ def exportar_excel():
                 "SÍ" if p.get("parte_ampliacion") else "NO",
                 p.get("proveedor_nombre"), p.get("proveedor_email"),
                 p.get("proveedor_telefono"), p.get("proveedor_contacto"),
-                p.get("observaciones"), p.get("creado_por_nombre"), p.get("creado_en"),
+                p.get("observaciones"), p.get("creado_por_nombre"), strip_tz(p.get("creado_en")),
             ])
             color = ESTADO_COLORES.get(p.get("estado", ""), "FFFFFF")
             fill  = PatternFill("solid", fgColor=color)
