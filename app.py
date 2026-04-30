@@ -627,13 +627,23 @@ def importar_excel():
         deptos_cache       = {r["nombre"].upper(): r["id"] for r in rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1"))}
         proveedores_cache  = {r["nombre"].upper(): r["id"] for r in rows_to_list(query("SELECT id, nombre FROM proveedores WHERE activo=1"))}
 
-        insertados = 0
-        errores    = []
+        errores = []
+        filas_validas = []
 
+        # 1. Obtener norden base en UNA sola query
+        year = datetime.now().year
+        with db.cursor() as cur_n:
+            cur_n.execute(
+                "SELECT COALESCE(MAX(norden), 0) as mx FROM pedidos WHERE EXTRACT(YEAR FROM creado_en) = %s",
+                (year,)
+            )
+            base_norden = (cur_n.fetchone()["mx"] or 0) + 1
+
+        # 2. Procesar todas las filas en memoria (sin queries)
         for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
             hotel_codigo = col(row, "HOTEL")
             if not hotel_codigo:
-                continue  # fila vacía
+                continue
 
             hotel_id = hoteles_cache.get(str(hotel_codigo).upper())
             if not hotel_id:
@@ -649,43 +659,60 @@ def importar_excel():
             estado_raw = col(row, "ESTADO")
             estado = estado_raw if estado_raw in ESTADOS_VALIDOS else "PENDIENTE FIRMA DIRECCION COMPRAS"
 
-            norden = _next_norden(db)
+            filas_validas.append({
+                "norden": base_norden + len(filas_validas),
+                "hotel_id": hotel_id, "depto_id": depto_id,
+                "fecha_sol": parse_date(col_raw(row, "FECHA SOLICITUD")),
+                "fecha_env": parse_date(col_raw(row, "FECHA ENVÍO Vº Bº")),
+                "fecha_tra": parse_date(col_raw(row, "FECHA TRAMITACIÓN")),
+                "pedido_num": col(row, "PEDIDO Nº"),
+                "presup_num": col(row, "Nº PRESUPUESTO"),
+                "albaran_num": col(row, "Nº ENTRADA ALBARÁN"),
+                "estado": estado,
+                "com_ab": bool_val(col(row, "COMUNICADO A&B")),
+                "com_jefe": bool_val(col(row, "COMUNICADO JEFE DEP.")),
+                "p_rotura": bool_val(col(row, "PARTE ROTURA")),
+                "p_amplia": bool_val(col(row, "PARTE AMPLIACIÓN")),
+                "prov_id": prov_id,
+                "obs": col(row, "OBSERVACIONES"),
+            })
 
-            cur = execute("""
-                INSERT INTO pedidos (
-                    norden, hotel_id, departamento_id,
-                    fecha_solicitud, fecha_envio_visto_bueno, fecha_tramitacion,
-                    pedido_num, presupuesto_num, entrada_albaran_num,
-                    estado, comunicado_ab, comunicado_jefe_dep,
-                    parte_rotura, parte_ampliacion,
-                    proveedor_id, observaciones,
-                    creado_por_id, modificado_por_id
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                RETURNING id
-            """, (
-                norden,
-                hotel_id, depto_id,
-                parse_date(col_raw(row, "FECHA SOLICITUD")),
-                parse_date(col_raw(row, "FECHA ENVÍO Vº Bº")),
-                parse_date(col_raw(row, "FECHA TRAMITACIÓN")),
-                col(row, "PEDIDO Nº"),
-                col(row, "Nº PRESUPUESTO"),
-                col(row, "Nº ENTRADA ALBARÁN"),
-                estado,
-                bool_val(col(row, "COMUNICADO A&B")),
-                bool_val(col(row, "COMUNICADO JEFE DEP.")),
-                bool_val(col(row, "PARTE ROTURA")),
-                bool_val(col(row, "PARTE AMPLIACIÓN")),
-                prov_id,
-                col(row, "OBSERVACIONES"),
-                uid, uid,
-            ))
-            pedido_id = cur.fetchone()["id"]
-            execute(
-                "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,nota) VALUES (%s,%s,%s,%s)",
-                (pedido_id, estado, uid, "Importado desde Excel")
-            )
-            insertados += 1
+        # 3. Bulk insert en 2 queries únicas
+        insertados = 0
+        if filas_validas:
+            from psycopg2.extras import execute_values
+            with db.cursor() as cur_i:
+                pedido_rows = [
+                    (f["norden"], f["hotel_id"], f["depto_id"],
+                     f["fecha_sol"], f["fecha_env"], f["fecha_tra"],
+                     f["pedido_num"], f["presup_num"], f["albaran_num"],
+                     f["estado"], f["com_ab"], f["com_jefe"],
+                     f["p_rotura"], f["p_amplia"], f["prov_id"],
+                     f["obs"], uid, uid)
+                    for f in filas_validas
+                ]
+                ids = execute_values(cur_i, """
+                    INSERT INTO pedidos (
+                        norden, hotel_id, departamento_id,
+                        fecha_solicitud, fecha_envio_visto_bueno, fecha_tramitacion,
+                        pedido_num, presupuesto_num, entrada_albaran_num,
+                        estado, comunicado_ab, comunicado_jefe_dep,
+                        parte_rotura, parte_ampliacion,
+                        proveedor_id, observaciones,
+                        creado_por_id, modificado_por_id
+                    ) VALUES %s RETURNING id
+                """, pedido_rows, fetch=True)
+
+                insertados = len(ids)
+
+                historial_rows = [
+                    (ids[idx]["id"], filas_validas[idx]["estado"], uid, "Importado desde Excel")
+                    for idx in range(len(ids))
+                ]
+                execute_values(cur_i, """
+                    INSERT INTO historial_estados (pedido_id, estado_nuevo, usuario_id, nota)
+                    VALUES %s
+                """, historial_rows)
 
         db.commit()
         return jsonify({"ok": True, "insertados": insertados, "errores": errores})
