@@ -719,10 +719,63 @@ def update_pedido(pid):
 @app.route("/api/pedidos/<int:pid>", methods=["DELETE"])
 @admin_required
 def delete_pedido(pid):
-    db = get_db()
+    data   = request.get_json(silent=True) or {}
+    motivo = (data.get("motivo") or "").strip()
+    if not motivo:
+        return jsonify({"error": "Debes indicar el motivo de la eliminación"}), 400
+
+    db  = get_db()
+    uid = current_user_id()
+
+    # ── 1. Capturar datos completos del pedido antes de borrar ───────────────
+    pedido = row_to_dict(query(f"{PEDIDO_SELECT} WHERE p.id=%s", (pid,), one=True))
+    if not pedido:
+        return jsonify({"error": "Pedido no encontrado"}), 404
+
+    admin_nombre = session.get("nombre", session.get("username", "Desconocido"))
+
+    # ── 2. Guardar registro histórico en pedidos_eliminados ──────────────────
+    execute("""
+        INSERT INTO pedidos_eliminados (
+            pedido_id, norden, hotel_nombre, departamento_nombre,
+            proveedor_nombre, proveedor_email, estado,
+            fecha_solicitud, pedido_num, presupuesto_num,
+            entrada_albaran_num, observaciones, creado_por_nombre,
+            motivo_eliminacion, eliminado_por_id, eliminado_por_nombre
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+    """, (
+        pid,
+        pedido.get("norden"),
+        pedido.get("hotel_nombre"),
+        pedido.get("departamento_nombre"),
+        pedido.get("proveedor_nombre"),
+        pedido.get("proveedor_email"),
+        pedido.get("estado"),
+        pedido.get("fecha_solicitud"),
+        pedido.get("pedido_num"),
+        pedido.get("presupuesto_num"),
+        pedido.get("entrada_albaran_num"),
+        pedido.get("observaciones"),
+        pedido.get("creado_por_nombre"),
+        motivo,
+        uid,
+        admin_nombre,
+    ))
+
+    # ── 3. Eliminar el pedido (CASCADE borra adjuntos e historial) ───────────
     execute("DELETE FROM pedidos WHERE id=%s", (pid,))
     db.commit()
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "norden": pedido.get("norden")})
+
+# ── Registro de pedidos eliminados ────────────────────────────────────────────
+
+@app.route("/api/pedidos_eliminados")
+@admin_required
+def get_pedidos_eliminados():
+    registros = rows_to_list(query(
+        "SELECT * FROM pedidos_eliminados ORDER BY eliminado_en DESC"
+    ))
+    return jsonify({"registros": registros})
 
 # ── API Stats ──────────────────────────────────────────────────────────────────
 

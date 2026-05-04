@@ -115,6 +115,31 @@ SQL_STATEMENTS = [
         creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    # ── Registro de pedidos eliminados ───────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS pedidos_eliminados (
+        id                      SERIAL PRIMARY KEY,
+        pedido_id               INTEGER NOT NULL,
+        norden                  INTEGER NOT NULL,
+        hotel_nombre            TEXT,
+        departamento_nombre     TEXT,
+        proveedor_nombre        TEXT,
+        proveedor_email         TEXT,
+        estado                  TEXT,
+        fecha_solicitud         TEXT,
+        pedido_num              TEXT,
+        presupuesto_num         TEXT,
+        entrada_albaran_num     TEXT,
+        observaciones           TEXT,
+        creado_por_nombre       TEXT,
+        motivo_eliminacion      TEXT,
+        eliminado_por_id        INTEGER REFERENCES usuarios(id),
+        eliminado_por_nombre    TEXT,
+        eliminado_en            TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_eliminados_pedido_id ON pedidos_eliminados(pedido_id)",
+    "CREATE INDEX IF NOT EXISTS idx_eliminados_norden    ON pedidos_eliminados(norden)",
     # ── Índices ───────────────────────────────────────────────────────────────
     "CREATE INDEX IF NOT EXISTS idx_pedidos_hotel     ON pedidos(hotel_id)",
     "CREATE INDEX IF NOT EXISTS idx_pedidos_estado    ON pedidos(estado)",

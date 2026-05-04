@@ -466,6 +466,9 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item" data-view="proveedores" onclick="showView('proveedores',this)">
       <span class="icon">🏭</span> Proveedores
     </div>
+    <div class="sb-item admin-only" data-view="eliminados" onclick="showView('eliminados',this)" style="display:none">
+      <span class="icon">🗑️</span> Pedidos eliminados
+    </div>
 
     <div class="sb-bottom">
       <div class="sb-user">
@@ -606,6 +609,40 @@ tbody tr:last-child{border-bottom:none}
           </div>
           <div id="prov-empty" class="empty-state section-hidden">
             <div class="icon">🏭</div><div>No hay proveedores registrados</div>
+          </div>
+        </div>
+      </div>
+
+      </div>
+
+      <!-- ── Vista: Pedidos Eliminados (solo admin) ───────────────────── -->
+      <div id="view-eliminados" class="section-hidden">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">🗑️ Registro de pedidos eliminados</span>
+            <span style="margin-left:auto;font-size:12px;color:var(--text-secondary)">Solo visible para Administradores</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Nº Orden</th>
+                  <th>Hotel</th>
+                  <th>Departamento</th>
+                  <th>Proveedor</th>
+                  <th>Estado</th>
+                  <th>Nº Pedido</th>
+                  <th>Creado por</th>
+                  <th>Motivo eliminación</th>
+                  <th>Eliminado por</th>
+                  <th>Fecha eliminación</th>
+                </tr>
+              </thead>
+              <tbody id="eliminados-tbody"></tbody>
+            </table>
+          </div>
+          <div id="eliminados-empty" class="empty-state section-hidden">
+            <div class="icon">✅</div><div>No se han eliminado pedidos</div>
           </div>
         </div>
       </div>
@@ -751,6 +788,38 @@ tbody tr:last-child{border-bottom:none}
   </div>
 </div>
 
+<!-- ── MODAL CONFIRMAR ELIMINACIÓN ──────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-confirmar-eliminar">
+  <div class="modal-box" style="max-width:480px">
+    <div class="modal-header" style="background:var(--danger,#dc3545)">
+      <h3 class="modal-title" style="color:#fff">⚠️ Confirmar eliminación</h3>
+      <button class="close-btn" style="color:#fff" onclick="closeModal('modal-confirmar-eliminar')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px">
+      <p style="margin:0 0 6px;font-size:13px;color:var(--text)">
+        Vas a eliminar el pedido <strong id="del-confirm-norden"></strong>.
+        Esta acción no se puede deshacer.<br>
+        Los datos quedarán registrados en el historial de eliminaciones.
+      </p>
+      <div style="background:#fff8f8;border:1px solid #fcd;border-radius:8px;padding:12px;margin:12px 0;font-size:12px;color:#666">
+        <div id="del-confirm-resumen"></div>
+      </div>
+      <label style="font-size:12px;font-weight:600;color:var(--navy2);display:block;margin-bottom:4px">
+        Motivo de la eliminación <span style="color:var(--danger,#dc3545)">*</span>
+      </label>
+      <textarea id="del-motivo" rows="3" placeholder="Indica el motivo..."
+        style="width:100%;box-sizing:border-box;border:1px solid #ccc;border-radius:6px;padding:8px;font-size:13px;resize:vertical"></textarea>
+      <p style="font-size:11px;color:#888;margin:6px 0 0">
+        Eliminado por: <strong id="del-confirm-admin"></strong>
+      </p>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-confirmar-eliminar')">Cancelar</button>
+      <button class="btn btn-danger" onclick="confirmarEliminarPedido()">Eliminar definitivamente</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL PROVEEDOR ─────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-proveedor">
   <div class="modal" style="max-width:520px">
@@ -836,11 +905,12 @@ tbody tr:last-child{border-bottom:none}
    Estado global
 ═══════════════════════════════════════════════════════════════════════════ */
 let G = {
-  user: null, rol: null,
+  user: null, rol: null, nombre: null,
   maestros: { hoteles:[], departamentos:[], proveedores:[], estados:[] },
   pedidos: [], total: 0, page: 1, pages: 1,
   editingPedidoId: null,
   editingProveedorId: null,
+  currentPedidoData: null,
   currentView: 'dashboard',
 };
 
@@ -855,13 +925,17 @@ async function doLogin() {
   try {
     const r = await api('/api/login', 'POST', {username:u, password:p});
     if (r.error) { err.textContent=r.error; err.style.display='block'; return; }
-    G.user = r.nombre; G.rol = r.rol;
+    G.user = r.nombre; G.nombre = r.nombre; G.rol = r.rol;
     document.getElementById('sb-nombre').textContent = r.nombre;
     document.getElementById('sb-rol').textContent    = r.rol === 'admin' ? 'Administrador' : 'Usuario';
     document.getElementById('sb-avatar').textContent = r.nombre.charAt(0).toUpperCase();
     document.getElementById('login-screen').style.display='none';
     document.getElementById('app').style.display='flex';
     if (G.rol !== 'admin') document.getElementById('btn-delete-pedido').style.display='none';
+    // Mostrar elementos de menú solo para admin
+    document.querySelectorAll('.admin-only').forEach(el => {
+      el.style.display = G.rol === 'admin' ? '' : 'none';
+    });
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
   } catch(e) { err.textContent='Error de conexión'; err.style.display='block'; }
@@ -907,13 +981,14 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   if (view==='dashboard')   loadStats();
   if (view==='pedidos')     loadPedidos();
   if (view==='alertas')     loadAlertas();
   if (view==='proveedores') loadProveedores();
+  if (view==='eliminados')  loadEliminados();
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1094,6 +1169,7 @@ function clearFilters() {
 ═══════════════════════════════════════════════════════════════════════════ */
 async function openPedidoModal(id=null) {
   G.editingPedidoId = id;
+  G.currentPedidoData = null;
   clearPedidoForm();
   document.getElementById('modal-pedido-title').textContent = id ? 'Editar pedido' : 'Nuevo pedido';
   document.getElementById('btn-delete-pedido').style.display = (id && G.rol==='admin') ? '' : 'none';
@@ -1107,6 +1183,7 @@ async function openPedidoModal(id=null) {
   if (id) {
     const d = await api(`/api/pedidos/${id}`);
     const p = d.pedido;
+    G.currentPedidoData = p;  // guardar para modal de eliminación
     setVal('p-hotel', p.hotel_id);
     setVal('p-depto', p.departamento_id);
     setVal('p-f-solicitud', p.fecha_solicitud);
@@ -1305,10 +1382,39 @@ async function savePedido() {
 }
 
 async function deletePedido() {
-  if (!confirm('¿Eliminar este pedido? Esta acción no se puede deshacer.')) return;
-  const r = await api(`/api/pedidos/${G.editingPedidoId}`, 'DELETE');
-  if (r.error) { toast(r.error,'error'); return; }
-  toast('Pedido eliminado','success');
+  // Abrir modal de confirmación con resumen del pedido
+  const p = G.currentPedidoData;
+  if (!p) return;
+  const norden = p.norden ? `Nº ${p.norden}` : `ID ${G.editingPedidoId}`;
+  document.getElementById('del-confirm-norden').textContent = norden;
+  document.getElementById('del-confirm-admin').textContent = G.nombre || G.username || 'Administrador';
+  document.getElementById('del-motivo').value = '';
+
+  // Resumen del pedido
+  const lines = [
+    p.hotel_nombre    ? `<b>Hotel:</b> ${p.hotel_nombre}` : null,
+    p.departamento_nombre ? `<b>Departamento:</b> ${p.departamento_nombre}` : null,
+    p.proveedor_nombre ? `<b>Proveedor:</b> ${p.proveedor_nombre}` : null,
+    p.estado          ? `<b>Estado:</b> ${p.estado}` : null,
+    p.pedido_num      ? `<b>Nº Pedido:</b> ${p.pedido_num}` : null,
+    p.creado_por_nombre ? `<b>Creado por:</b> ${p.creado_por_nombre}` : null,
+  ].filter(Boolean);
+  document.getElementById('del-confirm-resumen').innerHTML = lines.join('<br>') || '(sin datos)';
+
+  openModal('modal-confirmar-eliminar');
+}
+
+async function confirmarEliminarPedido() {
+  const motivo = document.getElementById('del-motivo').value.trim();
+  if (!motivo) {
+    document.getElementById('del-motivo').focus();
+    toast('Debes indicar el motivo de la eliminación', 'error');
+    return;
+  }
+  const r = await api(`/api/pedidos/${G.editingPedidoId}`, 'DELETE', { motivo });
+  if (r.error) { toast(r.error, 'error'); return; }
+  toast(`Pedido eliminado. Registro conservado en historial.`, 'success');
+  closeModal('modal-confirmar-eliminar');
   closeModal('modal-pedido');
   loadPedidos(); loadStats();
 }
@@ -1347,6 +1453,33 @@ function debouncedLoadProveedores() {
 
 // Cache de proveedores para el modal de edición (evita el problema con JSON inline en onclick)
 let _provCache = {};
+
+async function loadEliminados() {
+  const d = await api('/api/pedidos_eliminados');
+  const tbody = document.getElementById('eliminados-tbody');
+  const empty = document.getElementById('eliminados-empty');
+  if (!d.registros || !d.registros.length) {
+    tbody.innerHTML = '';
+    empty.classList.remove('section-hidden');
+    return;
+  }
+  empty.classList.add('section-hidden');
+  tbody.innerHTML = d.registros.map(r => {
+    const fecha = r.eliminado_en ? new Date(r.eliminado_en).toLocaleString('es-ES') : '—';
+    return `<tr style="background:#fff5f5">
+      <td><strong style="color:var(--danger,#dc3545)">Nº ${r.norden || '—'}</strong><br><small style="color:#999">ID pedido: ${r.pedido_id}</small></td>
+      <td>${r.hotel_nombre||'—'}</td>
+      <td>${r.departamento_nombre||'—'}</td>
+      <td>${r.proveedor_nombre||'—'}</td>
+      <td><span class="badge">${r.estado||'—'}</span></td>
+      <td>${r.pedido_num||'—'}</td>
+      <td>${r.creado_por_nombre||'—'}</td>
+      <td style="max-width:200px;font-size:12px;color:#555">${r.motivo_eliminacion||'—'}</td>
+      <td><strong>${r.eliminado_por_nombre||'—'}</strong></td>
+      <td style="font-size:12px;white-space:nowrap">${fecha}</td>
+    </tr>`;
+  }).join('');
+}
 
 async function loadProveedores() {
   const q = (document.getElementById('prov-q')?.value || '').trim();
