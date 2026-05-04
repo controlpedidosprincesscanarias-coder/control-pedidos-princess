@@ -245,7 +245,41 @@ tbody tr:last-child{border-bottom:none}
 .tl-estado{font-weight:600;font-size:13px}
 .tl-meta{font-size:11px;color:var(--muted);margin-top:2px}
 
-/* ── Login ──────────────────────────────────────────────────────────────── */
+/* ── Adjuntos ────────────────────────────────────────────────────────────── */
+.adj-upload-btn{
+  display:inline-flex;align-items:center;gap:6px;
+  padding:7px 14px;border-radius:8px;
+  border:2px dashed var(--border);cursor:pointer;
+  font-size:12px;font-weight:600;color:var(--navy2);
+  background:var(--bg);transition:border-color .2s,background .2s;user-select:none;
+}
+.adj-upload-btn:hover{border-color:var(--gold);background:rgba(180,140,60,.07)}
+.adj-item{
+  display:flex;align-items:center;gap:8px;
+  padding:7px 10px;border-radius:8px;
+  background:var(--bg);border:1px solid var(--border);
+  font-size:12px;
+}
+.adj-item a{flex:1;color:var(--navy2);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.adj-item a:hover{text-decoration:underline;color:var(--gold)}
+.adj-item .adj-del{cursor:pointer;color:var(--muted);font-size:14px;padding:0 4px;border:none;background:none;line-height:1}
+.adj-item .adj-del:hover{color:#c0392b}
+.adj-img-thumb{
+  width:90px;height:90px;border-radius:8px;object-fit:cover;
+  border:2px solid var(--border);cursor:pointer;transition:border-color .2s;
+}
+.adj-img-thumb:hover{border-color:var(--gold)}
+.adj-img-wrap{position:relative;display:inline-block}
+.adj-img-del{
+  position:absolute;top:4px;right:4px;
+  background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:50%;
+  width:20px;height:20px;font-size:12px;cursor:pointer;line-height:1;
+  display:flex;align-items:center;justify-content:center;
+}
+.adj-img-del:hover{background:#c0392b}
+.adj-uploading{opacity:.5;pointer-events:none}
+
+
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&display=swap');
 #login-screen{
   position:fixed;inset:0;
@@ -668,6 +702,39 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-group full">
           <textarea class="form-control" id="p-observaciones" rows="3" placeholder="Texto libre…" style="resize:vertical"></textarea>
         </div>
+
+        <!-- Adjuntos PDFs Presupuesto -->
+        <div class="form-section">PDFs Presupuesto</div>
+        <div class="form-group full" id="adj-presupuesto-wrap">
+          <div id="adj-presupuesto-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <label class="adj-upload-btn" id="lbl-presupuesto-pdf" title="Subir PDF de presupuesto">
+            <input type="file" accept="application/pdf" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'presupuesto_pdf')">
+            ＋ Adjuntar PDF de presupuesto
+          </label>
+        </div>
+
+        <!-- Adjuntos PDFs Pedido -->
+        <div class="form-section">PDFs Pedido</div>
+        <div class="form-group full" id="adj-pedido-wrap">
+          <div id="adj-pedido-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
+          <label class="adj-upload-btn" id="lbl-pedido-pdf" title="Subir PDF de pedido">
+            <input type="file" accept="application/pdf" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'pedido_pdf')">
+            ＋ Adjuntar PDF de pedido
+          </label>
+        </div>
+
+        <!-- Imágenes de artículos -->
+        <div class="form-section">Imágenes de artículos</div>
+        <div class="form-group full" id="adj-imagen-wrap">
+          <div id="adj-imagen-list" style="display:flex;flex-wrap:wrap;gap:10px;margin-bottom:10px"></div>
+          <label class="adj-upload-btn" title="Subir imágenes de artículos">
+            <input type="file" accept="image/*" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'imagen_articulo')">
+            ＋ Adjuntar imágenes de artículos
+          </label>
+        </div>
       </div>
 
       <!-- Historial (solo en edición) -->
@@ -1032,6 +1099,11 @@ async function openPedidoModal(id=null) {
   document.getElementById('btn-delete-pedido').style.display = (id && G.rol==='admin') ? '' : 'none';
   document.getElementById('p-historial-section').style.display = 'none';
 
+  // Limpiar adjuntos
+  renderAdjuntosPdf('presupuesto', []);
+  renderAdjuntosPdf('pedido', []);
+  renderAdjuntosImg([]);
+
   if (id) {
     const d = await api(`/api/pedidos/${id}`);
     const p = d.pedido;
@@ -1044,7 +1116,6 @@ async function openPedidoModal(id=null) {
     setVal('p-presup', p.presupuesto_num);
     setVal('p-albaran', p.entrada_albaran_num);
     setVal('p-estado', p.estado);
-    // Autocomplete proveedor: poblar input y valor oculto
     document.getElementById('p-proveedor').value = p.proveedor_id || '';
     document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
     setVal('p-observaciones', p.observaciones);
@@ -1065,8 +1136,112 @@ async function openPedidoModal(id=null) {
           </div>
         </div>`).join('');
     }
+
+    // Cargar adjuntos
+    cargarAdjuntos(id);
   }
   openModal('modal-pedido');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Adjuntos del pedido
+═══════════════════════════════════════════════════════════════════════════ */
+
+async function cargarAdjuntos(pedidoId) {
+  const d = await api(`/api/pedidos/${pedidoId}/adjuntos`);
+  if (!d.ok) return;
+  const pdfsPresup = d.adjuntos.filter(a => a.tipo === 'presupuesto_pdf');
+  const pdfsPedido = d.adjuntos.filter(a => a.tipo === 'pedido_pdf');
+  const imagenes   = d.adjuntos.filter(a => a.tipo === 'imagen_articulo');
+  renderAdjuntosPdf('presupuesto', pdfsPresup);
+  renderAdjuntosPdf('pedido', pdfsPedido);
+  renderAdjuntosImg(imagenes);
+}
+
+function renderAdjuntosPdf(prefijo, lista) {
+  const contenedor = document.getElementById(`adj-${prefijo}-list`);
+  if (!contenedor) return;
+  contenedor.innerHTML = lista.map(a => `
+    <div class="adj-item" id="adj-item-${a.id}">
+      <span style="font-size:16px">📄</span>
+      <a href="/api/adjuntos/${a.id}" target="_blank" title="${a.nombre}">${a.nombre}</a>
+      <button class="adj-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
+    </div>`).join('');
+}
+
+function renderAdjuntosImg(lista) {
+  const contenedor = document.getElementById('adj-imagen-list');
+  if (!contenedor) return;
+  contenedor.innerHTML = lista.map(a => `
+    <div class="adj-img-wrap" id="adj-item-${a.id}">
+      <img class="adj-img-thumb" src="/api/adjuntos/${a.id}"
+           onclick="window.open('/api/adjuntos/${a.id}','_blank')"
+           title="${a.nombre}" alt="${a.nombre}">
+      <button class="adj-img-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
+    </div>`).join('');
+}
+
+async function subirAdjuntos(input, tipo) {
+  const pedidoId = G.editingPedidoId;
+  const archivos = Array.from(input.files);
+  if (!archivos.length) return;
+
+  // Si es pedido nuevo, pedir guardar primero
+  if (!pedidoId) {
+    toast('Guarda el pedido primero antes de adjuntar archivos', 'error');
+    input.value = '';
+    return;
+  }
+
+  const label = input.closest('label');
+  if (label) label.classList.add('adj-uploading');
+
+  let subidos = 0;
+  for (const archivo of archivos) {
+    const MAX_MB = 20;
+    if (archivo.size > MAX_MB * 1024 * 1024) {
+      toast(`"${archivo.name}" supera ${MAX_MB} MB`, 'error');
+      continue;
+    }
+    const fd = new FormData();
+    fd.append('tipo', tipo);
+    fd.append('archivo', archivo);
+    try {
+      const resp = await fetch(`/api/pedidos/${pedidoId}/adjuntos`, {
+        method: 'POST',
+        body: fd,
+        credentials: 'same-origin',
+      });
+      const data = await resp.json();
+      if (data.ok) {
+        subidos++;
+      } else {
+        toast(`Error subiendo "${archivo.name}": ${data.error}`, 'error');
+      }
+    } catch(e) {
+      toast(`Error de conexión subiendo "${archivo.name}"`, 'error');
+    }
+  }
+
+  if (label) label.classList.remove('adj-uploading');
+  input.value = '';
+
+  if (subidos > 0) {
+    toast(`${subidos} archivo${subidos>1?'s':''} subido${subidos>1?'s':''}`, 'success');
+    cargarAdjuntos(pedidoId);
+  }
+}
+
+async function borrarAdjunto(adjId) {
+  if (!confirm('¿Eliminar este archivo adjunto?')) return;
+  const r = await api(`/api/adjuntos/${adjId}`, 'DELETE');
+  if (r.ok) {
+    const el = document.getElementById(`adj-item-${adjId}`);
+    if (el) el.remove();
+    toast('Adjunto eliminado', 'success');
+  } else {
+    toast(r.error || 'Error al eliminar', 'error');
+  }
 }
 
 function clearPedidoForm() {
@@ -1113,11 +1288,18 @@ async function savePedido() {
       r = await api('/api/pedidos', 'POST', body);
     }
     if (r.error) { toast(r.error,'error'); return; }
-    toast(G.editingPedidoId ? 'Pedido actualizado':'Pedido creado', 'success');
-    closeModal('modal-pedido');
     if (G.currentView==='pedidos') loadPedidos();
     if (G.currentView==='dashboard') loadStats();
     if (G.currentView==='alertas') loadAlertas();
+
+    if (!G.editingPedidoId && r.id) {
+      // Pedido recién creado: reabrir en modo edición para poder adjuntar archivos
+      toast('Pedido creado — ya puedes adjuntar archivos', 'success');
+      await openPedidoModal(r.id);
+    } else {
+      toast('Pedido actualizado', 'success');
+      closeModal('modal-pedido');
+    }
   } catch(e) { toast('Error de conexión','error'); }
   finally { btn.disabled=false; btn.textContent='Guardar'; }
 }

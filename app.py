@@ -35,7 +35,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 def _auto_migrate():
-    """Añade columnas nuevas a proveedores si no existen (idempotente)."""
+    """Añade columnas/tablas nuevas de forma idempotente."""
     try:
         db = psycopg2.connect(
             DATABASE_URL, cursor_factory=RealDictCursor,
@@ -43,10 +43,25 @@ def _auto_migrate():
         )
         db.autocommit = True
         with db.cursor() as cur:
+            # Columnas proveedores
             for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT")]:
                 cur.execute(f"ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+            # Tabla adjuntos
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS pedido_adjuntos (
+                    id            SERIAL PRIMARY KEY,
+                    pedido_id     INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+                    tipo          TEXT NOT NULL,
+                    nombre        TEXT NOT NULL,
+                    mime_type     TEXT NOT NULL,
+                    datos         BYTEA NOT NULL,
+                    subido_por_id INTEGER REFERENCES usuarios(id),
+                    creado_en     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_adjuntos_pedido ON pedido_adjuntos(pedido_id)")
         db.close()
-        log.info("Auto-migración proveedores OK")
+        log.info("Auto-migración OK")
     except Exception as e:
         log.warning(f"Auto-migración omitida: {e}")
 
@@ -978,6 +993,94 @@ def exportar_excel():
                          as_attachment=True, download_name=filename)
     except ImportError:
         return jsonify({"error": "openpyxl no instalado"}), 500
+
+# ── Adjuntos (PDFs e imágenes de artículos) ───────────────────────────────────
+
+TIPOS_ADJUNTO_VALIDOS = {"presupuesto_pdf", "pedido_pdf", "imagen_articulo"}
+MIME_PERMITIDOS = {
+    "application/pdf",
+    "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+}
+MAX_ADJUNTO_BYTES = 20 * 1024 * 1024  # 20 MB por archivo
+
+@app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
+@login_required
+def get_adjuntos(pid):
+    rows = query(
+        "SELECT id, tipo, nombre, mime_type, creado_en FROM pedido_adjuntos WHERE pedido_id=%s ORDER BY tipo, creado_en",
+        (pid,)
+    )
+    return jsonify({"ok": True, "adjuntos": rows_to_list(rows)})
+
+
+@app.route("/api/pedidos/<int:pid>/adjuntos", methods=["POST"])
+@login_required
+def upload_adjunto(pid):
+    # Verificar que el pedido existe
+    pedido = query("SELECT id FROM pedidos WHERE id=%s", (pid,), one=True)
+    if not pedido:
+        return jsonify({"ok": False, "error": "Pedido no encontrado"}), 404
+
+    tipo = request.form.get("tipo", "")
+    if tipo not in TIPOS_ADJUNTO_VALIDOS:
+        return jsonify({"ok": False, "error": f"Tipo inválido. Valores: {', '.join(TIPOS_ADJUNTO_VALIDOS)}"}), 400
+
+    if "archivo" not in request.files:
+        return jsonify({"ok": False, "error": "No se recibió ningún archivo"}), 400
+
+    archivo = request.files["archivo"]
+    if not archivo.filename:
+        return jsonify({"ok": False, "error": "Nombre de archivo vacío"}), 400
+
+    datos = archivo.read()
+    if len(datos) > MAX_ADJUNTO_BYTES:
+        return jsonify({"ok": False, "error": "El archivo supera el límite de 20 MB"}), 400
+
+    mime = archivo.mimetype or "application/octet-stream"
+
+    # Para PDFs forzar validación de tipo
+    if tipo in ("presupuesto_pdf", "pedido_pdf") and mime != "application/pdf":
+        return jsonify({"ok": False, "error": "Solo se aceptan archivos PDF en este apartado"}), 400
+
+    if mime not in MIME_PERMITIDOS:
+        return jsonify({"ok": False, "error": f"Tipo de archivo no permitido: {mime}"}), 400
+
+    uid = current_user_id()
+    db  = get_db()
+    cur = execute(
+        "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, subido_por_id) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
+        (pid, tipo, archivo.filename, mime, psycopg2.Binary(datos), uid)
+    )
+    adjunto_id = cur.fetchone()["id"]
+    db.commit()
+    return jsonify({"ok": True, "id": adjunto_id}), 201
+
+
+@app.route("/api/adjuntos/<int:aid>", methods=["GET"])
+@login_required
+def download_adjunto(aid):
+    from flask import Response
+    row = query("SELECT nombre, mime_type, datos FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
+    if not row:
+        return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
+    return Response(
+        bytes(row["datos"]),
+        mimetype=row["mime_type"],
+        headers={"Content-Disposition": f'inline; filename="{row["nombre"]}"'}
+    )
+
+
+@app.route("/api/adjuntos/<int:aid>", methods=["DELETE"])
+@login_required
+def delete_adjunto(aid):
+    db  = get_db()
+    row = query("SELECT id FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
+    if not row:
+        return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
+    execute("DELETE FROM pedido_adjuntos WHERE id=%s", (aid,))
+    db.commit()
+    return jsonify({"ok": True})
+
 
 # ── Ping endpoint (UptimeRobot) ────────────────────────────────────────────────
 

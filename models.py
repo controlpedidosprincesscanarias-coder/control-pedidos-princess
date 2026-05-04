@@ -76,6 +76,20 @@ SQL_STATEMENTS = [
         modificado_en           TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    # ── Adjuntos del pedido ───────────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS pedido_adjuntos (
+        id           SERIAL PRIMARY KEY,
+        pedido_id    INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+        tipo         TEXT NOT NULL,
+        nombre       TEXT NOT NULL,
+        mime_type    TEXT NOT NULL,
+        datos        BYTEA NOT NULL,
+        subido_por_id INTEGER REFERENCES usuarios(id),
+        creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_adjuntos_pedido ON pedido_adjuntos(pedido_id)",
     # ── Historial de estados ──────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS historial_estados (
