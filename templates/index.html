@@ -169,15 +169,22 @@ tbody tr:last-child{border-bottom:none}
 }
 
 /* ── Filtros ────────────────────────────────────────────────────────────── */
-.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center}
 .filter-input,.filter-select{
   padding:7px 10px;border:1px solid var(--border);border-radius:7px;
   font-family:inherit;font-size:13px;background:var(--white);color:var(--text);
   outline:none;transition:border-color .15s
 }
 .filter-input:focus,.filter-select:focus{border-color:var(--navy2)}
-.filter-input{width:200px}
+.filter-input{width:240px}
 .filter-select{min-width:160px}
+.search-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.search-chips-label{font-size:11px;color:var(--text-muted,#888);margin-right:2px}
+.schip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:500;border:1px solid transparent;cursor:default;user-select:none}
+.schip-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.schip-pedido{background:#EEEDFE;color:#3C3489;border-color:#AFA9EC}.schip-pedido .schip-dot{background:#534AB7}
+.schip-prov{background:#E1F5EE;color:#085041;border-color:#5DCAA5}.schip-prov .schip-dot{background:#0F6E56}
+.schip-obs{background:#FAEEDA;color:#633806;border-color:#EF9F27}.schip-obs .schip-dot{background:#854F0B}
 
 /* ── Paginación ────────────────────────────────────────────────────────── */
 .pagination{display:flex;align-items:center;gap:4px;justify-content:flex-end;margin-top:16px}
@@ -543,7 +550,7 @@ tbody tr:last-child{border-bottom:none}
       <!-- VIEW: PEDIDOS ───────────────────────────────────────────────── -->
       <div id="view-pedidos" class="section-hidden">
         <div class="filters">
-          <input class="filter-input" id="f-q" placeholder="🔍 Buscar pedido, proveedor, observaciones…" oninput="debouncedLoad()">
+          <input class="filter-input" id="f-q" placeholder="🔍 Buscar…" oninput="debouncedLoad()">
           <select class="filter-select" id="f-hotel" onchange="loadPedidos()">
             <option value="">Todos los hoteles</option>
           </select>
@@ -554,6 +561,12 @@ tbody tr:last-child{border-bottom:none}
             <option value="">Todos los departamentos</option>
           </select>
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
+        </div>
+        <div class="search-chips">
+          <span class="search-chips-label">Busca por:</span>
+          <span class="schip schip-pedido"><span class="schip-dot"></span>Nº pedido</span>
+          <span class="schip schip-prov"><span class="schip-dot"></span>Proveedor</span>
+          <span class="schip schip-obs"><span class="schip-dot"></span>Observaciones</span>
         </div>
 
         <div class="card">
