@@ -156,18 +156,6 @@ tbody tr:last-child{border-bottom:none}
 .bool-si{color:#059669;font-weight:600}
 .bool-no{color:#d1d5db}
 
-/* Comentarios en tabla */
-.comentarios-cell{max-width:220px}
-.comentarios-text{
-  display:block;
-  overflow:hidden;
-  text-overflow:ellipsis;
-  white-space:nowrap;
-  color:var(--text);
-  font-size:12px;
-  max-width:220px;
-}
-
 /* ── Filtros ────────────────────────────────────────────────────────────── */
 .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center}
 .filter-input,.filter-select{
@@ -543,7 +531,7 @@ tbody tr:last-child{border-bottom:none}
       <!-- VIEW: PEDIDOS ───────────────────────────────────────────────── -->
       <div id="view-pedidos" class="section-hidden">
         <div class="filters">
-          <input class="filter-input" id="f-q" placeholder="🔍 Buscar pedido, proveedor, comentarios…" oninput="debouncedLoad()">
+          <input class="filter-input" id="f-q" placeholder="🔍 Buscar pedido, proveedor…" oninput="debouncedLoad()">
           <select class="filter-select" id="f-hotel" onchange="loadPedidos()">
             <option value="">Todos los hoteles</option>
           </select>
@@ -565,7 +553,7 @@ tbody tr:last-child{border-bottom:none}
                   <th>Nº</th><th>Hotel</th><th>Depto.</th>
                   <th>F. Solicitud</th><th>Pedido SAP</th>
                   <th>Estado</th><th>Proveedor</th>
-                  <th>Comentarios</th>
+                  <th>A&B</th><th>Jefe Dep.</th><th>Rotura</th><th>Ampliación</th>
                   <th></th>
                 </tr>
               </thead>
@@ -1165,7 +1153,10 @@ function renderPedidosTable(pedidos) {
       <td class="monospace">${p.pedido_num||'—'}</td>
       <td>${estadoBadge(p.estado)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
-      <td class="comentarios-cell" title="${(p.observaciones||'').replace(/"/g,'&quot;')}">${p.observaciones ? `<span class="comentarios-text">${p.observaciones}</span>` : '<span class="bool-no">—</span>'}</td>
+      <td>${boolCell(p.comunicado_ab)}</td>
+      <td>${boolCell(p.comunicado_jefe_dep)}</td>
+      <td>${boolCell(p.parte_rotura)}</td>
+      <td>${boolCell(p.parte_ampliacion)}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openPedidoModal(${p.id})">✏ Editar</button></td>
     </tr>`).join('');
 }
