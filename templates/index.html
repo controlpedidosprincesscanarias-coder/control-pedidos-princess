@@ -487,12 +487,22 @@ tbody tr:last-child{border-bottom:none}
     <div id="topbar">
       <div class="tb-title" id="topbar-title">Dashboard</div>
       <div class="tb-actions">
-        <button class="btn btn-ghost btn-sm" onclick="loadStats();loadPedidos()" title="Actualizar">↻ Actualizar</button>
-        <button class="btn btn-gold" onclick="openPedidoModal()" id="btn-nuevo-pedido">
-          + Nuevo pedido
-        </button>
-        <button class="btn btn-ghost btn-sm" onclick="exportarExcel()" title="Exportar a Excel">⬇ Exportar</button>
-        <button class="btn btn-ghost btn-sm" onclick="openImportModal()" title="Importar desde Excel">⬆ Importar</button>
+        <button class="btn btn-ghost btn-sm" onclick="refreshCurrentView()" title="Actualizar">↻ Actualizar</button>
+
+        <!-- Acciones contextuales: Pedidos -->
+        <div id="tb-actions-pedidos" style="display:flex;gap:8px;align-items:center">
+          <button class="btn btn-gold" onclick="openPedidoModal()" id="btn-nuevo-pedido">
+            + Nuevo pedido
+          </button>
+          <button class="btn btn-ghost btn-sm" onclick="exportarExcel()" title="Exportar a Excel">⬇ Exportar</button>
+          <button class="btn btn-ghost btn-sm" onclick="openImportModal()" title="Importar desde Excel">⬆ Importar</button>
+        </div>
+
+        <!-- Acciones contextuales: Proveedores -->
+        <div id="tb-actions-proveedores" style="display:none;gap:8px;align-items:center">
+          <button class="btn btn-ghost btn-sm" onclick="exportarProveedores()" title="Descargar Excel">⬇ Exportar</button>
+          <button class="btn btn-ghost btn-sm" onclick="openImportProvModal()" title="Importar desde Excel">⬆ Importar</button>
+        </div>
       </div>
     </div>
 
@@ -589,10 +599,6 @@ tbody tr:last-child{border-bottom:none}
         <div class="card">
           <div class="card-header">
             <span class="card-title">Proveedores</span>
-            <div style="margin-left:auto;display:flex;gap:8px;align-items:center">
-              <button class="btn btn-ghost btn-sm" onclick="exportarProveedores()" title="Descargar Excel">⬇ Exportar</button>
-              <button class="btn btn-ghost btn-sm" onclick="openImportProvModal()" title="Importar desde Excel">⬆ Importar</button>
-            </div>
           </div>
           <div class="filters">
             <input class="filter-input" id="prov-q" placeholder="🔍 Buscar proveedor…"
@@ -984,12 +990,28 @@ function showView(view, el) {
   const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
+  // Botones contextuales del topbar
+  const accionesPedidos     = document.getElementById('tb-actions-pedidos');
+  const accionesProveedores = document.getElementById('tb-actions-proveedores');
+  accionesPedidos.style.display     = (view === 'pedidos')     ? 'flex' : 'none';
+  accionesProveedores.style.display = (view === 'proveedores') ? 'flex' : 'none';
+
   if (view==='dashboard')   loadStats();
   if (view==='pedidos')     loadPedidos();
   if (view==='alertas')     loadAlertas();
   if (view==='proveedores') loadProveedores();
   if (view==='eliminados')  loadEliminados();
 }
+
+function refreshCurrentView() {
+  const view = G.currentView || 'dashboard';
+  if (view==='dashboard')   { loadStats(); }
+  if (view==='pedidos')     loadPedidos();
+  if (view==='alertas')     loadAlertas();
+  if (view==='proveedores') loadProveedores();
+  if (view==='eliminados')  loadEliminados();
+}
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Maestros
