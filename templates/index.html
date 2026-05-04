@@ -639,9 +639,12 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-section">Proveedor</div>
         <div class="form-group full">
           <label class="form-label">Proveedor</label>
-          <select class="form-control" id="p-proveedor">
-            <option value="">— Sin asignar —</option>
-          </select>
+          <div style="position:relative">
+            <input class="form-control" id="p-proveedor-input" placeholder="Escribir para buscar proveedor…"
+                   autocomplete="off" oninput="buscarProveedor(this.value)" onfocus="buscarProveedor(this.value)">
+            <input type="hidden" id="p-proveedor">
+            <div id="prov-dropdown" style="display:none;position:absolute;z-index:9999;width:100%;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:220px;overflow-y:auto;top:calc(100% + 4px)"></div>
+          </div>
         </div>
 
         <!-- Comunicaciones -->
@@ -875,9 +878,7 @@ function poblarSelectEstados() {
   G.maestros.estados.forEach(e => s.innerHTML += `<option value="${e}">${e}</option>`);
 }
 function poblarSelectProveedores() {
-  const s = document.getElementById('p-proveedor');
-  s.innerHTML = '<option value="">— Sin asignar —</option>';
-  G.maestros.proveedores.forEach(p => s.innerHTML += `<option value="${p.id}">${p.nombre}</option>`);
+  // Ahora se usa autocomplete — esta función no hace nada
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1035,7 +1036,9 @@ async function openPedidoModal(id=null) {
     setVal('p-presup', p.presupuesto_num);
     setVal('p-albaran', p.entrada_albaran_num);
     setVal('p-estado', p.estado);
-    setVal('p-proveedor', p.proveedor_id||'');
+    // Autocomplete proveedor: poblar input y valor oculto
+    document.getElementById('p-proveedor').value = p.proveedor_id || '';
+    document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
     setVal('p-observaciones', p.observaciones);
     document.getElementById('p-ab').checked       = !!p.comunicado_ab;
     document.getElementById('p-jefe').checked     = !!p.comunicado_jefe_dep;
@@ -1062,7 +1065,9 @@ function clearPedidoForm() {
   ['p-hotel','p-depto','p-pedido-num','p-presup','p-albaran','p-observaciones','p-nota'].forEach(id=>setVal(id,''));
   ['p-f-solicitud','p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
   setVal('p-estado', G.maestros.estados[0]||'');
-  setVal('p-proveedor','');
+  document.getElementById('p-proveedor').value = '';
+  document.getElementById('p-proveedor-input').value = '';
+  document.getElementById('prov-dropdown').style.display = 'none';
   ['p-ab','p-jefe','p-rotura','p-ampliacion'].forEach(id=>document.getElementById(id).checked=false);
 }
 
@@ -1221,6 +1226,46 @@ function setProvFile(f) {
   document.getElementById('btn-importar-prov').disabled = false;
   document.getElementById('btn-importar-prov').style.opacity = '1';
 }
+let _provTimer = null;
+async function buscarProveedor(q) {
+  const drop = document.getElementById('prov-dropdown');
+  const hidden = document.getElementById('p-proveedor');
+  clearTimeout(_provTimer);
+  if (!q || q.length < 2) {
+    drop.style.display = 'none';
+    if (!q) hidden.value = '';
+    return;
+  }
+  _provTimer = setTimeout(async () => {
+    const res = await api(`/api/proveedores?q=${encodeURIComponent(q)}`);
+    if (!res.length) {
+      drop.innerHTML = '<div style="padding:10px 14px;color:var(--text-secondary);font-size:.9rem">Sin resultados</div>';
+    } else {
+      drop.innerHTML = res.slice(0,10).map(p => `
+        <div style="padding:9px 14px;cursor:pointer;font-size:.9rem;border-bottom:1px solid var(--border)"
+             onmousedown="seleccionarProveedor(${p.id}, '${esc(p.nombre)}')"
+             onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''">
+          <span style="font-weight:600">${p.nombre}</span>
+          ${p.codigo ? `<span style="color:var(--text-secondary);margin-left:6px;font-size:.8rem">${p.codigo}</span>` : ''}
+        </div>`).join('');
+    }
+    drop.style.display = 'block';
+  }, 200);
+}
+
+function seleccionarProveedor(id, nombre) {
+  document.getElementById('p-proveedor').value = id;
+  document.getElementById('p-proveedor-input').value = nombre;
+  document.getElementById('prov-dropdown').style.display = 'none';
+}
+
+document.addEventListener('click', (e) => {
+  const drop = document.getElementById('prov-dropdown');
+  if (drop && !drop.contains(e.target) && e.target.id !== 'p-proveedor-input') {
+    drop.style.display = 'none';
+  }
+});
+
 async function doImportProv() {
   if (!_provFile) return;
   const res = document.getElementById('prov-import-result');
@@ -1236,7 +1281,6 @@ async function doImportProv() {
       res.style.cssText = 'display:block;background:#d1fae5;color:#065f46;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
       res.textContent = `✅ Importación completada: ${d.insertados} nuevos, ${d.actualizados} actualizados.`;
       loadProveedores();
-      await loadMaestros();
     } else {
       res.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
       res.textContent = '❌ ' + (d.error || 'Error desconocido');
