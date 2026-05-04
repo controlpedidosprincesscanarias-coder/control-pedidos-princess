@@ -557,6 +557,11 @@ tbody tr:last-child{border-bottom:none}
               <button class="btn btn-ghost btn-sm" onclick="openImportProvModal()" title="Importar desde Excel">⬆ Importar</button>
             </div>
           </div>
+          <div class="filters">
+            <input class="filter-input" id="prov-q" placeholder="🔍 Buscar proveedor…"
+                   oninput="debouncedLoadProveedores()" style="width:280px">
+            <span id="prov-count" style="color:var(--text-secondary);font-size:.85rem;align-self:center"></span>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -715,6 +720,9 @@ tbody tr:last-child{border-bottom:none}
       </div>
     </div>
     <div class="modal-footer">
+      <button class="btn btn-ghost" style="color:#e74c3c;border-color:#e74c3c"
+              id="btn-borrar-proveedor" onclick="borrarProveedor()">🗑 Borrar</button>
+      <div style="flex:1"></div>
       <button class="btn btn-ghost" onclick="closeModal('modal-proveedor')">Cancelar</button>
       <button class="btn btn-gold" onclick="saveProveedor()">Guardar cambios</button>
     </div>
@@ -1149,12 +1157,33 @@ async function loadAlertas() {
 /* ═══════════════════════════════════════════════════════════════════════════
    Proveedores
 ═══════════════════════════════════════════════════════════════════════════ */
+let _provDebounceT = null;
+function debouncedLoadProveedores() {
+  clearTimeout(_provDebounceT);
+  _provDebounceT = setTimeout(loadProveedores, 300);
+}
+
+// Cache de proveedores para el modal de edición (evita el problema con JSON inline en onclick)
+let _provCache = {};
+
 async function loadProveedores() {
-  const d = await api('/api/proveedores');
+  const q = (document.getElementById('prov-q')?.value || '').trim();
+  const url = q ? `/api/proveedores?q=${encodeURIComponent(q)}` : '/api/proveedores';
+  const d = await api(url);
   const tbody = document.getElementById('proveedores-tbody');
   const empty = document.getElementById('prov-empty');
-  if (!d.length) { tbody.innerHTML=''; empty.classList.remove('section-hidden'); return; }
+  const countEl = document.getElementById('prov-count');
+  if (!d.length) {
+    tbody.innerHTML='';
+    empty.classList.remove('section-hidden');
+    if (countEl) countEl.textContent = q ? 'Sin resultados' : '';
+    return;
+  }
   empty.classList.add('section-hidden');
+  if (countEl) countEl.textContent = `${d.length} proveedor${d.length!==1?'es':''}`;
+  // Guardar en cache por id para el modal
+  _provCache = {};
+  d.forEach(p => { _provCache[p.id] = p; });
   tbody.innerHTML = d.map(p => `
     <tr>
       <td style="color:var(--text-secondary);font-size:.85rem">${p.codigo||'—'}</td>
@@ -1165,12 +1194,14 @@ async function loadProveedores() {
       <td>${p.movil||'—'}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.observaciones||'')}">${p.observaciones||'—'}</td>
       <td>
-        <button class="btn btn-ghost btn-sm" onclick="openProveedorModal(${JSON.stringify(p)})">✏ Editar</button>
+        <button class="btn btn-ghost btn-sm" onclick="openProveedorModal(${p.id})">✏ Editar</button>
       </td>
     </tr>`).join('');
 }
 
-function openProveedorModal(p) {
+function openProveedorModal(pid) {
+  const p = _provCache[pid];
+  if (!p) return;
   G.editingProveedorId = p.id;
   document.getElementById('pv-nombre-display').textContent = p.nombre || '';
   setVal('pv-contacto', p.contacto||'');
@@ -1178,6 +1209,7 @@ function openProveedorModal(p) {
   setVal('pv-tel',      p.telefono||'');
   setVal('pv-movil',    p.movil||'');
   document.getElementById('pv-obs').value = p.observaciones||'';
+  // El botón borrar siempre visible; el servidor comprobará si tiene pedidos
   openModal('modal-proveedor');
 }
 
@@ -1192,6 +1224,16 @@ async function saveProveedor() {
   const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'PUT', body);
   if (r.error) { toast(r.error,'error'); return; }
   toast('Proveedor actualizado','success');
+  closeModal('modal-proveedor');
+  loadProveedores();
+}
+
+async function borrarProveedor() {
+  const nombre = document.getElementById('pv-nombre-display').textContent || 'este proveedor';
+  if (!confirm(`¿Seguro que deseas eliminar "${nombre}"?\nEsta acción no se puede deshacer.`)) return;
+  const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'DELETE');
+  if (r.error) { toast(r.error, 'error'); return; }
+  toast('Proveedor eliminado', 'success');
   closeModal('modal-proveedor');
   loadProveedores();
 }
