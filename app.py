@@ -308,11 +308,10 @@ def me():
 def get_maestros():
     hoteles       = rows_to_list(query("SELECT * FROM hoteles WHERE activo=1 ORDER BY codigo"))
     departamentos = rows_to_list(query("SELECT * FROM departamentos WHERE activo=1 ORDER BY nombre"))
-    proveedores   = rows_to_list(query("SELECT * FROM proveedores WHERE activo=1 ORDER BY nombre"))
     return jsonify({
         "hoteles":       hoteles,
         "departamentos": departamentos,
-        "proveedores":   proveedores,
+        "proveedores":   [],   # vacío — se usa autocomplete en tiempo real
         "estados":       ESTADOS_VALIDOS,
     })
 
