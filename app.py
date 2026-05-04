@@ -361,6 +361,19 @@ def update_proveedor(pid):
     db.commit()
     return jsonify({"ok": True})
 
+@app.route("/api/proveedores/<int:pid>", methods=["DELETE"])
+@login_required
+def delete_proveedor(pid):
+    db = get_db()
+    # Verificar si tiene pedidos asociados
+    row = query("SELECT COUNT(*) as cnt FROM pedidos WHERE proveedor_id=%s", (pid,))
+    cnt = rows_to_list(row)[0]["cnt"] if row else 0
+    if cnt > 0:
+        return jsonify({"error": f"No se puede eliminar: tiene {cnt} pedido{'s' if cnt!=1 else ''} asociado{'s' if cnt!=1 else ''}"}), 409
+    execute("DELETE FROM proveedores WHERE id=%s", (pid,))
+    db.commit()
+    return jsonify({"ok": True})
+
 @app.route("/api/proveedores/exportar", methods=["GET"])
 @login_required
 def exportar_proveedores():
