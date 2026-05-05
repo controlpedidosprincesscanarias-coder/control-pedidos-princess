@@ -901,7 +901,18 @@ def reset_e_importar():
         # ── 1. Borrado total (CASCADE elimina adjuntos, historial, eliminados) ──
         with db.cursor() as cur_del:
             cur_del.execute("DELETE FROM pedidos")                # CASCADE → adjuntos + historial
-            cur_del.execute("DELETE FROM pedidos_eliminados")     # limpiar registro histórico también
+            # pedidos_eliminados puede no existir si no se ejecutó la migración
+            cur_del.execute("""
+                DO $$ BEGIN
+                    IF EXISTS (
+                        SELECT 1 FROM information_schema.tables
+                        WHERE table_schema = 'public'
+                          AND table_name   = 'pedidos_eliminados'
+                    ) THEN
+                        DELETE FROM pedidos_eliminados;
+                    END IF;
+                END $$;
+            """)
 
         log.info("RESET: todos los pedidos eliminados por admin user_id=%s", uid)
 
