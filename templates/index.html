@@ -1398,7 +1398,10 @@ async function borrarAdjunto(adjId) {
 
 function clearPedidoForm() {
   ['p-hotel','p-depto','p-pedido-num','p-presup','p-albaran','p-observaciones','p-nota'].forEach(id=>setVal(id,''));
-  ['p-f-solicitud','p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
+  ['p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
+  // Fecha de solicitud: hoy por defecto en pedidos nuevos
+  const hoy = new Date().toISOString().split('T')[0];
+  setVal('p-f-solicitud', hoy);
   setVal('p-estado', G.maestros.estados[0]||'');
   document.getElementById('p-proveedor').value = '';
   document.getElementById('p-proveedor-input').value = '';
@@ -1517,6 +1520,10 @@ async function loadAlertas() {
       ? '<span class="badge-alerta urgente">🔴 URGENTE</span>'
       : '<span class="badge-alerta aviso">⚠️ AVISO</span>';
     const diasLabel = `<span class="alert-dias ${esUrgente ? 'urgente' : ''}">${p.dias_tramitacion} días</span>`;
+    const fechaRef = p.estado === 'PENDIENTE COTIZACIÓN' ? p.fecha_solicitud : p.fecha_tramitacion;
+    const fechaLabel = p.estado === 'PENDIENTE COTIZACIÓN'
+      ? `<span title="Fecha de solicitud">${fmtDate(fechaRef)||'—'}</span>`
+      : (fmtDate(fechaRef)||'—');
     return `
     <tr class="${rowClass}">
       <td class="monospace">${p.norden||'—'}</td>
@@ -1524,7 +1531,7 @@ async function loadAlertas() {
       <td class="monospace">${p.pedido_num||'—'}</td>
       <td>${estadoBadge(p.estado)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
-      <td class="monospace" style="font-size:12px">${fmtDate(p.fecha_tramitacion)||'—'}</td>
+      <td class="monospace" style="font-size:12px">${fechaLabel}</td>
       <td>${diasLabel}</td>
       <td>${nivelBadge}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="openPedidoModal(${p.id})">✏ Editar</button></td>

@@ -825,9 +825,13 @@ def get_stats():
             'ENVIADO AL PROVEEDOR',
             'PENDIENTE FIRMA DIRECCION COMPRAS',
             'PENDIENTE DE FIRMA DIRECCION HOTEL',
-            'ENTREGA PARCIAL'
+            'ENTREGA PARCIAL',
+            'PENDIENTE COTIZACIÓN'
         )
-          AND p.fecha_tramitacion IS NOT NULL
+          AND (
+            p.fecha_tramitacion IS NOT NULL
+            OR (p.estado = 'PENDIENTE COTIZACIÓN' AND p.fecha_solicitud IS NOT NULL)
+          )
         ORDER BY p.fecha_tramitacion ASC
     """))
 
@@ -861,15 +865,20 @@ def get_stats():
         "ENTREGA PARCIAL": {
             "primera": 10, "urgente": None, "ciclo": 10,
         },
+        "PENDIENTE COTIZACIÓN": {
+            "primera": 2, "urgente": 3, "ciclo": None, "fecha_ref": "fecha_solicitud",
+        },
     }
 
     alertas = []
     for p in alertas_raw:
-        dias = _dias_desde(p.get("fecha_tramitacion"))
-        if dias is None:
-            continue
         cfg = UMBRALES.get(p["estado"])
         if not cfg:
+            continue
+        # Elegir la fecha de referencia según el estado
+        fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
+        dias = _dias_desde(p.get(fecha_ref_campo))
+        if dias is None:
             continue
 
         primera = cfg["primera"]
