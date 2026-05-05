@@ -1746,12 +1746,15 @@ function calcDias(s) {
 })();
 </script>
 <!-- ── MODAL IMPORTAR EXCEL ──────────────────────────────────────────────── -->
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL IMPORTAR PEDIDOS (paso 1: selección de archivo)
+════════════════════════════════════════════════════════════════════════ -->
 <div id="import-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:12px;padding:32px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.2);">
+  <div style="background:#fff;border-radius:12px;padding:32px;width:500px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.2);">
     <h3 style="margin:0 0 8px;color:#0f2044;font-size:1.2rem;">⬆ Importar pedidos desde Excel</h3>
     <p style="margin:0 0 20px;color:#666;font-size:.9rem;">
       El archivo debe tener las mismas columnas que el Excel exportado.<br>
-      Los pedidos se <strong>añaden</strong> a los existentes, no se sustituyen.
+      Los pedidos se añaden <strong>a continuación de los existentes</strong> con numeración correlativa.
     </p>
 
     <div id="import-dropzone"
@@ -1770,16 +1773,104 @@ function calcDias(s) {
 
     <div style="display:flex;gap:12px;justify-content:flex-end;">
       <button class="btn btn-ghost btn-sm" onclick="closeImportModal()">Cancelar</button>
-      <button class="btn btn-gold" id="btn-importar" onclick="doImport()" disabled style="opacity:.5">Importar</button>
+      <button class="btn btn-gold" id="btn-importar" onclick="onClickImportar()" disabled style="opacity:.5">Importar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL ADMIN: ¿Ampliar o desde cero? (paso 2 admin)
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-import-modo" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1100;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:36px;width:480px;max-width:95vw;box-shadow:0 12px 48px rgba(0,0,0,.3);">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div style="font-size:2rem;">📋</div>
+      <div>
+        <div style="font-weight:700;font-size:1.1rem;color:#0f2044;">Modo de importación</div>
+        <div style="color:#888;font-size:.85rem;">Selecciona cómo deseas proceder</div>
+      </div>
+    </div>
+
+    <div style="display:grid;gap:12px;margin-bottom:24px;">
+      <!-- Opción A: Ampliar -->
+      <div id="opt-ampliar"
+           onclick="selectImportMode('ampliar')"
+           style="border:2px solid #dee2e6;border-radius:10px;padding:16px 20px;cursor:pointer;transition:.15s;display:flex;align-items:flex-start;gap:14px;">
+        <div style="font-size:1.6rem;margin-top:2px;">➕</div>
+        <div>
+          <div style="font-weight:600;color:#0f2044;margin-bottom:4px;">Ampliar información existente</div>
+          <div style="font-size:.85rem;color:#666;">Los nuevos pedidos del Excel se añadirán a continuación de los que ya hay en el sistema, manteniendo la numeración correlativa actual.</div>
+        </div>
+      </div>
+      <!-- Opción B: Desde cero -->
+      <div id="opt-reset"
+           onclick="selectImportMode('reset')"
+           style="border:2px solid #dee2e6;border-radius:10px;padding:16px 20px;cursor:pointer;transition:.15s;display:flex;align-items:flex-start;gap:14px;">
+        <div style="font-size:1.6rem;margin-top:2px;">🗑️</div>
+        <div>
+          <div style="font-weight:600;color:#8B0000;margin-bottom:4px;">Eliminar todo y empezar desde cero</div>
+          <div style="font-size:.85rem;color:#666;">Se borrarán <strong>todos</strong> los pedidos actuales, incluidos PDFs e imágenes adjuntas. La numeración comenzará desde 1 con el nuevo Excel.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn btn-ghost btn-sm" onclick="closeModalImportModo()">Cancelar</button>
+      <button class="btn btn-gold" id="btn-confirmar-modo" onclick="confirmarModo()" disabled style="opacity:.5">Continuar →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL CONFIRMACIÓN DESTRUCCIÓN (paso 3 reset)
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-import-reset-confirm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1200;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:36px;width:480px;max-width:95vw;box-shadow:0 12px 48px rgba(139,0,0,.4);border-top:5px solid #8B0000;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div style="font-size:2.2rem;">⚠️</div>
+      <div>
+        <div style="font-weight:700;font-size:1.1rem;color:#8B0000;">ATENCIÓN: Operación irreversible</div>
+        <div style="color:#888;font-size:.85rem;">Esta acción no se puede deshacer</div>
+      </div>
+    </div>
+
+    <div style="background:#fff3f3;border:1px solid #f5c6cb;border-radius:8px;padding:16px;margin-bottom:20px;font-size:.9rem;color:#721c24;line-height:1.6;">
+      Se procederá a la <strong>eliminación definitiva</strong> de:
+      <ul style="margin:8px 0 0 18px;padding:0;">
+        <li>Todos los pedidos registrados en el sistema</li>
+        <li>Todos los PDFs adjuntos (presupuestos y pedidos)</li>
+        <li>Todas las imágenes de artículos</li>
+        <li>Todo el historial de estados</li>
+        <li>El registro de pedidos eliminados</li>
+      </ul>
+      <div style="margin-top:12px;font-weight:700;">¿Deseas realizar una copia de seguridad antes de continuar?</div>
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+      <button class="btn btn-ghost btn-sm" onclick="closeModalResetConfirm()" style="margin-right:auto;">← Cancelar y volver</button>
+      <button class="btn" onclick="descargarBackupYReset()"
+              style="background:#1a3a6b;color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;">
+        💾 Hacer copia de seguridad y continuar
+      </button>
+      <button class="btn" onclick="resetSinBackup()"
+              style="background:#8B0000;color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;">
+        🗑️ Eliminar todo sin backup
+      </button>
     </div>
   </div>
 </div>
 
 <script>
-let importFile = null;
+/* ──────────────────────────────────────────────────────────────────
+   LÓGICA DE IMPORTACIÓN DE PEDIDOS
+────────────────────────────────────────────────────────────────── */
+let importFile       = null;
+let importModoSel    = null;   // 'ampliar' | 'reset'
 
+/* — Apertura / cierre modales — */
 function openImportModal() {
   importFile = null;
+  importModoSel = null;
   document.getElementById('import-filename').textContent = 'Ningún archivo seleccionado';
   document.getElementById('import-resultado').style.display = 'none';
   document.getElementById('import-file-input').value = '';
@@ -1792,6 +1883,17 @@ function closeImportModal() {
   document.getElementById('import-modal').style.display = 'none';
 }
 
+function closeModalImportModo() {
+  document.getElementById('modal-import-modo').style.display = 'none';
+}
+
+function closeModalResetConfirm() {
+  document.getElementById('modal-import-reset-confirm').style.display = 'none';
+  // Volver al selector de modo
+  document.getElementById('modal-import-modo').style.display = 'flex';
+}
+
+/* — Drag & drop / selección de archivo — */
 function handleImportDrop(e) {
   e.preventDefault();
   document.getElementById('import-dropzone').style.background = '';
@@ -1811,16 +1913,97 @@ function handleImportFile(f) {
   btn.disabled = false; btn.style.opacity = '1';
 }
 
-async function doImport() {
+/* — Click en "Importar" — */
+async function onClickImportar() {
   if (!importFile) return;
+
+  // Si es admin → mostrar selector de modo
+  if (G.rol === 'admin') {
+    importModoSel = null;
+    // Resetear selección visual
+    document.getElementById('opt-ampliar').style.border = '2px solid #dee2e6';
+    document.getElementById('opt-ampliar').style.background = '';
+    document.getElementById('opt-reset').style.border   = '2px solid #dee2e6';
+    document.getElementById('opt-reset').style.background = '';
+    document.getElementById('btn-confirmar-modo').disabled = true;
+    document.getElementById('btn-confirmar-modo').style.opacity = '.5';
+    document.getElementById('import-modal').style.display = 'none';
+    document.getElementById('modal-import-modo').style.display = 'flex';
+  } else {
+    // Usuario normal → directamente ampliar
+    await doImport('ampliar');
+  }
+}
+
+/* — Selección de modo en el modal admin — */
+function selectImportMode(modo) {
+  importModoSel = modo;
+  const optA = document.getElementById('opt-ampliar');
+  const optB = document.getElementById('opt-reset');
+  const btn  = document.getElementById('btn-confirmar-modo');
+
+  if (modo === 'ampliar') {
+    optA.style.border     = '2px solid #1a3a6b';
+    optA.style.background = '#f0f4ff';
+    optB.style.border     = '2px solid #dee2e6';
+    optB.style.background = '';
+  } else {
+    optB.style.border     = '2px solid #8B0000';
+    optB.style.background = '#fff3f3';
+    optA.style.border     = '2px solid #dee2e6';
+    optA.style.background = '';
+  }
+  btn.disabled = false; btn.style.opacity = '1';
+}
+
+function confirmarModo() {
+  if (!importModoSel) return;
+  if (importModoSel === 'ampliar') {
+    document.getElementById('modal-import-modo').style.display = 'none';
+    doImport('ampliar');
+  } else {
+    // Mostrar confirmación de borrado
+    document.getElementById('modal-import-modo').style.display = 'none';
+    document.getElementById('modal-import-reset-confirm').style.display = 'flex';
+  }
+}
+
+/* — Backup + reset — */
+async function descargarBackupYReset() {
+  // 1. Descargar backup
+  const link = document.createElement('a');
+  link.href = '/api/importar/backup';
+  link.download = '';
+  link.click();
+  // 2. Pequeña espera para que el navegador inicie la descarga
+  await new Promise(r => setTimeout(r, 1200));
+  // 3. Proceder con el reset
+  document.getElementById('modal-import-reset-confirm').style.display = 'none';
+  doImport('reset');
+}
+
+function resetSinBackup() {
+  document.getElementById('modal-import-reset-confirm').style.display = 'none';
+  doImport('reset');
+}
+
+/* — Ejecución de la importación — */
+async function doImport(modo) {
+  if (!importFile) return;
+
+  // Mostrar el modal principal con estado de progreso
+  document.getElementById('import-modal').style.display = 'flex';
   const btn = document.getElementById('btn-importar');
-  btn.disabled = true; btn.textContent = 'Importando…';
+  btn.disabled = true;
+  btn.textContent = modo === 'reset' ? 'Procesando reset…' : 'Importando…';
 
   const fd = new FormData();
   fd.append('archivo', importFile);
 
+  const endpoint = modo === 'reset' ? '/api/importar/reset' : '/api/importar';
+
   try {
-    const r = await fetch('/api/importar', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const r = await fetch(endpoint, { method: 'POST', body: fd, credentials: 'same-origin' });
     const d = await r.json();
     const res = document.getElementById('import-resultado');
     res.style.display = 'block';
@@ -1828,7 +2011,8 @@ async function doImport() {
     if (d.ok) {
       res.style.background = '#d4edda';
       res.style.color = '#155724';
-      let msg = `✅ ${d.insertados} pedido${d.insertados !== 1 ? 's' : ''} importado${d.insertados !== 1 ? 's' : ''} correctamente.`;
+      const accion = modo === 'reset' ? 'importados (desde cero)' : 'importados';
+      let msg = `✅ ${d.insertados} pedido${d.insertados !== 1 ? 's' : ''} ${accion} correctamente.`;
       if (d.errores && d.errores.length) {
         msg += `<br><br>⚠️ <strong>${d.errores.length} fila${d.errores.length > 1 ? 's' : ''} con error:</strong><br>` +
                d.errores.map(e => `• ${e}`).join('<br>');
@@ -1854,6 +2038,9 @@ async function doImport() {
 // Cerrar modal al hacer clic fuera
 document.getElementById('import-modal').addEventListener('click', function(e) {
   if (e.target === this) closeImportModal();
+});
+document.getElementById('modal-import-modo').addEventListener('click', function(e) {
+  if (e.target === this) closeModalImportModo();
 });
 </script>
 

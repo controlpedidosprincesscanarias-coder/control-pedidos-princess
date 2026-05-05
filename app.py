@@ -805,6 +805,239 @@ def get_stats():
         "num_alertas": len(alertas),
     })
 
+# ── API Reset completo (admin only) ───────────────────────────────────────────
+
+@app.route("/api/importar/backup", methods=["GET"])
+@admin_required
+def exportar_backup_previo():
+    """Genera y devuelve un Excel con todos los pedidos actuales (backup previo al reset)."""
+    try:
+        import openpyxl, io
+        from openpyxl.styles import Font, PatternFill, Alignment
+
+        pedidos = rows_to_list(query(f"{PEDIDO_SELECT} ORDER BY p.norden ASC"))
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "BACKUP PEDIDOS"
+
+        HEADERS = [
+            "Nº ORDEN", "HOTEL", "DEPARTAMENTO", "FECHA SOLICITUD",
+            "FECHA ENVÍO Vº Bº", "PEDIDO Nº", "FECHA TRAMITACIÓN",
+            "Nº PRESUPUESTO", "ESTADO", "Nº ENTRADA ALBARÁN",
+            "COMUNICADO A&B", "COMUNICADO JEFE DEP.",
+            "PARTE ROTURA", "PARTE AMPLIACIÓN",
+            "PROVEEDOR", "EMAIL PROVEEDOR", "TELÉFONO", "CONTACTO",
+            "OBSERVACIONES", "CREADO POR", "CREADO EN",
+        ]
+        ws.append(HEADERS)
+        header_fill = PatternFill("solid", fgColor="8B0000")
+        header_font = Font(bold=True, color="FFFFFF")
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center")
+
+        def strip_tz(val):
+            if hasattr(val, "tzinfo") and val.tzinfo is not None:
+                return val.replace(tzinfo=None)
+            return val
+
+        for p in pedidos:
+            ws.append([
+                p.get("norden"), p.get("hotel_codigo"), p.get("departamento_nombre"),
+                strip_tz(p.get("fecha_solicitud")), strip_tz(p.get("fecha_envio_visto_bueno")),
+                p.get("pedido_num"), strip_tz(p.get("fecha_tramitacion")),
+                p.get("presupuesto_num"), p.get("estado"),
+                p.get("entrada_albaran_num"),
+                "SÍ" if p.get("comunicado_ab") else "NO",
+                "SÍ" if p.get("comunicado_jefe_dep") else "NO",
+                "SÍ" if p.get("parte_rotura") else "NO",
+                "SÍ" if p.get("parte_ampliacion") else "NO",
+                p.get("proveedor_nombre"), p.get("proveedor_email"),
+                p.get("proveedor_telefono"), p.get("proveedor_contacto"),
+                p.get("observaciones"), p.get("creado_por_nombre"), strip_tz(p.get("creado_en")),
+            ])
+
+        COL_WIDTHS = [8,8,22,14,14,16,14,18,32,16,12,14,12,12,28,28,14,16,40,18,18]
+        for i, w in enumerate(COL_WIDTHS, 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+        ws.freeze_panes = "A2"
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        from flask import send_file
+        filename = f"BACKUP_PEDIDOS_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return send_file(buf,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         as_attachment=True, download_name=filename)
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/importar/reset", methods=["POST"])
+@admin_required
+def reset_e_importar():
+    """
+    Borra TODOS los pedidos (incluidos adjuntos PDF/imágenes via CASCADE)
+    y el historial. Luego importa el Excel recibido desde cero.
+    Solo accesible para administradores.
+    """
+    try:
+        import openpyxl
+        from datetime import datetime as dt
+
+        if "archivo" not in request.files:
+            return jsonify({"ok": False, "error": "No se recibió ningún archivo"}), 400
+
+        archivo = request.files["archivo"]
+        if not archivo.filename.endswith((".xlsx", ".xls")):
+            return jsonify({"ok": False, "error": "El archivo debe ser .xlsx"}), 400
+
+        db  = get_db()
+        uid = current_user_id()
+
+        # ── 1. Borrado total (CASCADE elimina adjuntos, historial, eliminados) ──
+        with db.cursor() as cur_del:
+            cur_del.execute("DELETE FROM pedidos")                # CASCADE → adjuntos + historial
+            cur_del.execute("DELETE FROM pedidos_eliminados")     # limpiar registro histórico también
+
+        log.info("RESET: todos los pedidos eliminados por admin user_id=%s", uid)
+
+        # ── 2. Leer Excel y construir filas (misma lógica que /api/importar) ──
+        wb = openpyxl.load_workbook(archivo, data_only=True)
+        ws = wb.active
+        headers = [str(c.value).strip().upper() if c.value else "" for c in ws[1]]
+
+        def col_raw(row, name):
+            try:
+                idx = headers.index(name)
+                return row[idx].value
+            except (ValueError, IndexError):
+                return None
+
+        def col(row, name):
+            v = col_raw(row, name)
+            return str(v).strip() if v is not None else None
+
+        def parse_date(val):
+            if val is None:
+                return None
+            if hasattr(val, 'strftime'):
+                return val.strftime("%Y-%m-%d")
+            try:
+                n = int(float(str(val)))
+                if 30000 < n < 60000:
+                    from openpyxl.utils.datetime import from_excel
+                    return from_excel(n).strftime("%Y-%m-%d")
+            except Exception:
+                pass
+            for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y"):
+                try:
+                    return dt.strptime(str(val).strip(), fmt).strftime("%Y-%m-%d")
+                except Exception:
+                    pass
+            return None
+
+        def bool_val(val):
+            if not val:
+                return 0
+            return 1 if str(val).strip().upper() in ("SÍ", "SI", "S", "1", "TRUE", "YES") else 0
+
+        hoteles_cache     = {r["codigo"]: r["id"] for r in rows_to_list(query("SELECT id, codigo FROM hoteles WHERE activo=1"))}
+        deptos_cache      = {r["nombre"].upper(): r["id"] for r in rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1"))}
+        proveedores_cache = {r["nombre"].upper(): r["id"] for r in rows_to_list(query("SELECT id, nombre FROM proveedores WHERE activo=1"))}
+
+        errores = []
+        filas_validas = []
+
+        # Numeración correlativa desde 1 (reset completo)
+        year = datetime.now().year
+
+        for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
+            hotel_codigo = col(row, "HOTEL")
+            if not hotel_codigo:
+                continue
+
+            hotel_id = hoteles_cache.get(str(hotel_codigo).upper())
+            if not hotel_id:
+                errores.append(f"Fila {i}: hotel '{hotel_codigo}' no encontrado")
+                continue
+
+            depto_nombre = col(row, "DEPARTAMENTO")
+            depto_id = deptos_cache.get(str(depto_nombre).upper()) if depto_nombre else None
+
+            prov_nombre = col(row, "PROVEEDOR")
+            prov_id = proveedores_cache.get(str(prov_nombre).upper()) if prov_nombre else None
+
+            estado_raw = col(row, "ESTADO")
+            estado = estado_raw if estado_raw in ESTADOS_VALIDOS else "PENDIENTE FIRMA DIRECCION COMPRAS"
+
+            # norden siempre correlativo desde 1, independiente del Excel
+            filas_validas.append({
+                "norden":    len(filas_validas) + 1,
+                "hotel_id":  hotel_id, "depto_id": depto_id,
+                "fecha_sol": parse_date(col_raw(row, "FECHA SOLICITUD")),
+                "fecha_env": parse_date(col_raw(row, "FECHA ENVÍO Vº Bº")),
+                "fecha_tra": parse_date(col_raw(row, "FECHA TRAMITACIÓN")),
+                "pedido_num":  col(row, "PEDIDO Nº"),
+                "presup_num":  col(row, "Nº PRESUPUESTO"),
+                "albaran_num": col(row, "Nº ENTRADA ALBARÁN"),
+                "estado":    estado,
+                "com_ab":    bool_val(col(row, "COMUNICADO A&B")),
+                "com_jefe":  bool_val(col(row, "COMUNICADO JEFE DEP.")),
+                "p_rotura":  bool_val(col(row, "PARTE ROTURA")),
+                "p_amplia":  bool_val(col(row, "PARTE AMPLIACIÓN")),
+                "prov_id":   prov_id,
+                "obs":       col(row, "OBSERVACIONES"),
+            })
+
+        # ── 3. Bulk insert ─────────────────────────────────────────────────────
+        insertados = 0
+        if filas_validas:
+            from psycopg2.extras import execute_values
+            with db.cursor() as cur_i:
+                pedido_rows = [
+                    (f["norden"], f["hotel_id"], f["depto_id"],
+                     f["fecha_sol"], f["fecha_env"], f["fecha_tra"],
+                     f["pedido_num"], f["presup_num"], f["albaran_num"],
+                     f["estado"], f["com_ab"], f["com_jefe"],
+                     f["p_rotura"], f["p_amplia"], f["prov_id"],
+                     f["obs"], uid, uid)
+                    for f in filas_validas
+                ]
+                ids = execute_values(cur_i, """
+                    INSERT INTO pedidos (
+                        norden, hotel_id, departamento_id,
+                        fecha_solicitud, fecha_envio_visto_bueno, fecha_tramitacion,
+                        pedido_num, presupuesto_num, entrada_albaran_num,
+                        estado, comunicado_ab, comunicado_jefe_dep,
+                        parte_rotura, parte_ampliacion,
+                        proveedor_id, observaciones,
+                        creado_por_id, modificado_por_id
+                    ) VALUES %s RETURNING id
+                """, pedido_rows, fetch=True)
+
+                insertados = len(ids)
+
+                historial_rows = [
+                    (ids[idx]["id"], filas_validas[idx]["estado"], uid, "Importado desde Excel (reset completo)")
+                    for idx in range(len(ids))
+                ]
+                execute_values(cur_i, """
+                    INSERT INTO historial_estados (pedido_id, estado_nuevo, usuario_id, nota)
+                    VALUES %s
+                """, historial_rows)
+
+        db.commit()
+        log.info("RESET completado: %d pedidos importados por admin user_id=%s", insertados, uid)
+        return jsonify({"ok": True, "insertados": insertados, "errores": errores})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── API Importar Excel ─────────────────────────────────────────────────────────
 
 @app.route("/api/importar", methods=["POST"])
