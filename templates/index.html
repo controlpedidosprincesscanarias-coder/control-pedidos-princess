@@ -157,7 +157,7 @@ tbody tr:last-child{border-bottom:none}
 .bool-no{color:#d1d5db}
 
 /* Comentarios en tabla */
-.comentarios-cell{max-width:220px}
+.comentarios-cell{max-width:160px}
 .comentarios-text{
   display:block;
   overflow:hidden;
@@ -165,7 +165,7 @@ tbody tr:last-child{border-bottom:none}
   white-space:nowrap;
   color:var(--text);
   font-size:12px;
-  max-width:220px;
+  max-width:160px;
 }
 
 /* ── Filtros ────────────────────────────────────────────────────────────── */
@@ -577,7 +577,7 @@ tbody tr:last-child{border-bottom:none}
                 <tr>
                   <th>Nº</th><th>Hotel</th><th>Depto.</th>
                   <th>F. Solicitud</th><th>Pedido SAP</th>
-                  <th>Estado</th><th>Proveedor</th>
+                  <th>Estado</th><th>F. Tramit.</th><th>Proveedor</th>
                   <th>Observaciones</th>
                   <th></th>
                 </tr>
@@ -1177,6 +1177,7 @@ function renderPedidosTable(pedidos) {
       <td>${fmtDate(p.fecha_solicitud)}</td>
       <td class="monospace">${p.pedido_num||'—'}</td>
       <td>${estadoBadge(p.estado)}</td>
+      <td>${fmtDate(p.fecha_tramitacion)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
       <td class="comentarios-cell" title="${(p.observaciones||'').replace(/"/g,'&quot;')}">${p.observaciones ? `<span class="comentarios-text">${p.observaciones}</span>` : '<span class="bool-no">—</span>'}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openPedidoModal(${p.id})">✏ Editar</button></td>
