@@ -576,7 +576,7 @@ def get_pedidos():
         "estado":     "p.estado, p.creado_en DESC",
         "hotel":      "h.codigo, p.creado_en DESC",
     }
-    order = order_map.get(request.args.get("orden", ""), "p.creado_en DESC")
+    order = order_map.get(request.args.get("orden", ""), "p.norden DESC")
 
     try:
         page      = max(1, int(request.args.get("page", 1)))
