@@ -765,7 +765,7 @@ tbody tr:last-child{border-bottom:none}
             <input class="form-control" id="p-proveedor-input" placeholder="Escribir para buscar proveedor…"
                    autocomplete="off" oninput="buscarProveedor(this.value)" onfocus="buscarProveedor(this.value)">
             <input type="hidden" id="p-proveedor">
-            <div id="prov-dropdown" style="display:none;position:absolute;z-index:9999;width:100%;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:220px;overflow-y:auto;top:calc(100% + 4px)"></div>
+            <div id="prov-dropdown" style="display:none;position:fixed;z-index:99999;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:220px;overflow-y:auto"></div>
           </div>
         </div>
 
@@ -1402,7 +1402,9 @@ function clearPedidoForm() {
   // Fecha de solicitud: hoy por defecto en pedidos nuevos
   const hoy = new Date().toISOString().split('T')[0];
   setVal('p-f-solicitud', hoy);
-  setVal('p-estado', G.maestros.estados[0]||'');
+  // Estado por defecto: PENDIENTE COTIZACIÓN (o el primero disponible como fallback)
+  const estadoPendiente = G.maestros.estados.find(e => e === 'PENDIENTE COTIZACIÓN') || G.maestros.estados[0] || '';
+  setVal('p-estado', estadoPendiente);
   document.getElementById('p-proveedor').value = '';
   document.getElementById('p-proveedor-input').value = '';
   document.getElementById('prov-dropdown').style.display = 'none';
@@ -1681,6 +1683,16 @@ function setProvFile(f) {
   document.getElementById('btn-importar-prov').style.opacity = '1';
 }
 let _provTimer = null;
+function _posicionarProvDropdown() {
+  const input = document.getElementById('p-proveedor-input');
+  const drop  = document.getElementById('prov-dropdown');
+  if (!input || !drop) return;
+  const rect = input.getBoundingClientRect();
+  drop.style.top   = (rect.bottom + 4) + 'px';
+  drop.style.left  = rect.left + 'px';
+  drop.style.width = rect.width + 'px';
+}
+
 async function buscarProveedor(q) {
   const drop = document.getElementById('prov-dropdown');
   const hidden = document.getElementById('p-proveedor');
@@ -1703,6 +1715,7 @@ async function buscarProveedor(q) {
           ${p.codigo ? `<span style="color:var(--text-secondary);margin-left:6px;font-size:.8rem">${p.codigo}</span>` : ''}
         </div>`).join('');
     }
+    _posicionarProvDropdown();
     drop.style.display = 'block';
   }, 200);
 }
@@ -1718,6 +1731,16 @@ document.addEventListener('click', (e) => {
   if (drop && !drop.contains(e.target) && e.target.id !== 'p-proveedor-input') {
     drop.style.display = 'none';
   }
+});
+
+// Reposicionar el dropdown si el modal hace scroll o la ventana cambia de tamaño
+document.getElementById('modal-pedido').addEventListener('scroll', () => {
+  const drop = document.getElementById('prov-dropdown');
+  if (drop && drop.style.display !== 'none') _posicionarProvDropdown();
+});
+window.addEventListener('resize', () => {
+  const drop = document.getElementById('prov-dropdown');
+  if (drop && drop.style.display !== 'none') _posicionarProvDropdown();
 });
 
 async function doImportProv() {
