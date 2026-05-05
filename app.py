@@ -562,10 +562,12 @@ def get_pedidos():
     if depto:
         wheres.append("p.departamento_id = %s"); args.append(depto)
     if alerta == "1":
+        # Filtro rápido: pedidos con fecha_tramitacion y estado activo
+        # (el cálculo exacto de días y nivel se hace en /api/stats)
         wheres.append("""
             p.estado IN ('ENVIADO AL PROVEEDOR','PENDIENTE FIRMA DIRECCION COMPRAS',
                          'PENDIENTE DE FIRMA DIRECCION HOTEL','ENTREGA PARCIAL')
-            AND NOW() - p.modificado_en >= INTERVAL '7 days'
+            AND p.fecha_tramitacion IS NOT NULL
         """)
 
     where_sql = ("WHERE " + " AND ".join(wheres)) if wheres else ""
@@ -791,14 +793,80 @@ def get_stats():
            FROM hoteles h LEFT JOIN pedidos p ON p.hotel_id=h.id
            GROUP BY h.id, h.codigo, h.nombre ORDER BY total DESC"""
     ))
-    alertas   = rows_to_list(query(f"""
+    # ── Alertas por estado cruzando fecha_tramitacion ─────────────────────────
+    # Umbrales (días desde fecha_tramitacion):
+    #   ENVIADO AL PROVEEDOR               → primera ≥15d; urgente ≥25d; luego c/10d
+    #   PENDIENTE FIRMA DIRECCIÓN COMPRAS  → aviso c/8d
+    #   PENDIENTE DE FIRMA DIRECCIÓN HOTEL → aviso c/5d
+    #   ENTREGA PARCIAL                    → aviso c/10d
+    #   ENTREGADO / ANULADO                → sin alerta
+    alertas_raw = rows_to_list(query(f"""
         {PEDIDO_SELECT}
-        WHERE p.estado IN ('ENVIADO AL PROVEEDOR','PENDIENTE FIRMA DIRECCION COMPRAS',
-                           'PENDIENTE DE FIRMA DIRECCION HOTEL','ENTREGA PARCIAL')
-          AND NOW() - p.modificado_en >= INTERVAL '7 days'
-        ORDER BY p.modificado_en ASC
-        LIMIT 30
+        WHERE p.estado IN (
+            'ENVIADO AL PROVEEDOR',
+            'PENDIENTE FIRMA DIRECCION COMPRAS',
+            'PENDIENTE DE FIRMA DIRECCION HOTEL',
+            'ENTREGA PARCIAL'
+        )
+          AND p.fecha_tramitacion IS NOT NULL
+        ORDER BY p.fecha_tramitacion ASC
     """))
+
+    from datetime import date as _date, datetime as _dt
+
+    def _dias_desde(fecha_str):
+        if not fecha_str:
+            return None
+        try:
+            if hasattr(fecha_str, 'date'):
+                f = fecha_str.date()
+            elif isinstance(fecha_str, _date):
+                f = fecha_str
+            else:
+                s = str(fecha_str)[:10]
+                f = _dt.strptime(s, "%Y-%m-%d").date()
+            return (_date.today() - f).days
+        except Exception:
+            return None
+
+    UMBRALES = {
+        "ENVIADO AL PROVEEDOR": {
+            "primera": 15, "urgente": 25, "ciclo": 10,
+        },
+        "PENDIENTE FIRMA DIRECCION COMPRAS": {
+            "primera": 8, "urgente": None, "ciclo": 8,
+        },
+        "PENDIENTE DE FIRMA DIRECCION HOTEL": {
+            "primera": 5, "urgente": None, "ciclo": 5,
+        },
+        "ENTREGA PARCIAL": {
+            "primera": 10, "urgente": None, "ciclo": 10,
+        },
+    }
+
+    alertas = []
+    for p in alertas_raw:
+        dias = _dias_desde(p.get("fecha_tramitacion"))
+        if dias is None:
+            continue
+        cfg = UMBRALES.get(p["estado"])
+        if not cfg:
+            continue
+
+        primera = cfg["primera"]
+        urgente = cfg["urgente"]
+
+        if dias < primera:
+            continue  # aún no toca avisar
+
+        nivel = "urgente" if (urgente and dias >= urgente) else "aviso"
+        p["dias_tramitacion"] = dias
+        p["nivel_alerta"]     = nivel
+        alertas.append(p)
+
+    # Urgentes primero, luego por días descendente
+    alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1, -x["dias_tramitacion"]))
+
     return jsonify({
         "total": total, "by_estado": by_estado,
         "by_hotel": by_hotel, "alertas": alertas,

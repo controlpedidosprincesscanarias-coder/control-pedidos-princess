@@ -408,7 +408,12 @@ tbody tr:last-child{border-bottom:none}
 
 /* ── Alertas tabla ──────────────────────────────────────────────────────── */
 .alert-row{background:#fffbeb}
+.alert-row-urgente{background:#fff0f0 !important}
 .alert-dias{font-weight:700;color:#b45309;font-family:'DM Mono',monospace}
+.alert-dias.urgente{color:#dc2626}
+.badge-alerta{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap}
+.badge-alerta.urgente{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
+.badge-alerta.aviso{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
 
 /* ── Toast ──────────────────────────────────────────────────────────────── */
 #toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:9999}
@@ -533,7 +538,7 @@ tbody tr:last-child{border-bottom:none}
           <div class="stat-card"><div class="stat-num" id="st-total">—</div><div class="stat-label">Total pedidos</div></div>
           <div class="stat-card"><div class="stat-num" id="st-enviado" style="color:#1e40af">—</div><div class="stat-label">Enviados proveedor</div></div>
           <div class="stat-card"><div class="stat-num" id="st-entregado" style="color:#065f46">—</div><div class="stat-label">Entregados</div></div>
-          <div class="stat-card alert-card"><div class="stat-num" id="st-alertas">—</div><div class="stat-label">⚠ Sin resolver +7 días</div></div>
+          <div class="stat-card alert-card"><div class="stat-num" id="st-alertas">—</div><div class="stat-label">⚠ Pedidos con alerta activa</div></div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
           <div class="card">
@@ -602,12 +607,12 @@ tbody tr:last-child{border-bottom:none}
       <div id="view-alertas" class="section-hidden">
         <div class="card">
           <div class="card-header">
-            <span class="card-title">⚠️ Pedidos sin resolver más de 7 días</span>
+            <span class="card-title">⚠️ Alertas de seguimiento de pedidos</span>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Nº</th><th>Hotel</th><th>Pedido SAP</th><th>Estado</th><th>Proveedor</th><th>Días</th><th></th></tr>
+                <tr><th>Nº</th><th>Hotel</th><th>Pedido SAP</th><th>Estado</th><th>Proveedor</th><th>F. Tramitación</th><th>Días</th><th>Nivel</th><th></th></tr>
               </thead>
               <tbody id="alertas-tbody"></tbody>
             </table>
@@ -1472,16 +1477,31 @@ async function loadAlertas() {
     tbody.innerHTML=''; empty.classList.remove('section-hidden'); return;
   }
   empty.classList.add('section-hidden');
-  tbody.innerHTML = d.alertas.map(p => `
-    <tr class="alert-row">
+
+  // Agrupamos por nivel para el resumen superior
+  const urgentes = d.alertas.filter(p => p.nivel_alerta === 'urgente');
+  const avisos   = d.alertas.filter(p => p.nivel_alerta === 'aviso');
+
+  tbody.innerHTML = d.alertas.map(p => {
+    const esUrgente = p.nivel_alerta === 'urgente';
+    const rowClass  = esUrgente ? 'alert-row alert-row-urgente' : 'alert-row';
+    const nivelBadge = esUrgente
+      ? '<span class="badge-alerta urgente">🔴 URGENTE</span>'
+      : '<span class="badge-alerta aviso">⚠️ AVISO</span>';
+    const diasLabel = `<span class="alert-dias ${esUrgente ? 'urgente' : ''}">${p.dias_tramitacion} días</span>`;
+    return `
+    <tr class="${rowClass}">
       <td class="monospace">${p.norden||'—'}</td>
       <td><strong>${p.hotel_codigo||'—'}</strong></td>
       <td class="monospace">${p.pedido_num||'—'}</td>
       <td>${estadoBadge(p.estado)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
-      <td class="alert-dias">${calcDias(p.modificado_en)} días</td>
+      <td class="monospace" style="font-size:12px">${fmtDate(p.fecha_tramitacion)||'—'}</td>
+      <td>${diasLabel}</td>
+      <td>${nivelBadge}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="openPedidoModal(${p.id})">✏ Editar</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
