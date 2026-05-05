@@ -532,7 +532,10 @@ PEDIDO_SELECT = """
            pr.telefono as proveedor_telefono,
            pr.contacto as proveedor_contacto,
            u1.nombre as creado_por_nombre,
-           u2.nombre as modificado_por_nombre
+           u2.nombre as modificado_por_nombre,
+           EXISTS (
+               SELECT 1 FROM pedido_adjuntos pa WHERE pa.pedido_id = p.id
+           ) AS has_adjuntos
     FROM pedidos p
     LEFT JOIN hoteles       h  ON p.hotel_id          = h.id
     LEFT JOIN departamentos d  ON p.departamento_id   = d.id
@@ -674,6 +677,22 @@ def update_pedido(pid):
 
     estado_antes = pedido_actual["estado"]
     estado_nuevo = data.get("estado", estado_antes)
+
+    # ── Lógica automática: si se introduce fecha_solicitud por primera vez
+    #    y el pedido sigue en un estado "sin tramitar", pasar a PENDIENTE COTIZACIÓN
+    ESTADOS_SIN_TRAMITAR = {
+        "PENDIENTE FIRMA DIRECCION COMPRAS",
+        "PENDIENTE DE FIRMA DIRECCION HOTEL",
+    }
+    fecha_sol_nueva  = data.get("fecha_solicitud")
+    fecha_sol_actual = pedido_actual.get("fecha_solicitud")
+    if (
+        fecha_sol_nueva
+        and not fecha_sol_actual
+        and estado_nuevo in ESTADOS_SIN_TRAMITAR
+        and "estado" not in data          # el usuario no cambió el estado a mano
+    ):
+        estado_nuevo = "PENDIENTE COTIZACIÓN"
 
     execute("""
         UPDATE pedidos SET

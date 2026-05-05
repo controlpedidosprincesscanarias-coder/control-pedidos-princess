@@ -27,6 +27,7 @@
   /* Estado colores */
   --s-pendiente-compras: #ffeeba;
   --s-pendiente-hotel:   #ffe0a0;
+  --s-pendiente-cotizacion: #e0d4f7;
   --s-enviado:           #c8e6ff;
   --s-parcial:           #fff3cd;
   --s-entregado:         #c8f2d8;
@@ -146,7 +147,8 @@ tbody tr:last-child{border-bottom:none}
   white-space:nowrap
 }
 .badge-pendiente-compras{background:var(--s-pendiente-compras);color:#92400e}
-.badge-pendiente-hotel  {background:var(--s-pendiente-hotel);color:#92400e}
+.badge-pendiente-hotel      {background:var(--s-pendiente-hotel);color:#92400e}
+.badge-pendiente-cotizacion {background:var(--s-pendiente-cotizacion);color:#5b21b6}
 .badge-enviado          {background:var(--s-enviado);color:#1e40af}
 .badge-parcial          {background:var(--s-parcial);color:#78350f}
 .badge-entregado        {background:var(--s-entregado);color:#065f46}
@@ -167,6 +169,16 @@ tbody tr:last-child{border-bottom:none}
   font-size:12px;
   max-width:160px;
 }
+
+/* Indicador adjuntos en tabla */
+.adj-indicator{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:22px;height:22px;border-radius:50%;
+  background:var(--primary-light, #dbeafe);
+  font-size:13px;cursor:default;
+  transition:transform .15s;
+}
+.adj-indicator:hover{transform:scale(1.2)}
 
 /* ── Filtros ────────────────────────────────────────────────────────────── */
 .filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center}
@@ -584,6 +596,7 @@ tbody tr:last-child{border-bottom:none}
                   <th>F. Solicitud</th><th>Pedido SAP</th>
                   <th>Estado</th><th>F. Tramit.</th><th>Proveedor</th>
                   <th>Observaciones</th>
+                  <th title="Archivos adjuntos" style="width:36px;text-align:center">📎</th>
                   <th></th>
                 </tr>
               </thead>
@@ -982,6 +995,19 @@ async function doLogout() {
 document.getElementById('login-pass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
 document.getElementById('login-user').addEventListener('keydown', e => { if(e.key==='Enter') document.getElementById('login-pass').focus(); });
 
+// ── Auto-estado: al introducir FECHA DE SOLICITUD → PENDIENTE COTIZACIÓN ──
+document.getElementById('p-f-solicitud').addEventListener('change', function() {
+  const estadoSelect = document.getElementById('p-estado');
+  const estadoActual = estadoSelect.value;
+  const ESTADOS_SIN_TRAMITAR = [
+    'PENDIENTE FIRMA DIRECCION COMPRAS',
+    'PENDIENTE DE FIRMA DIRECCION HOTEL',
+  ];
+  if (this.value && ESTADOS_SIN_TRAMITAR.includes(estadoActual)) {
+    estadoSelect.value = 'PENDIENTE COTIZACIÓN';
+  }
+});
+
 /* ═══════════════════════════════════════════════════════════════════════════
    API helper
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -1159,6 +1185,7 @@ function estadoBadge(estado) {
   const map = {
     'PENDIENTE FIRMA DIRECCION COMPRAS': 'pendiente-compras',
     'PENDIENTE DE FIRMA DIRECCION HOTEL': 'pendiente-hotel',
+    'PENDIENTE COTIZACIÓN': 'pendiente-cotizacion',
     'ENVIADO AL PROVEEDOR': 'enviado',
     'ENTREGA PARCIAL': 'parcial',
     'ENTREGADO': 'entregado',
@@ -1185,6 +1212,7 @@ function renderPedidosTable(pedidos) {
       <td>${fmtDate(p.fecha_tramitacion)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
       <td class="comentarios-cell" title="${(p.observaciones||'').replace(/"/g,'&quot;')}">${p.observaciones ? `<span class="comentarios-text">${p.observaciones}</span>` : '<span class="bool-no">—</span>'}</td>
+      <td style="text-align:center">${p.has_adjuntos ? `<span class="adj-indicator" title="Tiene archivos adjuntos">📎</span>` : ''}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openPedidoModal(${p.id})">✏ Editar</button></td>
     </tr>`).join('');
 }
