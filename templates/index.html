@@ -766,40 +766,20 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-group">
           <label class="form-label">Nº Pedido (DALI / SAP)</label>
           <input class="form-control monospace" id="p-pedido-num" placeholder="Alfanumérico">
-          <label class="adj-fecha-btn" id="lbl-pedido-pdf" title="Adjuntar PDF del pedido DALI/SAP" style="margin-top:6px">
-            <input type="file" accept="application/pdf" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'pedido_pdf')">
-            📄 Adjuntar PDF
-          </label>
-          <label class="adj-fecha-btn" id="lbl-pedido-word" title="Adjuntar documento Word del pedido" style="margin-top:4px">
-            <input type="file" accept=".doc,.docx" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'pedido_word')">
-            📝 Adjuntar Word
-          </label>
-          <label class="adj-fecha-btn" id="lbl-pedido-eml" title="Adjuntar correo del pedido" style="margin-top:4px">
-            <input type="file" accept=".eml,.msg" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'pedido_eml')">
-            ✉️ Adjuntar correo
+          <label class="adj-fecha-btn" id="lbl-pedido-doc" title="Adjuntar documento o correo al pedido DALI/SAP" style="margin-top:6px">
+            <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'pedido_doc')">
+            📎 Adjuntar doc. / correo
           </label>
           <div id="adj-pedido-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group">
           <label class="form-label">Nº Presupuesto</label>
           <input class="form-control monospace" id="p-presup">
-          <label class="adj-fecha-btn" id="lbl-presup-pdf" title="Adjuntar PDF del presupuesto" style="margin-top:6px">
-            <input type="file" accept="application/pdf" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'presupuesto_pdf')">
-            📄 Adjuntar PDF
-          </label>
-          <label class="adj-fecha-btn" id="lbl-presup-word" title="Adjuntar documento Word del presupuesto" style="margin-top:4px">
-            <input type="file" accept=".doc,.docx" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'presupuesto_word')">
-            📝 Adjuntar Word
-          </label>
-          <label class="adj-fecha-btn" id="lbl-presup-eml" title="Adjuntar correo del presupuesto" style="margin-top:4px">
-            <input type="file" accept=".eml,.msg" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'presupuesto_eml')">
-            ✉️ Adjuntar correo
+          <label class="adj-fecha-btn" id="lbl-presup-doc" title="Adjuntar documento o correo al presupuesto" style="margin-top:6px">
+            <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'presupuesto_doc')">
+            📎 Adjuntar doc. / correo
           </label>
           <div id="adj-presupuesto-list" class="adj-fecha-list"></div>
         </div>
@@ -1368,8 +1348,8 @@ async function cargarAdjuntos(pedidoId) {
   const d = await api(`/api/pedidos/${pedidoId}/adjuntos`);
   if (!d.ok) return;
   // Adjuntos de los campos DALI/SAP y Presupuesto
-  const pedidoAdj    = d.adjuntos.filter(a => ['pedido_pdf','pedido_word','pedido_eml'].includes(a.tipo));
-  const presupAdj    = d.adjuntos.filter(a => ['presupuesto_pdf','presupuesto_word','presupuesto_eml'].includes(a.tipo));
+  const pedidoAdj    = d.adjuntos.filter(a => ['pedido_doc','pedido_pdf','pedido_word','pedido_eml'].includes(a.tipo));
+  const presupAdj    = d.adjuntos.filter(a => ['presupuesto_doc','presupuesto_pdf','presupuesto_word','presupuesto_eml'].includes(a.tipo));
   const imagenes     = d.adjuntos.filter(a => a.tipo === 'imagen_articulo');
   const solicitudDoc = d.adjuntos.filter(a => a.tipo === 'solicitud_doc');
   const vbEml        = d.adjuntos.filter(a => a.tipo === 'vb_eml');
