@@ -761,19 +761,41 @@ tbody tr:last-child{border-bottom:none}
           <div id="adj-tramit-list" class="adj-fecha-list"></div>
         </div>
 
-        <!-- Referencias SAP -->
-        <div class="form-section">Referencias SAP</div>
+        <!-- Referencias DALI / SAP -->
+        <div class="form-section">Referencias DALI / SAP</div>
         <div class="form-group">
-          <label class="form-label">Pedido Nº (SAP)</label>
+          <label class="form-label">Nº Pedido (DALI / SAP)</label>
           <input class="form-control monospace" id="p-pedido-num" placeholder="Alfanumérico">
         </div>
         <div class="form-group">
           <label class="form-label">Nº Presupuesto</label>
           <input class="form-control monospace" id="p-presup">
         </div>
-        <div class="form-group">
+
+        <!-- Nº Entrada Albarán con checkboxes y lista dinámica -->
+        <div class="form-group full" id="albaran-section">
           <label class="form-label">Nº Entrada Albarán</label>
-          <input class="form-control monospace" id="p-albaran">
+          <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;flex-wrap:wrap">
+            <label class="checkbox-item" style="font-size:13px;font-weight:500;color:var(--navy2)">
+              <input type="checkbox" id="chk-parcial" onchange="onAlbaranCheckChange('parcial')">
+              <span style="margin-left:4px">SERVIDO PARCIAL</span>
+            </label>
+            <label class="checkbox-item" style="font-size:13px;font-weight:500;color:var(--navy2)">
+              <input type="checkbox" id="chk-total" onchange="onAlbaranCheckChange('total')">
+              <span style="margin-left:4px">SERVIDO TOTAL</span>
+            </label>
+          </div>
+          <!-- Lista dinámica de entradas de albarán -->
+          <div id="albaran-list" style="display:flex;flex-direction:column;gap:6px"></div>
+          <!-- Botón añadir (sólo visible mientras PARCIAL activo) -->
+          <button type="button" id="btn-add-albaran" onclick="addAlbaranInput()"
+            style="display:none;margin-top:8px;padding:5px 14px;font-size:12px;font-weight:600;
+                   border:1.5px dashed var(--navy2);border-radius:8px;background:transparent;
+                   color:var(--navy2);cursor:pointer;transition:background .15s"
+            onmouseover="this.style.background='rgba(99,102,241,.07)'"
+            onmouseout="this.style.background='transparent'">
+            ＋ Añadir nº entrada
+          </button>
         </div>
 
         <!-- Estado -->
@@ -1299,8 +1321,8 @@ async function openPedidoModal(id=null) {
     setVal('p-f-tramit', p.fecha_tramitacion);
     setVal('p-pedido-num', p.pedido_num);
     setVal('p-presup', p.presupuesto_num);
-    setVal('p-albaran', p.entrada_albaran_num);
     setVal('p-estado', p.estado);
+    initAlbaranSection(p.entrada_albaran_num || '', p.estado);
     document.getElementById('p-proveedor').value = p.proveedor_id || '';
     document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
     setVal('p-observaciones', p.observaciones);
@@ -1450,8 +1472,147 @@ async function borrarAdjunto(adjId) {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Lógica de Nº Entrada Albarán — checkboxes SERVIDO PARCIAL / TOTAL
+═══════════════════════════════════════════════════════════════════════════ */
+
+// Devuelve todos los valores de albarán actuales (no vacíos) como array
+function getAlbaranValues() {
+  return Array.from(document.querySelectorAll('#albaran-list .albaran-input'))
+    .map(i => i.value.trim())
+    .filter(Boolean);
+}
+
+// Construye el string que se guarda: entradas separadas por " | "
+function getAlbaranCombined() {
+  return getAlbaranValues().join(' | ');
+}
+
+// Renderiza la lista desde un array de strings
+function renderAlbaranList(valores, editable) {
+  const list = document.getElementById('albaran-list');
+  list.innerHTML = '';
+  if (!valores || valores.length === 0) {
+    if (editable) addAlbaranInput();   // mínimo una caja cuando está en modo edición
+    return;
+  }
+  valores.forEach((v, idx) => {
+    const row = _makeAlbaranRow(v, editable, idx);
+    list.appendChild(row);
+  });
+}
+
+function _makeAlbaranRow(valor, editable, idx) {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:6px';
+  const prefix = document.createElement('span');
+  prefix.style.cssText = 'font-size:11px;color:#888;min-width:22px;text-align:right;font-weight:600';
+  prefix.textContent = `${(idx !== undefined ? idx : 0) + 1}.`;
+  const input = document.createElement('input');
+  input.className = 'form-control monospace albaran-input';
+  input.placeholder = 'Nº Entrada Albarán';
+  input.value = valor;
+  input.readOnly = !editable;
+  if (!editable) input.style.background = 'var(--surface2,#f4f5f7)';
+  row.appendChild(prefix);
+  row.appendChild(input);
+  if (editable) {
+    const btnDel = document.createElement('button');
+    btnDel.type = 'button';
+    btnDel.innerHTML = '✕';
+    btnDel.title = 'Eliminar esta entrada';
+    btnDel.style.cssText = 'background:none;border:none;color:#dc3545;cursor:pointer;font-size:14px;padding:2px 6px;flex-shrink:0';
+    btnDel.onclick = () => { row.remove(); reindexAlbaranList(); };
+    row.appendChild(btnDel);
+  }
+  return row;
+}
+
+function reindexAlbaranList() {
+  document.querySelectorAll('#albaran-list > div').forEach((row, idx) => {
+    const prefix = row.querySelector('span');
+    if (prefix) prefix.textContent = `${idx + 1}.`;
+  });
+}
+
+function addAlbaranInput() {
+  const list = document.getElementById('albaran-list');
+  const idx = list.children.length;
+  const row = _makeAlbaranRow('', true, idx);
+  list.appendChild(row);
+  const input = row.querySelector('input');
+  if (input) input.focus();
+}
+
+// Maneja el cambio en cualquiera de los dos checkboxes
+function onAlbaranCheckChange(cual) {
+  const chkParcial = document.getElementById('chk-parcial');
+  const chkTotal   = document.getElementById('chk-total');
+  const btnAdd     = document.getElementById('btn-add-albaran');
+  const estadoSel  = document.getElementById('p-estado');
+
+  if (cual === 'parcial') {
+    if (chkParcial.checked) {
+      chkTotal.checked = false;
+      // Actualizar estado → ENTREGA PARCIAL
+      if (estadoSel) estadoSel.value = 'ENTREGA PARCIAL';
+      // Mostrar lista editable y botón añadir
+      const vals = getAlbaranValues();
+      renderAlbaranList(vals.length ? vals : [], true);
+      btnAdd.style.display = '';
+    } else {
+      // Des-marcado sin marcar total: modo lectura
+      const vals = getAlbaranValues();
+      renderAlbaranList(vals, false);
+      btnAdd.style.display = 'none';
+    }
+  } else {
+    if (chkTotal.checked) {
+      chkParcial.checked = false;
+      // Actualizar estado → ENTREGADO
+      if (estadoSel) estadoSel.value = 'ENTREGADO';
+      // Modo lectura: no se añaden más entradas
+      const vals = getAlbaranValues();
+      renderAlbaranList(vals, false);
+      btnAdd.style.display = 'none';
+    } else {
+      // Des-marcado sin marcar parcial: modo neutro
+      const vals = getAlbaranValues();
+      renderAlbaranList(vals, false);
+      btnAdd.style.display = 'none';
+    }
+  }
+}
+
+// Inicializa la sección albarán al abrir el modal (carga datos existentes)
+function initAlbaranSection(albaranStr, estado) {
+  const chkParcial = document.getElementById('chk-parcial');
+  const chkTotal   = document.getElementById('chk-total');
+  const btnAdd     = document.getElementById('btn-add-albaran');
+
+  chkParcial.checked = false;
+  chkTotal.checked   = false;
+  btnAdd.style.display = 'none';
+
+  const valores = albaranStr
+    ? albaranStr.split('|').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  if (estado === 'ENTREGA PARCIAL') {
+    chkParcial.checked = true;
+    renderAlbaranList(valores.length ? valores : [], true);
+    btnAdd.style.display = '';
+  } else if (estado === 'ENTREGADO') {
+    chkTotal.checked = true;
+    renderAlbaranList(valores, false);
+  } else {
+    // Sin marcado especial: mostrar como caja simple no editable (o vacía)
+    renderAlbaranList(valores, false);
+  }
+}
+
 function clearPedidoForm() {
-  ['p-hotel','p-depto','p-pedido-num','p-presup','p-albaran','p-observaciones','p-nota'].forEach(id=>setVal(id,''));
+  ['p-hotel','p-depto','p-pedido-num','p-presup','p-observaciones','p-nota'].forEach(id=>setVal(id,''));
   ['p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
   // Fecha de solicitud: hoy por defecto en pedidos nuevos
   const hoy = new Date().toISOString().split('T')[0];
@@ -1459,6 +1620,8 @@ function clearPedidoForm() {
   // Estado por defecto: PENDIENTE COTIZACIÓN (o el primero disponible como fallback)
   const estadoPendiente = G.maestros.estados.find(e => e === 'PENDIENTE COTIZACIÓN') || G.maestros.estados[0] || '';
   setVal('p-estado', estadoPendiente);
+  // Reset sección albarán
+  initAlbaranSection('', estadoPendiente);
   document.getElementById('p-proveedor').value = '';
   document.getElementById('p-proveedor-input').value = '';
   document.getElementById('prov-dropdown').style.display = 'none';
@@ -1478,7 +1641,7 @@ async function savePedido() {
     fecha_tramitacion:    val('p-f-tramit'),
     pedido_num:           val('p-pedido-num'),
     presupuesto_num:      val('p-presup'),
-    entrada_albaran_num:  val('p-albaran'),
+    entrada_albaran_num:  getAlbaranCombined(),
     estado:               val('p-estado'),
     comunicado_ab:        document.getElementById('p-ab').checked,
     comunicado_jefe_dep:  document.getElementById('p-jefe').checked,
