@@ -43,10 +43,8 @@ def _auto_migrate():
         )
         db.autocommit = True
         with db.cursor() as cur:
-            # Columnas proveedores
             for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT")]:
                 cur.execute(f"ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
-            # Tabla adjuntos
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_adjuntos (
                     id            SERIAL PRIMARY KEY,
@@ -60,6 +58,26 @@ def _auto_migrate():
                 )
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_adjuntos_pedido ON pedido_adjuntos(pedido_id)")
+            # ── Techo de gastos (v9.0) ───────────────────────────────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS familias (
+                    id     SERIAL PRIMARY KEY,
+                    nombre TEXT NOT NULL UNIQUE,
+                    activo INTEGER NOT NULL DEFAULT 1
+                )
+            """)
+            cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS familia_id INTEGER REFERENCES familias(id)")
+            cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS importe NUMERIC(10,2)")
+            cur.execute("""
+                DO $$ BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name='pedidos' AND column_name='sujeto_techo'
+                    ) THEN
+                        ALTER TABLE pedidos ADD COLUMN sujeto_techo INTEGER NOT NULL DEFAULT 0;
+                    END IF;
+                END $$;
+            """)
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -323,12 +341,60 @@ def me():
 def get_maestros():
     hoteles       = rows_to_list(query("SELECT * FROM hoteles WHERE activo=1 ORDER BY codigo"))
     departamentos = rows_to_list(query("SELECT * FROM departamentos WHERE activo=1 ORDER BY nombre"))
+    familias      = rows_to_list(query("SELECT * FROM familias WHERE activo=1 ORDER BY nombre"))
     return jsonify({
         "hoteles":       hoteles,
         "departamentos": departamentos,
-        "proveedores":   [],   # vacío — se usa autocomplete en tiempo real
+        "proveedores":   [],
         "estados":       ESTADOS_VALIDOS,
+        "familias":      familias,
     })
+
+# ── API Familias ───────────────────────────────────────────────────────────────
+
+@app.route("/api/familias", methods=["GET"])
+@login_required
+def get_familias():
+    rows = rows_to_list(query("SELECT * FROM familias WHERE activo=1 ORDER BY nombre"))
+    return jsonify(rows)
+
+@app.route("/api/familias", methods=["POST"])
+@admin_required
+def create_familia():
+    data   = request.get_json(silent=True) or {}
+    nombre = (data.get("nombre") or "").strip()
+    if not nombre:
+        return jsonify({"error": "Nombre requerido"}), 400
+    db  = get_db()
+    cur = execute("INSERT INTO familias (nombre) VALUES (%s) ON CONFLICT (nombre) DO NOTHING RETURNING id", (nombre,))
+    row = cur.fetchone()
+    if not row:
+        return jsonify({"error": "Ya existe una familia con ese nombre"}), 409
+    db.commit()
+    return jsonify({"ok": True, "id": row["id"], "nombre": nombre}), 201
+
+@app.route("/api/familias/<int:fid>", methods=["PUT"])
+@admin_required
+def update_familia(fid):
+    data   = request.get_json(silent=True) or {}
+    nombre = (data.get("nombre") or "").strip()
+    if not nombre:
+        return jsonify({"error": "Nombre requerido"}), 400
+    db = get_db()
+    execute("UPDATE familias SET nombre=%s WHERE id=%s", (nombre, fid))
+    db.commit()
+    return jsonify({"ok": True})
+
+@app.route("/api/familias/<int:fid>", methods=["DELETE"])
+@admin_required
+def delete_familia(fid):
+    db  = get_db()
+    cnt = query("SELECT COUNT(*) as n FROM pedidos WHERE familia_id=%s AND sujeto_techo=1", (fid,), one=True)["n"]
+    if cnt > 0:
+        return jsonify({"error": f"No se puede eliminar: tiene {cnt} pedido(s) asociado(s)"}), 409
+    execute("UPDATE familias SET activo=0 WHERE id=%s", (fid,))
+    db.commit()
+    return jsonify({"ok": True})
 
 # ── API Proveedores ────────────────────────────────────────────────────────────
 
@@ -520,6 +586,131 @@ def importar_proveedores():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+# ── Validación techo de gastos ─────────────────────────────────────────────────
+
+TECHO_MAX_PEDIDO   = 3000.00   # €  por pedido individual
+TECHO_MAX_MES      = 6000.00   # €  acumulado mensual por hotel
+TECHO_MAX_PEDIDOS  = 2         # nº máximo de pedidos sujetos al techo por hotel/mes
+
+def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None):
+    """
+    Comprueba las reglas del techo de gastos para un pedido nuevo o editado.
+    mes_str: 'YYYY-MM'  (mes natural del pedido, normalmente el actual)
+    excluir_pedido_id: al editar, excluimos el propio pedido del conteo.
+
+    Devuelve lista de strings con los errores detectados (vacía = OK).
+    """
+    errores = []
+    if importe and float(importe) > TECHO_MAX_PEDIDO:
+        errores.append(
+            f"⚠️ El importe {float(importe):,.2f} € supera el límite individual de {TECHO_MAX_PEDIDO:,.0f} € por pedido."
+        )
+
+    if not familia_id:
+        return errores   # sin familia no hay más que comprobar
+
+    year, month = map(int, mes_str.split("-"))
+
+    excl_clause = "AND p.id != %s" if excluir_pedido_id else ""
+    excl_args   = (excluir_pedido_id,) if excluir_pedido_id else ()
+
+    # Pedidos sujetos al techo en este hotel/mes
+    base_args = (hotel_id, year, month) + excl_args
+    pedidos_mes = rows_to_list(query(f"""
+        SELECT p.id, p.familia_id, f.nombre as familia_nombre,
+               COALESCE(p.importe, 0) as importe
+        FROM pedidos p
+        LEFT JOIN familias f ON p.familia_id = f.id
+        WHERE p.hotel_id = %s
+          AND p.sujeto_techo = 1
+          AND p.estado NOT IN ('CANCELADO')
+          AND EXTRACT(YEAR  FROM p.creado_en) = %s
+          AND EXTRACT(MONTH FROM p.creado_en) = %s
+          {excl_clause}
+    """, base_args))
+
+    # Regla 1: máximo 2 pedidos sujetos al techo por hotel/mes
+    if len(pedidos_mes) >= TECHO_MAX_PEDIDOS:
+        errores.append(
+            f"🚫 Ya hay {len(pedidos_mes)} pedido(s) sujeto(s) al techo este mes para este hotel "
+            f"(máximo {TECHO_MAX_PEDIDOS})."
+        )
+
+    # Regla 2: no puede repetirse la familia en el mismo hotel/mes
+    familias_usadas = [p["familia_id"] for p in pedidos_mes]
+    if int(familia_id) in familias_usadas:
+        familia_row = query("SELECT nombre FROM familias WHERE id=%s", (familia_id,), one=True)
+        fname = familia_row["nombre"] if familia_row else f"ID {familia_id}"
+        errores.append(
+            f"🚫 Ya existe un pedido de la familia «{fname}» este mes para este hotel. "
+            f"Cada familia solo puede usarse una vez al mes por hotel."
+        )
+
+    # Regla 3: acumulado mensual no puede superar 6.000 €
+    acumulado = sum(float(p["importe"]) for p in pedidos_mes)
+    nuevo_importe = float(importe) if importe else 0.0
+    if acumulado + nuevo_importe > TECHO_MAX_MES:
+        errores.append(
+            f"⚠️ El acumulado del mes sería {acumulado + nuevo_importe:,.2f} € "
+            f"(actual {acumulado:,.2f} € + nuevo {nuevo_importe:,.2f} €), "
+            f"superando el techo mensual de {TECHO_MAX_MES:,.0f} €."
+        )
+
+    return errores
+
+@app.route("/api/techo/resumen")
+@login_required
+def techo_resumen():
+    """Devuelve el resumen del techo de gastos del mes actual por hotel."""
+    from datetime import date
+    hoy    = date.today()
+    year   = hoy.year
+    month  = hoy.month
+
+    hoteles = rows_to_list(query("SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"))
+    resultado = []
+    for hotel in hoteles:
+        pedidos = rows_to_list(query("""
+            SELECT p.id, p.importe, p.familia_id, f.nombre as familia_nombre,
+                   p.pedido_num, p.estado, p.norden
+            FROM pedidos p
+            LEFT JOIN familias f ON p.familia_id = f.id
+            WHERE p.hotel_id = %s
+              AND p.sujeto_techo = 1
+              AND p.estado NOT IN ('CANCELADO')
+              AND EXTRACT(YEAR  FROM p.creado_en) = %s
+              AND EXTRACT(MONTH FROM p.creado_en) = %s
+            ORDER BY p.creado_en
+        """, (hotel["id"], year, month)))
+
+        acumulado     = sum(float(p["importe"] or 0) for p in pedidos)
+        num_pedidos   = len(pedidos)
+        familias_usadas = [p["familia_nombre"] for p in pedidos if p["familia_nombre"]]
+
+        # Semáforo
+        if num_pedidos >= TECHO_MAX_PEDIDOS or acumulado >= TECHO_MAX_MES:
+            semaforo = "rojo"
+        elif num_pedidos == TECHO_MAX_PEDIDOS - 1 or acumulado >= TECHO_MAX_MES * 0.75:
+            semaforo = "amarillo"
+        else:
+            semaforo = "verde"
+
+        resultado.append({
+            "hotel_id":       hotel["id"],
+            "hotel_codigo":   hotel["codigo"],
+            "hotel_nombre":   hotel["nombre"],
+            "num_pedidos":    num_pedidos,
+            "max_pedidos":    TECHO_MAX_PEDIDOS,
+            "acumulado":      acumulado,
+            "techo_mes":      TECHO_MAX_MES,
+            "techo_pedido":   TECHO_MAX_PEDIDO,
+            "familias_usadas": familias_usadas,
+            "semaforo":       semaforo,
+            "pedidos":        pedidos,
+        })
+
+    return jsonify({"mes": f"{year}-{month:02d}", "hoteles": resultado})
+
 # ── API Pedidos ────────────────────────────────────────────────────────────────
 
 PEDIDO_SELECT = """
@@ -533,6 +724,7 @@ PEDIDO_SELECT = """
            pr.contacto as proveedor_contacto,
            u1.nombre as creado_por_nombre,
            u2.nombre as modificado_por_nombre,
+           f.nombre  as familia_nombre,
            EXISTS (
                SELECT 1 FROM pedido_adjuntos pa WHERE pa.pedido_id = p.id
            ) AS has_adjuntos
@@ -542,6 +734,7 @@ PEDIDO_SELECT = """
     LEFT JOIN proveedores   pr ON p.proveedor_id      = pr.id
     LEFT JOIN usuarios      u1 ON p.creado_por_id     = u1.id
     LEFT JOIN usuarios      u2 ON p.modificado_por_id = u2.id
+    LEFT JOIN familias      f  ON p.familia_id        = f.id
 """
 
 @app.route("/api/pedidos")
@@ -627,6 +820,18 @@ def create_pedido():
     norden = _next_norden(db)
     estado = data.get("estado", "PENDIENTE FIRMA DIRECCION COMPRAS")
 
+    sujeto_techo = 1 if data.get("sujeto_techo") else 0
+    familia_id   = data.get("familia_id") or None
+    importe      = data.get("importe") or None
+
+    # Validación techo de gastos
+    if sujeto_techo and not data.get("_forzar_techo"):
+        from datetime import date
+        mes_str = date.today().strftime("%Y-%m")
+        errores = _check_techo(data.get("hotel_id"), familia_id, importe, mes_str)
+        if errores:
+            return jsonify({"ok": False, "techo_errores": errores}), 422
+
     cur = execute("""
         INSERT INTO pedidos (
             norden, hotel_id, departamento_id,
@@ -635,8 +840,9 @@ def create_pedido():
             estado, comunicado_ab, comunicado_jefe_dep,
             parte_rotura, parte_ampliacion,
             proveedor_id, observaciones,
+            familia_id, importe, sujeto_techo,
             creado_por_id, modificado_por_id
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         RETURNING id
     """, (
         norden,
@@ -651,6 +857,7 @@ def create_pedido():
         1 if data.get("parte_rotura") else 0,
         1 if data.get("parte_ampliacion") else 0,
         data.get("proveedor_id"), data.get("observaciones"),
+        familia_id, importe, sujeto_techo,
         uid, uid,
     ))
     pedido_id = cur.fetchone()["id"]
@@ -678,8 +885,20 @@ def update_pedido(pid):
     estado_antes = pedido_actual["estado"]
     estado_nuevo = data.get("estado", estado_antes)
 
-    # ── Lógica automática: si se introduce fecha_solicitud por primera vez
-    #    y el pedido sigue en un estado "sin tramitar", pasar a PENDIENTE COTIZACIÓN
+    sujeto_techo = data.get("sujeto_techo", pedido_actual.get("sujeto_techo", 0))
+    sujeto_techo = 1 if sujeto_techo else 0
+    familia_id   = data.get("familia_id", pedido_actual.get("familia_id"))
+    importe      = data.get("importe", pedido_actual.get("importe"))
+
+    # Validación techo si está sujeto
+    if sujeto_techo and not data.get("_forzar_techo"):
+        from datetime import date
+        mes_str = date.today().strftime("%Y-%m")
+        hotel_id = data.get("hotel_id", pedido_actual["hotel_id"])
+        errores = _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=pid)
+        if errores:
+            return jsonify({"ok": False, "techo_errores": errores}), 422
+
     ESTADOS_SIN_TRAMITAR = {
         "PENDIENTE FIRMA DIRECCION COMPRAS",
         "PENDIENTE DE FIRMA DIRECCION HOTEL",
@@ -690,7 +909,7 @@ def update_pedido(pid):
         fecha_sol_nueva
         and not fecha_sol_actual
         and estado_nuevo in ESTADOS_SIN_TRAMITAR
-        and "estado" not in data          # el usuario no cambió el estado a mano
+        and "estado" not in data
     ):
         estado_nuevo = "PENDIENTE COTIZACIÓN"
 
@@ -703,6 +922,7 @@ def update_pedido(pid):
             comunicado_ab=%s, comunicado_jefe_dep=%s,
             parte_rotura=%s, parte_ampliacion=%s,
             proveedor_id=%s, observaciones=%s,
+            familia_id=%s, importe=%s, sujeto_techo=%s,
             modificado_por_id=%s, modificado_en=NOW()
         WHERE id=%s
     """, (
@@ -721,6 +941,7 @@ def update_pedido(pid):
         1 if data.get("parte_ampliacion",    pedido_actual["parte_ampliacion"]) else 0,
         data.get("proveedor_id",  pedido_actual["proveedor_id"]),
         data.get("observaciones", pedido_actual["observaciones"]),
+        familia_id, importe, sujeto_techo,
         uid, pid,
     ))
 

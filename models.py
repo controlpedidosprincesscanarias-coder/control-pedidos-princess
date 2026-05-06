@@ -50,6 +50,14 @@ SQL_STATEMENTS = [
         creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    # ── Familias de artículos ─────────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS familias (
+        id     SERIAL PRIMARY KEY,
+        nombre TEXT NOT NULL UNIQUE,
+        activo INTEGER NOT NULL DEFAULT 1
+    )
+    """,
     # ── Pedidos ───────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS pedidos (
@@ -70,6 +78,9 @@ SQL_STATEMENTS = [
         parte_ampliacion        INTEGER NOT NULL DEFAULT 0,
         proveedor_id            INTEGER REFERENCES proveedores(id),
         observaciones           TEXT,
+        familia_id              INTEGER REFERENCES familias(id),
+        importe                 NUMERIC(10,2),
+        sujeto_techo            INTEGER NOT NULL DEFAULT 0,
         creado_por_id           INTEGER REFERENCES usuarios(id),
         modificado_por_id       INTEGER REFERENCES usuarios(id),
         creado_en               TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -533,6 +533,13 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item admin-only" data-view="eliminados" onclick="showView('eliminados',this)" style="display:none">
       <span class="icon">🗑️</span> Pedidos eliminados
     </div>
+    <div class="sb-item admin-only" data-view="techo" onclick="showView('techo',this)" style="display:none">
+      <span class="icon">📉</span> Techo de gastos
+      <span class="sb-badge" id="sb-techo-count" style="display:none;background:#dc3545">!</span>
+    </div>
+    <div class="sb-item admin-only" data-view="familias" onclick="showView('familias',this)" style="display:none">
+      <span class="icon">🏷️</span> Familias artículos
+    </div>
 
     <div class="sb-bottom">
       <div class="sb-version">
@@ -541,7 +548,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 8.9.2
+          v 9.0.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -731,9 +738,61 @@ tbody tr:last-child{border-bottom:none}
         </div>
       </div>
 
+      <!-- ── Vista: Techo de Gastos (solo admin) ───────────────────────── -->
+      <div id="view-techo" class="section-hidden">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">📉 Techo de Gastos — Mes en curso</span>
+            <span id="techo-mes-label" style="margin-left:auto;font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+          <div id="techo-resumen-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;padding:16px 0"></div>
+          <div id="techo-empty" class="empty-state section-hidden">
+            <div class="icon">✅</div><div>No hay datos de techo este mes</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Vista: Familias de Artículos (solo admin) ─────────────────── -->
+      <div id="view-familias" class="section-hidden">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">🏷️ Familias de Artículos</span>
+            <button class="btn btn-gold btn-sm" onclick="openModalFamilia()">+ Nueva familia</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>Nombre</th><th style="width:120px">Acciones</th></tr></thead>
+              <tbody id="familias-tbody"></tbody>
+            </table>
+          </div>
+          <div id="familias-empty" class="empty-state section-hidden">
+            <div class="icon">🏷️</div><div>No hay familias configuradas</div>
+          </div>
+        </div>
+      </div>
+
     </div><!-- /content -->
   </div><!-- /main -->
 </div><!-- /app -->
+
+<!-- ── MODAL FAMILIA ─────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-familia">
+  <div class="modal-box" style="max-width:420px">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modal-familia-title">Nueva familia</h3>
+      <button class="close-btn" onclick="closeModal('modal-familia')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px">
+      <input type="hidden" id="familia-edit-id">
+      <label style="font-size:12px;font-weight:600;color:var(--navy2);display:block;margin-bottom:4px">Nombre *</label>
+      <input class="form-control" id="familia-nombre-input" placeholder="Ej: Limpieza, Menaje, Electrónica…" style="margin-bottom:16px">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-familia')">Cancelar</button>
+      <button class="btn btn-gold" onclick="saveFamilia()">Guardar</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── MODAL PEDIDO ─────────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-pedido">
@@ -899,6 +958,32 @@ tbody tr:last-child{border-bottom:none}
           </div>
         </div>
 
+        <!-- Techo de Gastos -->
+        <div class="form-section">Techo de gastos</div>
+        <div class="form-group full">
+          <div style="background:#f8f4e8;border:1.5px solid #e8d87a;border-radius:10px;padding:14px 16px">
+            <label class="checkbox-item" style="font-weight:600;margin-bottom:12px">
+              <input type="checkbox" id="p-sujeto-techo" onchange="onSujetoTechoChange()">
+              Este pedido computa para el techo de gasto mensual
+            </label>
+            <div id="techo-fields" style="display:none;margin-top:10px;display:none">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                <div>
+                  <label class="form-label">Familia de artículos *</label>
+                  <select class="form-control" id="p-familia">
+                    <option value="">— Seleccionar familia —</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label">Importe (€) *</label>
+                  <input class="form-control" type="number" id="p-importe" min="0" step="0.01" placeholder="0.00" oninput="checkTechoPreview()">
+                </div>
+              </div>
+              <div id="techo-preview" style="margin-top:10px;display:none"></div>
+            </div>
+          </div>
+        </div>
+
         <!-- Observaciones -->
         <div class="form-section">Observaciones</div>
         <div class="form-group full">
@@ -1049,7 +1134,7 @@ tbody tr:last-child{border-bottom:none}
 ═══════════════════════════════════════════════════════════════════════════ */
 let G = {
   user: null, rol: null, nombre: null,
-  maestros: { hoteles:[], departamentos:[], proveedores:[], estados:[] },
+  maestros: { hoteles:[], departamentos:[], proveedores:[], estados:[], familias:[] },
   pedidos: [], total: 0, page: 1, pages: 1,
   editingPedidoId: null,
   editingProveedorId: null,
@@ -1137,7 +1222,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -1151,6 +1236,8 @@ function showView(view, el) {
   if (view==='alertas')     loadAlertas();
   if (view==='proveedores') loadProveedores();
   if (view==='eliminados')  loadEliminados();
+  if (view==='techo')       loadTecho();
+  if (view==='familias')    loadFamilias();
 }
 
 function refreshCurrentView() {
@@ -1182,6 +1269,14 @@ async function loadMaestros() {
 
   // Poblar selects del modal pedido
   poblarSelectHoteles(); poblarSelectDeptos(); poblarSelectEstados(); poblarSelectProveedores();
+  poblarSelectFamilias();
+}
+
+function poblarSelectFamilias() {
+  const s = document.getElementById('p-familia');
+  if (!s) return;
+  s.innerHTML = '<option value="">— Seleccionar familia —</option>';
+  (G.maestros.familias || []).forEach(f => s.innerHTML += `<option value="${f.id}">${f.nombre}</option>`);
 }
 
 function poblarSelectHoteles() {
@@ -1298,20 +1393,23 @@ function boolCell(v) {
 
 function renderPedidosTable(pedidos) {
   const tbody = document.getElementById('pedidos-tbody');
-  tbody.innerHTML = pedidos.map(p => `
+  tbody.innerHTML = pedidos.map(p => {
+    const techo = p.sujeto_techo ? `<span title="Techo de gastos: ${p.familia_nombre||'familia'} — ${p.importe!=null?Number(p.importe).toLocaleString('es-ES',{minimumFractionDigits:2})+'€':'sin importe'}" style="display:inline-block;background:#fff3cd;border:1px solid #ffc107;color:#856404;border-radius:4px;font-size:10px;padding:1px 5px;margin-left:4px;font-weight:600">📉 TECHO</span>` : '';
+    return `
     <tr onclick="openPedidoModal(${p.id})">
       <td class="monospace">${p.norden||'—'}</td>
       <td><strong>${p.hotel_codigo||'—'}</strong></td>
       <td>${p.departamento_nombre||'—'}</td>
       <td>${fmtDate(p.fecha_solicitud)}</td>
-      <td class="monospace">${p.pedido_num||'—'}</td>
+      <td class="monospace">${p.pedido_num||'—'}${techo}</td>
       <td>${estadoBadge(p.estado)}</td>
       <td>${fmtDate(p.fecha_tramitacion)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
       <td class="comentarios-cell" title="${(p.observaciones||'').replace(/"/g,'&quot;')}">${p.observaciones ? `<span class="comentarios-text">${p.observaciones}</span>` : '<span class="bool-no">—</span>'}</td>
       <td style="text-align:center">${p.has_adjuntos ? `<span class="adj-indicator" title="Tiene archivos adjuntos">📎</span>` : ''}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openPedidoModal(${p.id})">✏ Editar</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 function renderPagination(page, pages, total) {
@@ -1377,6 +1475,15 @@ async function openPedidoModal(id=null) {
     document.getElementById('p-jefe').checked     = !!p.comunicado_jefe_dep;
     document.getElementById('p-rotura').checked   = !!p.parte_rotura;
     document.getElementById('p-ampliacion').checked = !!p.parte_ampliacion;
+
+    // Techo de gastos
+    const sujetoTecho = !!p.sujeto_techo;
+    document.getElementById('p-sujeto-techo').checked = sujetoTecho;
+    document.getElementById('techo-fields').style.display = sujetoTecho ? '' : 'none';
+    if (sujetoTecho) {
+      setVal('p-familia', p.familia_id || '');
+      setVal('p-importe', p.importe != null ? Number(p.importe).toFixed(2) : '');
+    }
 
     // Historial
     if (d.historial && d.historial.length) {
@@ -1844,6 +1951,20 @@ async function savePedido() {
     }
   }
 
+  const sujetoTecho = document.getElementById('p-sujeto-techo').checked;
+  const familiaId   = sujetoTecho ? (val('p-familia') || null) : null;
+  const importeVal  = sujetoTecho ? (parseFloat(val('p-importe')) || null) : null;
+
+  // Validación frontend básica de techo
+  if (sujetoTecho) {
+    if (!familiaId) { toast('Selecciona una familia de artículos para el techo de gastos', 'error'); return; }
+    if (!importeVal || importeVal <= 0) { toast('Introduce el importe del pedido (> 0)', 'error'); return; }
+    if (importeVal > 3000) {
+      const ok = confirm(`⚠️ El importe ${importeVal.toLocaleString('es-ES',{minimumFractionDigits:2})} € supera el límite individual de 3.000 €.\n¿Deseas continuar de todas formas?`);
+      if (!ok) return;
+    }
+  }
+
   const body = {
     hotel_id:             hotel,
     departamento_id:      depto || null,
@@ -1861,6 +1982,9 @@ async function savePedido() {
     proveedor_id:         val('p-proveedor') || null,
     observaciones:        val('p-observaciones'),
     nota_historial:       val('p-nota'),
+    sujeto_techo:         sujetoTecho,
+    familia_id:           familiaId,
+    importe:              importeVal,
   };
 
   const btn = document.getElementById('btn-save-pedido');
@@ -1872,13 +1996,22 @@ async function savePedido() {
     } else {
       r = await api('/api/pedidos', 'POST', body);
     }
+    if (r.techo_errores && r.techo_errores.length) {
+      const msg = r.techo_errores.join('\n\n');
+      const forzar = confirm(`Se han detectado problemas con el techo de gastos:\n\n${msg}\n\n¿Deseas guardar igualmente?`);
+      if (!forzar) return;
+      // Reintentar sin validación (añadimos flag)
+      body._forzar_techo = true;
+      r = G.editingPedidoId
+        ? await api(`/api/pedidos/${G.editingPedidoId}`, 'PUT', body)
+        : await api('/api/pedidos', 'POST', body);
+    }
     if (r.error) { toast(r.error,'error'); return; }
     if (G.currentView==='pedidos') loadPedidos();
     if (G.currentView==='dashboard') loadStats();
     if (G.currentView==='alertas') loadAlertas();
 
     if (!G.editingPedidoId && r.id) {
-      // Pedido recién creado: reabrir en modo edición para poder adjuntar archivos
       toast('Pedido creado — ya puedes adjuntar archivos', 'success');
       await openPedidoModal(r.id);
     } else {
@@ -2536,6 +2669,152 @@ document.getElementById('import-modal').addEventListener('click', function(e) {
 document.getElementById('modal-import-modo').addEventListener('click', function(e) {
   if (e.target === this) closeModalImportModo();
 });
+document.getElementById('modal-familia').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-familia');
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TECHO DE GASTOS
+═══════════════════════════════════════════════════════════════════════════ */
+
+function onSujetoTechoChange() {
+  const checked = document.getElementById('p-sujeto-techo').checked;
+  document.getElementById('techo-fields').style.display = checked ? '' : 'none';
+  if (!checked) {
+    document.getElementById('techo-preview').style.display = 'none';
+  }
+}
+
+function checkTechoPreview() {
+  const importe = parseFloat(document.getElementById('p-importe').value);
+  const preview = document.getElementById('techo-preview');
+  if (!importe || importe <= 0) { preview.style.display='none'; return; }
+  let html = '';
+  if (importe > 3000) {
+    html = `<div style="background:#f8d7da;border:1px solid #f5c6cb;border-radius:6px;padding:8px 12px;font-size:12px;color:#721c24">
+      ⚠️ <strong>Supera el límite individual de 3.000 €</strong> por pedido. Se mostrará aviso al guardar.
+    </div>`;
+  } else {
+    html = `<div style="background:#d4edda;border:1px solid #c3e6cb;border-radius:6px;padding:8px 12px;font-size:12px;color:#155724">
+      ✅ Importe dentro del límite individual (≤ 3.000 €)
+    </div>`;
+  }
+  preview.innerHTML = html;
+  preview.style.display = '';
+}
+
+async function loadTecho() {
+  const grid  = document.getElementById('techo-resumen-grid');
+  const empty = document.getElementById('techo-empty');
+  grid.innerHTML = '<div style="padding:20px;color:#999;text-align:center">Cargando…</div>';
+  const d = await api('/api/techo/resumen');
+  document.getElementById('techo-mes-label').textContent = `Mes: ${d.mes}`;
+
+  const hotelesCon = d.hoteles.filter(h => h.num_pedidos > 0 || true); // mostrar todos
+  if (!hotelesCon.length) {
+    grid.innerHTML = '';
+    empty.classList.remove('section-hidden');
+    return;
+  }
+  empty.classList.add('section-hidden');
+
+  const semColores = { verde:'#d4edda', amarillo:'#fff3cd', rojo:'#f8d7da' };
+  const semTexto   = { verde:'#155724', amarillo:'#856404', rojo:'#721c24' };
+  const semIcono   = { verde:'🟢', amarillo:'🟡', rojo:'🔴' };
+
+  grid.innerHTML = d.hoteles.map(h => {
+    const pct = Math.min(100, (h.acumulado / h.techo_mes) * 100);
+    const barColor = h.semaforo === 'rojo' ? '#dc3545' : h.semaforo === 'amarillo' ? '#ffc107' : '#28a745';
+    const pedidosHtml = h.pedidos.length ? h.pedidos.map(p => `
+      <div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #eee">
+        <span>${p.familia_nombre||'Sin familia'}</span>
+        <span style="font-weight:600">${p.importe!=null?Number(p.importe).toLocaleString('es-ES',{minimumFractionDigits:2})+' €':'—'}</span>
+      </div>`).join('') : '<div style="font-size:11px;color:#999;padding:4px 0">Sin pedidos sujetos al techo este mes</div>';
+    return `
+    <div style="background:#fff;border:1.5px solid ${semColores[h.semaforo]};border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong style="font-size:14px">${h.hotel_codigo} — ${h.hotel_nombre}</strong>
+        <span style="font-size:18px" title="${h.semaforo}">${semIcono[h.semaforo]}</span>
+      </div>
+      <div style="background:#e9ecef;border-radius:6px;height:8px;margin-bottom:10px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${barColor};border-radius:6px;transition:.3s"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:#666;margin-bottom:10px">
+        <span>Acumulado: <strong style="color:${semTexto[h.semaforo]}">${h.acumulado.toLocaleString('es-ES',{minimumFractionDigits:2})} €</strong></span>
+        <span>Techo: ${h.techo_mes.toLocaleString('es-ES')} €</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-bottom:8px">
+        <span>Pedidos usados: <strong>${h.num_pedidos} / ${h.max_pedidos}</strong></span>
+        <span>Familias: ${h.familias_usadas.length ? h.familias_usadas.join(', ') : '—'}</span>
+      </div>
+      <div style="border-top:1px solid #eee;padding-top:8px">${pedidosHtml}</div>
+    </div>`;
+  }).join('');
+
+  // Actualizar badge del sidebar
+  const rojos = d.hoteles.filter(h => h.semaforo === 'rojo').length;
+  const badge = document.getElementById('sb-techo-count');
+  if (badge) {
+    badge.style.display = rojos > 0 ? '' : 'none';
+    badge.textContent = rojos;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FAMILIAS DE ARTÍCULOS
+═══════════════════════════════════════════════════════════════════════════ */
+
+async function loadFamilias() {
+  const tbody = document.getElementById('familias-tbody');
+  const empty = document.getElementById('familias-empty');
+  const rows = await api('/api/familias');
+  if (!rows.length) {
+    tbody.innerHTML = '';
+    empty.classList.remove('section-hidden');
+    return;
+  }
+  empty.classList.add('section-hidden');
+  tbody.innerHTML = rows.map((f, i) => `
+    <tr>
+      <td class="monospace">${i+1}</td>
+      <td>${f.nombre}</td>
+      <td>
+        <button class="btn btn-ghost btn-sm" onclick="openModalFamilia(${f.id},'${f.nombre.replace(/'/g,"\\'")}')">✏ Editar</button>
+        <button class="btn btn-sm" style="color:#dc3545;border-color:#dc3545;background:#fff" onclick="deleteFamilia(${f.id},'${f.nombre.replace(/'/g,"\\'")}')">✕</button>
+      </td>
+    </tr>`).join('');
+  // Refrescar select en modal pedido
+  G.maestros.familias = rows;
+  poblarSelectFamilias();
+}
+
+function openModalFamilia(id=null, nombre='') {
+  document.getElementById('familia-edit-id').value = id || '';
+  document.getElementById('familia-nombre-input').value = nombre;
+  document.getElementById('modal-familia-title').textContent = id ? 'Editar familia' : 'Nueva familia';
+  openModal('modal-familia');
+}
+
+async function saveFamilia() {
+  const id     = document.getElementById('familia-edit-id').value;
+  const nombre = document.getElementById('familia-nombre-input').value.trim();
+  if (!nombre) { toast('El nombre es obligatorio','error'); return; }
+  const r = id
+    ? await api(`/api/familias/${id}`, 'PUT', {nombre})
+    : await api('/api/familias', 'POST', {nombre});
+  if (r.error) { toast(r.error,'error'); return; }
+  toast(id ? 'Familia actualizada' : 'Familia creada', 'success');
+  closeModal('modal-familia');
+  loadFamilias();
+}
+
+async function deleteFamilia(id, nombre) {
+  if (!confirm(`¿Eliminar la familia "${nombre}"?`)) return;
+  const r = await api(`/api/familias/${id}`, 'DELETE');
+  if (r.error) { toast(r.error,'error'); return; }
+  toast('Familia eliminada','success');
+  loadFamilias();
+}
 </script>
 
 </body>
