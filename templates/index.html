@@ -766,10 +766,42 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-group">
           <label class="form-label">Nº Pedido (DALI / SAP)</label>
           <input class="form-control monospace" id="p-pedido-num" placeholder="Alfanumérico">
+          <label class="adj-fecha-btn" id="lbl-pedido-pdf" title="Adjuntar PDF del pedido DALI/SAP" style="margin-top:6px">
+            <input type="file" accept="application/pdf" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'pedido_pdf')">
+            📄 Adjuntar PDF
+          </label>
+          <label class="adj-fecha-btn" id="lbl-pedido-word" title="Adjuntar documento Word del pedido" style="margin-top:4px">
+            <input type="file" accept=".doc,.docx" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'pedido_word')">
+            📝 Adjuntar Word
+          </label>
+          <label class="adj-fecha-btn" id="lbl-pedido-eml" title="Adjuntar correo del pedido" style="margin-top:4px">
+            <input type="file" accept=".eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'pedido_eml')">
+            ✉️ Adjuntar correo
+          </label>
+          <div id="adj-pedido-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group">
           <label class="form-label">Nº Presupuesto</label>
           <input class="form-control monospace" id="p-presup">
+          <label class="adj-fecha-btn" id="lbl-presup-pdf" title="Adjuntar PDF del presupuesto" style="margin-top:6px">
+            <input type="file" accept="application/pdf" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'presupuesto_pdf')">
+            📄 Adjuntar PDF
+          </label>
+          <label class="adj-fecha-btn" id="lbl-presup-word" title="Adjuntar documento Word del presupuesto" style="margin-top:4px">
+            <input type="file" accept=".doc,.docx" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'presupuesto_word')">
+            📝 Adjuntar Word
+          </label>
+          <label class="adj-fecha-btn" id="lbl-presup-eml" title="Adjuntar correo del presupuesto" style="margin-top:4px">
+            <input type="file" accept=".eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'presupuesto_eml')">
+            ✉️ Adjuntar correo
+          </label>
+          <div id="adj-presupuesto-list" class="adj-fecha-list"></div>
         </div>
 
         <!-- Nº Entrada Albarán con checkboxes y lista dinámica -->
@@ -836,28 +868,6 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-section">Observaciones</div>
         <div class="form-group full">
           <textarea class="form-control" id="p-observaciones" rows="3" placeholder="Texto libre…" style="resize:vertical"></textarea>
-        </div>
-
-        <!-- Adjuntos PDFs Presupuesto -->
-        <div class="form-section">PDFs Presupuesto</div>
-        <div class="form-group full" id="adj-presupuesto-wrap">
-          <div id="adj-presupuesto-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
-          <label class="adj-upload-btn" id="lbl-presupuesto-pdf" title="Subir PDF de presupuesto">
-            <input type="file" accept="application/pdf" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'presupuesto_pdf')">
-            ＋ Adjuntar PDF de presupuesto
-          </label>
-        </div>
-
-        <!-- Adjuntos PDFs Pedido -->
-        <div class="form-section">PDFs Pedido</div>
-        <div class="form-group full" id="adj-pedido-wrap">
-          <div id="adj-pedido-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
-          <label class="adj-upload-btn" id="lbl-pedido-pdf" title="Subir PDF de pedido">
-            <input type="file" accept="application/pdf" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'pedido_pdf')">
-            ＋ Adjuntar PDF de pedido
-          </label>
         </div>
 
         <!-- Imágenes de artículos -->
@@ -1303,8 +1313,8 @@ async function openPedidoModal(id=null) {
   document.getElementById('p-historial-section').style.display = 'none';
 
   // Limpiar adjuntos
-  renderAdjuntosPdf('presupuesto', []);
-  renderAdjuntosPdf('pedido', []);
+  renderAdjuntosFecha('pedido', []);
+  renderAdjuntosFecha('presupuesto', []);
   renderAdjuntosImg([]);
   renderAdjuntosFecha('solicitud', []);
   renderAdjuntosFecha('vb', []);
@@ -1357,14 +1367,15 @@ async function openPedidoModal(id=null) {
 async function cargarAdjuntos(pedidoId) {
   const d = await api(`/api/pedidos/${pedidoId}/adjuntos`);
   if (!d.ok) return;
-  const pdfsPresup   = d.adjuntos.filter(a => a.tipo === 'presupuesto_pdf');
-  const pdfsPedido   = d.adjuntos.filter(a => a.tipo === 'pedido_pdf');
+  // Adjuntos de los campos DALI/SAP y Presupuesto
+  const pedidoAdj    = d.adjuntos.filter(a => ['pedido_pdf','pedido_word','pedido_eml'].includes(a.tipo));
+  const presupAdj    = d.adjuntos.filter(a => ['presupuesto_pdf','presupuesto_word','presupuesto_eml'].includes(a.tipo));
   const imagenes     = d.adjuntos.filter(a => a.tipo === 'imagen_articulo');
   const solicitudDoc = d.adjuntos.filter(a => a.tipo === 'solicitud_doc');
   const vbEml        = d.adjuntos.filter(a => a.tipo === 'vb_eml');
   const tramitEml    = d.adjuntos.filter(a => a.tipo === 'tramit_eml');
-  renderAdjuntosPdf('presupuesto', pdfsPresup);
-  renderAdjuntosPdf('pedido', pdfsPedido);
+  renderAdjuntosFecha('pedido', pedidoAdj);
+  renderAdjuntosFecha('presupuesto', presupAdj);
   renderAdjuntosImg(imagenes);
   renderAdjuntosFecha('solicitud', solicitudDoc);
   renderAdjuntosFecha('vb', vbEml);
@@ -1397,7 +1408,7 @@ function renderAdjuntosImg(lista) {
 function renderAdjuntosFecha(prefijo, lista) {
   const contenedor = document.getElementById(`adj-${prefijo}-list`);
   if (!contenedor) return;
-  const iconos = {eml:'✉️',msg:'✉️',xlsx:'📊',xls:'📊',docx:'📝',doc:'📝',pdf:'📄'};
+  const iconos = {eml:'✉️',msg:'✉️',xlsx:'📊',xls:'📊',docx:'📝',doc:'📝',pdf:'📄',PDF:'📄'};
   contenedor.innerHTML = lista.map(a => {
     const ext = (a.nombre.split('.').pop() || '').toLowerCase();
     const ico = iconos[ext] || '📎';
