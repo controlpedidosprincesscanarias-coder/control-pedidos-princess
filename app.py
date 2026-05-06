@@ -818,7 +818,7 @@ def get_stats():
     #   PENDIENTE FIRMA DIRECCIÓN COMPRAS  → aviso c/8d
     #   PENDIENTE DE FIRMA DIRECCIÓN HOTEL → aviso c/5d
     #   ENTREGA PARCIAL                    → aviso c/10d
-    #   ENTREGADO / ANULADO                → sin alerta
+    #   ENTREGADO / CANCELADO              → sin alerta
     alertas_raw = rows_to_list(query(f"""
         {PEDIDO_SELECT}
         WHERE p.estado IN (
@@ -1343,7 +1343,7 @@ def exportar_excel():
             "ENTREGA PARCIAL":                   "fff3cd",
             "PENDIENTE FIRMA DIRECCION COMPRAS": "ffeeba",
             "PENDIENTE DE FIRMA DIRECCION HOTEL":"ffe8a1",
-            "ANULADO":                           "f8d7da",
+            "CANCELADO":                           "f8d7da",
         }
 
         def strip_tz(val):

@@ -153,6 +153,7 @@ tbody tr:last-child{border-bottom:none}
 .badge-parcial          {background:var(--s-parcial);color:#78350f}
 .badge-entregado        {background:var(--s-entregado);color:#065f46}
 .badge-anulado          {background:var(--s-anulado);color:#991b1b}
+.badge-cancelado        {background:var(--s-anulado);color:#991b1b}
 
 /* Bool badge */
 .bool-si{color:#059669;font-weight:600}
@@ -796,6 +797,10 @@ tbody tr:last-child{border-bottom:none}
               <input type="checkbox" id="chk-total" onchange="onAlbaranCheckChange('total')">
               <span style="margin-left:4px">SERVIDO TOTAL</span>
             </label>
+            <label class="checkbox-item" style="font-size:13px;font-weight:500;color:#991b1b">
+              <input type="checkbox" id="chk-cancelado" onchange="onAlbaranCheckChange('cancelado')">
+              <span style="margin-left:4px">CANCELADO</span>
+            </label>
           </div>
           <!-- Lista dinámica de entradas de albarán -->
           <div id="albaran-list" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -810,14 +815,39 @@ tbody tr:last-child{border-bottom:none}
           </button>
         </div>
 
+        <!-- Mini-modal: introducir Nº Entrada Albarán al marcar SERVIDO TOTAL -->
+        <div id="modal-albaran-total" style="display:none;position:fixed;inset:0;z-index:3000;
+             background:rgba(0,0,0,.45);align-items:center;justify-content:center">
+          <div style="background:#fff;border-radius:14px;padding:28px 32px;min-width:340px;max-width:420px;
+                      box-shadow:0 8px 32px rgba(0,0,0,.18);position:relative">
+            <div style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:16px">
+              Nº Entrada Albarán
+            </div>
+            <p style="font-size:13px;color:#555;margin-bottom:14px">
+              Introduce el número de entrada de albarán para registrar el servido total.
+            </p>
+            <input class="form-control monospace" id="albaran-total-input"
+                   placeholder="Nº Entrada Albarán"
+                   style="margin-bottom:18px;font-size:14px">
+            <div style="display:flex;gap:10px;justify-content:flex-end">
+              <button type="button" onclick="cerrarModalAlbaranTotal(false)"
+                style="padding:8px 18px;border:1.5px solid #ccc;border-radius:8px;
+                       background:#fff;font-size:13px;cursor:pointer">Omitir</button>
+              <button type="button" onclick="cerrarModalAlbaranTotal(true)"
+                style="padding:8px 18px;border:none;border-radius:8px;background:var(--gold,#b8860b);
+                       color:#fff;font-size:13px;font-weight:600;cursor:pointer">Guardar</button>
+            </div>
+          </div>
+        </div>
+
         <!-- Estado -->
         <div class="form-section">Estado</div>
         <div class="form-group full">
           <label class="form-label">Estado del pedido *</label>
-          <select class="form-control" id="p-estado"></select>
+          <select class="form-control" id="p-estado" onchange="onEstadoChange()"></select>
         </div>
         <div class="form-group full">
-          <label class="form-label">Nota (para historial, opcional)</label>
+          <label class="form-label" id="p-nota-label">Nota (para historial, opcional)</label>
           <input class="form-control" id="p-nota" placeholder="Motivo del cambio de estado…">
         </div>
 
@@ -1231,7 +1261,7 @@ function estadoBadge(estado) {
     'ENVIADO AL PROVEEDOR': 'enviado',
     'ENTREGA PARCIAL': 'parcial',
     'ENTREGADO': 'entregado',
-    'ANULADO': 'anulado',
+    'CANCELADO': 'cancelado',
   };
   const cls = map[estado] || 'pendiente-compras';
   return `<span class="badge badge-${cls}">${estado}</span>`;
@@ -1313,6 +1343,7 @@ async function openPedidoModal(id=null) {
     setVal('p-presup', p.presupuesto_num);
     setVal('p-estado', p.estado);
     initAlbaranSection(p.entrada_albaran_num || '', p.estado);
+    onEstadoChange();
     document.getElementById('p-proveedor').value = p.proveedor_id || '';
     document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
     setVal('p-observaciones', p.observaciones);
@@ -1535,55 +1566,148 @@ function addAlbaranInput() {
   if (input) input.focus();
 }
 
-// Maneja el cambio en cualquiera de los dos checkboxes
+// Maneja el cambio en cualquiera de los tres checkboxes (parcial / total / cancelado)
 function onAlbaranCheckChange(cual) {
-  const chkParcial = document.getElementById('chk-parcial');
-  const chkTotal   = document.getElementById('chk-total');
-  const btnAdd     = document.getElementById('btn-add-albaran');
-  const estadoSel  = document.getElementById('p-estado');
+  const chkParcial   = document.getElementById('chk-parcial');
+  const chkTotal     = document.getElementById('chk-total');
+  const chkCancelado = document.getElementById('chk-cancelado');
+  const btnAdd       = document.getElementById('btn-add-albaran');
+  const estadoSel    = document.getElementById('p-estado');
 
   if (cual === 'parcial') {
     if (chkParcial.checked) {
       chkTotal.checked = false;
-      // Actualizar estado → ENTREGA PARCIAL
+      chkCancelado.checked = false;
       if (estadoSel) estadoSel.value = 'ENTREGA PARCIAL';
-      // Mostrar lista editable y botón añadir
       const vals = getAlbaranValues();
       renderAlbaranList(vals.length ? vals : [], true);
       btnAdd.style.display = '';
+      setFormCancelado(false);
     } else {
-      // Des-marcado sin marcar total: modo lectura
       const vals = getAlbaranValues();
       renderAlbaranList(vals, false);
       btnAdd.style.display = 'none';
     }
-  } else {
+  } else if (cual === 'total') {
     if (chkTotal.checked) {
       chkParcial.checked = false;
-      // Actualizar estado → ENTREGADO
-      if (estadoSel) estadoSel.value = 'ENTREGADO';
-      // Modo lectura: no se añaden más entradas
+      chkCancelado.checked = false;
+      // Si no hay ningún albarán introducido, abrir mini-modal para pedirlo
       const vals = getAlbaranValues();
+      if (estadoSel) estadoSel.value = 'ENTREGADO';
       renderAlbaranList(vals, false);
       btnAdd.style.display = 'none';
+      setFormCancelado(false);
+      if (!vals.length) {
+        abrirModalAlbaranTotal();
+      }
     } else {
-      // Des-marcado sin marcar parcial: modo neutro
       const vals = getAlbaranValues();
       renderAlbaranList(vals, false);
       btnAdd.style.display = 'none';
     }
+  } else if (cual === 'cancelado') {
+    if (chkCancelado.checked) {
+      chkParcial.checked = false;
+      chkTotal.checked = false;
+      if (estadoSel) estadoSel.value = 'CANCELADO';
+      const vals = getAlbaranValues();
+      renderAlbaranList(vals, false);
+      btnAdd.style.display = 'none';
+      setFormCancelado(true);
+    } else {
+      setFormCancelado(false);
+    }
+  }
+}
+
+// Bloquea / desbloquea todos los controles editables del modal de pedido
+function setFormCancelado(bloqueado) {
+  const CAMPOS_EDIT = [
+    'p-hotel','p-depto','p-f-solicitud','p-f-vb','p-f-tramit',
+    'p-pedido-num','p-presup','p-observaciones','p-proveedor-input',
+    'p-ab','p-jefe','p-rotura','p-ampliacion'
+  ];
+  CAMPOS_EDIT.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = bloqueado;
+    el.style.opacity = bloqueado ? '0.55' : '';
+  });
+  // El estado sólo puede cambiarse si se indica motivo (nota obligatoria)
+  const estadoSel = document.getElementById('p-estado');
+  if (estadoSel) {
+    estadoSel.disabled = bloqueado;
+    estadoSel.style.opacity = bloqueado ? '0.55' : '';
+  }
+  // Checkboxes de albarán (excepto cancelado propio)
+  ['chk-parcial','chk-total'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.disabled = bloqueado; el.style.opacity = bloqueado ? '0.55' : ''; }
+  });
+  // Adjuntos y botón añadir albarán
+  const btnAdd = document.getElementById('btn-add-albaran');
+  if (btnAdd) { btnAdd.disabled = bloqueado; btnAdd.style.display = 'none'; }
+  // Nota: siempre editable (es donde se escribe el motivo para reactivar)
+  const nota = document.getElementById('p-nota');
+  if (nota) { nota.disabled = false; nota.style.opacity = ''; }
+  // Banner visual
+  let banner = document.getElementById('banner-cancelado');
+  if (bloqueado) {
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'banner-cancelado';
+      banner.style.cssText = 'background:#ffd6d6;border:1.5px solid #f5c6cb;border-radius:8px;' +
+        'padding:10px 16px;font-size:13px;font-weight:600;color:#991b1b;margin-bottom:12px;' +
+        'display:flex;align-items:center;gap:8px';
+      banner.innerHTML = '⛔ Pedido CANCELADO — sólo puedes modificar el estado indicando el motivo en Nota.';
+      const albaranSection = document.getElementById('albaran-section');
+      albaranSection.parentNode.insertBefore(banner, albaranSection);
+    }
+  } else {
+    if (banner) banner.remove();
+    // Si se desbloquea restaurar el estado correcto del campo nota
+    onEstadoChange();
+  }
+}
+
+// Mini-modal albarán total
+function abrirModalAlbaranTotal() {
+  const modal = document.getElementById('modal-albaran-total');
+  const input = document.getElementById('albaran-total-input');
+  input.value = '';
+  modal.style.display = 'flex';
+  setTimeout(() => input.focus(), 80);
+}
+
+function cerrarModalAlbaranTotal(guardar) {
+  const modal = document.getElementById('modal-albaran-total');
+  const input = document.getElementById('albaran-total-input');
+  modal.style.display = 'none';
+  if (guardar && input.value.trim()) {
+    // Añadir el valor introducido a la lista de albarán (en modo lectura)
+    const list = document.getElementById('albaran-list');
+    list.innerHTML = '';
+    const row = _makeAlbaranRow(input.value.trim(), false, 0);
+    list.appendChild(row);
   }
 }
 
 // Inicializa la sección albarán al abrir el modal (carga datos existentes)
 function initAlbaranSection(albaranStr, estado) {
-  const chkParcial = document.getElementById('chk-parcial');
-  const chkTotal   = document.getElementById('chk-total');
-  const btnAdd     = document.getElementById('btn-add-albaran');
+  const chkParcial   = document.getElementById('chk-parcial');
+  const chkTotal     = document.getElementById('chk-total');
+  const chkCancelado = document.getElementById('chk-cancelado');
+  const btnAdd       = document.getElementById('btn-add-albaran');
 
-  chkParcial.checked = false;
-  chkTotal.checked   = false;
+  chkParcial.checked   = false;
+  chkTotal.checked     = false;
+  chkCancelado.checked = false;
   btnAdd.style.display = 'none';
+
+  // Limpiar banner cancelado si existiera de una carga anterior
+  const banner = document.getElementById('banner-cancelado');
+  if (banner) banner.remove();
 
   const valores = albaranStr
     ? albaranStr.split('|').map(s => s.trim()).filter(Boolean)
@@ -1596,15 +1720,49 @@ function initAlbaranSection(albaranStr, estado) {
   } else if (estado === 'ENTREGADO') {
     chkTotal.checked = true;
     renderAlbaranList(valores, false);
+  } else if (estado === 'CANCELADO') {
+    chkCancelado.checked = true;
+    renderAlbaranList(valores, false);
+    setFormCancelado(true);
   } else {
-    // Sin marcado especial: mostrar como caja simple no editable (o vacía)
     renderAlbaranList(valores, false);
   }
 }
 
+// Controla obligatoriedad de la nota según el estado actual
+function onEstadoChange() {
+  const estadoSel   = document.getElementById('p-estado');
+  const notaLabel   = document.getElementById('p-nota-label');
+  const notaInput   = document.getElementById('p-nota');
+  const estadoAnterior = G.currentPedidoData ? G.currentPedidoData.estado : null;
+  const estadoNuevo    = estadoSel ? estadoSel.value : null;
+
+  // Nota es OBLIGATORIA si se está cambiando DESDE CANCELADO a otro estado
+  const notaObligatoria = (estadoAnterior === 'CANCELADO' && estadoNuevo && estadoNuevo !== 'CANCELADO');
+
+  if (notaLabel) {
+    notaLabel.textContent = notaObligatoria
+      ? 'Nota (obligatorio — motivo del cambio desde CANCELADO) *'
+      : 'Nota (para historial, opcional)';
+    notaLabel.style.color = notaObligatoria ? '#991b1b' : '';
+    notaLabel.style.fontWeight = notaObligatoria ? '700' : '';
+  }
+  if (notaInput) {
+    notaInput.placeholder = notaObligatoria
+      ? 'Indica el motivo por el que se reactiva este pedido…'
+      : 'Motivo del cambio de estado…';
+    notaInput.style.borderColor = notaObligatoria ? '#f5c6cb' : '';
+  }
+}
+
+
 function clearPedidoForm() {
   ['p-hotel','p-depto','p-pedido-num','p-presup','p-observaciones','p-nota'].forEach(id=>setVal(id,''));
   ['p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
+  // Resetear checkbox cancelado y desbloquear formulario
+  const chkCanc = document.getElementById('chk-cancelado');
+  if (chkCanc) chkCanc.checked = false;
+  setFormCancelado(false);
   // Fecha de solicitud: hoy por defecto en pedidos nuevos
   const hoy = new Date().toISOString().split('T')[0];
   setVal('p-f-solicitud', hoy);
@@ -1623,6 +1781,19 @@ async function savePedido() {
   const hotel = document.getElementById('p-hotel').value;
   const depto = document.getElementById('p-depto').value;
   if (!hotel) { toast('Selecciona un hotel','error'); return; }
+
+  // Validar nota obligatoria si se cambia desde CANCELADO
+  const estadoAnteriorSave = G.currentPedidoData ? G.currentPedidoData.estado : null;
+  const estadoNuevoSave    = val('p-estado');
+  if (estadoAnteriorSave === 'CANCELADO' && estadoNuevoSave !== 'CANCELADO') {
+    const notaSave = document.getElementById('p-nota').value.trim();
+    if (!notaSave) {
+      document.getElementById('p-nota').focus();
+      document.getElementById('p-nota').style.borderColor = '#dc3545';
+      toast('Debes indicar el motivo del cambio desde estado CANCELADO', 'error');
+      return;
+    }
+  }
 
   const body = {
     hotel_id:             hotel,
