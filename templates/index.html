@@ -309,6 +309,18 @@ tbody tr:last-child{border-bottom:none}
 }
 .adj-img-del:hover{background:#c0392b}
 .adj-uploading{opacity:.5;pointer-events:none}
+/* Botones adjunto en campos de fecha */
+.adj-fecha-btn{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 10px;border-radius:6px;
+  border:1.5px dashed var(--border);cursor:pointer;
+  font-size:11px;font-weight:600;color:var(--muted);
+  background:var(--surface,#f8f8f8);transition:border-color .2s,color .2s,background .2s;
+  user-select:none;white-space:nowrap;
+}
+.adj-fecha-btn:hover{border-color:var(--gold);color:var(--navy2);background:rgba(180,140,60,.06)}
+.adj-fecha-list{display:flex;flex-direction:column;gap:4px;margin-top:4px}
+.adj-fecha-list .adj-item{padding:5px 8px;font-size:11px}
 
 
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&display=swap');
@@ -721,14 +733,32 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-group">
           <label class="form-label">Fecha solicitud</label>
           <input type="date" class="form-control" id="p-f-solicitud">
+          <label class="adj-fecha-btn" id="lbl-solicitud-doc" title="Adjuntar documento o correo a la solicitud" style="margin-top:6px">
+            <input type="file" accept=".xlsx,.xls,.pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'solicitud_doc')">
+            📎 Adjuntar doc. / correo
+          </label>
+          <div id="adj-solicitud-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group">
           <label class="form-label">Fecha envío Vº Bº</label>
           <input type="date" class="form-control" id="p-f-vb">
+          <label class="adj-fecha-btn" id="lbl-vb-eml" title="Adjuntar correo de envío Vº Bº" style="margin-top:6px">
+            <input type="file" accept=".eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'vb_eml')">
+            ✉️ Adjuntar correo
+          </label>
+          <div id="adj-vb-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group">
           <label class="form-label">Fecha tramitación</label>
           <input type="date" class="form-control" id="p-f-tramit">
+          <label class="adj-fecha-btn" id="lbl-tramit-eml" title="Adjuntar correo de tramitación" style="margin-top:6px">
+            <input type="file" accept=".eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'tramit_eml')">
+            ✉️ Adjuntar correo
+          </label>
+          <div id="adj-tramit-list" class="adj-fecha-list"></div>
         </div>
 
         <!-- Referencias SAP -->
@@ -1254,6 +1284,9 @@ async function openPedidoModal(id=null) {
   renderAdjuntosPdf('presupuesto', []);
   renderAdjuntosPdf('pedido', []);
   renderAdjuntosImg([]);
+  renderAdjuntosFecha('solicitud', []);
+  renderAdjuntosFecha('vb', []);
+  renderAdjuntosFecha('tramit', []);
 
   if (id) {
     const d = await api(`/api/pedidos/${id}`);
@@ -1302,12 +1335,18 @@ async function openPedidoModal(id=null) {
 async function cargarAdjuntos(pedidoId) {
   const d = await api(`/api/pedidos/${pedidoId}/adjuntos`);
   if (!d.ok) return;
-  const pdfsPresup = d.adjuntos.filter(a => a.tipo === 'presupuesto_pdf');
-  const pdfsPedido = d.adjuntos.filter(a => a.tipo === 'pedido_pdf');
-  const imagenes   = d.adjuntos.filter(a => a.tipo === 'imagen_articulo');
+  const pdfsPresup   = d.adjuntos.filter(a => a.tipo === 'presupuesto_pdf');
+  const pdfsPedido   = d.adjuntos.filter(a => a.tipo === 'pedido_pdf');
+  const imagenes     = d.adjuntos.filter(a => a.tipo === 'imagen_articulo');
+  const solicitudDoc = d.adjuntos.filter(a => a.tipo === 'solicitud_doc');
+  const vbEml        = d.adjuntos.filter(a => a.tipo === 'vb_eml');
+  const tramitEml    = d.adjuntos.filter(a => a.tipo === 'tramit_eml');
   renderAdjuntosPdf('presupuesto', pdfsPresup);
   renderAdjuntosPdf('pedido', pdfsPedido);
   renderAdjuntosImg(imagenes);
+  renderAdjuntosFecha('solicitud', solicitudDoc);
+  renderAdjuntosFecha('vb', vbEml);
+  renderAdjuntosFecha('tramit', tramitEml);
 }
 
 function renderAdjuntosPdf(prefijo, lista) {
@@ -1331,6 +1370,21 @@ function renderAdjuntosImg(lista) {
            title="${a.nombre}" alt="${a.nombre}">
       <button class="adj-img-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
     </div>`).join('');
+}
+
+function renderAdjuntosFecha(prefijo, lista) {
+  const contenedor = document.getElementById(`adj-${prefijo}-list`);
+  if (!contenedor) return;
+  const iconos = {eml:'✉️',msg:'✉️',xlsx:'📊',xls:'📊',docx:'📝',doc:'📝',pdf:'📄'};
+  contenedor.innerHTML = lista.map(a => {
+    const ext = (a.nombre.split('.').pop() || '').toLowerCase();
+    const ico = iconos[ext] || '📎';
+    return `<div class="adj-item" id="adj-item-${a.id}">
+      <span style="font-size:14px">${ico}</span>
+      <a href="/api/adjuntos/${a.id}" target="_blank" title="${a.nombre}">${a.nombre}</a>
+      <button class="adj-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
+    </div>`;
+  }).join('');
 }
 
 async function subirAdjuntos(input, tipo) {

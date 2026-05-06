@@ -1389,11 +1389,34 @@ def exportar_excel():
 
 # ── Adjuntos (PDFs e imágenes de artículos) ───────────────────────────────────
 
-TIPOS_ADJUNTO_VALIDOS = {"presupuesto_pdf", "pedido_pdf", "imagen_articulo"}
+TIPOS_ADJUNTO_VALIDOS = {
+    "presupuesto_pdf", "pedido_pdf", "imagen_articulo",
+    "solicitud_doc",  # Excel/PDF/Word + correo vinculado a Fecha Solicitud
+    "vb_eml",         # Correo .eml/.msg vinculado a Fecha Envio Vº Bº
+    "tramit_eml",     # Correo .eml/.msg vinculado a Fecha Tramitacion
+}
 MIME_PERMITIDOS = {
     "application/pdf",
     "image/jpeg", "image/jpg", "image/png", "image/webp", "image/gif",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "message/rfc822",
+    "application/vnd.ms-outlook",
+    "application/octet-stream",
 }
+EXT_CORREO = {".eml", ".msg"}
+EXT_DOC    = {".xlsx", ".xls", ".docx", ".doc", ".pdf"}
+MIME_SOLICITUD_DOC = {
+    "application/pdf",
+    "application/vnd.ms-excel",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/msword",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "message/rfc822", "application/vnd.ms-outlook", "application/octet-stream",
+}
+MIME_CORREO = {"message/rfc822", "application/vnd.ms-outlook", "application/octet-stream"}
 MAX_ADJUNTO_BYTES = 20 * 1024 * 1024  # 20 MB por archivo
 
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
@@ -1430,13 +1453,27 @@ def upload_adjunto(pid):
         return jsonify({"ok": False, "error": "El archivo supera el límite de 20 MB"}), 400
 
     mime = archivo.mimetype or "application/octet-stream"
+    ext  = os.path.splitext(archivo.filename.lower())[1]  # ej. ".eml", ".xlsx"
 
-    # Para PDFs forzar validación de tipo
-    if tipo in ("presupuesto_pdf", "pedido_pdf") and mime != "application/pdf":
-        return jsonify({"ok": False, "error": "Solo se aceptan archivos PDF en este apartado"}), 400
+    if tipo in ("presupuesto_pdf", "pedido_pdf"):
+        if mime != "application/pdf":
+            return jsonify({"ok": False, "error": "Solo se aceptan archivos PDF en este apartado"}), 400
 
-    if mime not in MIME_PERMITIDOS:
-        return jsonify({"ok": False, "error": f"Tipo de archivo no permitido: {mime}"}), 400
+    elif tipo == "solicitud_doc":
+        if mime not in MIME_SOLICITUD_DOC:
+            return jsonify({"ok": False, "error": "Formato no permitido. Use Excel, Word, PDF o correo (.eml/.msg)"}), 400
+        if mime == "application/octet-stream" and ext not in EXT_CORREO | EXT_DOC:
+            return jsonify({"ok": False, "error": "Extension de archivo no reconocida"}), 400
+
+    elif tipo in ("vb_eml", "tramit_eml"):
+        if mime not in MIME_CORREO:
+            return jsonify({"ok": False, "error": "Solo se aceptan correos electronicos (.eml, .msg)"}), 400
+        if mime == "application/octet-stream" and ext not in EXT_CORREO:
+            return jsonify({"ok": False, "error": "Solo se aceptan archivos .eml o .msg"}), 400
+
+    else:
+        if mime not in MIME_PERMITIDOS:
+            return jsonify({"ok": False, "error": f"Tipo de archivo no permitido: {mime}"}), 400
 
     uid = current_user_id()
     db  = get_db()
