@@ -1317,6 +1317,7 @@ function clearFilters() {
 async function openPedidoModal(id=null) {
   G.editingPedidoId = id;
   G.currentPedidoData = null;
+  _estadoSelectorPrevio = null;   // reset rastreador al abrir modal
   clearPedidoForm();
   document.getElementById('modal-pedido-title').textContent = id ? 'Editar pedido' : 'Nuevo pedido';
   document.getElementById('btn-delete-pedido').style.display = (id && G.rol==='admin') ? '' : 'none';
@@ -1623,52 +1624,11 @@ function onAlbaranCheckChange(cual) {
 
 // Bloquea / desbloquea todos los controles editables del modal de pedido
 function setFormCancelado(bloqueado) {
-  const CAMPOS_EDIT = [
-    'p-hotel','p-depto','p-f-solicitud','p-f-vb','p-f-tramit',
-    'p-pedido-num','p-presup','p-observaciones','p-proveedor-input',
-    'p-ab','p-jefe','p-rotura','p-ampliacion'
-  ];
-  CAMPOS_EDIT.forEach(id => {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.disabled = bloqueado;
-    el.style.opacity = bloqueado ? '0.55' : '';
-  });
-  // El estado sólo puede cambiarse si se indica motivo (nota obligatoria)
+  // El selector de estado permanece SIEMPRE habilitado para poder cambiar desde CANCELADO
   const estadoSel = document.getElementById('p-estado');
-  if (estadoSel) {
-    estadoSel.disabled = bloqueado;
-    estadoSel.style.opacity = bloqueado ? '0.55' : '';
-  }
-  // Checkboxes de albarán (excepto cancelado propio)
-  ['chk-parcial','chk-total'].forEach(id => {
-    const el = document.getElementById(id);
-    if (el) { el.disabled = bloqueado; el.style.opacity = bloqueado ? '0.55' : ''; }
-  });
-  // Adjuntos y botón añadir albarán
-  const btnAdd = document.getElementById('btn-add-albaran');
-  if (btnAdd) { btnAdd.disabled = bloqueado; btnAdd.style.display = 'none'; }
-  // Nota: siempre editable (es donde se escribe el motivo para reactivar)
-  const nota = document.getElementById('p-nota');
-  if (nota) { nota.disabled = false; nota.style.opacity = ''; }
-  // Banner visual
-  let banner = document.getElementById('banner-cancelado');
-  if (bloqueado) {
-    if (!banner) {
-      banner = document.createElement('div');
-      banner.id = 'banner-cancelado';
-      banner.style.cssText = 'background:#ffd6d6;border:1.5px solid #f5c6cb;border-radius:8px;' +
-        'padding:10px 16px;font-size:13px;font-weight:600;color:#991b1b;margin-bottom:12px;' +
-        'display:flex;align-items:center;gap:8px';
-      banner.innerHTML = '⛔ Pedido CANCELADO — sólo puedes modificar el estado indicando el motivo en Nota.';
-      const albaranSection = document.getElementById('albaran-section');
-      albaranSection.parentNode.insertBefore(banner, albaranSection);
-    }
-  } else {
-    if (banner) banner.remove();
-    // Si se desbloquea restaurar el estado correcto del campo nota
-    onEstadoChange();
-  }
+  if (estadoSel) { estadoSel.disabled = false; estadoSel.style.opacity = ''; }
+  _setFormCanceladoSilent(bloqueado);
+  if (!bloqueado) onEstadoChange();
 }
 
 // Mini-modal albarán total
@@ -1730,15 +1690,35 @@ function initAlbaranSection(albaranStr, estado) {
 }
 
 // Controla obligatoriedad de la nota según el estado actual
+// Rastrea el estado que tenía el selector ANTES del último cambio manual
+// Se actualiza cada vez que el usuario toca el selector
+let _estadoSelectorPrevio = null;
+
 function onEstadoChange() {
   const estadoSel   = document.getElementById('p-estado');
   const notaLabel   = document.getElementById('p-nota-label');
   const notaInput   = document.getElementById('p-nota');
-  const estadoAnterior = G.currentPedidoData ? G.currentPedidoData.estado : null;
-  const estadoNuevo    = estadoSel ? estadoSel.value : null;
+  const estadoNuevo = estadoSel ? estadoSel.value : null;
+
+  // "Era CANCELADO" si:
+  //   a) el pedido guardado en BD tiene estado CANCELADO, O
+  //   b) el selector venía de CANCELADO en esta misma sesión de edición
+  const estadoBD       = G.currentPedidoData ? G.currentPedidoData.estado : null;
+  const erasCancelado  = (estadoBD === 'CANCELADO') || (_estadoSelectorPrevio === 'CANCELADO');
 
   // Nota es OBLIGATORIA si se está cambiando DESDE CANCELADO a otro estado
-  const notaObligatoria = (estadoAnterior === 'CANCELADO' && estadoNuevo && estadoNuevo !== 'CANCELADO');
+  const notaObligatoria = erasCancelado && estadoNuevo && estadoNuevo !== 'CANCELADO';
+
+  // Sincronizar checkbox de CANCELADO con el selector
+  const chkCancelado = document.getElementById('chk-cancelado');
+  if (chkCancelado) {
+    const marcado = estadoNuevo === 'CANCELADO';
+    if (chkCancelado.checked !== marcado) {
+      chkCancelado.checked = marcado;
+      // Aplicar bloqueo/desbloqueo visual sin recursión (pasamos false para no volver a llamar onEstadoChange)
+      _setFormCanceladoSilent(marcado);
+    }
+  }
 
   if (notaLabel) {
     notaLabel.textContent = notaObligatoria
@@ -1752,6 +1732,48 @@ function onEstadoChange() {
       ? 'Indica el motivo por el que se reactiva este pedido…'
       : 'Motivo del cambio de estado…';
     notaInput.style.borderColor = notaObligatoria ? '#f5c6cb' : '';
+  }
+
+  // Guardar el estado actual como "previo" para el próximo cambio
+  _estadoSelectorPrevio = estadoNuevo;
+}
+
+// Versión silenciosa de setFormCancelado que NO llama a onEstadoChange (evita bucle)
+function _setFormCanceladoSilent(bloqueado) {
+  const CAMPOS_EDIT = [
+    'p-hotel','p-depto','p-f-solicitud','p-f-vb','p-f-tramit',
+    'p-pedido-num','p-presup','p-observaciones','p-proveedor-input',
+    'p-ab','p-jefe','p-rotura','p-ampliacion'
+  ];
+  CAMPOS_EDIT.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = bloqueado;
+    el.style.opacity = bloqueado ? '0.55' : '';
+  });
+  ['chk-parcial','chk-total'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.disabled = bloqueado; el.style.opacity = bloqueado ? '0.55' : ''; }
+  });
+  const btnAdd = document.getElementById('btn-add-albaran');
+  if (btnAdd) { btnAdd.disabled = bloqueado; btnAdd.style.display = 'none'; }
+  const nota = document.getElementById('p-nota');
+  if (nota) { nota.disabled = false; nota.style.opacity = ''; }
+  // Banner
+  let banner = document.getElementById('banner-cancelado');
+  if (bloqueado) {
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'banner-cancelado';
+      banner.style.cssText = 'background:#ffd6d6;border:1.5px solid #f5c6cb;border-radius:8px;' +
+        'padding:10px 16px;font-size:13px;font-weight:600;color:#991b1b;margin-bottom:12px;' +
+        'display:flex;align-items:center;gap:8px';
+      banner.innerHTML = '⛔ Pedido CANCELADO — sólo puedes modificar el estado indicando el motivo en Nota.';
+      const albaranSection = document.getElementById('albaran-section');
+      albaranSection.parentNode.insertBefore(banner, albaranSection);
+    }
+  } else {
+    if (banner) banner.remove();
   }
 }
 
@@ -1783,9 +1805,11 @@ async function savePedido() {
   if (!hotel) { toast('Selecciona un hotel','error'); return; }
 
   // Validar nota obligatoria si se cambia desde CANCELADO
+  // (tanto si el estado en BD era CANCELADO como si se puso CANCELADO manualmente en esta sesión)
   const estadoAnteriorSave = G.currentPedidoData ? G.currentPedidoData.estado : null;
   const estadoNuevoSave    = val('p-estado');
-  if (estadoAnteriorSave === 'CANCELADO' && estadoNuevoSave !== 'CANCELADO') {
+  const veniaDeCANCELADO   = (estadoAnteriorSave === 'CANCELADO') || (_estadoSelectorPrevio === 'CANCELADO');
+  if (veniaDeCANCELADO && estadoNuevoSave !== 'CANCELADO') {
     const notaSave = document.getElementById('p-nota').value.trim();
     if (!notaSave) {
       document.getElementById('p-nota').focus();
