@@ -79,6 +79,21 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);colo
 }
 
 .sb-bottom{margin-top:auto;padding:16px;border-top:1px solid rgba(255,255,255,.08)}
+.sb-version{
+  text-align:center;padding:8px 0 12px;
+  border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:12px
+}
+.sb-version-badge{
+  display:inline-flex;align-items:center;gap:5px;
+  background:rgba(201,168,76,.12);border:1px solid rgba(201,168,76,.25);
+  border-radius:20px;padding:3px 10px;
+  font-size:10px;font-weight:600;letter-spacing:.04em;color:var(--gold2)
+}
+.sb-firma{
+  text-align:center;padding:6px 0 0;
+  font-size:9px;color:rgba(255,255,255,.22);letter-spacing:.02em;
+  line-height:1.5
+}
 .sb-user{display:flex;align-items:center;gap:10px}
 .sb-avatar{
   width:32px;height:32px;border-radius:50%;background:var(--navy2);
@@ -520,6 +535,16 @@ tbody tr:last-child{border-bottom:none}
     </div>
 
     <div class="sb-bottom">
+      <div class="sb-version">
+        <span class="sb-version-badge">
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+            <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
+            <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
+          </svg>
+          v 8.9.2
+        </span>
+        <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
+      </div>
       <div class="sb-user">
         <div class="sb-avatar" id="sb-avatar">—</div>
         <div>
