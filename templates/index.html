@@ -552,7 +552,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.0.6
+          v 9.0.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -587,6 +587,7 @@ tbody tr:last-child{border-bottom:none}
         <div id="tb-actions-proveedores" style="display:none;gap:8px;align-items:center">
           <button class="btn btn-ghost btn-sm" onclick="exportarProveedores()" title="Descargar Excel">⬇ Exportar</button>
           <button class="btn btn-ghost btn-sm" onclick="openImportProvModal()" title="Importar desde Excel">⬆ Importar</button>
+          <button class="btn btn-gold btn-sm" id="btn-nuevo-proveedor" onclick="openNuevoProveedorModal()" style="display:none">+ Nuevo proveedor</button>
         </div>
       </div>
     </div>
@@ -1085,9 +1086,10 @@ tbody tr:last-child{border-bottom:none}
         </div>
 
         <!-- Observaciones -->
-        <div class="form-section">Observaciones</div>
+        <div class="form-section">Observaciones del pedido</div>
         <div class="form-group full">
           <textarea class="form-control" id="p-observaciones" rows="3" placeholder="Texto libre…" style="resize:vertical"></textarea>
+          <div style="font-size:.78rem;color:var(--text-secondary);margin-top:3px">Observaciones internas de este pedido — independientes de las observaciones del proveedor.</div>
         </div>
 
         <!-- Imágenes de artículos -->
@@ -1156,9 +1158,22 @@ tbody tr:last-child{border-bottom:none}
       <button class="close-btn" onclick="closeModal('modal-proveedor')">✕</button>
     </div>
     <div class="modal-body">
+      <!-- Modo edición: muestra nombre como texto no editable -->
       <div class="form-group" id="pv-nombre-group" style="margin-bottom:12px">
         <label class="form-label" style="font-weight:700;color:var(--text-secondary)">Proveedor</label>
         <div id="pv-nombre-display" style="font-size:1rem;font-weight:600;padding:6px 0;color:var(--text)"></div>
+      </div>
+      <!-- Modo creación: campos nombre y código editables -->
+      <div class="form-grid" id="pv-create-fields" style="display:none;grid-template-columns:1fr 1fr;margin-bottom:4px">
+        <div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">Nombre del proveedor <span style="color:#e74c3c">*</span></label>
+          <input class="form-control" id="pv-nombre-input" placeholder="Nombre del proveedor…">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Código</label>
+          <input class="form-control" id="pv-codigo-input" placeholder="Código (opcional)">
+        </div>
+        <div class="form-group"><!-- spacer --></div>
       </div>
       <div class="form-grid" style="grid-template-columns:1fr 1fr">
         <div class="form-group">
@@ -1178,9 +1193,14 @@ tbody tr:last-child{border-bottom:none}
           <input class="form-control" id="pv-movil">
         </div>
       </div>
+      <!-- Observaciones independientes del proveedor (NO son las de pedidos) -->
       <div class="form-group">
-        <label class="form-label">Observaciones</label>
-        <textarea class="form-control" id="pv-obs" rows="3" style="resize:vertical"></textarea>
+        <label class="form-label">Observaciones del proveedor</label>
+        <textarea class="form-control" id="pv-obs" rows="3" style="resize:vertical"
+                  placeholder="Notas internas sobre este proveedor…"></textarea>
+        <div style="font-size:.78rem;color:var(--text-secondary);margin-top:3px">
+          Estas observaciones son del proveedor y no tienen relación con las observaciones de los pedidos.
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -1188,7 +1208,7 @@ tbody tr:last-child{border-bottom:none}
               id="btn-borrar-proveedor" onclick="borrarProveedor()">🗑 Borrar</button>
       <div style="flex:1"></div>
       <button class="btn btn-ghost" onclick="closeModal('modal-proveedor')">Cancelar</button>
-      <button class="btn btn-gold" onclick="saveProveedor()">Guardar cambios</button>
+      <button class="btn btn-gold" id="btn-save-proveedor" onclick="saveProveedor()">Guardar cambios</button>
     </div>
   </div>
 </div>
@@ -1335,7 +1355,7 @@ function showView(view, el) {
   if (view==='dashboard')   loadStats();
   if (view==='pedidos')     loadPedidos();
   if (view==='alertas')     loadAlertas(); loadTechoAlertas();
-  if (view==='proveedores') loadProveedores();
+  if (view==='proveedores') { loadProveedores(); _refreshProvAdminControls(); }
   if (view==='eliminados')  loadEliminados();
   if (view==='techo')       loadTecho();
   if (view==='familias')    loadFamilias();
@@ -2219,6 +2239,13 @@ function debouncedLoadProveedores() {
 // Cache de proveedores para el modal de edición (evita el problema con JSON inline en onclick)
 let _provCache = {};
 
+// ── Mostrar/ocultar controles de admin en proveedores ─────────────────────
+function _refreshProvAdminControls() {
+  const isAdmin = G.rol === 'admin';
+  const btnNuevo = document.getElementById('btn-nuevo-proveedor');
+  if (btnNuevo) btnNuevo.style.display = isAdmin ? 'inline-flex' : 'none';
+}
+
 async function loadEliminados() {
   const d = await api('/api/pedidos_eliminados');
   const tbody = document.getElementById('eliminados-tbody');
@@ -2282,28 +2309,87 @@ async function loadProveedores() {
 function openProveedorModal(pid) {
   const p = _provCache[pid];
   if (!p) return;
+  const isAdmin = G.rol === 'admin';
   G.editingProveedorId = p.id;
-  document.getElementById('pv-nombre-display').textContent = p.nombre || '';
+  // Modo edición
+  document.getElementById('modal-prov-title').textContent = 'Editar proveedor';
+  document.getElementById('btn-save-proveedor').textContent = 'Guardar cambios';
+  document.getElementById('btn-borrar-proveedor').style.display = isAdmin ? 'inline-flex' : 'none';
+  if (isAdmin) {
+    // Admin: puede editar nombre y código directamente
+    document.getElementById('pv-nombre-group').style.display = 'none';
+    document.getElementById('pv-create-fields').style.display = 'grid';
+    setVal('pv-nombre-input', p.nombre||'');
+    setVal('pv-codigo-input', p.codigo||'');
+  } else {
+    // Usuario: nombre como texto fijo
+    document.getElementById('pv-nombre-group').style.display = 'block';
+    document.getElementById('pv-nombre-display').textContent = p.nombre || '';
+    document.getElementById('pv-create-fields').style.display = 'none';
+  }
   setVal('pv-contacto', p.contacto||'');
   setVal('pv-email',    p.email||'');
   setVal('pv-tel',      p.telefono||'');
   setVal('pv-movil',    p.movil||'');
   document.getElementById('pv-obs').value = p.observaciones||'';
-  // El botón borrar siempre visible; el servidor comprobará si tiene pedidos
+  openModal('modal-proveedor');
+}
+
+function openNuevoProveedorModal() {
+  G.editingProveedorId = null;
+  // Modo creación: mostrar campos nombre y código
+  document.getElementById('pv-nombre-group').style.display = 'none';
+  document.getElementById('pv-create-fields').style.display = 'grid';
+  document.getElementById('modal-prov-title').textContent = 'Nuevo proveedor';
+  document.getElementById('btn-save-proveedor').textContent = 'Crear proveedor';
+  document.getElementById('btn-borrar-proveedor').style.display = 'none';
+  // Limpiar campos
+  setVal('pv-nombre-input', '');
+  setVal('pv-codigo-input', '');
+  setVal('pv-contacto', '');
+  setVal('pv-email', '');
+  setVal('pv-tel', '');
+  setVal('pv-movil', '');
+  document.getElementById('pv-obs').value = '';
   openModal('modal-proveedor');
 }
 
 async function saveProveedor() {
+  const isNew = !G.editingProveedorId;
   const body = {
-    contacto:     val('pv-contacto'),
-    email:        val('pv-email'),
-    telefono:     val('pv-tel'),
-    movil:        val('pv-movil'),
+    contacto:      val('pv-contacto'),
+    email:         val('pv-email'),
+    telefono:      val('pv-tel'),
+    movil:         val('pv-movil'),
     observaciones: document.getElementById('pv-obs').value.trim()
   };
-  const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'PUT', body);
-  if (r.error) { toast(r.error,'error'); return; }
-  toast('Proveedor actualizado','success');
+
+  if (isNew) {
+    // Alta de nuevo proveedor — solo desde la vista Proveedores
+    const nombre = val('pv-nombre-input');
+    if (!nombre) { toast('El nombre del proveedor es obligatorio', 'error'); return; }
+    body.nombre = nombre;
+    body.codigo = val('pv-codigo-input');
+    const r = await api('/api/proveedores', 'POST', body);
+    if (r.error) { toast(r.error, 'error'); return; }
+    toast('Proveedor creado correctamente', 'success');
+  } else {
+    // Edición de proveedor existente
+    // Si los campos de creación están visibles (admin), leer de ahí; si no, del display fijo
+    const createFields = document.getElementById('pv-create-fields');
+    if (createFields.style.display !== 'none') {
+      const nombre = val('pv-nombre-input');
+      if (!nombre) { toast('El nombre del proveedor es obligatorio', 'error'); return; }
+      body.nombre = nombre;
+      body.codigo = val('pv-codigo-input');
+    } else {
+      body.nombre = document.getElementById('pv-nombre-display').textContent.trim();
+    }
+    const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'PUT', body);
+    if (r.error) { toast(r.error, 'error'); return; }
+    toast('Proveedor actualizado', 'success');
+  }
+
   closeModal('modal-proveedor');
   loadProveedores();
 }

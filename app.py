@@ -472,7 +472,7 @@ def get_proveedores():
     return jsonify(rows_to_list(rows))
 
 @app.route("/api/proveedores", methods=["POST"])
-@login_required
+@admin_required
 def create_proveedor():
     data   = request.get_json(silent=True) or {}
     nombre = (data.get("nombre") or "").strip()
@@ -490,13 +490,14 @@ def create_proveedor():
     return jsonify({"ok": True, "id": new_id, "nombre": nombre}), 201
 
 @app.route("/api/proveedores/<int:pid>", methods=["PUT"])
-@login_required
+@admin_required
 def update_proveedor(pid):
     data = request.get_json(silent=True) or {}
     db   = get_db()
     execute(
-        "UPDATE proveedores SET contacto=%s,email=%s,telefono=%s,movil=%s,observaciones=%s WHERE id=%s",
-        (data.get("contacto",""), data.get("email",""),
+        "UPDATE proveedores SET codigo=%s,nombre=%s,contacto=%s,email=%s,telefono=%s,movil=%s,observaciones=%s WHERE id=%s",
+        (data.get("codigo",""), data.get("nombre",""),
+         data.get("contacto",""), data.get("email",""),
          data.get("telefono",""), data.get("movil",""),
          data.get("observaciones",""), pid)
     )
@@ -504,7 +505,7 @@ def update_proveedor(pid):
     return jsonify({"ok": True})
 
 @app.route("/api/proveedores/<int:pid>", methods=["DELETE"])
-@login_required
+@admin_required
 def delete_proveedor(pid):
     db = get_db()
     # Verificar si tiene pedidos asociados
