@@ -477,6 +477,29 @@ tbody tr:last-child{border-bottom:none}
 .text-muted{color:var(--muted)}
 .flex-1{flex:1}
 .gap-8{gap:8px}
+
+/* ── Spinner para botones de carga ─────────────────────────────── */
+@keyframes spin { to { transform: rotate(360deg); } }
+.btn-spinner {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid rgba(255,255,255,0.4);
+  border-top-color: #fff;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
+.btn-spinner-dark {
+  display: inline-block;
+  width: 14px; height: 14px;
+  border: 2px solid rgba(0,0,0,0.15);
+  border-top-color: #555;
+  border-radius: 50%;
+  animation: spin .7s linear infinite;
+  vertical-align: middle;
+  margin-right: 6px;
+}
 </style>
 </head>
 <body>
@@ -552,7 +575,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.1.2
+          v 9.0.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -579,13 +602,13 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-gold" onclick="openPedidoModal()" id="btn-nuevo-pedido">
             + Nuevo pedido
           </button>
-          <button class="btn btn-ghost btn-sm" onclick="exportarExcel()" title="Exportar a Excel">⬇ Exportar</button>
+          <button class="btn btn-ghost btn-sm" id="btn-exportar-pedidos" onclick="exportarExcel()" title="Exportar a Excel">⬇ Exportar</button>
           <button class="btn btn-ghost btn-sm" onclick="openImportModal()" title="Importar desde Excel">⬆ Importar</button>
         </div>
 
         <!-- Acciones contextuales: Proveedores -->
         <div id="tb-actions-proveedores" style="display:none;gap:8px;align-items:center">
-          <button class="btn btn-ghost btn-sm" onclick="exportarProveedores()" title="Descargar Excel">⬇ Exportar</button>
+          <button class="btn btn-ghost btn-sm" id="btn-exportar-prov" onclick="exportarProveedores()" title="Descargar Excel">⬇ Exportar</button>
           <button class="btn btn-ghost btn-sm" onclick="openImportProvModal()" title="Importar desde Excel">⬆ Importar</button>
           <button class="btn btn-gold btn-sm" id="btn-nuevo-proveedor" onclick="openNuevoProveedorModal()" style="display:none">+ Nuevo proveedor</button>
         </div>
@@ -1239,7 +1262,7 @@ tbody tr:last-child{border-bottom:none}
       <div id="prov-import-result" style="display:none;margin-top:12px;padding:10px 14px;border-radius:8px;font-size:.9rem"></div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('modal-import-prov')">Cancelar</button>
+      <button class="btn btn-ghost" id="btn-cancelar-import-prov" onclick="closeModal('modal-import-prov')">Cancelar</button>
       <button class="btn btn-gold" id="btn-importar-prov" onclick="onClickImportarProv()" disabled style="opacity:.5">Importar</button>
     </div>
   </div>
@@ -2480,9 +2503,16 @@ async function borrarProveedor() {
 }
 
 async function exportarProveedores() {
-  const a = document.createElement('a');
-  a.href = '/api/proveedores/exportar';
-  a.click();
+  const btn = document.getElementById('btn-exportar-prov');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="btn-spinner-dark"></span>Exportando…'; }
+  try {
+    const a = document.createElement('a');
+    a.href = '/api/proveedores/exportar';
+    a.click();
+    await new Promise(r => setTimeout(r, 2000));
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '⬇ Exportar'; }
+  }
 }
 
 let _provFile = null;
@@ -2494,8 +2524,11 @@ function openImportProvModal() {
   document.getElementById('prov-file-name').textContent = '';
   document.getElementById('btn-importar-prov').disabled = true;
   document.getElementById('btn-importar-prov').style.opacity = '.5';
+  document.getElementById('btn-importar-prov').innerHTML = 'Importar';
   document.getElementById('prov-import-result').style.display = 'none';
   document.getElementById('drop-prov').style.borderColor = 'var(--border)';
+  const btnC = document.getElementById('btn-cancelar-import-prov');
+  if (btnC) btnC.textContent = 'Cancelar';
   openModal('modal-import-prov');
 }
 function onFileProvSelected(input) {
@@ -2628,8 +2661,9 @@ async function doImportProv(modo) {
   // Reabrir modal principal para mostrar progreso
   openModal('modal-import-prov');
   const btn = document.getElementById('btn-importar-prov');
+  const btnCancel = document.getElementById('btn-cancelar-import-prov');
   btn.disabled = true;
-  btn.textContent = modo === 'reset' ? 'Procesando reset…' : 'Importando…';
+  btn.innerHTML = '<span class="btn-spinner"></span>' + (modo === 'reset' ? 'Procesando…' : 'Importando…');
 
   const res = document.getElementById('prov-import-result');
   res.style.display = 'none';
@@ -2643,8 +2677,8 @@ async function doImportProv(modo) {
     const d = await r.json();
     if (d.ok) {
       res.style.cssText = 'display:block;background:#d1fae5;color:#065f46;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
-      const accion = modo === 'reset' ? 'importados (desde cero)' : 'importados';
       res.textContent = `✅ Importación completada: ${d.insertados} nuevos, ${d.actualizados} actualizados.`;
+      if (btnCancel) btnCancel.textContent = 'Cerrar';
       loadProveedores();
     } else {
       res.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
@@ -2655,14 +2689,21 @@ async function doImportProv(modo) {
     res.textContent = '❌ ' + e.message;
   }
   btn.disabled = false;
-  btn.textContent = 'Importar';
+  btn.innerHTML = 'Importar';
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Exportar
 ═══════════════════════════════════════════════════════════════════════════ */
-function exportarExcel() {
-  window.open('/api/exportar','_blank');
+async function exportarExcel() {
+  const btn = document.getElementById('btn-exportar-pedidos');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="btn-spinner-dark"></span>Exportando…'; }
+  try {
+    window.open('/api/exportar','_blank');
+    await new Promise(r => setTimeout(r, 2000));
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '⬇ Exportar'; }
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -2965,7 +3006,7 @@ async function doImport(modo) {
   document.getElementById('import-modal').style.display = 'flex';
   const btn = document.getElementById('btn-importar');
   btn.disabled = true;
-  btn.textContent = modo === 'reset' ? 'Procesando reset…' : 'Importando…';
+  btn.innerHTML = '<span class="btn-spinner"></span>' + (modo === 'reset' ? 'Procesando…' : 'Importando…');
 
   const fd = new FormData();
   fd.append('archivo', importFile);
@@ -3003,7 +3044,7 @@ async function doImport(modo) {
     res.textContent = '❌ Error de conexión: ' + e.message;
   }
 
-  btn.disabled = false; btn.textContent = 'Importar';
+  btn.disabled = false; btn.innerHTML = 'Importar';
 }
 
 // Cerrar modal al hacer clic fuera
