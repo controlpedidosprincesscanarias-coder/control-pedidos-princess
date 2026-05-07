@@ -652,7 +652,7 @@ def importar_proveedores():
 @login_required
 def importar_proveedores_reset():
     """Solo admin: borra todos los proveedores e importa desde el Excel."""
-    if g.rol != "admin":
+    if session.get("rol") != "admin":
         return jsonify({"ok": False, "error": "Acceso restringido a administradores"}), 403
     try:
         import openpyxl
