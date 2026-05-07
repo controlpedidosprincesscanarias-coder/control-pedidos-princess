@@ -467,7 +467,6 @@ tbody tr:last-child{border-bottom:none}
 .toast.success{background:#065f46}
 .toast.error{background:#991b1b}
 @keyframes toastIn{from{transform:translateX(40px);opacity:0}to{transform:translateX(0);opacity:1}}
-@keyframes techoAlertaIn{from{transform:translateY(-100%);opacity:0}to{transform:translateY(0);opacity:1}}
 
 /* ── Utilidades ─────────────────────────────────────────────────────────── */
 .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
@@ -553,7 +552,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.0.4
+          v 9.0.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -643,7 +642,7 @@ tbody tr:last-child{border-bottom:none}
               <thead>
                 <tr>
                   <th>Nº</th><th>Hotel</th><th>Depto.</th>
-                  <th>F. Solicitud</th><th>Pedido SAP</th>
+                  <th>F. Solicitud</th><th>Pedido DALI/SAP</th>
                   <th>Estado</th><th>F. Tramit.</th><th>Proveedor</th>
                   <th>Observaciones</th>
                   <th title="Archivos adjuntos" style="width:36px;text-align:center">📎</th>
@@ -668,6 +667,16 @@ tbody tr:last-child{border-bottom:none}
 
       <!-- VIEW: ALERTAS ───────────────────────────────────────────────── -->
       <div id="view-alertas" class="section-hidden">
+
+        <!-- Alertas de Techo de Gastos -->
+        <div id="techo-alertas-card" class="card" style="display:none;margin-bottom:16px;border-left:4px solid #dc3545">
+          <div class="card-header" style="background:#fff5f5">
+            <span class="card-title">📉 Alertas de Techo de Gastos</span>
+            <span id="techo-alertas-mes" style="margin-left:auto;font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+          <div id="techo-alertas-list" style="padding:0 16px 12px"></div>
+        </div>
+
         <div class="card">
           <div class="card-header">
             <span class="card-title">⚠️ Alertas de seguimiento de pedidos</span>
@@ -1257,7 +1266,7 @@ async function doLogin() {
     });
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
-    checkTechoAlerta();
+    updateAlertBadge();
   } catch(e) { err.textContent='Error de conexión'; err.style.display='block'; }
 }
 
@@ -1325,14 +1334,10 @@ function showView(view, el) {
 
   if (view==='dashboard')   loadStats();
   if (view==='pedidos')     loadPedidos();
-  if (view==='alertas')     loadAlertas();
+  if (view==='alertas')     loadAlertas(); loadTechoAlertas();
   if (view==='proveedores') loadProveedores();
   if (view==='eliminados')  loadEliminados();
-  if (view==='techo') {
-    loadTecho();
-    const b = document.getElementById('techo-alerta-banner');
-    if (b) b.remove();
-  }
+  if (view==='techo')       loadTecho();
   if (view==='familias')    loadFamilias();
   if (view==='usuarios')    loadUsuarios();
 }
@@ -1341,7 +1346,7 @@ function refreshCurrentView() {
   const view = G.currentView || 'dashboard';
   if (view==='dashboard')   { loadStats(); }
   if (view==='pedidos')     loadPedidos();
-  if (view==='alertas')     loadAlertas();
+  if (view==='alertas')     loadAlertas(); loadTechoAlertas();
   if (view==='proveedores') loadProveedores();
   if (view==='eliminados')  loadEliminados();
 }
@@ -1409,9 +1414,11 @@ async function loadStats() {
   document.getElementById('st-enviado').textContent   = envi ? envi.total : 0;
   document.getElementById('st-entregado').textContent = entr ? entr.total : 0;
 
-  // Alerta badge sidebar
+  // Alerta badge sidebar — suma pedidos + alertas de techo (usando cache si disponible)
   const badge = document.getElementById('sb-alert-count');
-  if (d.num_alertas > 0) { badge.textContent=d.num_alertas; badge.style.display=''; }
+  const nTecho = _techoCache?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0;
+  const totalBadge = d.num_alertas + nTecho;
+  if (totalBadge > 0) { badge.textContent=totalBadge; badge.style.display=''; }
   else { badge.style.display='none'; }
 
   // Gráfico estados
@@ -2107,7 +2114,7 @@ async function savePedido() {
     if (G.currentView==='pedidos') loadPedidos();
     if (G.currentView==='dashboard') loadStats();
     if (G.currentView==='alertas') loadAlertas();
-    checkTechoAlerta();
+    updateAlertBadge();
 
     if (!G.editingPedidoId && r.id) {
       toast('Pedido creado — ya puedes adjuntar archivos', 'success');
@@ -2861,72 +2868,96 @@ async function loadTecho() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   ALERTA TECHO DE GASTOS (visible para todos los usuarios)
+   ALERTAS DE TECHO DE GASTOS — integradas en el panel Alertas
 ═══════════════════════════════════════════════════════════════════════════ */
 
-async function checkTechoAlerta() {
+// Cache del último resumen de techo
+let _techoCache = null;
+
+async function loadTechoAlertas() {
   try {
     const d = await api('/api/techo/resumen');
-    if (!d || !d.hoteles) return;
-
-    const rojos    = d.hoteles.filter(h => h.semaforo === 'rojo');
-    const amarillos = d.hoteles.filter(h => h.semaforo === 'amarillo');
-
-    // Actualizar badge del sidebar (ya se hace en loadTecho, pero también aquí al iniciar)
-    const badge = document.getElementById('sb-techo-count');
-    if (badge) {
-      badge.style.display = rojos.length > 0 ? '' : 'none';
-      badge.textContent   = rojos.length;
-    }
-
-    // Construir mensaje de alerta si hay hoteles en rojo o amarillo
-    const lineas = [];
-    rojos.forEach(h => {
-      lineas.push(`🔴 ${h.hotel_codigo} — ${h.hotel_nombre}: acumulado ${h.acumulado.toLocaleString('es-ES',{minimumFractionDigits:2})} € / techo ${h.techo_mes.toLocaleString('es-ES')} € (SUPERADO)`);
-    });
-    amarillos.forEach(h => {
-      const pct = Math.round((h.acumulado / h.techo_mes) * 100);
-      lineas.push(`🟡 ${h.hotel_codigo} — ${h.hotel_nombre}: ${pct}% del techo mensual consumido`);
-    });
-
-    if (!lineas.length) return;
-
-    // Mostrar banner de alerta en el dashboard
-    let banner = document.getElementById('techo-alerta-banner');
-    if (!banner) {
-      banner = document.createElement('div');
-      banner.id = 'techo-alerta-banner';
-      banner.style.cssText = [
-        'position:fixed','top:0','left:0','right:0','z-index:8000',
-        'background:' + (rojos.length ? '#dc3545' : '#ffc107'),
-        'color:' + (rojos.length ? '#fff' : '#212529'),
-        'padding:10px 20px','font-size:13px','font-weight:600',
-        'display:flex','align-items:center','gap:12px',
-        'box-shadow:0 2px 8px rgba(0,0,0,.25)','cursor:pointer',
-        'animation:techoAlertaIn .3s ease'
-      ].join(';');
-      banner.title = 'Haz clic para ver el Techo de Gastos';
-      banner.onclick = () => {
-        showView('techo', document.querySelector('[data-view="techo"]'));
-        banner.remove();
-      };
-      document.body.appendChild(banner);
-    }
-
-    const icono = rojos.length ? '🚨' : '⚠️';
-    const titulo = rojos.length
-      ? `¡TECHO DE GASTOS SUPERADO en ${rojos.length} hotel${rojos.length>1?'es':''}!`
-      : `Aviso: techo de gastos al ${Math.round((amarillos[0]?.acumulado/amarillos[0]?.techo_mes)*100)}% en ${amarillos.length} hotel${amarillos.length>1?'es':''}`;
-
-    banner.innerHTML = `
-      <span style="font-size:18px">${icono}</span>
-      <span style="flex:1">${titulo} — ${d.mes} &nbsp;|&nbsp; ${lineas.join(' &nbsp;·&nbsp; ')}</span>
-      <span style="font-size:11px;opacity:.8">Clic para ver detalle &nbsp; ✕</span>`;
-
+    _techoCache = d;
+    _renderTechoAlertas(d);
   } catch(e) {
-    console.warn('checkTechoAlerta error:', e);
+    console.warn('loadTechoAlertas error:', e);
   }
 }
+
+function _renderTechoAlertas(d) {
+  const card  = document.getElementById('techo-alertas-card');
+  const list  = document.getElementById('techo-alertas-list');
+  const label = document.getElementById('techo-alertas-mes');
+  if (!d || !d.hoteles) return;
+
+  const alertas = d.hoteles.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo');
+  if (!alertas.length) { card.style.display = 'none'; return; }
+
+  label.textContent = `Mes: ${d.mes}`;
+  card.style.display = '';
+
+  const hayRojo = alertas.some(h => h.semaforo === 'rojo');
+  card.style.borderLeftColor = hayRojo ? '#dc3545' : '#ffc107';
+
+  list.innerHTML = alertas.map(h => {
+    const pct      = Math.min(100, Math.round((h.acumulado / h.techo_mes) * 100));
+    const esRojo   = h.semaforo === 'rojo';
+    const barColor = esRojo ? '#dc3545' : '#ffc107';
+    const bgColor  = esRojo ? '#fff5f5' : '#fffbf0';
+    const icono    = esRojo ? '🔴' : '🟡';
+    const msg      = esRojo
+      ? `Techo mensual <strong>SUPERADO</strong> — ${h.acumulado.toLocaleString('es-ES',{minimumFractionDigits:2})} € de ${h.techo_mes.toLocaleString('es-ES')} €`
+      : `${pct}% del techo mensual consumido — ${h.acumulado.toLocaleString('es-ES',{minimumFractionDigits:2})} € de ${h.techo_mes.toLocaleString('es-ES')} €`;
+    return `
+    <div onclick="showView('techo',document.querySelector('[data-view=\'techo\']'))"
+         title="Ver panel Techo de Gastos"
+         style="display:flex;align-items:center;gap:12px;cursor:pointer;background:${bgColor};margin:0 -16px;padding:10px 16px;border-bottom:1px solid rgba(0,0,0,.06)">
+      <span style="font-size:20px">${icono}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px">${h.hotel_codigo} — ${h.hotel_nombre}</div>
+        <div style="font-size:12px;color:#555;margin-top:2px">${msg}</div>
+        <div style="background:#e9ecef;border-radius:4px;height:5px;margin-top:6px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px"></div>
+        </div>
+      </div>
+      <span style="font-size:11px;color:#999;white-space:nowrap">Ver detalle →</span>
+    </div>`;
+  }).join('');
+}
+
+// Actualiza el badge del sidebar sumando alertas de pedidos + alertas de techo
+async function updateAlertBadge() {
+  try {
+    const [stats, techo] = await Promise.all([
+      api('/api/stats'),
+      api('/api/techo/resumen')
+    ]);
+    _techoCache = techo;
+
+    const nPedidos = stats.num_alertas || 0;
+    const nTecho   = techo?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0;
+    const total    = nPedidos + nTecho;
+
+    const badge = document.getElementById('sb-alert-count');
+    if (badge) {
+      badge.textContent   = total;
+      badge.style.display = total > 0 ? '' : 'none';
+      badge.style.background = techo?.hoteles?.some(h => h.semaforo === 'rojo') ? '#dc3545' : '';
+    }
+
+    // Badge techo sidebar
+    const badgeTecho = document.getElementById('sb-techo-count');
+    if (badgeTecho) {
+      const rojos = techo?.hoteles?.filter(h => h.semaforo === 'rojo').length || 0;
+      badgeTecho.style.display = rojos > 0 ? '' : 'none';
+      badgeTecho.textContent   = rojos;
+    }
+  } catch(e) {
+    console.warn('updateAlertBadge error:', e);
+  }
+}
+
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
    FAMILIAS DE ARTÍCULOS
