@@ -1673,9 +1673,11 @@ def exportar_excel():
 
 TIPOS_ADJUNTO_VALIDOS = {
     "presupuesto_pdf", "pedido_pdf", "imagen_articulo",
-    "solicitud_doc",  # Excel/PDF/Word + correo vinculado a Fecha Solicitud
-    "vb_eml",         # Correo .eml/.msg vinculado a Fecha Envio Vº Bº
-    "tramit_eml",     # Correo .eml/.msg vinculado a Fecha Tramitacion
+    "pedido_doc",       # PDF/Word/correo vinculado a Nº Pedido DALI/SAP
+    "presupuesto_doc",  # PDF/Word/correo vinculado a Nº Presupuesto
+    "solicitud_doc",    # Excel/PDF/Word + correo vinculado a Fecha Solicitud
+    "vb_eml",           # Correo .eml/.msg vinculado a Fecha Envio Vº Bº
+    "tramit_eml",       # Correo .eml/.msg vinculado a Fecha Tramitacion
 }
 MIME_PERMITIDOS = {
     "application/pdf",
@@ -1741,6 +1743,12 @@ def upload_adjunto(pid):
         if mime != "application/pdf":
             return jsonify({"ok": False, "error": "Solo se aceptan archivos PDF en este apartado"}), 400
 
+    elif tipo in ("pedido_doc", "presupuesto_doc"):
+        if mime not in MIME_SOLICITUD_DOC:
+            return jsonify({"ok": False, "error": "Formato no permitido. Use PDF, Word o correo (.eml/.msg)"}), 400
+        if mime == "application/octet-stream" and ext not in EXT_CORREO | EXT_DOC:
+            return jsonify({"ok": False, "error": "Extensión de archivo no reconocida"}), 400
+
     elif tipo == "solicitud_doc":
         if mime not in MIME_SOLICITUD_DOC:
             return jsonify({"ok": False, "error": "Formato no permitido. Use Excel, Word, PDF o correo (.eml/.msg)"}), 400
@@ -1775,10 +1783,15 @@ def download_adjunto(aid):
     row = query("SELECT nombre, mime_type, datos FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
     if not row:
         return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
+    # Los correos (.eml/.msg) se sirven como attachment para que el SO
+    # los abra con el gestor de correo predeterminado.
+    # El resto (PDF, imagenes, Word) se sirven inline para previsualizacion.
+    ext = os.path.splitext(row["nombre"].lower())[1]
+    disposition = "attachment" if ext in {".eml", ".msg"} else "inline"
     return Response(
         bytes(row["datos"]),
         mimetype=row["mime_type"],
-        headers={"Content-Disposition": f'inline; filename="{row["nombre"]}"'}
+        headers={"Content-Disposition": f'{disposition}; filename="{row["nombre"]}"'}
     )
 
 

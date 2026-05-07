@@ -48,7 +48,8 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);colo
   display:flex;align-items:center;padding:0 24px;gap:16px;flex-shrink:0;
   box-shadow:0 1px 4px rgba(15,32,68,.06)
 }
-#content{flex:1;overflow-y:auto;padding:24px}
+#content{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start}
+#content>div[id^="view-"]{width:100%}
 
 /* ── Sidebar ────────────────────────────────────────────────────────────── */
 .sb-logo{
