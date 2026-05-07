@@ -533,12 +533,27 @@ def get_proveedores():
 def create_proveedor():
     data   = request.get_json(silent=True) or {}
     nombre = (data.get("nombre") or "").strip()
+    codigo = (data.get("codigo") or "").strip()
     if not nombre:
         return jsonify({"error": "Nombre requerido"}), 400
+    if not codigo:
+        return jsonify({"error": "El código SAP es obligatorio"}), 400
+    # Anti-duplicado: mismo nombre (insensible a mayúsculas)
+    dup_nombre = query(
+        "SELECT id FROM proveedores WHERE activo=1 AND LOWER(nombre)=LOWER(%s)", (nombre,)
+    )
+    if rows_to_list(dup_nombre):
+        return jsonify({"error": f"Ya existe un proveedor con el nombre '{nombre}'"}), 409
+    # Anti-duplicado: mismo código SAP
+    dup_codigo = query(
+        "SELECT id FROM proveedores WHERE activo=1 AND codigo=%s", (codigo,)
+    )
+    if rows_to_list(dup_codigo):
+        return jsonify({"error": f"Ya existe un proveedor con el código SAP '{codigo}'"}), 409
     db  = get_db()
     cur = execute(
         "INSERT INTO proveedores (codigo,nombre,observaciones) VALUES (%s,%s,%s) RETURNING id",
-        (data.get("codigo",""), nombre, data.get("observaciones",""))
+        (codigo, nombre, data.get("observaciones",""))
     )
     new_id = cur.fetchone()["id"]
     # Insertar contactos
@@ -558,11 +573,29 @@ def create_proveedor():
 @app.route("/api/proveedores/<int:pid>", methods=["PUT"])
 @admin_required
 def update_proveedor(pid):
-    data = request.get_json(silent=True) or {}
+    data   = request.get_json(silent=True) or {}
+    nombre = (data.get("nombre") or "").strip()
+    codigo = (data.get("codigo") or "").strip()
+    if not nombre:
+        return jsonify({"error": "Nombre requerido"}), 400
+    if not codigo:
+        return jsonify({"error": "El código SAP es obligatorio"}), 400
+    # Anti-duplicado: nombre en uso por otro proveedor
+    dup_nombre = query(
+        "SELECT id FROM proveedores WHERE activo=1 AND LOWER(nombre)=LOWER(%s) AND id!=%s", (nombre, pid)
+    )
+    if rows_to_list(dup_nombre):
+        return jsonify({"error": f"Ya existe otro proveedor con el nombre '{nombre}'"}), 409
+    # Anti-duplicado: código SAP en uso por otro proveedor
+    dup_codigo = query(
+        "SELECT id FROM proveedores WHERE activo=1 AND codigo=%s AND id!=%s", (codigo, pid)
+    )
+    if rows_to_list(dup_codigo):
+        return jsonify({"error": f"Ya existe otro proveedor con el código SAP '{codigo}'"}), 409
     db   = get_db()
     execute(
         "UPDATE proveedores SET codigo=%s,nombre=%s,observaciones=%s WHERE id=%s",
-        (data.get("codigo",""), data.get("nombre",""), data.get("observaciones",""), pid)
+        (codigo, nombre, data.get("observaciones",""), pid)
     )
     # Reemplazar contactos
     execute("DELETE FROM proveedor_contactos WHERE proveedor_id=%s", (pid,))
@@ -647,7 +680,7 @@ def exportar_proveedores():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/proveedores/importar", methods=["POST"])
-@login_required
+@admin_required
 def importar_proveedores():
     try:
         import openpyxl

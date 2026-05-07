@@ -552,7 +552,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.2.0
+          v 9.3.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -586,7 +586,7 @@ tbody tr:last-child{border-bottom:none}
         <!-- Acciones contextuales: Proveedores -->
         <div id="tb-actions-proveedores" style="display:none;gap:8px;align-items:center">
           <button class="btn btn-ghost btn-sm" id="btn-exportar-prov" onclick="exportarProveedores()" title="Descargar Excel">⬇ Exportar</button>
-          <button class="btn btn-ghost btn-sm" onclick="openImportProvModal()" title="Importar desde Excel">⬆ Importar</button>
+          <button class="btn btn-ghost btn-sm" id="btn-importar-prov-trigger" onclick="openImportProvModal()" title="Importar desde Excel" style="display:none">⬆ Importar</button>
           <button class="btn btn-gold btn-sm" id="btn-nuevo-proveedor" onclick="openNuevoProveedorModal()" style="display:none">+ Nuevo proveedor</button>
         </div>
       </div>
@@ -1170,8 +1170,8 @@ tbody tr:last-child{border-bottom:none}
           <input class="form-control" id="pv-nombre-input" placeholder="Nombre del proveedor…">
         </div>
         <div class="form-group">
-          <label class="form-label">Código SAP</label>
-          <input class="form-control" id="pv-codigo-input" placeholder="Código (opcional)">
+          <label class="form-label">Código SAP <span style="color:#e74c3c">*</span></label>
+          <input class="form-control" id="pv-codigo-input" placeholder="Código SAP…">
         </div>
         <div class="form-group"><!-- spacer --></div>
       </div>
@@ -2329,6 +2329,8 @@ function _refreshProvAdminControls() {
   const isAdmin = G.rol === 'admin';
   const btnNuevo = document.getElementById('btn-nuevo-proveedor');
   if (btnNuevo) btnNuevo.style.display = isAdmin ? 'inline-flex' : 'none';
+  const btnImport = document.getElementById('btn-importar-prov-trigger');
+  if (btnImport) btnImport.style.display = isAdmin ? 'inline-flex' : 'none';
 }
 
 async function loadEliminados() {
@@ -2483,8 +2485,10 @@ async function saveProveedor() {
   if (isNew) {
     const nombre = val('pv-nombre-input');
     if (!nombre) { toast('El nombre del proveedor es obligatorio', 'error'); return; }
+    const codigo = val('pv-codigo-input');
+    if (!codigo) { toast('El código SAP es obligatorio', 'error'); return; }
     body.nombre = nombre;
-    body.codigo = val('pv-codigo-input');
+    body.codigo = codigo;
     const r = await api('/api/proveedores', 'POST', body);
     if (r.error) { toast(r.error, 'error'); return; }
     toast('Proveedor creado correctamente', 'success');
@@ -2493,8 +2497,10 @@ async function saveProveedor() {
     if (createFields.style.display !== 'none') {
       const nombre = val('pv-nombre-input');
       if (!nombre) { toast('El nombre del proveedor es obligatorio', 'error'); return; }
+      const codigo = val('pv-codigo-input');
+      if (!codigo) { toast('El código SAP es obligatorio', 'error'); return; }
       body.nombre = nombre;
-      body.codigo = val('pv-codigo-input');
+      body.codigo = codigo;
     } else {
       body.nombre = document.getElementById('pv-nombre-display').textContent.trim();
     }
