@@ -477,29 +477,6 @@ tbody tr:last-child{border-bottom:none}
 .text-muted{color:var(--muted)}
 .flex-1{flex:1}
 .gap-8{gap:8px}
-
-/* ── Spinner para botones de carga ─────────────────────────────── */
-@keyframes spin { to { transform: rotate(360deg); } }
-.btn-spinner {
-  display: inline-block;
-  width: 14px; height: 14px;
-  border: 2px solid rgba(255,255,255,0.4);
-  border-top-color: #fff;
-  border-radius: 50%;
-  animation: spin .7s linear infinite;
-  vertical-align: middle;
-  margin-right: 6px;
-}
-.btn-spinner-dark {
-  display: inline-block;
-  width: 14px; height: 14px;
-  border: 2px solid rgba(0,0,0,0.15);
-  border-top-color: #555;
-  border-radius: 50%;
-  animation: spin .7s linear infinite;
-  vertical-align: middle;
-  margin-right: 6px;
-}
 </style>
 </head>
 <body>
@@ -575,7 +552,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.0.8
+          v 9.1.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
