@@ -552,7 +552,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.0.8
+          v 9.1.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1240,7 +1240,82 @@ tbody tr:last-child{border-bottom:none}
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('modal-import-prov')">Cancelar</button>
-      <button class="btn btn-gold" id="btn-importar-prov" onclick="doImportProv()" disabled style="opacity:.5">Importar</button>
+      <button class="btn btn-gold" id="btn-importar-prov" onclick="onClickImportarProv()" disabled style="opacity:.5">Importar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL ADMIN PROVEEDORES: ¿Ampliar o desde cero? (paso 2 admin)
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-import-prov-modo" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1100;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:36px;width:480px;max-width:95vw;box-shadow:0 12px 48px rgba(0,0,0,.3);">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div style="font-size:2rem;">🏢</div>
+      <div>
+        <div style="font-weight:700;font-size:1.1rem;color:#0f2044;">Modo de importación</div>
+        <div style="color:#888;font-size:.85rem;">Selecciona cómo deseas proceder con los proveedores</div>
+      </div>
+    </div>
+
+    <div style="display:grid;gap:12px;margin-bottom:24px;">
+      <!-- Opción A: Ampliar -->
+      <div id="opt-prov-ampliar"
+           onclick="selectImportProvMode('ampliar')"
+           style="border:2px solid #dee2e6;border-radius:10px;padding:16px 20px;cursor:pointer;transition:.15s;display:flex;align-items:flex-start;gap:14px;">
+        <div style="font-size:1.6rem;margin-top:2px;">➕</div>
+        <div>
+          <div style="font-weight:600;color:#0f2044;margin-bottom:4px;">Ampliar información existente</div>
+          <div style="font-size:.85rem;color:#666;">Los nuevos proveedores del Excel se añadirán al sistema. Los existentes (por código) actualizarán sus datos de contacto.</div>
+        </div>
+      </div>
+      <!-- Opción B: Desde cero -->
+      <div id="opt-prov-reset"
+           onclick="selectImportProvMode('reset')"
+           style="border:2px solid #dee2e6;border-radius:10px;padding:16px 20px;cursor:pointer;transition:.15s;display:flex;align-items:flex-start;gap:14px;">
+        <div style="font-size:1.6rem;margin-top:2px;">🗑️</div>
+        <div>
+          <div style="font-weight:600;color:#8B0000;margin-bottom:4px;">Eliminar todo y empezar desde cero</div>
+          <div style="font-size:.85rem;color:#666;">Se borrarán <strong>todos</strong> los proveedores actuales del sistema y se importarán los del Excel.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn btn-ghost btn-sm" onclick="closeModalImportProvModo()">Cancelar</button>
+      <button class="btn btn-gold" id="btn-confirmar-prov-modo" onclick="confirmarProvModo()" disabled style="opacity:.5">Continuar →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL CONFIRMACIÓN DESTRUCCIÓN PROVEEDORES (paso 3 reset)
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-import-prov-reset-confirm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1200;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:36px;width:480px;max-width:95vw;box-shadow:0 12px 48px rgba(139,0,0,.4);border-top:5px solid #8B0000;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div style="font-size:2.2rem;">⚠️</div>
+      <div>
+        <div style="font-weight:700;font-size:1.1rem;color:#8B0000;">ATENCIÓN: Operación irreversible</div>
+        <div style="color:#888;font-size:.85rem;">Esta acción no se puede deshacer</div>
+      </div>
+    </div>
+
+    <div style="background:#fff3f3;border:1px solid #f5c6cb;border-radius:8px;padding:16px;margin-bottom:20px;font-size:.9rem;color:#721c24;line-height:1.6;">
+      Se procederá a la <strong>eliminación definitiva</strong> de:
+      <ul style="margin:8px 0 0 18px;padding:0;">
+        <li>Todos los proveedores registrados en el sistema</li>
+        <li>Todos sus datos de contacto asociados</li>
+      </ul>
+      <div style="margin-top:12px;font-weight:700;">Los pedidos que referencien esos proveedores podrían quedar sin proveedor asignado.</div>
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+      <button class="btn btn-ghost btn-sm" onclick="closeModalProvResetConfirm()" style="margin-right:auto;">← Cancelar y volver</button>
+      <button class="btn" onclick="doImportProvReset()"
+              style="background:#8B0000;color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;">
+        🗑️ Eliminar todo e importar
+      </button>
     </div>
   </div>
 </div>
@@ -2411,8 +2486,11 @@ async function exportarProveedores() {
 }
 
 let _provFile = null;
+let _provModoSel = null;  // 'ampliar' | 'reset'
+
 function openImportProvModal() {
   _provFile = null;
+  _provModoSel = null;
   document.getElementById('prov-file-name').textContent = '';
   document.getElementById('btn-importar-prov').disabled = true;
   document.getElementById('btn-importar-prov').style.opacity = '.5';
@@ -2434,6 +2512,69 @@ function setProvFile(f) {
   document.getElementById('btn-importar-prov').disabled = false;
   document.getElementById('btn-importar-prov').style.opacity = '1';
 }
+
+/* — Click en "Importar" del modal de proveedores — */
+async function onClickImportarProv() {
+  if (!_provFile) return;
+  if (G.rol === 'admin') {
+    _provModoSel = null;
+    document.getElementById('opt-prov-ampliar').style.border = '2px solid #dee2e6';
+    document.getElementById('opt-prov-ampliar').style.background = '';
+    document.getElementById('opt-prov-reset').style.border   = '2px solid #dee2e6';
+    document.getElementById('opt-prov-reset').style.background = '';
+    document.getElementById('btn-confirmar-prov-modo').disabled = true;
+    document.getElementById('btn-confirmar-prov-modo').style.opacity = '.5';
+    closeModal('modal-import-prov');
+    document.getElementById('modal-import-prov-modo').style.display = 'flex';
+  } else {
+    await doImportProv('ampliar');
+  }
+}
+
+function closeModalImportProvModo() {
+  document.getElementById('modal-import-prov-modo').style.display = 'none';
+}
+
+function closeModalProvResetConfirm() {
+  document.getElementById('modal-import-prov-reset-confirm').style.display = 'none';
+  document.getElementById('modal-import-prov-modo').style.display = 'flex';
+}
+
+function selectImportProvMode(modo) {
+  _provModoSel = modo;
+  const optA = document.getElementById('opt-prov-ampliar');
+  const optB = document.getElementById('opt-prov-reset');
+  const btn  = document.getElementById('btn-confirmar-prov-modo');
+  if (modo === 'ampliar') {
+    optA.style.border     = '2px solid #1a3a6b';
+    optA.style.background = '#f0f4ff';
+    optB.style.border     = '2px solid #dee2e6';
+    optB.style.background = '';
+  } else {
+    optB.style.border     = '2px solid #8B0000';
+    optB.style.background = '#fff3f3';
+    optA.style.border     = '2px solid #dee2e6';
+    optA.style.background = '';
+  }
+  btn.disabled = false; btn.style.opacity = '1';
+}
+
+function confirmarProvModo() {
+  if (!_provModoSel) return;
+  if (_provModoSel === 'ampliar') {
+    document.getElementById('modal-import-prov-modo').style.display = 'none';
+    doImportProv('ampliar');
+  } else {
+    document.getElementById('modal-import-prov-modo').style.display = 'none';
+    document.getElementById('modal-import-prov-reset-confirm').style.display = 'flex';
+  }
+}
+
+function doImportProvReset() {
+  document.getElementById('modal-import-prov-reset-confirm').style.display = 'none';
+  doImportProv('reset');
+}
+
 let _provTimer = null;
 
 async function buscarProveedor(q) {
@@ -2482,19 +2623,27 @@ document.addEventListener('click', (e) => {
 
 
 
-async function doImportProv() {
+async function doImportProv(modo) {
   if (!_provFile) return;
+  // Reabrir modal principal para mostrar progreso
+  openModal('modal-import-prov');
+  const btn = document.getElementById('btn-importar-prov');
+  btn.disabled = true;
+  btn.textContent = modo === 'reset' ? 'Procesando reset…' : 'Importando…';
+
   const res = document.getElementById('prov-import-result');
   res.style.display = 'none';
   const fd = new FormData();
   fd.append('archivo', _provFile);
+  const endpoint = modo === 'reset' ? '/api/proveedores/importar/reset' : '/api/proveedores/importar';
   try {
-    const r = await fetch('/api/proveedores/importar', { method:'POST', body:fd, credentials:'same-origin' });
+    const r = await fetch(endpoint, { method:'POST', body:fd, credentials:'same-origin' });
     const contentType = r.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) throw new Error(`Error del servidor (${r.status})`);
     const d = await r.json();
     if (d.ok) {
       res.style.cssText = 'display:block;background:#d1fae5;color:#065f46;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
+      const accion = modo === 'reset' ? 'importados (desde cero)' : 'importados';
       res.textContent = `✅ Importación completada: ${d.insertados} nuevos, ${d.actualizados} actualizados.`;
       loadProveedores();
     } else {
@@ -2505,6 +2654,8 @@ async function doImportProv() {
     res.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
     res.textContent = '❌ ' + e.message;
   }
+  btn.disabled = false;
+  btn.textContent = 'Importar';
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

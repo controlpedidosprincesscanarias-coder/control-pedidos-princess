@@ -648,6 +648,68 @@ def importar_proveedores():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+@app.route("/api/proveedores/importar/reset", methods=["POST"])
+@login_required
+def importar_proveedores_reset():
+    """Solo admin: borra todos los proveedores e importa desde el Excel."""
+    if g.rol != "admin":
+        return jsonify({"ok": False, "error": "Acceso restringido a administradores"}), 403
+    try:
+        import openpyxl
+        if "archivo" not in request.files:
+            return jsonify({"ok": False, "error": "No se recibió ningún archivo"}), 400
+        archivo = request.files["archivo"]
+        if not archivo.filename.endswith((".xlsx", ".xls")):
+            return jsonify({"ok": False, "error": "El archivo debe ser .xlsx"}), 400
+
+        wb = openpyxl.load_workbook(archivo, data_only=True)
+        ws = wb.active
+        headers = [str(c.value).strip().upper() if c.value else "" for c in ws[1]]
+
+        def col(row, name):
+            try:
+                idx = headers.index(name)
+                v = row[idx].value
+                return str(v).strip() if v is not None else None
+            except (ValueError, IndexError):
+                return None
+
+        db = get_db()
+        nuevos_rows = []
+
+        for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
+            nombre = col(row, "PROVEEDOR")
+            if not nombre:
+                continue
+            codigo       = col(row, "CODIGO") or ""
+            contacto     = col(row, "CONTACTO") or ""
+            email        = col(row, "EMAIL") or ""
+            telefono     = col(row, "TELEFONO") or ""
+            movil        = col(row, "MOVIL") or ""
+            observaciones = col(row, "OBSERVACIONES") or ""
+            nuevos_rows.append((codigo, nombre, contacto, email, telefono, movil, observaciones))
+
+        from psycopg2.extras import execute_values
+
+        with db.cursor() as cur:
+            # Primero desvinculamos pedidos para no violar la FK
+            cur.execute("UPDATE pedidos SET proveedor_id = NULL WHERE proveedor_id IS NOT NULL")
+            cur.execute("DELETE FROM proveedores")
+            insertados = 0
+            if nuevos_rows:
+                execute_values(cur, """
+                    INSERT INTO proveedores (codigo, nombre, contacto, email, telefono, movil, observaciones)
+                    VALUES %s
+                """, nuevos_rows)
+                insertados = cur.rowcount
+
+        db.commit()
+        return jsonify({"ok": True, "insertados": insertados, "actualizados": 0, "errores": []})
+
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 # ── Validación techo de gastos ─────────────────────────────────────────────────
 
 TECHO_MAX_PEDIDO   = 3000.00   # €  por pedido individual
