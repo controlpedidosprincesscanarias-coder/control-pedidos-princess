@@ -540,6 +540,9 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item admin-only" data-view="familias" onclick="showView('familias',this)" style="display:none">
       <span class="icon">🏷️</span> Familias artículos
     </div>
+    <div class="sb-item admin-only" data-view="usuarios" onclick="showView('usuarios',this)" style="display:none">
+      <span class="icon">👥</span> Usuarios
+    </div>
 
     <div class="sb-bottom">
       <div class="sb-version">
@@ -771,9 +774,95 @@ tbody tr:last-child{border-bottom:none}
         </div>
       </div>
 
+      <!-- ── Vista: Usuarios (solo admin) ──────────────────────────────── -->
+      <div id="view-usuarios" class="section-hidden">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">👥 Gestión de Usuarios</span>
+            <button class="btn btn-gold btn-sm" onclick="openModalUsuario()">+ Nuevo usuario</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Usuario</th>
+                  <th>Nombre</th>
+                  <th>Email</th>
+                  <th>Rol</th>
+                  <th>Estado</th>
+                  <th style="width:160px">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="usuarios-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     </div><!-- /content -->
   </div><!-- /main -->
 </div><!-- /app -->
+
+<!-- ── MODAL USUARIO ─────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-usuario">
+  <div class="modal-box" style="max-width:480px">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modal-usuario-title">Nuevo usuario</h3>
+      <button class="close-btn" onclick="closeModal('modal-usuario')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px;display:grid;gap:14px">
+      <input type="hidden" id="usr-edit-id">
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label class="form-label">Username *</label>
+          <input class="form-control" id="usr-username" placeholder="ej: comprascan7" autocomplete="off">
+        </div>
+        <div>
+          <label class="form-label">Nombre completo *</label>
+          <input class="form-control" id="usr-nombre" placeholder="Nombre Apellido">
+        </div>
+      </div>
+
+      <div>
+        <label class="form-label">Email</label>
+        <input class="form-control" id="usr-email" type="email" placeholder="usuario@princess.es">
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label class="form-label">Rol</label>
+          <select class="form-control" id="usr-rol">
+            <option value="user">Usuario</option>
+            <option value="admin">Administrador</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label" id="usr-pwd-label">Contraseña *</label>
+          <div style="position:relative">
+            <input class="form-control" id="usr-password" type="password" placeholder="Contraseña" autocomplete="new-password" style="padding-right:36px">
+            <button type="button" onclick="togglePwdVisibility()" title="Mostrar/ocultar"
+              style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;color:#888">👁</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="usr-activo-row" style="display:none">
+        <label class="checkbox-item">
+          <input type="checkbox" id="usr-activo"> Usuario activo
+        </label>
+      </div>
+
+      <div id="usr-pwd-hint" style="font-size:11px;color:#888;display:none">
+        Deja en blanco para no cambiar la contraseña.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-usuario')">Cancelar</button>
+      <button class="btn btn-gold" onclick="saveUsuario()">Guardar</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── MODAL FAMILIA ─────────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-familia">
@@ -1133,7 +1222,7 @@ tbody tr:last-child{border-bottom:none}
    Estado global
 ═══════════════════════════════════════════════════════════════════════════ */
 let G = {
-  user: null, rol: null, nombre: null,
+  user: null, rol: null, nombre: null, userId: null,
   maestros: { hoteles:[], departamentos:[], proveedores:[], estados:[], familias:[] },
   pedidos: [], total: 0, page: 1, pages: 1,
   editingPedidoId: null,
@@ -1153,7 +1242,7 @@ async function doLogin() {
   try {
     const r = await api('/api/login', 'POST', {username:u, password:p});
     if (r.error) { err.textContent=r.error; err.style.display='block'; return; }
-    G.user = r.nombre; G.nombre = r.nombre; G.rol = r.rol;
+    G.user = r.nombre; G.nombre = r.nombre; G.rol = r.rol; G.userId = r.id;
     document.getElementById('sb-nombre').textContent = r.nombre;
     document.getElementById('sb-rol').textContent    = r.rol === 'admin' ? 'Administrador' : 'Usuario';
     document.getElementById('sb-avatar').textContent = r.nombre.charAt(0).toUpperCase();
@@ -1222,7 +1311,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -1238,6 +1327,7 @@ function showView(view, el) {
   if (view==='eliminados')  loadEliminados();
   if (view==='techo')       loadTecho();
   if (view==='familias')    loadFamilias();
+  if (view==='usuarios')    loadUsuarios();
 }
 
 function refreshCurrentView() {
@@ -2361,7 +2451,7 @@ function calcDias(s) {
 (async () => {
   const d = await api('/api/me');
   if (d.logged) {
-    G.user=d.nombre; G.rol=d.rol;
+    G.user=d.nombre; G.rol=d.rol; G.userId=d.id;
     document.getElementById('sb-nombre').textContent = d.nombre;
     document.getElementById('sb-rol').textContent    = d.rol==='admin'?'Administrador':'Usuario';
     document.getElementById('sb-avatar').textContent = d.nombre.charAt(0).toUpperCase();
@@ -2399,7 +2489,7 @@ function calcDias(s) {
     <div id="import-resultado" style="display:none;margin-bottom:16px;padding:12px;border-radius:8px;font-size:.9rem;"></div>
 
     <div style="display:flex;gap:12px;justify-content:flex-end;">
-      <button class="btn btn-ghost btn-sm" onclick="closeImportModal()">Cancelar</button>
+      <button class="btn btn-ghost btn-sm" id="btn-cancelar-import" onclick="closeImportModal()">Cancelar</button>
       <button class="btn btn-gold" id="btn-importar" onclick="onClickImportar()" disabled style="opacity:.5">Importar</button>
     </div>
   </div>
@@ -2508,6 +2598,7 @@ function openImportModal() {
 
 function closeImportModal() {
   document.getElementById('import-modal').style.display = 'none';
+  document.getElementById('btn-cancelar-import').textContent = 'Cancelar';
 }
 
 function closeModalImportModo() {
@@ -2645,6 +2736,7 @@ async function doImport(modo) {
                d.errores.map(e => `• ${e}`).join('<br>');
       }
       res.innerHTML = msg;
+      document.getElementById('btn-cancelar-import').textContent = 'Cerrar';
       loadPedidos(); loadStats();
     } else {
       res.style.background = '#f8d7da';
@@ -2814,6 +2906,107 @@ async function deleteFamilia(id, nombre) {
   if (r.error) { toast(r.error,'error'); return; }
   toast('Familia eliminada','success');
   loadFamilias();
+}
+
+document.getElementById('modal-usuario').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-usuario');
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GESTIÓN DE USUARIOS
+═══════════════════════════════════════════════════════════════════════════ */
+
+async function loadUsuarios() {
+  const tbody = document.getElementById('usuarios-tbody');
+  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">Cargando…</td></tr>';
+  const rows = await api('/api/usuarios');
+  if (!rows || !rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">No hay usuarios</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(u => {
+    const rolBadge = u.rol === 'admin'
+      ? `<span style="background:#1a3a6b;color:#fff;border-radius:4px;font-size:11px;padding:2px 8px;font-weight:600">Admin</span>`
+      : `<span style="background:#e9ecef;color:#555;border-radius:4px;font-size:11px;padding:2px 8px">Usuario</span>`;
+    const activoBadge = u.activo
+      ? `<span style="color:#28a745;font-weight:600;font-size:12px">● Activo</span>`
+      : `<span style="color:#dc3545;font-weight:600;font-size:12px">○ Inactivo</span>`;
+    const esMismo = u.id == G.userId;
+    return `<tr>
+      <td class="monospace" style="font-size:13px">${u.username}</td>
+      <td>${u.nombre}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
+      <td style="font-size:12px;color:#666">${u.email||'—'}</td>
+      <td>${rolBadge}</td>
+      <td>${activoBadge}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="openModalUsuario(${u.id})">✏ Editar</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function openModalUsuario(id=null) {
+  document.getElementById('usr-edit-id').value  = id || '';
+  document.getElementById('modal-usuario-title').textContent = id ? 'Editar usuario' : 'Nuevo usuario';
+  document.getElementById('usr-username').value  = '';
+  document.getElementById('usr-nombre').value    = '';
+  document.getElementById('usr-email').value     = '';
+  document.getElementById('usr-password').value  = '';
+  document.getElementById('usr-rol').value       = 'user';
+  document.getElementById('usr-activo').checked  = true;
+
+  if (id) {
+    document.getElementById('usr-username').disabled        = true;
+    document.getElementById('usr-pwd-label').textContent    = 'Nueva contraseña';
+    document.getElementById('usr-pwd-hint').style.display   = '';
+    document.getElementById('usr-activo-row').style.display = '';
+    api('/api/usuarios').then(rows => {
+      const u = rows.find(r => r.id == id);
+      if (!u) return;
+      document.getElementById('usr-username').value = u.username;
+      document.getElementById('usr-nombre').value   = u.nombre;
+      document.getElementById('usr-email').value    = u.email || '';
+      document.getElementById('usr-rol').value      = u.rol;
+      document.getElementById('usr-activo').checked = !!u.activo;
+    });
+  } else {
+    document.getElementById('usr-username').disabled        = false;
+    document.getElementById('usr-pwd-label').textContent    = 'Contraseña *';
+    document.getElementById('usr-pwd-hint').style.display   = 'none';
+    document.getElementById('usr-activo-row').style.display = 'none';
+  }
+  openModal('modal-usuario');
+}
+
+async function saveUsuario() {
+  const id       = document.getElementById('usr-edit-id').value;
+  const username = document.getElementById('usr-username').value.trim().toLowerCase();
+  const nombre   = document.getElementById('usr-nombre').value.trim();
+  const email    = document.getElementById('usr-email').value.trim();
+  const rol      = document.getElementById('usr-rol').value;
+  const password = document.getElementById('usr-password').value;
+  const activo   = document.getElementById('usr-activo').checked;
+
+  if (!nombre) { toast('El nombre es obligatorio', 'error'); return; }
+
+  let r;
+  if (id) {
+    const body = { nombre, email, rol, activo };
+    if (password) body.password = password;
+    r = await api(`/api/usuarios/${id}`, 'PUT', body);
+  } else {
+    if (!username) { toast('El username es obligatorio', 'error'); return; }
+    if (!password) { toast('La contraseña es obligatoria', 'error'); return; }
+    r = await api('/api/usuarios', 'POST', { username, nombre, email, rol, password });
+  }
+
+  if (r.error) { toast(r.error, 'error'); return; }
+  toast(id ? 'Usuario actualizado' : 'Usuario creado', 'success');
+  closeModal('modal-usuario');
+  loadUsuarios();
+}
+
+function togglePwdVisibility() {
+  const inp = document.getElementById('usr-password');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
 }
 </script>
 

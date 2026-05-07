@@ -319,7 +319,7 @@ def login():
     session["username"] = user["username"]
     session["nombre"]   = user["nombre"]
     session["rol"]      = user["rol"]
-    return jsonify({"ok": True, "username": user["username"],
+    return jsonify({"ok": True, "id": user["id"], "username": user["username"],
                     "nombre": user["nombre"], "rol": user["rol"]})
 
 @app.route("/api/logout", methods=["POST"])
@@ -331,7 +331,7 @@ def logout():
 def me():
     if "user_id" not in session:
         return jsonify({"logged": False})
-    return jsonify({"logged": True, "username": session["username"],
+    return jsonify({"logged": True, "id": session["user_id"], "username": session["username"],
                     "nombre": session["nombre"], "rol": session["rol"]})
 
 # ── API Maestros ───────────────────────────────────────────────────────────────
@@ -394,6 +394,67 @@ def delete_familia(fid):
         return jsonify({"error": f"No se puede eliminar: tiene {cnt} pedido(s) asociado(s)"}), 409
     execute("UPDATE familias SET activo=0 WHERE id=%s", (fid,))
     db.commit()
+    return jsonify({"ok": True})
+
+# ── API Usuarios (gestión admin) ───────────────────────────────────────────────
+
+@app.route("/api/usuarios", methods=["GET"])
+@admin_required
+def get_usuarios():
+    rows = rows_to_list(query(
+        "SELECT id, username, nombre, email, rol, activo, creado_en FROM usuarios ORDER BY nombre"
+    ))
+    return jsonify(rows)
+
+@app.route("/api/usuarios", methods=["POST"])
+@admin_required
+def create_usuario():
+    data     = request.get_json(silent=True) or {}
+    username = (data.get("username") or "").strip().lower()
+    nombre   = (data.get("nombre")   or "").strip()
+    password = (data.get("password") or "").strip()
+    if not username or not nombre or not password:
+        return jsonify({"error": "username, nombre y contraseña son obligatorios"}), 400
+    existing = query("SELECT id FROM usuarios WHERE username=%s", (username,), one=True)
+    if existing:
+        return jsonify({"error": "Ya existe un usuario con ese username"}), 409
+    db  = get_db()
+    cur = execute(
+        "INSERT INTO usuarios (username, nombre, email, password, rol, activo) VALUES (%s,%s,%s,%s,%s,1) RETURNING id",
+        (username, nombre, data.get("email",""), password, data.get("rol","user"))
+    )
+    new_id = cur.fetchone()["id"]
+    db.commit()
+    return jsonify({"ok": True, "id": new_id}), 201
+
+@app.route("/api/usuarios/<int:uid>", methods=["PUT"])
+@admin_required
+def update_usuario(uid):
+    data = request.get_json(silent=True) or {}
+    db   = get_db()
+    # No permitir que el admin se quite el rol a sí mismo
+    if uid == current_user_id() and data.get("rol") == "user":
+        return jsonify({"error": "No puedes quitarte el rol de administrador a ti mismo"}), 400
+    # Construir UPDATE dinámico solo con campos enviados
+    fields, args = [], []
+    if "nombre" in data:
+        fields.append("nombre=%s"); args.append(data["nombre"].strip())
+    if "email" in data:
+        fields.append("email=%s"); args.append(data["email"].strip())
+    if "rol" in data and data["rol"] in ("admin","user"):
+        fields.append("rol=%s"); args.append(data["rol"])
+    if "activo" in data:
+        fields.append("activo=%s"); args.append(1 if data["activo"] else 0)
+    if "password" in data and data["password"].strip():
+        fields.append("password=%s"); args.append(data["password"].strip())
+    if not fields:
+        return jsonify({"error": "Nada que actualizar"}), 400
+    args.append(uid)
+    execute(f"UPDATE usuarios SET {', '.join(fields)} WHERE id=%s", args)
+    db.commit()
+    # Si cambié mi propio nombre, actualizar sesión
+    if uid == current_user_id() and "nombre" in data:
+        session["nombre"] = data["nombre"].strip()
     return jsonify({"ok": True})
 
 # ── API Proveedores ────────────────────────────────────────────────────────────
