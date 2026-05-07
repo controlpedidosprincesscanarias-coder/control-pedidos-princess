@@ -552,7 +552,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.1.2
+          v 9.1.3
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2676,8 +2676,19 @@ async function exportarExcel() {
   const btn = document.getElementById('btn-exportar-pedidos');
   if (btn) { btn.disabled = true; btn.innerHTML = '<span class="btn-spinner-dark"></span>Exportando…'; }
   try {
-    window.open('/api/exportar','_blank');
-    await new Promise(r => setTimeout(r, 2000));
+    const resp = await fetch('/api/exportar');
+    if (!resp.ok) throw new Error('Error al exportar');
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const disposition = resp.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename[^;=\n]*=(['"]?)([^'"\n]*)\1/);
+    a.download = match ? match[2] : 'pedidos.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    alert('Error al exportar: ' + e.message);
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = '⬇ Exportar'; }
   }
