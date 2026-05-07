@@ -552,7 +552,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.1.3
+          v 9.2.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -708,7 +708,7 @@ tbody tr:last-child{border-bottom:none}
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Código</th><th>Nombre</th><th>Contacto</th><th>Email</th><th>Teléfono</th><th>Móvil</th><th>Observaciones</th><th></th></tr>
+                <tr><th>Código</th><th>Nombre</th><th>Contactos</th><th>Observaciones</th><th></th></tr>
               </thead>
               <tbody id="proveedores-tbody"></tbody>
             </table>
@@ -1152,49 +1152,43 @@ tbody tr:last-child{border-bottom:none}
 
 <!-- ── MODAL PROVEEDOR ─────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-proveedor">
-  <div class="modal" style="max-width:520px">
+  <div class="modal" style="max-width:600px">
     <div class="modal-header">
       <div class="modal-title" id="modal-prov-title">Editar proveedor</div>
       <button class="close-btn" onclick="closeModal('modal-proveedor')">✕</button>
     </div>
     <div class="modal-body">
-      <!-- Modo edición: muestra nombre como texto no editable -->
+      <!-- Modo edición: nombre como texto fijo para no-admin -->
       <div class="form-group" id="pv-nombre-group" style="margin-bottom:12px">
         <label class="form-label" style="font-weight:700;color:var(--text-secondary)">Proveedor</label>
         <div id="pv-nombre-display" style="font-size:1rem;font-weight:600;padding:6px 0;color:var(--text)"></div>
       </div>
-      <!-- Modo creación: campos nombre y código editables -->
+      <!-- Modo creación / admin: campos nombre y código editables -->
       <div class="form-grid" id="pv-create-fields" style="display:none;grid-template-columns:1fr 1fr;margin-bottom:4px">
         <div class="form-group" style="grid-column:1/-1">
           <label class="form-label">Nombre del proveedor <span style="color:#e74c3c">*</span></label>
           <input class="form-control" id="pv-nombre-input" placeholder="Nombre del proveedor…">
         </div>
         <div class="form-group">
-          <label class="form-label">Código</label>
+          <label class="form-label">Código SAP</label>
           <input class="form-control" id="pv-codigo-input" placeholder="Código (opcional)">
         </div>
         <div class="form-group"><!-- spacer --></div>
       </div>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr">
-        <div class="form-group">
-          <label class="form-label">Persona de contacto</label>
-          <input class="form-control" id="pv-contacto">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Email</label>
-          <input class="form-control" id="pv-email" type="email">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Teléfono</label>
-          <input class="form-control" id="pv-tel">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Móvil</label>
-          <input class="form-control" id="pv-movil">
-        </div>
+
+      <!-- ── CONTACTOS MÚLTIPLES ──────────────────────────────────── -->
+      <div style="margin:14px 0 6px 0;display:flex;align-items:center;gap:10px">
+        <label class="form-label" style="margin:0;font-weight:700">Contactos</label>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="pvAddContacto()"
+                style="padding:2px 10px;font-size:.82rem">+ Añadir contacto</button>
       </div>
-      <!-- Observaciones independientes del proveedor (NO son las de pedidos) -->
-      <div class="form-group">
+      <div id="pv-contactos-list" style="display:flex;flex-direction:column;gap:10px;max-height:300px;overflow-y:auto;padding-right:4px"></div>
+      <div id="pv-contactos-empty" style="color:var(--text-secondary);font-size:.85rem;padding:8px 0 4px">
+        Sin contactos. Pulsa "+ Añadir contacto" para incluir personas de contacto, teléfonos o correos.
+      </div>
+
+      <!-- Observaciones -->
+      <div class="form-group" style="margin-top:14px">
         <label class="form-label">Observaciones del proveedor</label>
         <textarea class="form-control" id="pv-obs" rows="3" style="resize:vertical"
                   placeholder="Notas internas sobre este proveedor…"></textarea>
@@ -1361,7 +1355,7 @@ async function doLogin() {
     });
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
-    updateAlertBadge();
+    // loadStats (llamado por showView) ya actualiza badge y card de alertas del dashboard.
   } catch(e) { err.textContent='Error de conexión'; err.style.display='block'; }
 }
 
@@ -1499,22 +1493,38 @@ function poblarSelectProveedores() {
    Dashboard / Stats
 ═══════════════════════════════════════════════════════════════════════════ */
 async function loadStats() {
-  const d = await api('/api/stats');
+  // Cargar stats y techo en paralelo para que el badge y el card del dashboard
+  // siempre reflejen ambas fuentes de alerta, sin depender de la cache.
+  const [d, techo] = await Promise.all([
+    api('/api/stats'),
+    api('/api/techo/resumen').catch(() => null)
+  ]);
+  if (techo) _techoCache = techo;
+
+  const nTecho = _techoCache?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0;
 
   document.getElementById('st-total').textContent    = d.total;
-  document.getElementById('st-alertas').textContent  = d.num_alertas;
+  // Bug fix: el card de alertas del dashboard también suma las alertas de techo
+  document.getElementById('st-alertas').textContent  = d.num_alertas + nTecho;
 
   const envi = d.by_estado.find(e=>e.estado==='ENVIADO AL PROVEEDOR');
   const entr = d.by_estado.find(e=>e.estado==='ENTREGADO');
   document.getElementById('st-enviado').textContent   = envi ? envi.total : 0;
   document.getElementById('st-entregado').textContent = entr ? entr.total : 0;
 
-  // Alerta badge sidebar — suma pedidos + alertas de techo (usando cache si disponible)
+  // Alerta badge sidebar — suma pedidos + alertas de techo (ya siempre actualizado)
   const badge = document.getElementById('sb-alert-count');
-  const nTecho = _techoCache?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0;
   const totalBadge = d.num_alertas + nTecho;
   if (totalBadge > 0) { badge.textContent=totalBadge; badge.style.display=''; }
   else { badge.style.display='none'; }
+
+  // Badge techo sidebar
+  const badgeTecho = document.getElementById('sb-techo-count');
+  if (badgeTecho) {
+    const rojos = _techoCache?.hoteles?.filter(h => h.semaforo === 'rojo').length || 0;
+    badgeTecho.style.display = rojos > 0 ? '' : 'none';
+    badgeTecho.textContent   = rojos;
+  }
 
   // Gráfico estados
   const maxE = Math.max(...d.by_estado.map(e=>e.total), 1);
@@ -2366,19 +2376,64 @@ async function loadProveedores() {
   // Guardar en cache por id para el modal
   _provCache = {};
   d.forEach(p => { _provCache[p.id] = p; });
-  tbody.innerHTML = d.map(p => `
+  tbody.innerHTML = d.map(p => {
+    const contactos = (p.contactos && p.contactos.length)
+      ? p.contactos.map(c => {
+          const parts = [];
+          if (c.nombre)   parts.push(`<span style="font-weight:600">${esc(c.nombre)}</span>`);
+          if (c.telefono) parts.push(`<span style="color:var(--text-secondary)">📞 ${esc(c.telefono)}</span>`);
+          if (c.email)    parts.push(`<a href="mailto:${esc(c.email)}" style="color:var(--gold)">✉ ${esc(c.email)}</a>`);
+          return `<div style="margin-bottom:2px">${parts.join(' · ')}</div>`;
+        }).join('')
+      : '<span style="color:var(--text-secondary)">—</span>';
+    return `
     <tr>
       <td style="color:var(--text-secondary);font-size:.85rem">${p.codigo||'—'}</td>
       <td><strong>${p.nombre}</strong></td>
-      <td>${p.contacto||'—'}</td>
-      <td>${p.email ? `<a href="mailto:${p.email}" style="color:var(--gold)">${p.email}</a>` : '—'}</td>
-      <td>${p.telefono||'—'}</td>
-      <td>${p.movil||'—'}</td>
+      <td style="font-size:.85rem;line-height:1.5">${contactos}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.observaciones||'')}">${p.observaciones||'—'}</td>
       <td>
         <button class="btn btn-ghost btn-sm" onclick="openProveedorModal(${p.id})">✏ Editar</button>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
+}
+
+/* ── Helpers para contactos múltiples ── */
+function pvContactoRow(c = {}, idx) {
+  return `<div class="pv-contacto-row" data-idx="${idx}" style="display:grid;grid-template-columns:1fr 1fr 1fr auto;gap:8px;align-items:center;background:var(--bg-card, #f8f9fa);border:1px solid var(--border,#e2e8f0);border-radius:8px;padding:8px 10px">
+    <input class="form-control pv-c-nombre" placeholder="Persona de contacto" value="${esc(c.nombre||'')}" style="font-size:.88rem">
+    <input class="form-control pv-c-tel"    placeholder="Teléfono" value="${esc(c.telefono||'')}" style="font-size:.88rem">
+    <input class="form-control pv-c-email"  placeholder="Email" type="email" value="${esc(c.email||'')}" style="font-size:.88rem">
+    <button type="button" onclick="pvRemoveContacto(this)" title="Eliminar contacto"
+            style="background:none;border:none;color:#e74c3c;cursor:pointer;font-size:1.1rem;padding:0 4px">✕</button>
+  </div>`;
+}
+function pvAddContacto(c = {}) {
+  const list = document.getElementById('pv-contactos-list');
+  const idx  = list.children.length;
+  list.insertAdjacentHTML('beforeend', pvContactoRow(c, idx));
+  document.getElementById('pv-contactos-empty').style.display = 'none';
+}
+function pvRemoveContacto(btn) {
+  btn.closest('.pv-contacto-row').remove();
+  const list = document.getElementById('pv-contactos-list');
+  if (!list.children.length)
+    document.getElementById('pv-contactos-empty').style.display = '';
+}
+function pvGetContactos() {
+  return Array.from(document.querySelectorAll('.pv-contacto-row')).map(row => ({
+    nombre:   row.querySelector('.pv-c-nombre').value.trim(),
+    telefono: row.querySelector('.pv-c-tel').value.trim(),
+    email:    row.querySelector('.pv-c-email').value.trim(),
+  })).filter(c => c.nombre || c.telefono || c.email);
+}
+function pvSetContactos(contactos) {
+  const list = document.getElementById('pv-contactos-list');
+  list.innerHTML = '';
+  (contactos || []).forEach((c, i) => pvAddContacto(c));
+  document.getElementById('pv-contactos-empty').style.display =
+    list.children.length ? 'none' : '';
 }
 
 function openProveedorModal(pid) {
@@ -2386,45 +2441,34 @@ function openProveedorModal(pid) {
   if (!p) return;
   const isAdmin = G.rol === 'admin';
   G.editingProveedorId = p.id;
-  // Modo edición
   document.getElementById('modal-prov-title').textContent = 'Editar proveedor';
   document.getElementById('btn-save-proveedor').textContent = 'Guardar cambios';
   document.getElementById('btn-borrar-proveedor').style.display = isAdmin ? 'inline-flex' : 'none';
   if (isAdmin) {
-    // Admin: puede editar nombre y código directamente
     document.getElementById('pv-nombre-group').style.display = 'none';
     document.getElementById('pv-create-fields').style.display = 'grid';
     setVal('pv-nombre-input', p.nombre||'');
     setVal('pv-codigo-input', p.codigo||'');
   } else {
-    // Usuario: nombre como texto fijo
     document.getElementById('pv-nombre-group').style.display = 'block';
     document.getElementById('pv-nombre-display').textContent = p.nombre || '';
     document.getElementById('pv-create-fields').style.display = 'none';
   }
-  setVal('pv-contacto', p.contacto||'');
-  setVal('pv-email',    p.email||'');
-  setVal('pv-tel',      p.telefono||'');
-  setVal('pv-movil',    p.movil||'');
+  pvSetContactos(p.contactos || []);
   document.getElementById('pv-obs').value = p.observaciones||'';
   openModal('modal-proveedor');
 }
 
 function openNuevoProveedorModal() {
   G.editingProveedorId = null;
-  // Modo creación: mostrar campos nombre y código
   document.getElementById('pv-nombre-group').style.display = 'none';
   document.getElementById('pv-create-fields').style.display = 'grid';
   document.getElementById('modal-prov-title').textContent = 'Nuevo proveedor';
   document.getElementById('btn-save-proveedor').textContent = 'Crear proveedor';
   document.getElementById('btn-borrar-proveedor').style.display = 'none';
-  // Limpiar campos
   setVal('pv-nombre-input', '');
   setVal('pv-codigo-input', '');
-  setVal('pv-contacto', '');
-  setVal('pv-email', '');
-  setVal('pv-tel', '');
-  setVal('pv-movil', '');
+  pvSetContactos([]);
   document.getElementById('pv-obs').value = '';
   openModal('modal-proveedor');
 }
@@ -2432,15 +2476,11 @@ function openNuevoProveedorModal() {
 async function saveProveedor() {
   const isNew = !G.editingProveedorId;
   const body = {
-    contacto:      val('pv-contacto'),
-    email:         val('pv-email'),
-    telefono:      val('pv-tel'),
-    movil:         val('pv-movil'),
-    observaciones: document.getElementById('pv-obs').value.trim()
+    observaciones: document.getElementById('pv-obs').value.trim(),
+    contactos:     pvGetContactos(),
   };
 
   if (isNew) {
-    // Alta de nuevo proveedor — solo desde la vista Proveedores
     const nombre = val('pv-nombre-input');
     if (!nombre) { toast('El nombre del proveedor es obligatorio', 'error'); return; }
     body.nombre = nombre;
@@ -2449,8 +2489,6 @@ async function saveProveedor() {
     if (r.error) { toast(r.error, 'error'); return; }
     toast('Proveedor creado correctamente', 'success');
   } else {
-    // Edición de proveedor existente
-    // Si los campos de creación están visibles (admin), leer de ahí; si no, del display fijo
     const createFields = document.getElementById('pv-create-fields');
     if (createFields.style.display !== 'none') {
       const nombre = val('pv-nombre-input');
@@ -2470,7 +2508,9 @@ async function saveProveedor() {
 }
 
 async function borrarProveedor() {
-  const nombre = document.getElementById('pv-nombre-display').textContent || 'este proveedor';
+  const pid = G.editingProveedorId;
+  const pCache = _provCache[pid];
+  const nombre = (pCache && pCache.nombre) || document.getElementById('pv-nombre-display').textContent || 'este proveedor';
   if (!confirm(`¿Seguro que deseas eliminar "${nombre}"?\nEsta acción no se puede deshacer.`)) return;
   const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'DELETE');
   if (r.error) { toast(r.error, 'error'); return; }

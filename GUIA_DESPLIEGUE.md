@@ -1,6 +1,13 @@
 # Guía de despliegue — Control Pedidos Princess
 ## Stack: Render (Flask) + Supabase (PostgreSQL) + Resend (email) + UptimeRobot (anti-sleep)
 
+> **v9.2.0** — Contactos múltiples por proveedor. Los campos `telefono` y `movil` se han
+> unificado en una única columna `telefono` dentro de la tabla `proveedor_contactos`.
+> La migración es automática al arrancar la app: si un proveedor tenía datos en los
+> campos legacy (`contacto`, `email`, `telefono`, `movil`), se crea automáticamente
+> su primer registro de contacto conservando todos los datos.
+
+
 ---
 
 ## PASO 1 — Supabase: crear proyecto y base de datos

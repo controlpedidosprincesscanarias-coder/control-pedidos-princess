@@ -43,8 +43,35 @@ def _auto_migrate():
         )
         db.autocommit = True
         with db.cursor() as cur:
-            for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT")]:
+            # Columnas legacy de proveedores (para DBs antiguas)
+            for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT"),
+                                        ("contacto","TEXT"),("email","TEXT"),("telefono","TEXT")]:
                 cur.execute(f"ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS {col_name} {col_type}")
+            # Tabla de contactos múltiples (v9.2)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS proveedor_contactos (
+                    id           SERIAL PRIMARY KEY,
+                    proveedor_id INTEGER NOT NULL REFERENCES proveedores(id) ON DELETE CASCADE,
+                    nombre       TEXT,
+                    telefono     TEXT,
+                    email        TEXT,
+                    orden        INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_prov_contactos ON proveedor_contactos(proveedor_id)")
+            # Migrar datos legacy: si hay contacto/email/telefono/movil y no hay contactos aún
+            cur.execute("""
+                INSERT INTO proveedor_contactos (proveedor_id, nombre, telefono, email, orden)
+                SELECT id,
+                       NULLIF(TRIM(COALESCE(contacto,'')), ''),
+                       NULLIF(TRIM(COALESCE(telefono,'') || CASE WHEN TRIM(COALESCE(movil,''))!='' THEN ' / '||TRIM(movil) ELSE '' END), ''),
+                       NULLIF(TRIM(COALESCE(email,'')), ''),
+                       0
+                FROM proveedores
+                WHERE NOT EXISTS (SELECT 1 FROM proveedor_contactos pc WHERE pc.proveedor_id = proveedores.id)
+                  AND (TRIM(COALESCE(contacto,''))!='' OR TRIM(COALESCE(email,''))!=''
+                       OR TRIM(COALESCE(telefono,''))!='' OR TRIM(COALESCE(movil,''))!='')
+            """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_adjuntos (
                     id            SERIAL PRIMARY KEY,
@@ -237,7 +264,8 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     pedido = row_to_dict(query(
         """SELECT p.*, h.nombre as hotel_nombre, h.codigo as hotel_codigo,
                   d.nombre as departamento_nombre,
-                  pr.nombre as proveedor_nombre, pr.email as proveedor_email
+                  pr.nombre as proveedor_nombre,
+                  (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' ORDER BY orden,id LIMIT 1) as proveedor_email
            FROM pedidos p
            LEFT JOIN hoteles h ON p.hotel_id = h.id
            LEFT JOIN departamentos d ON p.departamento_id = d.id
@@ -459,17 +487,46 @@ def update_usuario(uid):
 
 # ── API Proveedores ────────────────────────────────────────────────────────────
 
+def _prov_with_contactos(rows):
+    """Añade lista de contactos a cada proveedor."""
+    result = rows_to_list(rows)
+    if not result:
+        return result
+    ids = [p["id"] for p in result]
+    placeholders = ",".join(["%s"] * len(ids))
+    contactos_rows = rows_to_list(query(
+        f"SELECT proveedor_id,nombre,telefono,email FROM proveedor_contactos WHERE proveedor_id IN ({placeholders}) ORDER BY proveedor_id,orden,id",
+        tuple(ids)
+    ))
+    # Agrupar por proveedor_id
+    from collections import defaultdict
+    cmap = defaultdict(list)
+    for c in contactos_rows:
+        cmap[c["proveedor_id"]].append({
+            "nombre": c["nombre"] or "",
+            "telefono": c["telefono"] or "",
+            "email": c["email"] or "",
+        })
+    for p in result:
+        p["contactos"] = cmap.get(p["id"], [])
+        # Campos de compatibilidad para la vista de pedidos (primer contacto)
+        first = p["contactos"][0] if p["contactos"] else {}
+        p["contacto"]  = first.get("nombre", "")
+        p["email"]     = first.get("email", "")
+        p["telefono"]  = first.get("telefono", "")
+    return result
+
 @app.route("/api/proveedores", methods=["GET"])
 @login_required
 def get_proveedores():
     q = request.args.get("q", "").strip()
     if q:
         rows = query(
-            "SELECT id,codigo,nombre,contacto,email,telefono,movil,observaciones FROM proveedores WHERE activo=1 AND nombre ILIKE %s ORDER BY nombre",
+            "SELECT id,codigo,nombre,observaciones FROM proveedores WHERE activo=1 AND nombre ILIKE %s ORDER BY nombre",
             (f"%{q}%",))
     else:
-        rows = query("SELECT id,codigo,nombre,contacto,email,telefono,movil,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre")
-    return jsonify(rows_to_list(rows))
+        rows = query("SELECT id,codigo,nombre,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre")
+    return jsonify(_prov_with_contactos(rows))
 
 @app.route("/api/proveedores", methods=["POST"])
 @admin_required
@@ -480,12 +537,21 @@ def create_proveedor():
         return jsonify({"error": "Nombre requerido"}), 400
     db  = get_db()
     cur = execute(
-        "INSERT INTO proveedores (codigo,nombre,contacto,email,telefono,movil,observaciones) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-        (data.get("codigo",""), nombre, data.get("contacto",""),
-         data.get("email",""), data.get("telefono",""),
-         data.get("movil",""), data.get("observaciones",""))
+        "INSERT INTO proveedores (codigo,nombre,observaciones) VALUES (%s,%s,%s) RETURNING id",
+        (data.get("codigo",""), nombre, data.get("observaciones",""))
     )
     new_id = cur.fetchone()["id"]
+    # Insertar contactos
+    contactos = data.get("contactos", [])
+    for i, c in enumerate(contactos):
+        nombre_c = (c.get("nombre") or "").strip() or None
+        tel_c    = (c.get("telefono") or "").strip() or None
+        email_c  = (c.get("email") or "").strip() or None
+        if nombre_c or tel_c or email_c:
+            execute(
+                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
+                (new_id, nombre_c, tel_c, email_c, i)
+            )
     db.commit()
     return jsonify({"ok": True, "id": new_id, "nombre": nombre}), 201
 
@@ -495,12 +561,21 @@ def update_proveedor(pid):
     data = request.get_json(silent=True) or {}
     db   = get_db()
     execute(
-        "UPDATE proveedores SET codigo=%s,nombre=%s,contacto=%s,email=%s,telefono=%s,movil=%s,observaciones=%s WHERE id=%s",
-        (data.get("codigo",""), data.get("nombre",""),
-         data.get("contacto",""), data.get("email",""),
-         data.get("telefono",""), data.get("movil",""),
-         data.get("observaciones",""), pid)
+        "UPDATE proveedores SET codigo=%s,nombre=%s,observaciones=%s WHERE id=%s",
+        (data.get("codigo",""), data.get("nombre",""), data.get("observaciones",""), pid)
     )
+    # Reemplazar contactos
+    execute("DELETE FROM proveedor_contactos WHERE proveedor_id=%s", (pid,))
+    contactos = data.get("contactos", [])
+    for i, c in enumerate(contactos):
+        nombre_c = (c.get("nombre") or "").strip() or None
+        tel_c    = (c.get("telefono") or "").strip() or None
+        email_c  = (c.get("email") or "").strip() or None
+        if nombre_c or tel_c or email_c:
+            execute(
+                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
+                (pid, nombre_c, tel_c, email_c, i)
+            )
     db.commit()
     return jsonify({"ok": True})
 
@@ -508,11 +583,11 @@ def update_proveedor(pid):
 @admin_required
 def delete_proveedor(pid):
     db = get_db()
-    # Verificar si tiene pedidos asociados
     row = query("SELECT COUNT(*) as cnt FROM pedidos WHERE proveedor_id=%s", (pid,))
     cnt = rows_to_list(row)[0]["cnt"] if row else 0
     if cnt > 0:
         return jsonify({"error": f"No se puede eliminar: tiene {cnt} pedido{'s' if cnt!=1 else ''} asociado{'s' if cnt!=1 else ''}"}), 409
+    execute("DELETE FROM proveedor_contactos WHERE proveedor_id=%s", (pid,))
     execute("DELETE FROM proveedores WHERE id=%s", (pid,))
     db.commit()
     return jsonify({"ok": True})
@@ -525,15 +600,15 @@ def exportar_proveedores():
         from openpyxl.styles import Font, PatternFill, Alignment
         from flask import send_file
 
-        rows = rows_to_list(query(
-            "SELECT codigo,nombre,contacto,email,telefono,movil,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre"
+        provs = _prov_with_contactos(query(
+            "SELECT id,codigo,nombre,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre"
         ))
 
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Proveedores"
 
-        headers = ["CODIGO", "PROVEEDOR", "CONTACTO", "EMAIL", "TELEFONO", "MOVIL", "OBSERVACIONES"]
+        headers = ["CODIGO", "PROVEEDOR", "CONTACTO", "TELEFONO", "EMAIL", "OBSERVACIONES"]
         header_fill = PatternFill("solid", fgColor="1B2A4A")
         header_font = Font(bold=True, color="FFFFFF")
 
@@ -543,18 +618,23 @@ def exportar_proveedores():
             cell.font = header_font
             cell.alignment = Alignment(horizontal="center")
 
-        col_widths = [15, 45, 25, 35, 15, 15, 35]
+        col_widths = [15, 45, 25, 20, 35, 40]
         for i, w in enumerate(col_widths, 1):
             ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
 
-        for r_idx, row in enumerate(rows, 2):
-            ws.cell(row=r_idx, column=1, value=row.get("codigo") or "")
-            ws.cell(row=r_idx, column=2, value=row.get("nombre") or "")
-            ws.cell(row=r_idx, column=3, value=row.get("contacto") or "")
-            ws.cell(row=r_idx, column=4, value=row.get("email") or "")
-            ws.cell(row=r_idx, column=5, value=row.get("telefono") or "")
-            ws.cell(row=r_idx, column=6, value=row.get("movil") or "")
-            ws.cell(row=r_idx, column=7, value=row.get("observaciones") or "")
+        r_idx = 2
+        for p in provs:
+            contactos = p.get("contactos", [{}])
+            if not contactos:
+                contactos = [{}]
+            for ci, c in enumerate(contactos):
+                ws.cell(row=r_idx, column=1, value=p.get("codigo") or "" if ci == 0 else "")
+                ws.cell(row=r_idx, column=2, value=p.get("nombre") or "" if ci == 0 else "")
+                ws.cell(row=r_idx, column=3, value=c.get("nombre") or "")
+                ws.cell(row=r_idx, column=4, value=c.get("telefono") or "")
+                ws.cell(row=r_idx, column=5, value=c.get("email") or "")
+                ws.cell(row=r_idx, column=6, value=p.get("observaciones") or "" if ci == 0 else "")
+                r_idx += 1
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -590,60 +670,73 @@ def importar_proveedores():
                 return None
 
         db = get_db()
-
-        # Cargar proveedores existentes por codigo para comparar
         existentes = {r["codigo"]: r["id"] for r in rows_to_list(
             query("SELECT id, codigo FROM proveedores WHERE codigo IS NOT NULL AND codigo != ''")
         )}
 
-        from psycopg2.extras import execute_values
+        # Agrupar filas por proveedor (codigo+nombre)
+        from collections import defaultdict
+        prov_data = {}   # codigo -> {nombre, obs, contactos:[]}
+        prov_order = []  # mantener orden
 
-        nuevos_rows = []
-        update_rows = []
-        errores = []
-
-        for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
+        for row in ws.iter_rows(min_row=2):
             codigo  = col(row, "CODIGO")
             nombre  = col(row, "PROVEEDOR")
             if not nombre:
                 continue
+            key = codigo or nombre
+            if key not in prov_data:
+                prov_data[key] = {
+                    "codigo": codigo or "",
+                    "nombre": nombre,
+                    "observaciones": col(row, "OBSERVACIONES") or "",
+                    "contactos": []
+                }
+                prov_order.append(key)
+            # Contacto de esta fila
+            c_nombre = col(row, "CONTACTO") or ""
+            c_tel    = col(row, "TELEFONO") or col(row, "MOVIL") or ""
+            c_email  = col(row, "EMAIL") or ""
+            if c_nombre or c_tel or c_email:
+                prov_data[key]["contactos"].append((c_nombre, c_tel, c_email))
 
-            contacto     = col(row, "CONTACTO") or ""
-            email        = col(row, "EMAIL") or ""
-            telefono     = col(row, "TELEFONO") or ""
-            movil        = col(row, "MOVIL") or ""
-            observaciones = col(row, "OBSERVACIONES") or ""
-
-            if codigo and codigo in existentes:
-                # Actualizar campos editables (no nombre, no codigo)
-                update_rows.append((contacto, email, telefono, movil, observaciones, existentes[codigo]))
-            else:
-                nuevos_rows.append((codigo or "", nombre, contacto, email, telefono, movil, observaciones))
-
-        # Bulk insert nuevos
         insertados = 0
         actualizados = 0
 
         with db.cursor() as cur_i:
-            if nuevos_rows:
-                execute_values(cur_i, """
-                    INSERT INTO proveedores (codigo, nombre, contacto, email, telefono, movil, observaciones)
-                    VALUES %s
-                    ON CONFLICT DO NOTHING
-                """, nuevos_rows)
-                insertados = cur_i.rowcount
-
-            if update_rows:
-                from psycopg2.extras import execute_batch
-                execute_batch(cur_i, """
-                    UPDATE proveedores
-                    SET contacto=%s, email=%s, telefono=%s, movil=%s, observaciones=%s
-                    WHERE id=%s
-                """, update_rows)
-                actualizados = len(update_rows)
+            for key in prov_order:
+                p = prov_data[key]
+                codigo = p["codigo"]
+                if codigo and codigo in existentes:
+                    pid = existentes[codigo]
+                    cur_i.execute(
+                        "UPDATE proveedores SET observaciones=%s WHERE id=%s",
+                        (p["observaciones"], pid)
+                    )
+                    cur_i.execute("DELETE FROM proveedor_contactos WHERE proveedor_id=%s", (pid,))
+                    for i, (cn, ct, ce) in enumerate(p["contactos"]):
+                        cur_i.execute(
+                            "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
+                            (pid, cn or None, ct or None, ce or None, i)
+                        )
+                    actualizados += 1
+                else:
+                    cur_i.execute(
+                        "INSERT INTO proveedores (codigo,nombre,observaciones) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING RETURNING id",
+                        (codigo, p["nombre"], p["observaciones"])
+                    )
+                    row_r = cur_i.fetchone()
+                    if row_r:
+                        new_pid = row_r["id"]
+                        for i, (cn, ct, ce) in enumerate(p["contactos"]):
+                            cur_i.execute(
+                                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
+                                (new_pid, cn or None, ct or None, ce or None, i)
+                            )
+                        insertados += 1
 
         db.commit()
-        return jsonify({"ok": True, "insertados": insertados, "actualizados": actualizados, "errores": errores})
+        return jsonify({"ok": True, "insertados": insertados, "actualizados": actualizados, "errores": []})
 
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
@@ -674,34 +767,49 @@ def importar_proveedores_reset():
             except (ValueError, IndexError):
                 return None
 
-        db = get_db()
-        nuevos_rows = []
+        from collections import defaultdict
+        prov_data = {}
+        prov_order = []
 
-        for i, row in enumerate(ws.iter_rows(min_row=2), start=2):
+        for row in ws.iter_rows(min_row=2):
             nombre = col(row, "PROVEEDOR")
             if not nombre:
                 continue
-            codigo       = col(row, "CODIGO") or ""
-            contacto     = col(row, "CONTACTO") or ""
-            email        = col(row, "EMAIL") or ""
-            telefono     = col(row, "TELEFONO") or ""
-            movil        = col(row, "MOVIL") or ""
-            observaciones = col(row, "OBSERVACIONES") or ""
-            nuevos_rows.append((codigo, nombre, contacto, email, telefono, movil, observaciones))
+            codigo = col(row, "CODIGO") or ""
+            key = codigo or nombre
+            if key not in prov_data:
+                prov_data[key] = {
+                    "codigo": codigo,
+                    "nombre": nombre,
+                    "observaciones": col(row, "OBSERVACIONES") or "",
+                    "contactos": []
+                }
+                prov_order.append(key)
+            c_nombre = col(row, "CONTACTO") or ""
+            c_tel    = col(row, "TELEFONO") or col(row, "MOVIL") or ""
+            c_email  = col(row, "EMAIL") or ""
+            if c_nombre or c_tel or c_email:
+                prov_data[key]["contactos"].append((c_nombre, c_tel, c_email))
 
-        from psycopg2.extras import execute_values
-
+        db = get_db()
+        insertados = 0
         with db.cursor() as cur:
-            # Primero desvinculamos pedidos para no violar la FK
             cur.execute("UPDATE pedidos SET proveedor_id = NULL WHERE proveedor_id IS NOT NULL")
+            cur.execute("DELETE FROM proveedor_contactos")
             cur.execute("DELETE FROM proveedores")
-            insertados = 0
-            if nuevos_rows:
-                execute_values(cur, """
-                    INSERT INTO proveedores (codigo, nombre, contacto, email, telefono, movil, observaciones)
-                    VALUES %s
-                """, nuevos_rows)
-                insertados = cur.rowcount
+            for key in prov_order:
+                p = prov_data[key]
+                cur.execute(
+                    "INSERT INTO proveedores (codigo,nombre,observaciones) VALUES (%s,%s,%s) RETURNING id",
+                    (p["codigo"], p["nombre"], p["observaciones"])
+                )
+                pid = cur.fetchone()["id"]
+                for i, (cn, ct, ce) in enumerate(p["contactos"]):
+                    cur.execute(
+                        "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
+                        (pid, cn or None, ct or None, ce or None, i)
+                    )
+                insertados += 1
 
         db.commit()
         return jsonify({"ok": True, "insertados": insertados, "actualizados": 0, "errores": []})
@@ -843,9 +951,9 @@ PEDIDO_SELECT = """
            h.nombre  as hotel_nombre,
            d.nombre  as departamento_nombre,
            pr.nombre as proveedor_nombre,
-           pr.email  as proveedor_email,
-           pr.telefono as proveedor_telefono,
-           pr.contacto as proveedor_contacto,
+           (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' ORDER BY orden,id LIMIT 1) as proveedor_email,
+           (SELECT telefono FROM proveedor_contactos WHERE proveedor_id=pr.id AND telefono IS NOT NULL AND telefono!='' ORDER BY orden,id LIMIT 1) as proveedor_telefono,
+           (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id ORDER BY orden,id LIMIT 1) as proveedor_contacto,
            u1.nombre as creado_por_nombre,
            u2.nombre as modificado_por_nombre,
            f.nombre  as familia_nombre,

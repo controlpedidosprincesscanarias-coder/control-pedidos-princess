@@ -25,18 +25,26 @@ SQL_STATEMENTS = [
     # ── Proveedores ───────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS proveedores (
-        id           SERIAL PRIMARY KEY,
-        codigo       TEXT,
-        nombre       TEXT NOT NULL,
-        contacto     TEXT,
-        email        TEXT,
-        telefono     TEXT,
-        movil        TEXT,
+        id            SERIAL PRIMARY KEY,
+        codigo        TEXT,
+        nombre        TEXT NOT NULL,
         observaciones TEXT,
-        activo       INTEGER NOT NULL DEFAULT 1,
-        creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        activo        INTEGER NOT NULL DEFAULT 1,
+        creado_en     TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    # ── Contactos de proveedor (múltiples por proveedor) ──────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS proveedor_contactos (
+        id           SERIAL PRIMARY KEY,
+        proveedor_id INTEGER NOT NULL REFERENCES proveedores(id) ON DELETE CASCADE,
+        nombre       TEXT,
+        telefono     TEXT,
+        email        TEXT,
+        orden        INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_prov_contactos ON proveedor_contactos(proveedor_id)",
     # ── Usuarios ──────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS usuarios (
