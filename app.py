@@ -787,22 +787,31 @@ def _parse_excel_proveedores(archivo):
     prov_data  = {}   # key → dict
     prov_order = []   # mantener orden de aparición
 
+    last_key = None  # último proveedor visto — para filas de contacto extra sin CODIGO/PROVEEDOR
+
     for row in ws.iter_rows(min_row=2):
         nombre = col(row, "PROVEEDOR")
-        if not nombre:
-            continue
         codigo = col(row, "CODIGO") or ""
-        key    = codigo or nombre
 
-        if key not in prov_data:
-            obs = col(row, "OBSERVACIONES") or ""
-            prov_data[key] = {
-                "codigo":        codigo,
-                "nombre":        nombre,
-                "observaciones": obs,
-                "contactos":     [],
-            }
-            prov_order.append(key)
+        if nombre:
+            # Fila con proveedor identificado → crear/localizar entrada
+            key = codigo or nombre
+            if key not in prov_data:
+                obs = col(row, "OBSERVACIONES") or ""
+                prov_data[key] = {
+                    "codigo":        codigo,
+                    "nombre":        nombre,
+                    "observaciones": obs,
+                    "contactos":     [],
+                }
+                prov_order.append(key)
+            last_key = key
+        else:
+            # Fila sin PROVEEDOR → contacto adicional del último proveedor visto
+            key = last_key
+
+        if key is None:
+            continue  # fila suelta sin proveedor de referencia, ignorar
 
         c_nombre    = col(row, "CONTACTO")  or ""
         c_tel       = col(row, "TELEFONO")  or ""
