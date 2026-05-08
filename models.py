@@ -40,7 +40,9 @@ SQL_STATEMENTS = [
         proveedor_id INTEGER NOT NULL REFERENCES proveedores(id) ON DELETE CASCADE,
         nombre       TEXT,
         telefono     TEXT,
+        movil        TEXT,
         email        TEXT,
+        es_principal INTEGER NOT NULL DEFAULT 0,
         orden        INTEGER NOT NULL DEFAULT 0
     )
     """,

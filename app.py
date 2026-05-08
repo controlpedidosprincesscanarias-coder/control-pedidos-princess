@@ -54,18 +54,33 @@ def _auto_migrate():
                     proveedor_id INTEGER NOT NULL REFERENCES proveedores(id) ON DELETE CASCADE,
                     nombre       TEXT,
                     telefono     TEXT,
+                    movil        TEXT,
                     email        TEXT,
+                    es_principal INTEGER NOT NULL DEFAULT 0,
                     orden        INTEGER NOT NULL DEFAULT 0
                 )
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_prov_contactos ON proveedor_contactos(proveedor_id)")
+            # Nuevas columnas v9.4 (para DBs existentes sin ellas)
+            cur.execute("ALTER TABLE proveedor_contactos ADD COLUMN IF NOT EXISTS movil TEXT")
+            cur.execute("ALTER TABLE proveedor_contactos ADD COLUMN IF NOT EXISTS es_principal INTEGER NOT NULL DEFAULT 0")
+            # Marcar como principal el contacto de orden=0 si ninguno tiene es_principal=1
+            cur.execute("""
+                UPDATE proveedor_contactos SET es_principal=1
+                WHERE id IN (
+                    SELECT DISTINCT ON (proveedor_id) id FROM proveedor_contactos
+                    WHERE proveedor_id NOT IN (SELECT proveedor_id FROM proveedor_contactos WHERE es_principal=1)
+                    ORDER BY proveedor_id, orden, id
+                )
+            """)
             # Migrar datos legacy: si hay contacto/email/telefono/movil y no hay contactos aún
             cur.execute("""
-                INSERT INTO proveedor_contactos (proveedor_id, nombre, telefono, email, orden)
+                INSERT INTO proveedor_contactos (proveedor_id, nombre, telefono, email, es_principal, orden)
                 SELECT id,
                        NULLIF(TRIM(COALESCE(contacto,'')), ''),
                        NULLIF(TRIM(COALESCE(telefono,'') || CASE WHEN TRIM(COALESCE(movil,''))!='' THEN ' / '||TRIM(movil) ELSE '' END), ''),
                        NULLIF(TRIM(COALESCE(email,'')), ''),
+                       1,
                        0
                 FROM proveedores
                 WHERE NOT EXISTS (SELECT 1 FROM proveedor_contactos pc WHERE pc.proveedor_id = proveedores.id)
@@ -265,7 +280,9 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         """SELECT p.*, h.nombre as hotel_nombre, h.codigo as hotel_codigo,
                   d.nombre as departamento_nombre,
                   pr.nombre as proveedor_nombre,
-                  (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' ORDER BY orden,id LIMIT 1) as proveedor_email
+                  (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' AND es_principal=1 LIMIT 1) as proveedor_email,
+                  (SELECT COALESCE(NULLIF(movil,''), NULLIF(telefono,'')) FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_movil,
+                  (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_contacto_nombre
            FROM pedidos p
            LEFT JOIN hoteles h ON p.hotel_id = h.id
            LEFT JOIN departamentos d ON p.departamento_id = d.id
@@ -495,7 +512,7 @@ def _prov_with_contactos(rows):
     ids = [p["id"] for p in result]
     placeholders = ",".join(["%s"] * len(ids))
     contactos_rows = rows_to_list(query(
-        f"SELECT proveedor_id,nombre,telefono,email FROM proveedor_contactos WHERE proveedor_id IN ({placeholders}) ORDER BY proveedor_id,orden,id",
+        f"SELECT proveedor_id,nombre,telefono,movil,email,es_principal FROM proveedor_contactos WHERE proveedor_id IN ({placeholders}) ORDER BY proveedor_id,es_principal DESC,orden,id",
         tuple(ids)
     ))
     # Agrupar por proveedor_id
@@ -503,17 +520,20 @@ def _prov_with_contactos(rows):
     cmap = defaultdict(list)
     for c in contactos_rows:
         cmap[c["proveedor_id"]].append({
-            "nombre": c["nombre"] or "",
-            "telefono": c["telefono"] or "",
-            "email": c["email"] or "",
+            "nombre":       c["nombre"] or "",
+            "telefono":     c["telefono"] or "",
+            "movil":        c["movil"] or "",
+            "email":        c["email"] or "",
+            "es_principal": bool(c["es_principal"]),
         })
     for p in result:
         p["contactos"] = cmap.get(p["id"], [])
-        # Campos de compatibilidad para la vista de pedidos (primer contacto)
-        first = p["contactos"][0] if p["contactos"] else {}
-        p["contacto"]  = first.get("nombre", "")
-        p["email"]     = first.get("email", "")
-        p["telefono"]  = first.get("telefono", "")
+        # Campos de compatibilidad: usar contacto principal (o primero si no hay)
+        principal = next((c for c in p["contactos"] if c.get("es_principal")), p["contactos"][0] if p["contactos"] else {})
+        p["contacto"]       = principal.get("nombre", "")
+        p["email"]          = principal.get("email", "")
+        p["telefono"]       = principal.get("telefono", "")
+        p["movil_principal"] = principal.get("movil", "")
     return result
 
 @app.route("/api/proveedores", methods=["GET"])
@@ -559,13 +579,15 @@ def create_proveedor():
     # Insertar contactos
     contactos = data.get("contactos", [])
     for i, c in enumerate(contactos):
-        nombre_c = (c.get("nombre") or "").strip() or None
-        tel_c    = (c.get("telefono") or "").strip() or None
-        email_c  = (c.get("email") or "").strip() or None
-        if nombre_c or tel_c or email_c:
+        nombre_c    = (c.get("nombre") or "").strip() or None
+        tel_c       = (c.get("telefono") or "").strip() or None
+        movil_c     = (c.get("movil") or "").strip() or None
+        email_c     = (c.get("email") or "").strip() or None
+        principal_c = 1 if c.get("es_principal") else 0
+        if nombre_c or tel_c or movil_c or email_c:
             execute(
-                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
-                (new_id, nombre_c, tel_c, email_c, i)
+                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (new_id, nombre_c, tel_c, movil_c, email_c, principal_c, i)
             )
     db.commit()
     return jsonify({"ok": True, "id": new_id, "nombre": nombre}), 201
@@ -601,13 +623,15 @@ def update_proveedor(pid):
     execute("DELETE FROM proveedor_contactos WHERE proveedor_id=%s", (pid,))
     contactos = data.get("contactos", [])
     for i, c in enumerate(contactos):
-        nombre_c = (c.get("nombre") or "").strip() or None
-        tel_c    = (c.get("telefono") or "").strip() or None
-        email_c  = (c.get("email") or "").strip() or None
-        if nombre_c or tel_c or email_c:
+        nombre_c    = (c.get("nombre") or "").strip() or None
+        tel_c       = (c.get("telefono") or "").strip() or None
+        movil_c     = (c.get("movil") or "").strip() or None
+        email_c     = (c.get("email") or "").strip() or None
+        principal_c = 1 if c.get("es_principal") else 0
+        if nombre_c or tel_c or movil_c or email_c:
             execute(
-                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
-                (pid, nombre_c, tel_c, email_c, i)
+                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (pid, nombre_c, tel_c, movil_c, email_c, principal_c, i)
             )
     db.commit()
     return jsonify({"ok": True})
@@ -749,8 +773,8 @@ def importar_proveedores():
                     cur_i.execute("DELETE FROM proveedor_contactos WHERE proveedor_id=%s", (pid,))
                     for i, (cn, ct, ce) in enumerate(p["contactos"]):
                         cur_i.execute(
-                            "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
-                            (pid, cn or None, ct or None, ce or None, i)
+                            "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                            (pid, cn or None, ct or None, None, ce or None, 1 if i==0 else 0, i)
                         )
                     actualizados += 1
                 else:
@@ -763,8 +787,8 @@ def importar_proveedores():
                         new_pid = row_r["id"]
                         for i, (cn, ct, ce) in enumerate(p["contactos"]):
                             cur_i.execute(
-                                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
-                                (new_pid, cn or None, ct or None, ce or None, i)
+                                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                                (new_pid, cn or None, ct or None, None, ce or None, 1 if i==0 else 0, i)
                             )
                         insertados += 1
 
@@ -839,8 +863,8 @@ def importar_proveedores_reset():
                 pid = cur.fetchone()["id"]
                 for i, (cn, ct, ce) in enumerate(p["contactos"]):
                     cur.execute(
-                        "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,email,orden) VALUES (%s,%s,%s,%s,%s)",
-                        (pid, cn or None, ct or None, ce or None, i)
+                        "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                        (pid, cn or None, ct or None, None, ce or None, 1 if i==0 else 0, i)
                     )
                 insertados += 1
 
@@ -984,7 +1008,9 @@ PEDIDO_SELECT = """
            h.nombre  as hotel_nombre,
            d.nombre  as departamento_nombre,
            pr.nombre as proveedor_nombre,
-           (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' ORDER BY orden,id LIMIT 1) as proveedor_email,
+           (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' AND es_principal=1 LIMIT 1) as proveedor_email,
+                  (SELECT COALESCE(NULLIF(movil,''), NULLIF(telefono,'')) FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_movil,
+                  (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_contacto_nombre,
            (SELECT telefono FROM proveedor_contactos WHERE proveedor_id=pr.id AND telefono IS NOT NULL AND telefono!='' ORDER BY orden,id LIMIT 1) as proveedor_telefono,
            (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id ORDER BY orden,id LIMIT 1) as proveedor_contacto,
            u1.nombre as creado_por_nombre,
