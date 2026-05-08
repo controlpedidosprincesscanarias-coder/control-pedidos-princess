@@ -665,19 +665,34 @@ def exportar_proveedores():
         ws = wb.active
         ws.title = "Proveedores"
 
-        headers = ["CODIGO", "PROVEEDOR", "CONTACTO", "TELEFONO", "EMAIL", "OBSERVACIONES"]
-        header_fill = PatternFill("solid", fgColor="1B2A4A")
-        header_font = Font(bold=True, color="FFFFFF")
+        # Cabeceras: CODIGO · PROVEEDOR · PRINCIPAL · CONTACTO · TELEFONO · MOVIL · EMAIL · OBSERVACIONES
+        headers = ["CODIGO", "PROVEEDOR", "PRINCIPAL", "CONTACTO", "TELEFONO", "MOVIL", "EMAIL", "OBSERVACIONES"]
+        col_widths = [14, 42, 10, 25, 18, 18, 35, 38]
 
+        hdr_fill_prov = PatternFill("solid", fgColor="1B2A4A")
+        hdr_fill_ctc  = PatternFill("solid", fgColor="2E5090")
+        hdr_font      = Font(bold=True, color="FFFFFF")
+
+        ctc_cols = {3, 4, 5, 6, 7}  # columnas de contacto (1-based)
         for col_idx, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_idx, value=h)
-            cell.fill = header_fill
-            cell.font = header_font
+            cell.fill = hdr_fill_ctc if col_idx in ctc_cols else hdr_fill_prov
+            cell.font = hdr_font
             cell.alignment = Alignment(horizontal="center")
 
-        col_widths = [15, 45, 25, 20, 35, 40]
         for i, w in enumerate(col_widths, 1):
             ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+
+        # Freeze header row
+        ws.freeze_panes = "A2"
+
+        # Estilos de filas
+        from openpyxl.styles import Border, Side
+        thin = Side(style="thin", color="D0D7E3")
+        border = Border(bottom=thin)
+        fill_principal = PatternFill("solid", fgColor="FFF8E7")   # dorado claro → principal
+        fill_alt       = PatternFill("solid", fgColor="F5F7FA")   # gris claro → proveedor sin color
+        fill_ctc_alt   = PatternFill("solid", fgColor="EEF2FA")   # azul muy claro → contacto secundario
 
         r_idx = 2
         for p in provs:
@@ -685,13 +700,50 @@ def exportar_proveedores():
             if not contactos:
                 contactos = [{}]
             for ci, c in enumerate(contactos):
-                ws.cell(row=r_idx, column=1, value=p.get("codigo") or "" if ci == 0 else "")
-                ws.cell(row=r_idx, column=2, value=p.get("nombre") or "" if ci == 0 else "")
-                ws.cell(row=r_idx, column=3, value=c.get("nombre") or "")
-                ws.cell(row=r_idx, column=4, value=c.get("telefono") or "")
-                ws.cell(row=r_idx, column=5, value=c.get("email") or "")
-                ws.cell(row=r_idx, column=6, value=p.get("observaciones") or "" if ci == 0 else "")
+                es_principal = c.get("es_principal", ci == 0)
+                principal_val = "★" if es_principal else ""
+
+                # Color de fila
+                if es_principal:
+                    row_fill = fill_principal
+                elif ci > 0:
+                    row_fill = fill_ctc_alt
+                else:
+                    row_fill = None
+
+                vals = [
+                    p.get("codigo") or ""      if ci == 0 else "",
+                    p.get("nombre") or ""      if ci == 0 else "",
+                    principal_val,
+                    c.get("nombre") or "",
+                    c.get("telefono") or "",
+                    c.get("movil") or "",
+                    c.get("email") or "",
+                    p.get("observaciones") or "" if ci == 0 else "",
+                ]
+                for col_idx, val in enumerate(vals, 1):
+                    cell = ws.cell(row=r_idx, column=col_idx, value=val)
+                    cell.border = border
+                    if col_idx == 3:  # PRINCIPAL col
+                        cell.alignment = Alignment(horizontal="center")
+                        cell.font = Font(bold=True, color="B8860B")
+                    if row_fill:
+                        cell.fill = row_fill
                 r_idx += 1
+
+        # Nota de instrucciones en la parte inferior
+        ws.cell(row=r_idx + 1, column=1, value="INSTRUCCIONES DE IMPORTACIÓN:").font = Font(bold=True, color="1B2A4A")
+        instrucciones = [
+            "• CODIGO: código SAP (obligatorio). Identifica al proveedor — si ya existe se actualiza, si no existe se crea.",
+            "• PRINCIPAL: Escribe ★ o 1 o SI en la fila del contacto que recibirá emails/WhatsApp automáticos. Solo uno por proveedor.",
+            "• Varios contactos del mismo proveedor: repite CODIGO y PROVEEDOR en filas adicionales, deja OBSERVACIONES vacío.",
+            "• TELEFONO: teléfono fijo.  MOVIL: móvil/WhatsApp (se usará para alertas automáticas).",
+            "• Para eliminar todos los contactos de un proveedor: deja CONTACTO, TELEFONO, MOVIL y EMAIL vacíos.",
+        ]
+        for i, txt in enumerate(instrucciones, r_idx + 2):
+            cell = ws.cell(row=i, column=1, value=txt)
+            cell.font = Font(italic=True, color="555555", size=9)
+            ws.merge_cells(start_row=i, start_column=1, end_row=i, end_column=len(headers))
 
         buf = io.BytesIO()
         wb.save(buf)
@@ -751,11 +803,15 @@ def importar_proveedores():
                 }
                 prov_order.append(key)
             # Contacto de esta fila
-            c_nombre = col(row, "CONTACTO") or ""
-            c_tel    = col(row, "TELEFONO") or col(row, "MOVIL") or ""
-            c_email  = col(row, "EMAIL") or ""
-            if c_nombre or c_tel or c_email:
-                prov_data[key]["contactos"].append((c_nombre, c_tel, c_email))
+            c_nombre    = col(row, "CONTACTO") or ""
+            c_tel       = col(row, "TELEFONO") or ""
+            c_movil     = col(row, "MOVIL") or ""
+            c_email     = col(row, "EMAIL") or ""
+            c_principal = col(row, "PRINCIPAL") or ""
+            # ★, 1 o SI (case insensitive) → es_principal
+            es_principal = c_principal.strip().upper() in ("★", "1", "SI", "SÍ", "S", "YES", "Y", "TRUE")
+            if c_nombre or c_tel or c_movil or c_email:
+                prov_data[key]["contactos"].append((c_nombre, c_tel, c_movil, c_email, es_principal))
 
         insertados = 0
         actualizados = 0
@@ -764,17 +820,24 @@ def importar_proveedores():
             for key in prov_order:
                 p = prov_data[key]
                 codigo = p["codigo"]
+                ctcs = p["contactos"]
+
+                # Si ningún contacto está marcado como principal, marcar el primero
+                hay_principal = any(c[4] for c in ctcs)
+                if ctcs and not hay_principal:
+                    ctcs[0] = (ctcs[0][0], ctcs[0][1], ctcs[0][2], ctcs[0][3], True)
+
                 if codigo and codigo in existentes:
                     pid = existentes[codigo]
                     cur_i.execute(
-                        "UPDATE proveedores SET observaciones=%s WHERE id=%s",
-                        (p["observaciones"], pid)
+                        "UPDATE proveedores SET nombre=%s, observaciones=%s WHERE id=%s",
+                        (p["nombre"], p["observaciones"], pid)
                     )
                     cur_i.execute("DELETE FROM proveedor_contactos WHERE proveedor_id=%s", (pid,))
-                    for i, (cn, ct, ce) in enumerate(p["contactos"]):
+                    for i, (cn, ct, cm, ce, ep) in enumerate(ctcs):
                         cur_i.execute(
                             "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                            (pid, cn or None, ct or None, None, ce or None, 1 if i==0 else 0, i)
+                            (pid, cn or None, ct or None, cm or None, ce or None, 1 if ep else 0, i)
                         )
                     actualizados += 1
                 else:
@@ -785,10 +848,10 @@ def importar_proveedores():
                     row_r = cur_i.fetchone()
                     if row_r:
                         new_pid = row_r["id"]
-                        for i, (cn, ct, ce) in enumerate(p["contactos"]):
+                        for i, (cn, ct, cm, ce, ep) in enumerate(ctcs):
                             cur_i.execute(
                                 "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                                (new_pid, cn or None, ct or None, None, ce or None, 1 if i==0 else 0, i)
+                                (new_pid, cn or None, ct or None, cm or None, ce or None, 1 if ep else 0, i)
                             )
                         insertados += 1
 
@@ -842,11 +905,14 @@ def importar_proveedores_reset():
                     "contactos": []
                 }
                 prov_order.append(key)
-            c_nombre = col(row, "CONTACTO") or ""
-            c_tel    = col(row, "TELEFONO") or col(row, "MOVIL") or ""
-            c_email  = col(row, "EMAIL") or ""
-            if c_nombre or c_tel or c_email:
-                prov_data[key]["contactos"].append((c_nombre, c_tel, c_email))
+            c_nombre    = col(row, "CONTACTO") or ""
+            c_tel       = col(row, "TELEFONO") or ""
+            c_movil     = col(row, "MOVIL") or ""
+            c_email     = col(row, "EMAIL") or ""
+            c_principal = col(row, "PRINCIPAL") or ""
+            es_principal = c_principal.strip().upper() in ("★", "1", "SI", "SÍ", "S", "YES", "Y", "TRUE")
+            if c_nombre or c_tel or c_movil or c_email:
+                prov_data[key]["contactos"].append((c_nombre, c_tel, c_movil, c_email, es_principal))
 
         db = get_db()
         insertados = 0
@@ -856,15 +922,19 @@ def importar_proveedores_reset():
             cur.execute("DELETE FROM proveedores")
             for key in prov_order:
                 p = prov_data[key]
+                ctcs = p["contactos"]
+                hay_principal = any(c[4] for c in ctcs)
+                if ctcs and not hay_principal:
+                    ctcs[0] = (ctcs[0][0], ctcs[0][1], ctcs[0][2], ctcs[0][3], True)
                 cur.execute(
                     "INSERT INTO proveedores (codigo,nombre,observaciones) VALUES (%s,%s,%s) RETURNING id",
                     (p["codigo"], p["nombre"], p["observaciones"])
                 )
                 pid = cur.fetchone()["id"]
-                for i, (cn, ct, ce) in enumerate(p["contactos"]):
+                for i, (cn, ct, cm, ce, ep) in enumerate(ctcs):
                     cur.execute(
                         "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                        (pid, cn or None, ct or None, None, ce or None, 1 if i==0 else 0, i)
+                        (pid, cn or None, ct or None, cm or None, ce or None, 1 if ep else 0, i)
                     )
                 insertados += 1
 
