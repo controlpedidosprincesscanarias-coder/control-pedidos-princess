@@ -63,7 +63,9 @@ def _auto_migrate():
             cur.execute("CREATE INDEX IF NOT EXISTS idx_prov_contactos ON proveedor_contactos(proveedor_id)")
             # Nuevas columnas v9.4 (para DBs existentes sin ellas)
             cur.execute("ALTER TABLE proveedor_contactos ADD COLUMN IF NOT EXISTS movil TEXT")
-            cur.execute("ALTER TABLE proveedor_contactos ADD COLUMN IF NOT EXISTS es_principal INTEGER NOT NULL DEFAULT 0")
+            # es_principal: añadir sin NOT NULL primero (seguro para tablas con filas existentes)
+            cur.execute("ALTER TABLE proveedor_contactos ADD COLUMN IF NOT EXISTS es_principal INTEGER DEFAULT 0")
+            cur.execute("UPDATE proveedor_contactos SET es_principal=0 WHERE es_principal IS NULL")
             # Marcar como principal el contacto de orden=0 si ninguno tiene es_principal=1
             cur.execute("""
                 UPDATE proveedor_contactos SET es_principal=1
@@ -75,10 +77,11 @@ def _auto_migrate():
             """)
             # Migrar datos legacy: si hay contacto/email/telefono/movil y no hay contactos aún
             cur.execute("""
-                INSERT INTO proveedor_contactos (proveedor_id, nombre, telefono, email, es_principal, orden)
+                INSERT INTO proveedor_contactos (proveedor_id, nombre, telefono, movil, email, es_principal, orden)
                 SELECT id,
                        NULLIF(TRIM(COALESCE(contacto,'')), ''),
-                       NULLIF(TRIM(COALESCE(telefono,'') || CASE WHEN TRIM(COALESCE(movil,''))!='' THEN ' / '||TRIM(movil) ELSE '' END), ''),
+                       NULLIF(TRIM(COALESCE(telefono,'')), ''),
+                       NULLIF(TRIM(COALESCE(movil,'')), ''),
                        NULLIF(TRIM(COALESCE(email,'')), ''),
                        1,
                        0
@@ -755,193 +758,288 @@ def exportar_proveedores():
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
+
+def _parse_excel_proveedores(archivo):
+    """
+    Lee un .xlsx de proveedores y devuelve (prov_order, prov_data).
+    prov_data[key] = {codigo, nombre, observaciones, contactos: [(nombre,tel,movil,email,es_principal), ...]}
+    Hace todo el trabajo en memoria — sin tocar la BD — para minimizar el tiempo de conexión.
+    """
+    import openpyxl
+    wb = openpyxl.load_workbook(archivo, data_only=True, read_only=True)
+    ws = wb.active
+    raw_headers = [c.value for c in next(ws.iter_rows(min_row=1, max_row=1))]
+    headers = [str(h).strip().upper() if h is not None else "" for h in raw_headers]
+
+    PRINCIPAL_SI = {"★", "1", "SI", "SÍ", "S", "YES", "Y", "TRUE"}
+
+    def col(row, name):
+        try:
+            idx = headers.index(name)
+            v = row[idx].value
+            if v is None:
+                return None
+            s = str(v).strip()
+            return s if s and s.lower() not in ("none", "nan") else None
+        except (ValueError, IndexError):
+            return None
+
+    prov_data  = {}   # key → dict
+    prov_order = []   # mantener orden de aparición
+
+    for row in ws.iter_rows(min_row=2):
+        nombre = col(row, "PROVEEDOR")
+        if not nombre:
+            continue
+        codigo = col(row, "CODIGO") or ""
+        key    = codigo or nombre
+
+        if key not in prov_data:
+            obs = col(row, "OBSERVACIONES") or ""
+            prov_data[key] = {
+                "codigo":        codigo,
+                "nombre":        nombre,
+                "observaciones": obs,
+                "contactos":     [],
+            }
+            prov_order.append(key)
+
+        c_nombre    = col(row, "CONTACTO")  or ""
+        c_tel       = col(row, "TELEFONO")  or ""
+        c_movil     = col(row, "MOVIL")     or ""
+        c_email     = col(row, "EMAIL")     or ""
+        c_principal = col(row, "PRINCIPAL") or ""
+        es_principal = str(c_principal).strip().upper() in PRINCIPAL_SI
+
+        if c_nombre or c_tel or c_movil or c_email:
+            prov_data[key]["contactos"].append(
+                (c_nombre, c_tel, c_movil, c_email, es_principal)
+            )
+
+    wb.close()
+
+    # Garantizar que cada proveedor con contactos tenga exactamente uno principal
+    for key in prov_order:
+        ctcs = prov_data[key]["contactos"]
+        if ctcs and not any(c[4] for c in ctcs):
+            ctcs[0] = (ctcs[0][0], ctcs[0][1], ctcs[0][2], ctcs[0][3], True)
+
+    return prov_order, prov_data
+
 @app.route("/api/proveedores/importar", methods=["POST"])
 @admin_required
 def importar_proveedores():
+    """
+    Importación incremental: actualiza existentes (por código SAP), inserta nuevos.
+    Usa bulk operations para evitar timeouts con listas grandes (>500 proveedores).
+    Total de round-trips a la BD: ~5, independientemente del tamaño del Excel.
+    """
     try:
-        import openpyxl
         if "archivo" not in request.files:
             return jsonify({"ok": False, "error": "No se recibió ningún archivo"}), 400
         archivo = request.files["archivo"]
         if not archivo.filename.endswith((".xlsx", ".xls")):
             return jsonify({"ok": False, "error": "El archivo debe ser .xlsx"}), 400
 
-        wb = openpyxl.load_workbook(archivo, data_only=True)
-        ws = wb.active
-        headers = [str(c.value).strip().upper() if c.value else "" for c in ws[1]]
+        # ── 1. Parsear Excel completamente en memoria (sin BD) ──────────────
+        prov_order, prov_data = _parse_excel_proveedores(archivo)
 
-        def col(row, name):
-            try:
-                idx = headers.index(name)
-                v = row[idx].value
-                return str(v).strip() if v is not None else None
-            except (ValueError, IndexError):
-                return None
-
-        db = get_db()
+        # ── 2. Una sola query para saber qué proveedores ya existen ─────────
+        from psycopg2.extras import execute_values
+        db  = get_db()
         existentes = {r["codigo"]: r["id"] for r in rows_to_list(
             query("SELECT id, codigo FROM proveedores WHERE codigo IS NOT NULL AND codigo != ''")
         )}
 
-        # Agrupar filas por proveedor (codigo+nombre)
-        from collections import defaultdict
-        prov_data = {}   # codigo -> {nombre, obs, contactos:[]}
-        prov_order = []  # mantener orden
+        to_update = []   # (nombre, obs, id)
+        to_insert = []   # (codigo, nombre, obs)
 
-        for row in ws.iter_rows(min_row=2):
-            codigo  = col(row, "CODIGO")
-            nombre  = col(row, "PROVEEDOR")
-            if not nombre:
-                continue
-            key = codigo or nombre
-            if key not in prov_data:
-                prov_data[key] = {
-                    "codigo": codigo or "",
-                    "nombre": nombre,
-                    "observaciones": col(row, "OBSERVACIONES") or "",
-                    "contactos": []
-                }
-                prov_order.append(key)
-            # Contacto de esta fila
-            c_nombre    = col(row, "CONTACTO") or ""
-            c_tel       = col(row, "TELEFONO") or ""
-            c_movil     = col(row, "MOVIL") or ""
-            c_email     = col(row, "EMAIL") or ""
-            c_principal = col(row, "PRINCIPAL") or ""
-            # ★, 1 o SI (case insensitive) → es_principal
-            es_principal = c_principal.strip().upper() in ("★", "1", "SI", "SÍ", "S", "YES", "Y", "TRUE")
-            if c_nombre or c_tel or c_movil or c_email:
-                prov_data[key]["contactos"].append((c_nombre, c_tel, c_movil, c_email, es_principal))
+        for key in prov_order:
+            p = prov_data[key]
+            codigo = p["codigo"]
+            if codigo and codigo in existentes:
+                to_update.append((p["nombre"], p["observaciones"], existentes[codigo]))
+            else:
+                to_insert.append((codigo or None, p["nombre"], p["observaciones"]))
 
-        insertados = 0
+        # ── 3. Bulk UPDATE de proveedores existentes ─────────────────────────
         actualizados = 0
+        with db.cursor() as cur:
+            if to_update:
+                execute_values(
+                    cur,
+                    """UPDATE proveedores AS p SET nombre=v.nombre, observaciones=v.obs
+                       FROM (VALUES %s) AS v(nombre, obs, id)
+                       WHERE p.id = v.id::int""",
+                    to_update,
+                    template="(%s, %s, %s)"
+                )
+                actualizados = len(to_update)
 
-        with db.cursor() as cur_i:
-            for key in prov_order:
-                p = prov_data[key]
-                codigo = p["codigo"]
-                ctcs = p["contactos"]
+        # ── 4. Bulk INSERT de proveedores nuevos → recuperar sus IDs ─────────
+        insertados = 0
+        nuevos_ids = {}   # codigo_o_nombre → id
+        if to_insert:
+            with db.cursor() as cur:
+                execute_values(
+                    cur,
+                    """INSERT INTO proveedores (codigo, nombre, observaciones)
+                       VALUES %s
+                       ON CONFLICT DO NOTHING
+                       RETURNING id, codigo, nombre""",
+                    to_insert,
+                    template="(%s, %s, %s)",
+                    fetch=True
+                )
+                rows = cur.fetchall()
+                for row in rows:
+                    k = row["codigo"] or row["nombre"]
+                    nuevos_ids[k] = row["id"]
+                    insertados += 1
 
-                # Si ningún contacto está marcado como principal, marcar el primero
-                hay_principal = any(c[4] for c in ctcs)
-                if ctcs and not hay_principal:
-                    ctcs[0] = (ctcs[0][0], ctcs[0][1], ctcs[0][2], ctcs[0][3], True)
+        # Mapear todos los keys a su ID final
+        key_to_id = {}
+        for key in prov_order:
+            p = prov_data[key]
+            codigo = p["codigo"]
+            if codigo and codigo in existentes:
+                key_to_id[key] = existentes[codigo]
+            else:
+                kid = nuevos_ids.get(codigo) or nuevos_ids.get(p["nombre"])
+                if kid:
+                    key_to_id[key] = kid
 
-                if codigo and codigo in existentes:
-                    pid = existentes[codigo]
-                    cur_i.execute(
-                        "UPDATE proveedores SET nombre=%s, observaciones=%s WHERE id=%s",
-                        (p["nombre"], p["observaciones"], pid)
+        # ── 5. Reemplazar contactos: DELETE existentes + bulk INSERT nuevos ──
+        ids_con_datos = list(key_to_id.values())
+        if ids_con_datos:
+            with db.cursor() as cur:
+                # DELETE en un solo IN (una query)
+                cur.execute(
+                    "DELETE FROM proveedor_contactos WHERE proveedor_id = ANY(%s)",
+                    (ids_con_datos,)
+                )
+
+                # Construir todas las filas de contactos a insertar
+                contactos_rows = []
+                for key in prov_order:
+                    pid = key_to_id.get(key)
+                    if pid is None:
+                        continue
+                    for orden, (cn, ct, cm, ce, ep) in enumerate(prov_data[key]["contactos"]):
+                        contactos_rows.append((
+                            pid,
+                            cn or None,
+                            ct or None,
+                            cm or None,
+                            ce or None,
+                            1 if ep else 0,
+                            orden
+                        ))
+
+                # INSERT en una sola query bulk
+                if contactos_rows:
+                    execute_values(
+                        cur,
+                        """INSERT INTO proveedor_contactos
+                           (proveedor_id, nombre, telefono, movil, email, es_principal, orden)
+                           VALUES %s""",
+                        contactos_rows,
+                        template="(%s, %s, %s, %s, %s, %s, %s)",
+                        page_size=500
                     )
-                    cur_i.execute("DELETE FROM proveedor_contactos WHERE proveedor_id=%s", (pid,))
-                    for i, (cn, ct, cm, ce, ep) in enumerate(ctcs):
-                        cur_i.execute(
-                            "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                            (pid, cn or None, ct or None, cm or None, ce or None, 1 if ep else 0, i)
-                        )
-                    actualizados += 1
-                else:
-                    cur_i.execute(
-                        "INSERT INTO proveedores (codigo,nombre,observaciones) VALUES (%s,%s,%s) ON CONFLICT DO NOTHING RETURNING id",
-                        (codigo, p["nombre"], p["observaciones"])
-                    )
-                    row_r = cur_i.fetchone()
-                    if row_r:
-                        new_pid = row_r["id"]
-                        for i, (cn, ct, cm, ce, ep) in enumerate(ctcs):
-                            cur_i.execute(
-                                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                                (new_pid, cn or None, ct or None, cm or None, ce or None, 1 if ep else 0, i)
-                            )
-                        insertados += 1
 
         db.commit()
         return jsonify({"ok": True, "insertados": insertados, "actualizados": actualizados, "errores": []})
 
     except Exception as e:
+        import traceback
+        log.error(f"importar_proveedores error: {traceback.format_exc()}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 @app.route("/api/proveedores/importar/reset", methods=["POST"])
 @login_required
 def importar_proveedores_reset():
-    """Solo admin: borra todos los proveedores e importa desde el Excel."""
+    """Solo admin: borra todos los proveedores e importa desde el Excel.
+    Usa bulk operations para evitar timeouts con listas grandes.
+    Total de round-trips a la BD: ~4, independientemente del tamaño del Excel.
+    """
     if session.get("rol") != "admin":
         return jsonify({"ok": False, "error": "Acceso restringido a administradores"}), 403
     try:
-        import openpyxl
         if "archivo" not in request.files:
             return jsonify({"ok": False, "error": "No se recibió ningún archivo"}), 400
         archivo = request.files["archivo"]
         if not archivo.filename.endswith((".xlsx", ".xls")):
             return jsonify({"ok": False, "error": "El archivo debe ser .xlsx"}), 400
 
-        wb = openpyxl.load_workbook(archivo, data_only=True)
-        ws = wb.active
-        headers = [str(c.value).strip().upper() if c.value else "" for c in ws[1]]
+        # ── 1. Parsear Excel completamente en memoria ────────────────────────
+        prov_order, prov_data = _parse_excel_proveedores(archivo)
 
-        def col(row, name):
-            try:
-                idx = headers.index(name)
-                v = row[idx].value
-                return str(v).strip() if v is not None else None
-            except (ValueError, IndexError):
-                return None
-
-        from collections import defaultdict
-        prov_data = {}
-        prov_order = []
-
-        for row in ws.iter_rows(min_row=2):
-            nombre = col(row, "PROVEEDOR")
-            if not nombre:
-                continue
-            codigo = col(row, "CODIGO") or ""
-            key = codigo or nombre
-            if key not in prov_data:
-                prov_data[key] = {
-                    "codigo": codigo,
-                    "nombre": nombre,
-                    "observaciones": col(row, "OBSERVACIONES") or "",
-                    "contactos": []
-                }
-                prov_order.append(key)
-            c_nombre    = col(row, "CONTACTO") or ""
-            c_tel       = col(row, "TELEFONO") or ""
-            c_movil     = col(row, "MOVIL") or ""
-            c_email     = col(row, "EMAIL") or ""
-            c_principal = col(row, "PRINCIPAL") or ""
-            es_principal = c_principal.strip().upper() in ("★", "1", "SI", "SÍ", "S", "YES", "Y", "TRUE")
-            if c_nombre or c_tel or c_movil or c_email:
-                prov_data[key]["contactos"].append((c_nombre, c_tel, c_movil, c_email, es_principal))
-
+        from psycopg2.extras import execute_values
         db = get_db()
-        insertados = 0
+
         with db.cursor() as cur:
+            # ── 2. Limpiar todo de una vez (3 queries) ───────────────────────
             cur.execute("UPDATE pedidos SET proveedor_id = NULL WHERE proveedor_id IS NOT NULL")
             cur.execute("DELETE FROM proveedor_contactos")
             cur.execute("DELETE FROM proveedores")
+
+            # ── 3. Bulk INSERT proveedores → recuperar IDs en un paso ────────
+            prov_rows = [
+                (prov_data[k]["codigo"] or None, prov_data[k]["nombre"], prov_data[k]["observaciones"])
+                for k in prov_order
+            ]
+            execute_values(
+                cur,
+                "INSERT INTO proveedores (codigo, nombre, observaciones) VALUES %s RETURNING id, codigo, nombre",
+                prov_rows,
+                template="(%s, %s, %s)",
+                page_size=500,
+                fetch=True
+            )
+            inserted_rows = cur.fetchall()
+
+            # Mapear codigo/nombre → id preservando el orden
+            key_to_id = {}
+            for row in inserted_rows:
+                k = row["codigo"] or row["nombre"]
+                key_to_id[k] = row["id"]
+
+            # ── 4. Bulk INSERT de todos los contactos ────────────────────────
+            contactos_rows = []
             for key in prov_order:
-                p = prov_data[key]
-                ctcs = p["contactos"]
-                hay_principal = any(c[4] for c in ctcs)
-                if ctcs and not hay_principal:
-                    ctcs[0] = (ctcs[0][0], ctcs[0][1], ctcs[0][2], ctcs[0][3], True)
-                cur.execute(
-                    "INSERT INTO proveedores (codigo,nombre,observaciones) VALUES (%s,%s,%s) RETURNING id",
-                    (p["codigo"], p["nombre"], p["observaciones"])
+                pid = key_to_id.get(key)
+                if pid is None:
+                    continue
+                for orden, (cn, ct, cm, ce, ep) in enumerate(prov_data[key]["contactos"]):
+                    contactos_rows.append((
+                        pid,
+                        cn or None,
+                        ct or None,
+                        cm or None,
+                        ce or None,
+                        1 if ep else 0,
+                        orden
+                    ))
+
+            if contactos_rows:
+                execute_values(
+                    cur,
+                    """INSERT INTO proveedor_contactos
+                       (proveedor_id, nombre, telefono, movil, email, es_principal, orden)
+                       VALUES %s""",
+                    contactos_rows,
+                    template="(%s, %s, %s, %s, %s, %s, %s)",
+                    page_size=500
                 )
-                pid = cur.fetchone()["id"]
-                for i, (cn, ct, cm, ce, ep) in enumerate(ctcs):
-                    cur.execute(
-                        "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-                        (pid, cn or None, ct or None, cm or None, ce or None, 1 if ep else 0, i)
-                    )
-                insertados += 1
 
         db.commit()
+        insertados = len(prov_order)
         return jsonify({"ok": True, "insertados": insertados, "actualizados": 0, "errores": []})
 
     except Exception as e:
+        import traceback
+        log.error(f"importar_proveedores_reset error: {traceback.format_exc()}")
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
