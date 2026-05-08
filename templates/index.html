@@ -552,7 +552,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.4.0
+          v 9.4.1
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1152,7 +1152,7 @@ tbody tr:last-child{border-bottom:none}
 
 <!-- ── MODAL PROVEEDOR ─────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-proveedor">
-  <div class="modal" style="max-width:600px">
+  <div class="modal" style="max-width:780px">
     <div class="modal-header">
       <div class="modal-title" id="modal-prov-title">Editar proveedor</div>
       <button class="close-btn" onclick="closeModal('modal-proveedor')">✕</button>
@@ -1182,7 +1182,7 @@ tbody tr:last-child{border-bottom:none}
         <button type="button" class="btn btn-ghost btn-sm" onclick="pvAddContacto()"
                 style="padding:2px 10px;font-size:.82rem">+ Añadir contacto</button>
       </div>
-      <div id="pv-contactos-list" style="display:flex;flex-direction:column;gap:10px;max-height:300px;overflow-y:auto;padding-right:4px"></div>
+      <div id="pv-contactos-list" style="display:flex;flex-direction:column;gap:10px;max-height:420px;overflow-y:auto;padding-right:4px"></div>
       <div id="pv-contactos-empty" style="color:var(--text-secondary);font-size:.85rem;padding:8px 0 4px">
         Sin contactos. Pulsa "+ Añadir contacto" para incluir personas de contacto, teléfonos, móvil/WhatsApp o correos. El primer contacto se marcará como ★ principal (usado para alertas automáticas).
       </div>
@@ -2406,32 +2406,63 @@ async function loadProveedores() {
 /* ── Helpers para contactos múltiples ── */
 function pvContactoRow(c = {}, idx) {
   const esPrincipal = c.es_principal ? true : false;
-  return `<div class="pv-contacto-row" data-idx="${idx}" style="display:grid;grid-template-columns:auto 1fr 1fr 1fr 1fr auto;gap:8px;align-items:center;background:var(--bg-card, #f8f9fa);border:1px solid ${esPrincipal ? 'var(--gold,#d4a800)' : 'var(--border,#e2e8f0)'};border-radius:8px;padding:8px 10px">
-    <button type="button" onclick="pvSetPrincipal(this)" title="${esPrincipal ? 'Contacto principal' : 'Marcar como principal'}"
-            class="pv-c-principal-btn"
-            style="background:none;border:none;cursor:pointer;font-size:1.2rem;padding:0 2px;line-height:1;color:${esPrincipal ? 'var(--gold,#d4a800)' : '#ccc'}"
-            data-principal="${esPrincipal ? '1' : '0'}">★</button>
-    <input class="form-control pv-c-nombre" placeholder="Persona de contacto" value="${esc(c.nombre||'')}" style="font-size:.88rem">
-    <input class="form-control pv-c-tel"    placeholder="Teléfono fijo" value="${esc(c.telefono||'')}" style="font-size:.88rem">
-    <input class="form-control pv-c-movil"  placeholder="📱 Móvil / WhatsApp" value="${esc(c.movil||'')}" style="font-size:.88rem">
-    <input class="form-control pv-c-email"  placeholder="Email" type="email" value="${esc(c.email||'')}" style="font-size:.88rem">
-    <button type="button" onclick="pvRemoveContacto(this)" title="Eliminar contacto"
-            style="background:none;border:none;color:#e74c3c;cursor:pointer;font-size:1.1rem;padding:0 4px">✕</button>
+  const borderColor = esPrincipal ? 'var(--gold,#d4a800)' : 'var(--border,#e2e8f0)';
+  const starColor   = esPrincipal ? 'var(--gold,#d4a800)' : '#ccc';
+  const starTitle   = esPrincipal ? 'Contacto principal (para alertas automáticas)' : 'Marcar como principal';
+  const badge       = esPrincipal ? `<span style="font-size:.7rem;font-weight:700;background:var(--gold,#d4a800);color:#fff;border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:middle">PRINCIPAL</span>` : '';
+  return `<div class="pv-contacto-row" data-idx="${idx}" style="background:var(--bg-card,#f8f9fa);border:1px solid ${borderColor};border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <button type="button" onclick="pvSetPrincipal(this)" title="${starTitle}"
+              class="pv-c-principal-btn"
+              style="background:none;border:none;cursor:pointer;font-size:1.3rem;padding:0;line-height:1;color:${starColor};flex-shrink:0"
+              data-principal="${esPrincipal ? '1' : '0'}">★</button>
+      <input class="form-control pv-c-nombre" placeholder="Nombre del contacto" value="${esc(c.nombre||'')}" style="font-size:.9rem;font-weight:500;flex:1">
+      ${badge}
+      <button type="button" onclick="pvRemoveContacto(this)" title="Eliminar contacto"
+              style="background:none;border:none;color:#e74c3c;cursor:pointer;font-size:1.1rem;padding:0 2px;flex-shrink:0;margin-left:auto">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div style="position:relative">
+        <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.8rem;pointer-events:none">📞</span>
+        <input class="form-control pv-c-tel" placeholder="Teléfono fijo" value="${esc(c.telefono||'')}" style="font-size:.88rem;padding-left:28px">
+      </div>
+      <div style="position:relative">
+        <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.8rem;pointer-events:none">📱</span>
+        <input class="form-control pv-c-movil" placeholder="Móvil / WhatsApp" value="${esc(c.movil||'')}" style="font-size:.88rem;padding-left:28px">
+      </div>
+      <div style="position:relative">
+        <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.8rem;pointer-events:none">✉</span>
+        <input class="form-control pv-c-email" placeholder="Email" type="email" value="${esc(c.email||'')}" style="font-size:.88rem;padding-left:28px">
+      </div>
+    </div>
   </div>`;
 }
 function pvSetPrincipal(btn) {
-  // Quitar estrella de todos
+  // Quitar estrella y badge de todos
   document.querySelectorAll('.pv-c-principal-btn').forEach(b => {
     b.setAttribute('data-principal', '0');
     b.style.color = '#ccc';
     b.title = 'Marcar como principal';
-    b.closest('.pv-contacto-row').style.borderColor = 'var(--border,#e2e8f0)';
+    const row = b.closest('.pv-contacto-row');
+    row.style.borderColor = 'var(--border,#e2e8f0)';
+    const badge = row.querySelector('.pv-principal-badge');
+    if (badge) badge.remove();
   });
   // Activar el pulsado
   btn.setAttribute('data-principal', '1');
   btn.style.color = 'var(--gold,#d4a800)';
-  btn.title = 'Contacto principal';
-  btn.closest('.pv-contacto-row').style.borderColor = 'var(--gold,#d4a800)';
+  btn.title = 'Contacto principal (para alertas automáticas)';
+  const row = btn.closest('.pv-contacto-row');
+  row.style.borderColor = 'var(--gold,#d4a800)';
+  // Insertar badge junto al input de nombre si no existe ya
+  if (!row.querySelector('.pv-principal-badge')) {
+    const nombreInput = row.querySelector('.pv-c-nombre');
+    const badge = document.createElement('span');
+    badge.className = 'pv-principal-badge';
+    badge.style.cssText = 'font-size:.7rem;font-weight:700;background:var(--gold,#d4a800);color:#fff;border-radius:4px;padding:1px 6px;white-space:nowrap';
+    badge.textContent = 'PRINCIPAL';
+    nombreInput.after(badge);
+  }
 }
 function pvAddContacto(c = {}) {
   const list = document.getElementById('pv-contactos-list');
