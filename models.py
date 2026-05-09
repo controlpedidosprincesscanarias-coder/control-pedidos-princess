@@ -54,6 +54,7 @@ SQL_STATEMENTS = [
         username  TEXT NOT NULL UNIQUE,
         nombre    TEXT NOT NULL,
         email     TEXT,
+        movil     TEXT,
         password  TEXT NOT NULL,
         rol       TEXT NOT NULL DEFAULT 'user',
         activo    INTEGER NOT NULL DEFAULT 1,
@@ -131,6 +132,19 @@ SQL_STATEMENTS = [
         tipo         TEXT NOT NULL,
         destinatario TEXT NOT NULL,
         asunto       TEXT,
+        enviado      INTEGER NOT NULL DEFAULT 0,
+        error        TEXT,
+        creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    # ── WhatsApp log (v9.5) ───────────────────────────────────────────────────
+    """
+    CREATE TABLE IF NOT EXISTS whatsapp_log (
+        id           SERIAL PRIMARY KEY,
+        pedido_id    INTEGER REFERENCES pedidos(id),
+        tipo         TEXT NOT NULL,
+        destinatario TEXT NOT NULL,
+        mensaje      TEXT,
         enviado      INTEGER NOT NULL DEFAULT 0,
         error        TEXT,
         creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()

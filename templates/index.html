@@ -552,7 +552,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.4.4
+          v 9.5.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -800,6 +800,7 @@ tbody tr:last-child{border-bottom:none}
                   <th>Usuario</th>
                   <th>Nombre</th>
                   <th>Email</th>
+                  <th>📱 Móvil</th>
                   <th>Rol</th>
                   <th>Estado</th>
                   <th style="width:160px">Acciones</th>
@@ -839,6 +840,15 @@ tbody tr:last-child{border-bottom:none}
       <div>
         <label class="form-label">Email</label>
         <input class="form-control" id="usr-email" type="email" placeholder="usuario@princess.es">
+      </div>
+
+      <div>
+        <label class="form-label">📱 Móvil / WhatsApp</label>
+        <input class="form-control" id="usr-movil" type="tel" placeholder="+34 600 000 000"
+               style="padding-left:10px">
+        <div style="font-size:11px;color:#888;margin-top:3px">
+          Se usará para recibir avisos de alertas por WhatsApp.
+        </div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
@@ -2307,7 +2317,10 @@ async function loadAlertas() {
       <td class="monospace" style="font-size:12px">${fechaLabel}</td>
       <td>${diasLabel}</td>
       <td>${nivelBadge}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="openPedidoModal(${p.id})">✏ Editar</button></td>
+      <td>
+          <button class="btn btn-ghost btn-sm" onclick="openPedidoModal(${p.id})">✏ Editar</button>
+          <button class="btn btn-sm" style="background:#1a3a6b;color:#fff;margin-left:4px" onclick="abrirModalEmailAlerta(${p.id},${p.dias_tramitacion},'${p.nivel_alerta}')">✉ Notificar</button>
+      </td>
     </tr>`;
   }).join('');
 }
@@ -2808,7 +2821,12 @@ async function exportarExcel() {
    Modales
 ═══════════════════════════════════════════════════════════════════════════ */
 function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('open');
+  el.style.display = 'none';  // para modales con display:flex
+}
 document.querySelectorAll('.modal-overlay').forEach(o =>
   o.addEventListener('click', e => { if(e.target===o) o.classList.remove('open'); })
 );
@@ -3415,10 +3433,16 @@ async function loadUsuarios() {
       ? `<span style="color:#28a745;font-weight:600;font-size:12px">● Activo</span>`
       : `<span style="color:#dc3545;font-weight:600;font-size:12px">○ Inactivo</span>`;
     const esMismo = u.id == G.userId;
+    const movilLink = u.movil
+      ? `<a href="https://wa.me/${u.movil.replace(/[^0-9]/g,'')}" target="_blank"
+            title="Abrir WhatsApp" style="color:#25d366;text-decoration:none;font-size:12px">
+            📱 ${u.movil}</a>`
+      : '<span style="color:#ccc;font-size:12px">—</span>';
     return `<tr>
       <td class="monospace" style="font-size:13px">${u.username}</td>
       <td>${u.nombre}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
       <td style="font-size:12px;color:#666">${u.email||'—'}</td>
+      <td>${movilLink}</td>
       <td>${rolBadge}</td>
       <td>${activoBadge}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="openModalUsuario(${u.id})">✏ Editar</button></td>
@@ -3432,6 +3456,7 @@ function openModalUsuario(id=null) {
   document.getElementById('usr-username').value  = '';
   document.getElementById('usr-nombre').value    = '';
   document.getElementById('usr-email').value     = '';
+  document.getElementById('usr-movil').value     = '';
   document.getElementById('usr-password').value  = '';
   document.getElementById('usr-rol').value       = 'user';
   document.getElementById('usr-activo').checked  = true;
@@ -3447,6 +3472,7 @@ function openModalUsuario(id=null) {
       document.getElementById('usr-username').value = u.username;
       document.getElementById('usr-nombre').value   = u.nombre;
       document.getElementById('usr-email').value    = u.email || '';
+      document.getElementById('usr-movil').value    = u.movil || '';
       document.getElementById('usr-rol').value      = u.rol;
       document.getElementById('usr-activo').checked = !!u.activo;
     });
@@ -3464,6 +3490,7 @@ async function saveUsuario() {
   const username = document.getElementById('usr-username').value.trim().toLowerCase();
   const nombre   = document.getElementById('usr-nombre').value.trim();
   const email    = document.getElementById('usr-email').value.trim();
+  const movil    = document.getElementById('usr-movil').value.trim();
   const rol      = document.getElementById('usr-rol').value;
   const password = document.getElementById('usr-password').value;
   const activo   = document.getElementById('usr-activo').checked;
@@ -3472,13 +3499,13 @@ async function saveUsuario() {
 
   let r;
   if (id) {
-    const body = { nombre, email, rol, activo };
+    const body = { nombre, email, movil, rol, activo };
     if (password) body.password = password;
     r = await api(`/api/usuarios/${id}`, 'PUT', body);
   } else {
     if (!username) { toast('El username es obligatorio', 'error'); return; }
     if (!password) { toast('La contraseña es obligatoria', 'error'); return; }
-    r = await api('/api/usuarios', 'POST', { username, nombre, email, rol, password });
+    r = await api('/api/usuarios', 'POST', { username, nombre, email, movil, rol, password });
   }
 
   if (r.error) { toast(r.error, 'error'); return; }
@@ -3493,5 +3520,242 @@ function togglePwdVisibility() {
 }
 </script>
 
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL: Propuesta de email por alerta (v9.5)
+════════════════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-email-alerta" style="display:none;align-items:center;justify-content:center">
+  <div class="modal-box" style="max-width:680px;width:95vw;max-height:90vh;display:flex;flex-direction:column">
+    <div class="modal-header" style="background:#1a3a6b;color:#fff;border-radius:6px 6px 0 0;padding:14px 20px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:20px">✉️</span>
+      <h3 class="modal-title" style="margin:0;font-size:16px;color:#fff" id="mea-title">Propuesta de notificación</h3>
+      <button class="close-btn" onclick="closeModal('modal-email-alerta')" style="margin-left:auto;background:none;border:none;color:#fff;font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px;overflow-y:auto;flex:1;display:grid;gap:14px">
+
+      <!-- Info del pedido -->
+      <div id="mea-pedido-info" style="background:#f8f9fa;border-radius:6px;padding:12px;font-size:13px;display:grid;grid-template-columns:1fr 1fr;gap:6px"></div>
+
+      <!-- Tabs: Email / WhatsApp -->
+      <div style="display:flex;gap:0;border-bottom:2px solid #e0e0e0">
+        <button id="mea-tab-email" onclick="meaSetTab('email')"
+          style="padding:8px 18px;border:none;background:none;font-weight:600;cursor:pointer;border-bottom:3px solid #1a3a6b;color:#1a3a6b;margin-bottom:-2px">
+          ✉ Email
+        </button>
+        <button id="mea-tab-wa" onclick="meaSetTab('wa')"
+          style="padding:8px 18px;border:none;background:none;font-weight:600;cursor:pointer;border-bottom:3px solid transparent;color:#888;margin-bottom:-2px">
+          📱 WhatsApp
+        </button>
+      </div>
+
+      <!-- PANEL EMAIL -->
+      <div id="mea-panel-email">
+        <div style="display:grid;gap:10px">
+          <div>
+            <label class="form-label">Para (destinatario principal)</label>
+            <input class="form-control" id="mea-to" type="email" placeholder="email@proveedor.com">
+          </div>
+          <div>
+            <label class="form-label">CC (compradores asignados)</label>
+            <div id="mea-cc-list" style="display:flex;flex-wrap:wrap;gap:6px;min-height:32px;padding:6px;border:1px solid #ddd;border-radius:4px;background:#f9f9f9"></div>
+          </div>
+          <div>
+            <label class="form-label">Asunto</label>
+            <input class="form-control" id="mea-subject" placeholder="Asunto del email">
+          </div>
+          <div>
+            <label class="form-label">Vista previa del cuerpo</label>
+            <div id="mea-body-preview" style="border:1px solid #ddd;border-radius:4px;padding:12px;max-height:260px;overflow-y:auto;background:#fff;font-size:13px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANEL WHATSAPP -->
+      <div id="mea-panel-wa" style="display:none">
+        <div style="display:grid;gap:10px">
+          <div style="background:#e7fbe6;border:1px solid #b2dfdb;border-radius:6px;padding:12px;font-size:13px;color:#1b5e20">
+            ℹ️ El envío de WhatsApp se realiza abriendo un enlace <strong>wa.me</strong> en una nueva pestaña.
+            El sistema registrará el intento en el log.
+          </div>
+          <div id="mea-wa-recipients" style="display:grid;gap:8px"></div>
+          <div>
+            <label class="form-label">Mensaje (editable)</label>
+            <textarea class="form-control" id="mea-wa-text" rows="7" style="font-family:monospace;font-size:13px;resize:vertical"></textarea>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <div class="modal-footer" style="padding:12px 20px;border-top:1px solid #eee;display:flex;justify-content:flex-end;gap:10px">
+      <button class="btn btn-ghost" onclick="closeModal('modal-email-alerta')">Cancelar</button>
+      <div id="mea-btn-email-wrap">
+        <button class="btn btn-gold" id="mea-btn-enviar" onclick="meaEnviarEmail()">📤 Enviar email</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   Módulo: Email/WhatsApp por alerta (v9.5)
+═══════════════════════════════════════════════════════════════════════════ */
+
+let _meaData = null;  // Preview data del servidor
+
+function meaSetTab(tab) {
+  const isEmail = tab === 'email';
+  document.getElementById('mea-panel-email').style.display = isEmail ? '' : 'none';
+  document.getElementById('mea-panel-wa').style.display   = isEmail ? 'none' : '';
+  document.getElementById('mea-tab-email').style.borderBottomColor = isEmail ? '#1a3a6b' : 'transparent';
+  document.getElementById('mea-tab-email').style.color              = isEmail ? '#1a3a6b' : '#888';
+  document.getElementById('mea-tab-wa').style.borderBottomColor    = isEmail ? 'transparent' : '#25d366';
+  document.getElementById('mea-tab-wa').style.color                 = isEmail ? '#888' : '#1b5e20';
+  const btnWrap = document.getElementById('mea-btn-email-wrap');
+  btnWrap.innerHTML = isEmail
+    ? '<button class="btn btn-gold" id="mea-btn-enviar" onclick="meaEnviarEmail()">📤 Enviar email</button>'
+    : '<button class="btn" style="background:#25d366;color:#fff" onclick="meaEnviarWA()">📱 Abrir WhatsApp</button>';
+}
+
+async function abrirModalEmailAlerta(pedidoId, dias, nivel) {
+  _meaData = null;
+  document.getElementById('mea-pedido-info').innerHTML = '<span style="color:#999">Cargando propuesta…</span>';
+  document.getElementById('mea-body-preview').innerHTML = '';
+  document.getElementById('mea-to').value = '';
+  document.getElementById('mea-subject').value = '';
+  document.getElementById('mea-cc-list').innerHTML = '';
+  document.getElementById('mea-wa-recipients').innerHTML = '';
+  document.getElementById('mea-wa-text').value = '';
+  meaSetTab('email');
+
+  document.getElementById('modal-email-alerta').style.display = 'flex';
+
+  const d = await api(`/api/alertas/${pedidoId}/email-preview?dias=${dias}&nivel=${nivel}`);
+  if (d.error) {
+    document.getElementById('mea-pedido-info').innerHTML =
+      `<span style="color:#dc2626">⚠ ${esc(d.error)}</span>`;
+    return;
+  }
+  _meaData = d;
+
+  // Título
+  const nivelLabel = nivel === 'urgente' ? '🔴 URGENTE' : '⚠️ AVISO';
+  document.getElementById('mea-title').textContent =
+    `Notificación de alerta — ${d.hotel_codigo} · Pedido ${d.pedido_num||'—'} [${nivelLabel}]`;
+
+  // Info pedido
+  document.getElementById('mea-pedido-info').innerHTML = `
+    <div><strong>Hotel:</strong> ${esc(d.hotel_nombre||'—')}</div>
+    <div><strong>Proveedor:</strong> ${esc(d.proveedor_nombre||'—')}</div>
+    <div><strong>Estado:</strong> ${esc(d.estado||'—')}</div>
+    <div><strong>Tipo envío:</strong> ${d.es_proveedor ? '📧 Al proveedor' : '🏢 Interno'}</div>`;
+
+  // Campos email
+  document.getElementById('mea-to').value      = d.to_email || '';
+  document.getElementById('mea-subject').value = d.subject  || '';
+  document.getElementById('mea-body-preview').innerHTML = d.body_html || '';
+
+  // CC badges
+  const ccList = document.getElementById('mea-cc-list');
+  if (d.cc_emails && d.cc_emails.length) {
+    ccList.innerHTML = d.cc_emails.map(e =>
+      `<span style="background:#e3f0ff;border:1px solid #90c0f0;border-radius:12px;padding:2px 10px;font-size:12px">
+         📋 ${esc(e)}
+         <button onclick="meaRemoveCC(this)" data-email="${esc(e)}"
+           style="background:none;border:none;cursor:pointer;color:#666;margin-left:4px">✕</button>
+       </span>`).join('');
+  } else {
+    ccList.innerHTML = '<span style="color:#aaa;font-size:12px">Sin copias asignadas para este hotel</span>';
+  }
+
+  // WhatsApp
+  document.getElementById('mea-wa-text').value = d.wa_text || '';
+  const waDiv = document.getElementById('mea-wa-recipients');
+  if (d.wa_recipients && d.wa_recipients.length) {
+    waDiv.innerHTML = d.wa_recipients.map(r => `
+      <div style="display:flex;align-items:center;gap:10px;background:#e7fbe6;padding:8px 12px;border-radius:6px">
+        <span style="font-size:13px">👤 <strong>${esc(r.nombre)}</strong></span>
+        <span style="font-size:13px;color:#1b5e20">📱 ${esc(r.movil)}</span>
+        <button class="btn btn-sm" style="background:#25d366;color:#fff;margin-left:auto"
+          onclick="meaAbrirWAUno('${r.movil.replace(/[^0-9+]/g,'')}')">Abrir WhatsApp</button>
+      </div>`).join('');
+  } else {
+    waDiv.innerHTML = `<div style="color:#888;font-size:13px;padding:8px">
+      ⚠️ Los compradores asignados a este hotel no tienen número de móvil configurado.<br>
+      <a href="#" onclick="showView('usuarios',null);closeModal('modal-email-alerta')"
+         style="color:#1a3a6b">→ Ir a Usuarios para añadir móviles</a>
+    </div>`;
+  }
+}
+
+function meaRemoveCC(btn) {
+  btn.closest('span').remove();
+}
+
+function _meaGetCCs() {
+  return Array.from(
+    document.getElementById('mea-cc-list').querySelectorAll('[data-email]')
+  ).map(el => el.dataset.email);
+}
+
+async function meaEnviarEmail() {
+  if (!_meaData) return;
+  const toEmail = document.getElementById('mea-to').value.trim();
+  const subject = document.getElementById('mea-subject').value.trim();
+  if (!toEmail) { toast('Introduce un email destinatario', 'error'); return; }
+  if (!subject) { toast('El asunto no puede estar vacío', 'error'); return; }
+
+  const btn = document.getElementById('mea-btn-enviar');
+  btn.disabled = true;
+  btn.textContent = 'Enviando…';
+
+  const r = await api(`/api/alertas/${_meaData.pedido_id}/enviar-email`, 'POST', {
+    to_email:   toEmail,
+    cc_emails:  _meaGetCCs(),
+    subject:    subject,
+    body_html:  _meaData.body_html,
+    dias:       _meaData.dias || 0,
+    nivel:      _meaData.nivel || 'aviso',
+    es_proveedor: _meaData.es_proveedor,
+  });
+
+  btn.disabled = false;
+  btn.textContent = '📤 Enviar email';
+
+  if (r.ok) {
+    toast(`✅ Email enviado correctamente a ${toEmail}`, 'success');
+    closeModal('modal-email-alerta');
+  } else {
+    const fallidos = (r.resultados||[]).filter(x=>!x.ok).map(x=>x.email).join(', ');
+    toast(`⚠ Algunos envíos fallaron: ${fallidos||'error desconocido'}`, 'error');
+  }
+}
+
+function meaAbrirWAUno(movil) {
+  if (!_meaData) return;
+  const texto = encodeURIComponent(document.getElementById('mea-wa-text').value);
+  const num   = movil.replace(/[^0-9]/g, '');
+  window.open(`https://wa.me/${num}?text=${texto}`, '_blank');
+  // Log en BD
+  api(`/api/alertas/${_meaData.pedido_id}/log-whatsapp`, 'POST', {
+    destinatario: movil,
+    mensaje: document.getElementById('mea-wa-text').value,
+  });
+}
+
+function meaEnviarWA() {
+  // Enviar a todos los receptores con móvil
+  if (!_meaData || !_meaData.wa_recipients || !_meaData.wa_recipients.length) {
+    toast('No hay números de móvil configurados para este hotel', 'error');
+    return;
+  }
+  _meaData.wa_recipients.forEach(r => {
+    if (r.movil) meaAbrirWAUno(r.movil.replace(/[^0-9+]/g,''));
+  });
+}
+
+document.getElementById('modal-email-alerta').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-email-alerta');
+});
+</script>
 </body>
 </html>

@@ -103,6 +103,21 @@ def _auto_migrate():
                 )
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_adjuntos_pedido ON pedido_adjuntos(pedido_id)")
+            # ── Columna móvil en usuarios (v9.5) ─────────────────────────────
+            cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS movil TEXT")
+            # ── Log de WhatsApp (v9.5) ───────────────────────────────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS whatsapp_log (
+                    id           SERIAL PRIMARY KEY,
+                    pedido_id    INTEGER REFERENCES pedidos(id),
+                    tipo         TEXT NOT NULL,
+                    destinatario TEXT NOT NULL,
+                    mensaje      TEXT,
+                    enviado      INTEGER NOT NULL DEFAULT 0,
+                    error        TEXT,
+                    creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
             # ── Techo de gastos (v9.0) ───────────────────────────────────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS familias (
@@ -327,6 +342,353 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 
 # ── Helper norden ──────────────────────────────────────────────────────────────
 
+# ── Asignación de compradores por hotel (v9.5) ─────────────────────────────────
+# MG - TA - SU  →  comprascan2
+# GC - MT       →  comprascan4
+# GY - IT - LP  →  comprascan6  y  comprascan
+HOTEL_COMPRADOR = {
+    "MG": ["comprascan2"],
+    "TA": ["comprascan2"],
+    "SU": ["comprascan2"],
+    "GC": ["comprascan4"],
+    "MT": ["comprascan4"],
+    "GY": ["comprascan6", "comprascan"],
+    "IT": ["comprascan6", "comprascan"],
+    "LP": ["comprascan6", "comprascan"],
+}
+
+def _get_compradores_cc(hotel_codigo: str):
+    """Devuelve lista de dicts {email, nombre, movil} de los compradores responsables del hotel."""
+    usernames = HOTEL_COMPRADOR.get((hotel_codigo or "").upper(), [])
+    if not usernames:
+        return []
+    placeholders = ",".join(["%s"] * len(usernames))
+    rows = rows_to_list(query(
+        f"SELECT username, nombre, email, movil FROM usuarios WHERE username IN ({placeholders}) AND activo=1",
+        tuple(usernames)
+    ))
+    return rows
+
+# ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
+
+def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool) -> tuple:
+    """Pedido enviado al proveedor sin acuse de recibo tras varios días."""
+    nivel = "URGENTE" if urgente else "Recordatorio"
+    subject = f"[{nivel}] Seguimiento pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
+    body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
+        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
+        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Departamento Central de Compras</p>
+      </div>
+      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+        <p>Estimado/a <strong>{pedido.get('proveedor_contacto_nombre') or pedido.get('proveedor_nombre','')}</strong>,</p>
+        <p>Nos ponemos en contacto con usted en relación al pedido que figura a continuación,
+           el cual fue tramitado hace <strong>{dias} días</strong> y aún no hemos recibido confirmación de entrega.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Pedido Nº</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('pedido_num','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Hotel</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Estado actual</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;color:#8B0000;font-weight:bold">ENVIADO AL PROVEEDOR</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días transcurridos</td>
+              <td style="padding:8px 12px;border:1px solid #ddd"><strong style="color:{'#dc2626' if urgente else '#b45309'}">{dias} días</strong></td></tr>
+          {f'<tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
+        </table>
+        <p>Le rogamos que nos confirme el estado actual del pedido y la fecha estimada de entrega
+           a la mayor brevedad posible.</p>
+        {'<p style="color:#dc2626;font-weight:bold;border:1px solid #fca5a5;background:#fee2e2;padding:10px;border-radius:4px">⚠️ ATENCIÓN: Esta es una solicitud urgente. Por favor, responda en el día de hoy.</p>' if urgente else ''}
+        <p>Muchas gracias por su colaboración.</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+        <p style="font-size:12px;color:#666">Atentamente,<br>
+           <strong>Departamento Central de Compras</strong><br>
+           Princess Hotels &amp; Resorts — Canarias<br>
+           <a href="mailto:compras@princess.es" style="color:#8B0000">compras@princess.es</a></p>
+      </div>
+    </div>
+    """
+    return subject, body
+
+def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple:
+    """Pedido pendiente de firma (dirección compras o dirección hotel)."""
+    if tipo == "PENDIENTE FIRMA DIRECCION COMPRAS":
+        dest_label = "Dirección de Compras"
+        accion = "firma por parte de Dirección de Compras"
+    else:
+        dest_label = "Dirección del Hotel"
+        accion = "firma por parte de la Dirección del Hotel"
+    subject = f"[Recordatorio] Pedido Nº {pedido.get('pedido_num','—')} pendiente de {accion}"
+    body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="background:#1a3a6b;padding:16px 24px;border-radius:6px 6px 0 0">
+        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
+        <p style="color:#a8c0e8;margin:4px 0 0;font-size:13px">Control de Pedidos — Aviso interno</p>
+      </div>
+      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+        <p>Se le notifica que el siguiente pedido lleva <strong>{dias} días</strong>
+           pendiente de {accion}:</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Pedido Nº</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('pedido_num','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Nº de Orden</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('norden','—')}</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Hotel</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Proveedor</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('proveedor_nombre','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días en espera</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">{dias} días</td></tr>
+          {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
+        </table>
+        <p>Por favor, proceda con la revisión y firma del pedido a la mayor brevedad posible
+           para no retrasar el proceso de compra.</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+        <p style="font-size:12px;color:#666">Mensaje automático generado por el sistema de Control de Pedidos.<br>
+           <strong>Princess Hotels &amp; Resorts — Canarias</strong></p>
+      </div>
+    </div>
+    """
+    return subject, body
+
+def _email_template_entrega_parcial(pedido: dict, dias: int) -> tuple:
+    """Pedido con entrega parcial sin cierre."""
+    subject = f"[Seguimiento] Pedido Nº {pedido.get('pedido_num','—')} — Entrega parcial pendiente de completar"
+    body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
+        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
+        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Departamento Central de Compras</p>
+      </div>
+      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+        <p>Estimado/a <strong>{pedido.get('proveedor_contacto_nombre') or pedido.get('proveedor_nombre','')}</strong>,</p>
+        <p>Le contactamos en relación al pedido indicado, cuya entrega se registró de forma
+           <strong>parcial</strong> hace <strong>{dias} días</strong> y aún está pendiente de completarse.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Pedido Nº</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('pedido_num','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Hotel</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días desde entrega parcial</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">{dias} días</td></tr>
+          {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
+        </table>
+        <p>Le rogamos que nos informe sobre la fecha prevista para completar la entrega pendiente.</p>
+        <p>Muchas gracias.</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+        <p style="font-size:12px;color:#666">Atentamente,<br>
+           <strong>Departamento Central de Compras</strong><br>
+           Princess Hotels &amp; Resorts — Canarias</p>
+      </div>
+    </div>
+    """
+    return subject, body
+
+def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool) -> tuple:
+    """Pedido pendiente de cotización del proveedor."""
+    nivel = "URGENTE" if urgente else "Solicitud de cotización"
+    subject = f"[{nivel}] Cotización solicitada — {pedido.get('hotel_nombre','Princess Hotels')} — Princess Hotels & Resorts"
+    body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
+        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
+        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Departamento Central de Compras</p>
+      </div>
+      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+        <p>Estimado/a <strong>{pedido.get('proveedor_contacto_nombre') or pedido.get('proveedor_nombre','')}</strong>,</p>
+        <p>Le recordamos que hace <strong>{dias} días</strong> se le solicitó cotización
+           para el siguiente pedido y aún estamos a la espera de su propuesta económica.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Nº de Solicitud</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('norden','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Hotel</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días pendiente</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</td></tr>
+          {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Descripción / Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
+        </table>
+        {'<p style="color:#dc2626;font-weight:bold;border:1px solid #fca5a5;background:#fee2e2;padding:10px;border-radius:4px">⚠️ URGENTE: Necesitamos su cotización hoy para no retrasar la tramitación del pedido.</p>' if urgente else '<p>Le agradecemos que nos envíe su mejor oferta a la mayor brevedad posible.</p>'}
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+        <p style="font-size:12px;color:#666">Atentamente,<br>
+           <strong>Departamento Central de Compras</strong><br>
+           Princess Hotels &amp; Resorts — Canarias<br>
+           <a href="mailto:compras@princess.es" style="color:#8B0000">compras@princess.es</a></p>
+      </div>
+    </div>
+    """
+    return subject, body
+
+def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
+    """Selecciona la plantilla correcta según el estado del pedido y devuelve (subject, body, es_proveedor)."""
+    estado    = pedido.get("estado", "")
+    urgente   = nivel == "urgente"
+    if estado == "ENVIADO AL PROVEEDOR":
+        s, b = _email_template_enviado_proveedor(pedido, dias, urgente)
+        return s, b, True
+    elif estado in ("PENDIENTE FIRMA DIRECCION COMPRAS", "PENDIENTE DE FIRMA DIRECCION HOTEL"):
+        s, b = _email_template_pendiente_firma(pedido, dias, estado)
+        return s, b, False
+    elif estado == "ENTREGA PARCIAL":
+        s, b = _email_template_entrega_parcial(pedido, dias)
+        return s, b, True
+    elif estado == "PENDIENTE COTIZACIÓN":
+        s, b = _email_template_pendiente_cotizacion(pedido, dias, urgente)
+        return s, b, True
+    return None, None, False
+
+def _whatsapp_text(pedido: dict, dias: int, nivel: str) -> str:
+    """Genera el texto de WhatsApp (plano, sin HTML) para notificación al comprador."""
+    emoji = "🔴" if nivel == "urgente" else "⚠️"
+    hotel = pedido.get("hotel_codigo", "—")
+    num   = pedido.get("pedido_num", "—")
+    estado = pedido.get("estado", "—")
+    prov   = pedido.get("proveedor_nombre", "—")
+    return (
+        f"{emoji} *Alerta {'URGENTE' if nivel == 'urgente' else 'de pedido'}*\n"
+        f"Hotel: *{hotel}* | Pedido: *{num}*\n"
+        f"Proveedor: {prov}\n"
+        f"Estado: {estado}\n"
+        f"Días transcurridos: *{dias}*\n"
+        f"— Control Pedidos Princess Canarias"
+    )
+
+def _log_whatsapp(db, pedido_id, tipo, destinatario, mensaje, enviado, error=None):
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO whatsapp_log (pedido_id,tipo,destinatario,mensaje,enviado,error) VALUES (%s,%s,%s,%s,%s,%s)",
+            (pedido_id, tipo, destinatario, mensaje, 1 if enviado else 0, error)
+        )
+
+# ── API: preparar propuesta de email por alerta ───────────────────────────────
+
+PEDIDO_SELECT_ALERTA = """
+    SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
+           p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
+           h.codigo as hotel_codigo, h.nombre as hotel_nombre,
+           d.nombre as departamento_nombre,
+           pr.nombre as proveedor_nombre,
+           (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' AND es_principal=1 LIMIT 1) as proveedor_email,
+           (SELECT COALESCE(NULLIF(movil,''),NULLIF(telefono,'')) FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_movil,
+           (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_contacto_nombre
+    FROM pedidos p
+    LEFT JOIN hoteles h ON p.hotel_id = h.id
+    LEFT JOIN departamentos d ON p.departamento_id = d.id
+    LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
+"""
+
+@app.route("/api/alertas/<int:pedido_id>/email-preview", methods=["GET"])
+@login_required
+def alerta_email_preview(pedido_id):
+    """Devuelve la propuesta de email (destinatarios + cuerpo) para una alerta concreta."""
+    dias_str = request.args.get("dias", "0")
+    nivel    = request.args.get("nivel", "aviso")
+    try:
+        dias = int(dias_str)
+    except Exception:
+        dias = 0
+
+    pedido = row_to_dict(query(f"{PEDIDO_SELECT_ALERTA} WHERE p.id=%s", (pedido_id,), one=True))
+    if not pedido:
+        return jsonify({"error": "Pedido no encontrado"}), 404
+
+    subject, body_html, es_proveedor = _build_alerta_email(pedido, dias, nivel)
+    if not subject:
+        return jsonify({"error": "No hay plantilla para este estado"}), 400
+
+    hotel_codigo = pedido.get("hotel_codigo", "")
+    compradores  = _get_compradores_cc(hotel_codigo)
+
+    # Destinatario principal
+    if es_proveedor:
+        to_email   = pedido.get("proveedor_email") or ""
+        to_nombre  = pedido.get("proveedor_nombre") or ""
+    else:
+        # Email interno: comprador responsable como destinatario
+        to_email  = compradores[0]["email"] if compradores else ""
+        to_nombre = compradores[0]["nombre"] if compradores else ""
+
+    cc_emails = [c["email"] for c in compradores if c.get("email") and c["email"] != to_email]
+
+    # WhatsApp text para compradores
+    wa_text = _whatsapp_text(pedido, dias, nivel)
+    wa_recipients = [{"nombre": c["nombre"], "movil": c.get("movil","")} for c in compradores if c.get("movil")]
+
+    return jsonify({
+        "pedido_id":     pedido_id,
+        "estado":        pedido.get("estado"),
+        "hotel_codigo":  hotel_codigo,
+        "hotel_nombre":  pedido.get("hotel_nombre"),
+        "pedido_num":    pedido.get("pedido_num"),
+        "proveedor_nombre": pedido.get("proveedor_nombre"),
+        "es_proveedor":  es_proveedor,
+        "to_email":      to_email,
+        "to_nombre":     to_nombre,
+        "cc_emails":     cc_emails,
+        "compradores":   compradores,
+        "subject":       subject,
+        "body_html":     body_html,
+        "wa_text":       wa_text,
+        "wa_recipients": wa_recipients,
+    })
+
+@app.route("/api/alertas/<int:pedido_id>/enviar-email", methods=["POST"])
+@login_required
+def alerta_enviar_email(pedido_id):
+    """Envía el email de alerta al destinatario/s indicados y lo registra en emails_log."""
+    data     = request.get_json(silent=True) or {}
+    to_email = (data.get("to_email") or "").strip()
+    cc_emails = [e.strip() for e in (data.get("cc_emails") or []) if e.strip()]
+    subject  = (data.get("subject") or "").strip()
+    body_html = data.get("body_html") or ""
+    dias     = int(data.get("dias", 0))
+    nivel    = data.get("nivel", "aviso")
+
+    if not to_email or not subject:
+        return jsonify({"error": "Faltan destinatario o asunto"}), 400
+
+    db = get_db()
+    resultados = []
+
+    # Envío al destinatario principal
+    ok = _send_email(to_email, subject, body_html)
+    _log_email(db, pedido_id, "alerta_proveedor" if data.get("es_proveedor") else "alerta_interno",
+               to_email, subject, ok)
+    resultados.append({"email": to_email, "ok": ok})
+
+    # Envío a copias (compradores)
+    for cc in cc_emails:
+        ok_cc = _send_email(cc, f"[CC] {subject}", body_html)
+        _log_email(db, pedido_id, "alerta_cc", cc, subject, ok_cc)
+        resultados.append({"email": cc, "ok": ok_cc})
+
+    db.commit()
+    todos_ok = all(r["ok"] for r in resultados)
+    return jsonify({"ok": todos_ok, "resultados": resultados})
+
+@app.route("/api/alertas/<int:pedido_id>/log-whatsapp", methods=["POST"])
+@login_required
+def alerta_log_whatsapp(pedido_id):
+    """Registra en BD que se inició un envío de WhatsApp (el envío real es client-side via wa.me)."""
+    data         = request.get_json(silent=True) or {}
+    destinatario = (data.get("destinatario") or "").strip()
+    mensaje      = (data.get("mensaje") or "").strip()
+    if not destinatario:
+        return jsonify({"error": "Destinatario requerido"}), 400
+    db = get_db()
+    _log_whatsapp(db, pedido_id, "alerta_comprador", destinatario, mensaje, True)
+    db.commit()
+    return jsonify({"ok": True})
+
+
+
 def _next_norden(db):
     year = datetime.now().year
     with db.cursor() as cur:
@@ -450,7 +812,7 @@ def delete_familia(fid):
 @admin_required
 def get_usuarios():
     rows = rows_to_list(query(
-        "SELECT id, username, nombre, email, rol, activo, creado_en FROM usuarios ORDER BY nombre"
+        "SELECT id, username, nombre, email, movil, rol, activo, creado_en FROM usuarios ORDER BY nombre"
     ))
     return jsonify(rows)
 
@@ -468,8 +830,8 @@ def create_usuario():
         return jsonify({"error": "Ya existe un usuario con ese username"}), 409
     db  = get_db()
     cur = execute(
-        "INSERT INTO usuarios (username, nombre, email, password, rol, activo) VALUES (%s,%s,%s,%s,%s,1) RETURNING id",
-        (username, nombre, data.get("email",""), password, data.get("rol","user"))
+        "INSERT INTO usuarios (username, nombre, email, movil, password, rol, activo) VALUES (%s,%s,%s,%s,%s,%s,1) RETURNING id",
+        (username, nombre, data.get("email",""), data.get("movil",""), password, data.get("rol","user"))
     )
     new_id = cur.fetchone()["id"]
     db.commit()
@@ -489,6 +851,8 @@ def update_usuario(uid):
         fields.append("nombre=%s"); args.append(data["nombre"].strip())
     if "email" in data:
         fields.append("email=%s"); args.append(data["email"].strip())
+    if "movil" in data:
+        fields.append("movil=%s"); args.append((data["movil"] or "").strip())
     if "rol" in data and data["rol"] in ("admin","user"):
         fields.append("rol=%s"); args.append(data["rol"])
     if "activo" in data:
