@@ -1,61 +1,63 @@
 """
-migrate_add_eliminados.py — Migración para bases de datos ya existentes.
-Añade la tabla pedidos_eliminados si no existe.
+migrate_sqlite_to_pg.py
+Migra los datos existentes de pedidos.db → Supabase PostgreSQL.
 
-Uso (una sola vez sobre la BD en producción):
-    python migrate_add_eliminados.py
+Uso:
+    pip install psycopg2-binary
+    python migrate_sqlite_to_pg.py --sqlite pedidos.db --pg "postgresql://..."
 """
 
-import os, sys
+import argparse, sqlite3, sys
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
-if not DATABASE_URL:
-    print("❌ ERROR: DATABASE_URL no está definida.")
-    sys.exit(1)
+TABLES_ORDER = [
+    "hoteles",
+    "departamentos",
+    "usuarios",
+    "proveedores",
+    "pedidos",
+    "historial_estados",
+    "emails_log",
+]
 
-SQL = """
-CREATE TABLE IF NOT EXISTS pedidos_eliminados (
-    id                      SERIAL PRIMARY KEY,
-    pedido_id               INTEGER NOT NULL,
-    norden                  INTEGER NOT NULL,
-    hotel_nombre            TEXT,
-    departamento_nombre     TEXT,
-    proveedor_nombre        TEXT,
-    proveedor_email         TEXT,
-    estado                  TEXT,
-    fecha_solicitud         TEXT,
-    pedido_num              TEXT,
-    presupuesto_num         TEXT,
-    entrada_albaran_num     TEXT,
-    observaciones           TEXT,
-    creado_por_nombre       TEXT,
-    motivo_eliminacion      TEXT,
-    eliminado_por_id        INTEGER REFERENCES usuarios(id),
-    eliminado_por_nombre    TEXT,
-    eliminado_en            TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-CREATE INDEX IF NOT EXISTS idx_eliminados_pedido_id ON pedidos_eliminados(pedido_id);
-CREATE INDEX IF NOT EXISTS idx_eliminados_norden    ON pedidos_eliminados(norden);
-"""
+def migrate(sqlite_path: str, pg_url: str):
+    src = sqlite3.connect(sqlite_path)
+    src.row_factory = sqlite3.Row
+    dst = psycopg2.connect(pg_url, cursor_factory=RealDictCursor)
 
-print("🔌 Conectando a la base de datos...")
-try:
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
-    conn.autocommit = False
-except Exception as e:
-    print(f"❌ No se pudo conectar: {e}")
-    sys.exit(1)
+    for table in TABLES_ORDER:
+        rows = src.execute(f"SELECT * FROM {table}").fetchall()
+        if not rows:
+            print(f"  {table}: vacía, omitida")
+            continue
 
-try:
-    with conn.cursor() as cur:
-        cur.execute(SQL)
-    conn.commit()
-    print("✅ Tabla pedidos_eliminados creada correctamente (o ya existía).")
-except Exception as e:
-    conn.rollback()
-    print(f"❌ Error: {e}")
-    sys.exit(1)
-finally:
-    conn.close()
+        cols   = rows[0].keys()
+        placeholders = ", ".join(["%s"] * len(cols))
+        col_names    = ", ".join(cols)
+        sql = f"INSERT INTO {table} ({col_names}) VALUES ({placeholders}) ON CONFLICT DO NOTHING"
+
+        with dst.cursor() as cur:
+            for row in rows:
+                cur.execute(sql, list(row))
+
+        # Restablece la secuencia SERIAL para que empiece por encima del MAX existente
+        with dst.cursor() as cur:
+            try:
+                cur.execute(f"SELECT setval(pg_get_serial_sequence('{table}', 'id'), MAX(id)) FROM {table}")
+            except Exception:
+                pass
+
+        dst.commit()
+        print(f"  {table}: {len(rows)} filas migradas ✓")
+
+    src.close()
+    dst.close()
+    print("\nMigración completada.")
+
+if __name__ == "__main__":
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--sqlite", required=True, help="Ruta al pedidos.db")
+    ap.add_argument("--pg",     required=True, help="PostgreSQL connection string")
+    args = ap.parse_args()
+    migrate(args.sqlite, args.pg)

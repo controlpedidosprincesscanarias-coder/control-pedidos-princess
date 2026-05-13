@@ -530,17 +530,17 @@ tbody tr:last-child{border-bottom:none}
     <div id="login-error" class="login-error"></div>
     <button class="login-btn" onclick="doLogin()">Acceder</button>
     <div style="text-align:center;margin-top:14px;">
-      <button onclick="mostrarFormReset()"
-         style="background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.55);font-size:13px;text-decoration:underline;padding:0;font-family:inherit;">
+      <a href="#" onclick="mostrarFormReset(event)"
+         style="color:rgba(255,255,255,0.55);font-size:13px;text-decoration:none;">
         ¿Olvidaste tu contraseña?
-      </button>
+      </a>
     </div>
   </div>
 </div>
 
 <!-- ── MODAL RESET PASSWORD ──────────────────────────────────────────────── -->
 <div id="modal-reset" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
-     z-index:10000;align-items:center;justify-content:center;">
+     z-index:2000;align-items:center;justify-content:center;">
   <div style="background:#1a1a2e;border:1px solid rgba(255,255,255,.15);border-radius:12px;
        padding:36px 32px;width:360px;max-width:95vw;color:#fff;position:relative;">
     <button onclick="cerrarModalReset()" style="position:absolute;top:12px;right:16px;
@@ -573,24 +573,6 @@ tbody tr:last-child{border-bottom:none}
       <button class="login-btn" onclick="cerrarModalReset()" style="width:100%;margin-top:20px;">
         Cerrar
       </button>
-    </div>
-
-    <!-- Paso 2b: sin email configurado — mostrar enlace directo -->
-    <div id="reset-paso2b" style="display:none;text-align:center;">
-      <div style="font-size:48px;margin-bottom:16px;">🔗</div>
-      <h3 style="margin:0 0 10px;">Enlace generado</h3>
-      <p style="color:rgba(255,255,255,.65);font-size:13px;margin:0 0 14px;">
-        El servidor no tiene email configurado. Copia este enlace y ábrelo para restablecer la contraseña:
-      </p>
-      <div style="background:rgba(255,255,255,.08);border-radius:6px;padding:10px 12px;
-                  word-break:break-all;font-size:12px;color:#ffd700;text-align:left;margin-bottom:14px;">
-        <span id="reset-link-directo"></span>
-      </div>
-      <button class="login-btn" onclick="copiarEnlaceReset()" style="width:100%;margin-bottom:10px;">
-        Copiar enlace
-      </button>
-      <button onclick="cerrarModalReset()" style="background:none;border:none;color:rgba(255,255,255,.5);
-              font-size:13px;cursor:pointer;text-decoration:underline;">Cerrar</button>
     </div>
 
     <!-- Paso 3: nueva contraseña (token en URL) -->
@@ -674,7 +656,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.5.8
+          v 9.5.5
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1527,11 +1509,11 @@ async function api(url, method='GET', body=null) {
 ═══════════════════════════════════════════════════════════════════════════ */
 let _resetToken = null;
 
-function mostrarFormReset() {
+function mostrarFormReset(e) {
+  if (e) e.preventDefault();
   document.getElementById('modal-reset').style.display = 'flex';
   document.getElementById('reset-paso1').style.display = '';
   document.getElementById('reset-paso2').style.display = 'none';
-  document.getElementById('reset-paso2b').style.display = 'none';
   document.getElementById('reset-paso3').style.display = 'none';
   document.getElementById('reset-paso4').style.display = 'none';
   document.getElementById('reset-usuario').value = '';
@@ -1554,26 +1536,11 @@ async function enviarSolicitudReset() {
   try {
     const r = await api('/api/password-reset/solicitar', 'POST', { usuario });
     document.getElementById('reset-paso1').style.display = 'none';
-    if (r.sin_email && r.link) {
-      // Servidor sin email configurado — mostrar enlace directo
-      document.getElementById('reset-link-directo').textContent = r.link;
-      document.getElementById('reset-paso2b').style.display = '';
-    } else {
-      document.getElementById('reset-paso2').style.display = '';
-    }
+    document.getElementById('reset-paso2').style.display = '';
   } catch(err) {
     errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
     errEl.style.display = 'block';
   }
-}
-
-function copiarEnlaceReset() {
-  const link = document.getElementById('reset-link-directo').textContent;
-  navigator.clipboard.writeText(link).then(() => {
-    toast('Enlace copiado al portapapeles', 'ok');
-  }).catch(() => {
-    prompt('Copia este enlace:', link);
-  });
 }
 
 async function guardarNuevaPassword() {
