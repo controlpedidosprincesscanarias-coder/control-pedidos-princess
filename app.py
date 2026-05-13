@@ -792,7 +792,34 @@ def solicitar_reset_password():
     Si no lo solicitaste, ignora este mensaje.</p>
     <p style="color:#666;font-size:12px;">Control de Pedidos · Princess Canarias</p>
     """
-    _send_email(user["email"], subject, body_html)
+    # Siempre loguear el enlace en el servidor
+    log.info("PASSWORD RESET solicitado por '%s' (id=%s) — enlace: %s",
+             user["username"], user["id"], link)
+
+    email_enviado = _send_email(user["email"], subject, body_html)
+
+    # Fallback: si falla, intentar con ADMIN_EMAIL
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    if not email_enviado and admin_email:
+        admin_body = f"""
+        <p><strong>Solicitud de reset de contraseña</strong></p>
+        <p>El usuario <strong>{user['nombre']}</strong> ({user['username']}) solicitó
+        restablecer su contraseña pero el envío directo falló.</p>
+        <p>Enlace (válido 2h): <a href="{link}">{link}</a></p>
+        <p style="color:#666;font-size:12px;">Reenvía este enlace manualmente al usuario.</p>
+        """
+        _send_email(admin_email, f"[RESET] Contraseña usuario {user['username']}", admin_body)
+
+    # Si no hay email configurado en absoluto, devolver el enlace directamente
+    email_configurado = bool(RESEND_API_KEY or (SMTP_HOST and SMTP_USER))
+    if not email_configurado:
+        return jsonify({
+            "ok": True,
+            "sin_email": True,
+            "link": link,
+            "msg": "Email no configurado en el servidor."
+        })
+
     return jsonify({"ok": True, "msg": "Si el usuario existe, recibirás un correo."})
 
 

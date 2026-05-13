@@ -575,6 +575,24 @@ tbody tr:last-child{border-bottom:none}
       </button>
     </div>
 
+    <!-- Paso 2b: sin email configurado — mostrar enlace directo -->
+    <div id="reset-paso2b" style="display:none;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">🔗</div>
+      <h3 style="margin:0 0 10px;">Enlace generado</h3>
+      <p style="color:rgba(255,255,255,.65);font-size:13px;margin:0 0 14px;">
+        El servidor no tiene email configurado. Copia este enlace y ábrelo para restablecer la contraseña:
+      </p>
+      <div style="background:rgba(255,255,255,.08);border-radius:6px;padding:10px 12px;
+                  word-break:break-all;font-size:12px;color:#ffd700;text-align:left;margin-bottom:14px;">
+        <span id="reset-link-directo"></span>
+      </div>
+      <button class="login-btn" onclick="copiarEnlaceReset()" style="width:100%;margin-bottom:10px;">
+        Copiar enlace
+      </button>
+      <button onclick="cerrarModalReset()" style="background:none;border:none;color:rgba(255,255,255,.5);
+              font-size:13px;cursor:pointer;text-decoration:underline;">Cerrar</button>
+    </div>
+
     <!-- Paso 3: nueva contraseña (token en URL) -->
     <div id="reset-paso3" style="display:none;">
       <h3 style="margin:0 0 6px;font-size:18px;">Nueva contraseña</h3>
@@ -656,7 +674,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.5.7
+          v 9.5.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1513,6 +1531,7 @@ function mostrarFormReset() {
   document.getElementById('modal-reset').style.display = 'flex';
   document.getElementById('reset-paso1').style.display = '';
   document.getElementById('reset-paso2').style.display = 'none';
+  document.getElementById('reset-paso2b').style.display = 'none';
   document.getElementById('reset-paso3').style.display = 'none';
   document.getElementById('reset-paso4').style.display = 'none';
   document.getElementById('reset-usuario').value = '';
@@ -1535,11 +1554,26 @@ async function enviarSolicitudReset() {
   try {
     const r = await api('/api/password-reset/solicitar', 'POST', { usuario });
     document.getElementById('reset-paso1').style.display = 'none';
-    document.getElementById('reset-paso2').style.display = '';
+    if (r.sin_email && r.link) {
+      // Servidor sin email configurado — mostrar enlace directo
+      document.getElementById('reset-link-directo').textContent = r.link;
+      document.getElementById('reset-paso2b').style.display = '';
+    } else {
+      document.getElementById('reset-paso2').style.display = '';
+    }
   } catch(err) {
     errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
     errEl.style.display = 'block';
   }
+}
+
+function copiarEnlaceReset() {
+  const link = document.getElementById('reset-link-directo').textContent;
+  navigator.clipboard.writeText(link).then(() => {
+    toast('Enlace copiado al portapapeles', 'ok');
+  }).catch(() => {
+    prompt('Copia este enlace:', link);
+  });
 }
 
 async function guardarNuevaPassword() {
