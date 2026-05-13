@@ -238,7 +238,7 @@ tbody tr:last-child{border-bottom:none}
 .modal-overlay.open{opacity:1;pointer-events:all}
 .modal{
   background:var(--white);border-radius:14px;
-  width:min(1000px,95vw);max-height:90vh;overflow-y:auto;
+  width:min(760px,95vw);max-height:90vh;overflow-y:auto;
   box-shadow:var(--shadow-lg);transform:translateY(20px);transition:transform .2s
 }
 .modal-overlay.open .modal{transform:translateY(0)}
@@ -259,7 +259,7 @@ tbody tr:last-child{border-bottom:none}
 /* ── Formulario ─────────────────────────────────────────────────────────── */
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .form-grid.cols-3{grid-template-columns:1fr 1fr 1fr}
-.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group{display:flex;flex-direction:column;gap:5px;min-width:0;overflow:hidden}
 .form-group.full{grid-column:1/-1}
 .form-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .form-control{
@@ -306,9 +306,9 @@ tbody tr:last-child{border-bottom:none}
   display:flex;align-items:center;gap:8px;
   padding:7px 10px;border-radius:8px;
   background:var(--bg);border:1px solid var(--border);
-  font-size:12px;
+  font-size:12px;min-width:0;overflow:hidden;
 }
-.adj-item a{flex:1;color:var(--navy2);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.adj-item a{flex:1;color:var(--navy2);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .adj-item a:hover{text-decoration:underline;color:var(--gold)}
 .adj-item .adj-del{cursor:pointer;color:var(--muted);font-size:14px;padding:0 4px;border:none;background:none;line-height:1}
 .adj-item .adj-del:hover{color:#c0392b}
@@ -336,7 +336,7 @@ tbody tr:last-child{border-bottom:none}
   user-select:none;white-space:nowrap;
 }
 .adj-fecha-btn:hover{border-color:var(--gold);color:var(--navy2);background:rgba(180,140,60,.06)}
-.adj-fecha-list{display:flex;flex-direction:column;gap:4px;margin-top:4px}
+.adj-fecha-list{display:flex;flex-direction:column;gap:4px;margin-top:4px;min-width:0}
 .adj-fecha-list .adj-item{padding:5px 8px;font-size:11px}
 
 
@@ -583,7 +583,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.5.3
+          v 9.5.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
