@@ -16,7 +16,7 @@ from models import SQL_STATEMENTS, ESTADOS_VALIDOS, ESTADOS_EMAIL_PROVEEDOR, EST
 # ── Configuración ──────────────────────────────────────────────────────────────
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")          # Supabase → Settings → Database → URI
-SECRET_KEY   = os.environ.get("SECRET_KEY", "princess-canarias-2026-dev-key")
+SECRET_KEY = os.environ["SECRET_KEY"]
 
 # Email — Resend (preferido) o SMTP como fallback
 RESEND_API_KEY   = os.environ.get("RESEND_API_KEY", "")
@@ -39,7 +39,7 @@ def _auto_migrate():
     try:
         db = psycopg2.connect(
             DATABASE_URL, cursor_factory=RealDictCursor,
-            connect_timeout=10,
+            connect_timeout=20,
         )
         db.autocommit = True
         with db.cursor() as cur:
@@ -268,13 +268,13 @@ def _send_email(to: str, subject: str, body_html: str) -> bool:
                 method="POST",
             )
             with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status == 200
+                return resp.status in (200, 201, 202)
         except Exception as e:
             log.error("Resend error enviando a %s: %s", to, e)
             return False
 
     # ── SMTP fallback ─────────────────────────────────────────────────────────
-    if SMTP_HOST and SMTP_USER:
+    if SMTP_HOST and SMTP_USER and SMTP_PASSWORD:
         try:
             import smtplib
             from email.mime.text import MIMEText
