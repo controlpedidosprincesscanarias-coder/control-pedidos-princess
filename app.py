@@ -284,10 +284,15 @@ def _send_email(to: str, subject: str, body_html: str) -> bool:
             msg["From"]    = EMAIL_FROM
             msg["To"]      = to
             msg.attach(MIMEText(body_html, "html", "utf-8"))
-            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
-                s.starttls()
-                s.login(SMTP_USER, SMTP_PASSWORD)
-                s.sendmail(EMAIL_FROM, [to], msg.as_string())
+            if SMTP_PORT == 465:
+                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+                    s.login(SMTP_USER, SMTP_PASSWORD)
+                    s.sendmail(EMAIL_FROM, [to], msg.as_string())
+            else:
+                with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
+                    s.starttls()
+                    s.login(SMTP_USER, SMTP_PASSWORD)
+                    s.sendmail(EMAIL_FROM, [to], msg.as_string())
             return True
         except Exception as e:
             log.error("SMTP error enviando a %s: %s", to, e)
