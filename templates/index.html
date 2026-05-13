@@ -656,7 +656,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.5.6
+          v 9.5.5
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1478,86 +1478,6 @@ async function doLogout() {
   location.reload();
 }
 
-// ── Restablecimiento de contraseña ───────────────────────────────────────────
-
-let _resetToken = null;
-
-function mostrarFormReset(e) {
-  if (e) e.preventDefault();
-  document.getElementById('modal-reset').style.display = 'flex';
-  document.getElementById('reset-paso1').style.display = '';
-  document.getElementById('reset-paso2').style.display = 'none';
-  document.getElementById('reset-paso3').style.display = 'none';
-  document.getElementById('reset-paso4').style.display = 'none';
-  document.getElementById('reset-usuario').value = '';
-  document.getElementById('reset-error1').style.display = 'none';
-}
-
-function cerrarModalReset() {
-  document.getElementById('modal-reset').style.display = 'none';
-  // Si había token en la URL, limpiar para no volver a mostrar el modal al recargar
-  if (_resetToken) {
-    history.replaceState(null, '', location.pathname);
-    _resetToken = null;
-  }
-}
-
-async function enviarSolicitudReset() {
-  const usuario = document.getElementById('reset-usuario').value.trim();
-  const errEl   = document.getElementById('reset-error1');
-  errEl.style.display = 'none';
-  if (!usuario) { errEl.textContent = 'Introduce tu usuario o email'; errEl.style.display = 'block'; return; }
-  try {
-    const r = await api('/api/password-reset/solicitar', 'POST', { usuario });
-    document.getElementById('reset-paso1').style.display = 'none';
-    document.getElementById('reset-paso2').style.display = '';
-  } catch(e) {
-    errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
-    errEl.style.display = 'block';
-  }
-}
-
-async function guardarNuevaPassword() {
-  const nueva    = document.getElementById('reset-nueva').value;
-  const confirma = document.getElementById('reset-confirma').value;
-  const errEl    = document.getElementById('reset-error3');
-  errEl.style.display = 'none';
-  if (!nueva || nueva.length < 6) { errEl.textContent = 'La contraseña debe tener al menos 6 caracteres.'; errEl.style.display = 'block'; return; }
-  if (nueva !== confirma)          { errEl.textContent = 'Las contraseñas no coinciden.'; errEl.style.display = 'block'; return; }
-  try {
-    const r = await api('/api/password-reset/cambiar', 'POST', { token: _resetToken, nueva_password: nueva });
-    if (r.error) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
-    document.getElementById('reset-paso3').style.display = 'none';
-    document.getElementById('reset-paso4').style.display = '';
-  } catch(e) {
-    errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
-    errEl.style.display = 'block';
-  }
-}
-
-// Al cargar la página, comprobar si hay token de reset en la URL
-(async function checkResetToken() {
-  const params = new URLSearchParams(location.search);
-  const token  = params.get('reset_token');
-  if (!token) return;
-  _resetToken = token;
-  try {
-    const r = await api(`/api/password-reset/validar/${token}`, 'GET');
-    if (r.valido) {
-      document.getElementById('reset-bienvenido').textContent =
-        `Hola ${r.nombre}, elige tu nueva contraseña.`;
-      document.getElementById('modal-reset').style.display = 'flex';
-      document.getElementById('reset-paso1').style.display = 'none';
-      document.getElementById('reset-paso3').style.display = '';
-    } else {
-      alert('El enlace de restablecimiento no es válido o ha caducado. Solicita uno nuevo.');
-      history.replaceState(null, '', location.pathname);
-    }
-  } catch(e) {
-    history.replaceState(null, '', location.pathname);
-  }
-})();
-
 document.getElementById('login-pass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
 document.getElementById('login-user').addEventListener('keydown', e => { if(e.key==='Enter') document.getElementById('login-pass').focus(); });
 
@@ -1583,6 +1503,86 @@ async function api(url, method='GET', body=null) {
   const r = await fetch(url, opts);
   return r.json();
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Restablecimiento de contraseña
+═══════════════════════════════════════════════════════════════════════════ */
+let _resetToken = null;
+
+function mostrarFormReset(e) {
+  if (e) e.preventDefault();
+  document.getElementById('modal-reset').style.display = 'flex';
+  document.getElementById('reset-paso1').style.display = '';
+  document.getElementById('reset-paso2').style.display = 'none';
+  document.getElementById('reset-paso3').style.display = 'none';
+  document.getElementById('reset-paso4').style.display = 'none';
+  document.getElementById('reset-usuario').value = '';
+  document.getElementById('reset-error1').style.display = 'none';
+}
+
+function cerrarModalReset() {
+  document.getElementById('modal-reset').style.display = 'none';
+  if (_resetToken) {
+    history.replaceState(null, '', location.pathname);
+    _resetToken = null;
+  }
+}
+
+async function enviarSolicitudReset() {
+  const usuario = document.getElementById('reset-usuario').value.trim();
+  const errEl   = document.getElementById('reset-error1');
+  errEl.style.display = 'none';
+  if (!usuario) { errEl.textContent = 'Introduce tu usuario o email'; errEl.style.display = 'block'; return; }
+  try {
+    const r = await api('/api/password-reset/solicitar', 'POST', { usuario });
+    document.getElementById('reset-paso1').style.display = 'none';
+    document.getElementById('reset-paso2').style.display = '';
+  } catch(err) {
+    errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+    errEl.style.display = 'block';
+  }
+}
+
+async function guardarNuevaPassword() {
+  const nueva    = document.getElementById('reset-nueva').value;
+  const confirma = document.getElementById('reset-confirma').value;
+  const errEl    = document.getElementById('reset-error3');
+  errEl.style.display = 'none';
+  if (!nueva || nueva.length < 6) { errEl.textContent = 'La contraseña debe tener al menos 6 caracteres.'; errEl.style.display = 'block'; return; }
+  if (nueva !== confirma)          { errEl.textContent = 'Las contraseñas no coinciden.'; errEl.style.display = 'block'; return; }
+  try {
+    const r = await api('/api/password-reset/cambiar', 'POST', { token: _resetToken, nueva_password: nueva });
+    if (r.error) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
+    document.getElementById('reset-paso3').style.display = 'none';
+    document.getElementById('reset-paso4').style.display = '';
+  } catch(err) {
+    errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+    errEl.style.display = 'block';
+  }
+}
+
+// Comprobar si hay token de reset en la URL al cargar la página
+window.addEventListener('DOMContentLoaded', async function() {
+  const params = new URLSearchParams(location.search);
+  const token  = params.get('reset_token');
+  if (!token) return;
+  _resetToken = token;
+  try {
+    const r = await api('/api/password-reset/validar/' + token, 'GET');
+    if (r.valido) {
+      document.getElementById('reset-bienvenido').textContent =
+        'Hola ' + r.nombre + ', elige tu nueva contraseña.';
+      document.getElementById('modal-reset').style.display = 'flex';
+      document.getElementById('reset-paso1').style.display = 'none';
+      document.getElementById('reset-paso3').style.display = '';
+    } else {
+      alert('El enlace de restablecimiento no es válido o ha caducado. Solicita uno nuevo.');
+      history.replaceState(null, '', location.pathname);
+    }
+  } catch(err) {
+    history.replaceState(null, '', location.pathname);
+  }
+});
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Toast
