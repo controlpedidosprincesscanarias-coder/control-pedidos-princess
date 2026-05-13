@@ -92,7 +92,7 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);colo
 }
 .sb-firma{
   text-align:center;padding:6px 0 0;
-  font-size:9px;color:rgba(255,255,255,.22);letter-spacing:.02em;
+  font-size:9px;color:rgba(255,255,255,.55);letter-spacing:.02em;
   line-height:1.5
 }
 .sb-user{display:flex;align-items:center;gap:10px}
@@ -238,7 +238,7 @@ tbody tr:last-child{border-bottom:none}
 .modal-overlay.open{opacity:1;pointer-events:all}
 .modal{
   background:var(--white);border-radius:14px;
-  width:min(720px,95vw);max-height:90vh;overflow-y:auto;
+  width:min(760px,95vw);max-height:90vh;overflow-y:auto;
   box-shadow:var(--shadow-lg);transform:translateY(20px);transition:transform .2s
 }
 .modal-overlay.open .modal{transform:translateY(0)}
@@ -259,7 +259,7 @@ tbody tr:last-child{border-bottom:none}
 /* ── Formulario ─────────────────────────────────────────────────────────── */
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .form-grid.cols-3{grid-template-columns:1fr 1fr 1fr}
-.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group{display:flex;flex-direction:column;gap:5px;min-width:0;overflow:visible}
 .form-group.full{grid-column:1/-1}
 .form-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .form-control{
@@ -306,9 +306,9 @@ tbody tr:last-child{border-bottom:none}
   display:flex;align-items:center;gap:8px;
   padding:7px 10px;border-radius:8px;
   background:var(--bg);border:1px solid var(--border);
-  font-size:12px;
+  font-size:12px;min-width:0;overflow:hidden;
 }
-.adj-item a{flex:1;color:var(--navy2);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.adj-item a{flex:1;color:var(--navy2);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .adj-item a:hover{text-decoration:underline;color:var(--gold)}
 .adj-item .adj-del{cursor:pointer;color:var(--muted);font-size:14px;padding:0 4px;border:none;background:none;line-height:1}
 .adj-item .adj-del:hover{color:#c0392b}
@@ -336,7 +336,7 @@ tbody tr:last-child{border-bottom:none}
   user-select:none;white-space:nowrap;
 }
 .adj-fecha-btn:hover{border-color:var(--gold);color:var(--navy2);background:rgba(180,140,60,.06)}
-.adj-fecha-list{display:flex;flex-direction:column;gap:4px;margin-top:4px}
+.adj-fecha-list{display:flex;flex-direction:column;gap:4px;margin-top:4px;min-width:0}
 .adj-fecha-list .adj-item{padding:5px 8px;font-size:11px}
 
 
@@ -529,6 +529,97 @@ tbody tr:last-child{border-bottom:none}
     </div>
     <div id="login-error" class="login-error"></div>
     <button class="login-btn" onclick="doLogin()">Acceder</button>
+    <div style="text-align:center;margin-top:14px;">
+      <button onclick="mostrarFormReset()"
+         style="background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.55);font-size:13px;text-decoration:underline;padding:0;font-family:inherit;">
+        ¿Olvidaste tu contraseña?
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL RESET PASSWORD ──────────────────────────────────────────────── -->
+<div id="modal-reset" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+     z-index:10000;align-items:center;justify-content:center;">
+  <div style="background:#1a1a2e;border:1px solid rgba(255,255,255,.15);border-radius:12px;
+       padding:36px 32px;width:360px;max-width:95vw;color:#fff;position:relative;">
+    <button onclick="cerrarModalReset()" style="position:absolute;top:12px;right:16px;
+            background:none;border:none;color:rgba(255,255,255,.5);font-size:22px;
+            cursor:pointer;line-height:1;">&times;</button>
+
+    <!-- Paso 1: solicitar -->
+    <div id="reset-paso1">
+      <h3 style="margin:0 0 6px;font-size:18px;">Restablecer contraseña</h3>
+      <p style="margin:0 0 20px;color:rgba(255,255,255,.6);font-size:13px;">
+        Introduce tu usuario o email y te enviaremos un enlace.
+      </p>
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Usuario o email</label>
+      <input id="reset-usuario" class="login-input" placeholder="usuario o email"
+             style="margin-top:4px;margin-bottom:12px;">
+      <div id="reset-error1" style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:10px;"></div>
+      <button class="login-btn" onclick="enviarSolicitudReset()" style="width:100%;">
+        Enviar enlace
+      </button>
+    </div>
+
+    <!-- Paso 2: confirmación enviado -->
+    <div id="reset-paso2" style="display:none;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">📧</div>
+      <h3 style="margin:0 0 10px;">¡Correo enviado!</h3>
+      <p style="color:rgba(255,255,255,.65);font-size:14px;margin:0;">
+        Si el usuario existe en el sistema, recibirás un correo con el enlace
+        para restablecer tu contraseña. Revisa también la carpeta de spam.
+      </p>
+      <button class="login-btn" onclick="cerrarModalReset()" style="width:100%;margin-top:20px;">
+        Cerrar
+      </button>
+    </div>
+
+    <!-- Paso 2b: sin email configurado — mostrar enlace directo -->
+    <div id="reset-paso2b" style="display:none;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">🔗</div>
+      <h3 style="margin:0 0 10px;">Enlace generado</h3>
+      <p style="color:rgba(255,255,255,.65);font-size:13px;margin:0 0 14px;">
+        El servidor no tiene email configurado. Copia este enlace y ábrelo para restablecer la contraseña:
+      </p>
+      <div style="background:rgba(255,255,255,.08);border-radius:6px;padding:10px 12px;
+                  word-break:break-all;font-size:12px;color:#ffd700;text-align:left;margin-bottom:14px;">
+        <span id="reset-link-directo"></span>
+      </div>
+      <button class="login-btn" onclick="copiarEnlaceReset()" style="width:100%;margin-bottom:10px;">
+        Copiar enlace
+      </button>
+      <button onclick="cerrarModalReset()" style="background:none;border:none;color:rgba(255,255,255,.5);
+              font-size:13px;cursor:pointer;text-decoration:underline;">Cerrar</button>
+    </div>
+
+    <!-- Paso 3: nueva contraseña (token en URL) -->
+    <div id="reset-paso3" style="display:none;">
+      <h3 style="margin:0 0 6px;font-size:18px;">Nueva contraseña</h3>
+      <p id="reset-bienvenido" style="margin:0 0 20px;color:rgba(255,255,255,.6);font-size:13px;"></p>
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Nueva contraseña</label>
+      <input id="reset-nueva" class="login-input" type="password" placeholder="Mínimo 6 caracteres"
+             style="margin-top:4px;margin-bottom:8px;">
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Repetir contraseña</label>
+      <input id="reset-confirma" class="login-input" type="password" placeholder="Repite la contraseña"
+             style="margin-top:4px;margin-bottom:12px;">
+      <div id="reset-error3" style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:10px;"></div>
+      <button class="login-btn" onclick="guardarNuevaPassword()" style="width:100%;">
+        Guardar contraseña
+      </button>
+    </div>
+
+    <!-- Paso 4: éxito -->
+    <div id="reset-paso4" style="display:none;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">✅</div>
+      <h3 style="margin:0 0 10px;">Contraseña actualizada</h3>
+      <p style="color:rgba(255,255,255,.65);font-size:14px;margin:0;">
+        Tu contraseña ha sido cambiada correctamente. Ya puedes iniciar sesión.
+      </p>
+      <button class="login-btn" onclick="cerrarModalReset()" style="width:100%;margin-top:20px;">
+        Ir al inicio de sesión
+      </button>
+    </div>
   </div>
 </div>
 
@@ -583,7 +674,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.5.2
+          v 9.5.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1430,6 +1521,101 @@ async function api(url, method='GET', body=null) {
   const r = await fetch(url, opts);
   return r.json();
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Restablecimiento de contraseña
+═══════════════════════════════════════════════════════════════════════════ */
+let _resetToken = null;
+
+function mostrarFormReset() {
+  document.getElementById('modal-reset').style.display = 'flex';
+  document.getElementById('reset-paso1').style.display = '';
+  document.getElementById('reset-paso2').style.display = 'none';
+  document.getElementById('reset-paso2b').style.display = 'none';
+  document.getElementById('reset-paso3').style.display = 'none';
+  document.getElementById('reset-paso4').style.display = 'none';
+  document.getElementById('reset-usuario').value = '';
+  document.getElementById('reset-error1').style.display = 'none';
+}
+
+function cerrarModalReset() {
+  document.getElementById('modal-reset').style.display = 'none';
+  if (_resetToken) {
+    history.replaceState(null, '', location.pathname);
+    _resetToken = null;
+  }
+}
+
+async function enviarSolicitudReset() {
+  const usuario = document.getElementById('reset-usuario').value.trim();
+  const errEl   = document.getElementById('reset-error1');
+  errEl.style.display = 'none';
+  if (!usuario) { errEl.textContent = 'Introduce tu usuario o email'; errEl.style.display = 'block'; return; }
+  try {
+    const r = await api('/api/password-reset/solicitar', 'POST', { usuario });
+    document.getElementById('reset-paso1').style.display = 'none';
+    if (r.sin_email && r.link) {
+      // Servidor sin email configurado — mostrar enlace directo
+      document.getElementById('reset-link-directo').textContent = r.link;
+      document.getElementById('reset-paso2b').style.display = '';
+    } else {
+      document.getElementById('reset-paso2').style.display = '';
+    }
+  } catch(err) {
+    errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+    errEl.style.display = 'block';
+  }
+}
+
+function copiarEnlaceReset() {
+  const link = document.getElementById('reset-link-directo').textContent;
+  navigator.clipboard.writeText(link).then(() => {
+    toast('Enlace copiado al portapapeles', 'ok');
+  }).catch(() => {
+    prompt('Copia este enlace:', link);
+  });
+}
+
+async function guardarNuevaPassword() {
+  const nueva    = document.getElementById('reset-nueva').value;
+  const confirma = document.getElementById('reset-confirma').value;
+  const errEl    = document.getElementById('reset-error3');
+  errEl.style.display = 'none';
+  if (!nueva || nueva.length < 6) { errEl.textContent = 'La contraseña debe tener al menos 6 caracteres.'; errEl.style.display = 'block'; return; }
+  if (nueva !== confirma)          { errEl.textContent = 'Las contraseñas no coinciden.'; errEl.style.display = 'block'; return; }
+  try {
+    const r = await api('/api/password-reset/cambiar', 'POST', { token: _resetToken, nueva_password: nueva });
+    if (r.error) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
+    document.getElementById('reset-paso3').style.display = 'none';
+    document.getElementById('reset-paso4').style.display = '';
+  } catch(err) {
+    errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+    errEl.style.display = 'block';
+  }
+}
+
+// Comprobar si hay token de reset en la URL al cargar la página
+window.addEventListener('DOMContentLoaded', async function() {
+  const params = new URLSearchParams(location.search);
+  const token  = params.get('reset_token');
+  if (!token) return;
+  _resetToken = token;
+  try {
+    const r = await api('/api/password-reset/validar/' + token, 'GET');
+    if (r.valido) {
+      document.getElementById('reset-bienvenido').textContent =
+        'Hola ' + r.nombre + ', elige tu nueva contraseña.';
+      document.getElementById('modal-reset').style.display = 'flex';
+      document.getElementById('reset-paso1').style.display = 'none';
+      document.getElementById('reset-paso3').style.display = '';
+    } else {
+      alert('El enlace de restablecimiento no es válido o ha caducado. Solicita uno nuevo.');
+      history.replaceState(null, '', location.pathname);
+    }
+  } catch(err) {
+    history.replaceState(null, '', location.pathname);
+  }
+});
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Toast

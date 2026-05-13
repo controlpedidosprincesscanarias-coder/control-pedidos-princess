@@ -3,8 +3,8 @@ Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase) + Resend
 Despliegue: Render.com  |  BD: Supabase  |  Email: Resend
 """
 
-import os, json, logging
-from datetime import datetime
+import os, json, logging, secrets
+from datetime import datetime, timedelta
 from functools import wraps
 
 import psycopg2
@@ -103,6 +103,16 @@ def _auto_migrate():
                 )
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_adjuntos_pedido ON pedido_adjuntos(pedido_id)")
+            # ── Tokens de restablecimiento de contraseña ──────────────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                    id         SERIAL PRIMARY KEY,
+                    usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                    token      TEXT NOT NULL UNIQUE,
+                    expira_en  TIMESTAMPTZ NOT NULL,
+                    usado      INTEGER NOT NULL DEFAULT 0
+                )
+            """)
             # ── Columna móvil en usuarios (v9.5) ─────────────────────────────
             cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS movil TEXT")
             # ── Log de WhatsApp (v9.5) ───────────────────────────────────────
@@ -736,6 +746,120 @@ def login():
 def logout():
     session.clear()
     return jsonify({"ok": True})
+
+# ── Restablecimiento de contraseña ────────────────────────────────────────────
+
+@app.route("/api/password-reset/solicitar", methods=["POST"])
+def solicitar_reset_password():
+    """El usuario introduce su username o email y recibe un enlace de reset."""
+    body    = request.get_json(silent=True) or {}
+    usuario = (body.get("usuario") or "").strip().lower()
+    if not usuario:
+        return jsonify({"error": "Indica tu usuario o email"}), 400
+
+    user = query(
+        "SELECT * FROM usuarios WHERE (username=%s OR email=%s) AND activo=1",
+        (usuario, usuario), one=True
+    )
+    # Siempre respuesta OK para no revelar si el usuario existe
+    if not user or not user.get("email"):
+        return jsonify({"ok": True, "msg": "Si el usuario existe, recibirás un correo."})
+
+    # Generar token seguro con 2 h de validez
+    token    = secrets.token_urlsafe(32)
+    expira   = datetime.utcnow() + timedelta(hours=2)
+    db       = get_db()
+    # Invalidar tokens anteriores del mismo usuario
+    execute("UPDATE password_reset_tokens SET usado=1 WHERE usuario_id=%s AND usado=0", (user["id"],))
+    execute(
+        "INSERT INTO password_reset_tokens (usuario_id, token, expira_en) VALUES (%s,%s,%s)",
+        (user["id"], token, expira)
+    )
+    db.commit()
+
+    # Construir enlace (se puede configurar la URL base con env var APP_URL)
+    app_url  = os.environ.get("APP_URL", request.host_url.rstrip("/"))
+    link     = f"{app_url}/?reset_token={token}"
+
+    subject  = "Restablecimiento de contraseña – Control de Pedidos"
+    body_html = f"""
+    <p>Hola <strong>{user['nombre']}</strong>,</p>
+    <p>Hemos recibido una solicitud para restablecer tu contraseña.</p>
+    <p><a href="{link}" style="background:#8B0000;color:#fff;padding:10px 20px;
+       border-radius:4px;text-decoration:none;display:inline-block;">
+       Restablecer contraseña</a></p>
+    <p>Este enlace es válido durante <strong>2 horas</strong>.<br>
+    Si no lo solicitaste, ignora este mensaje.</p>
+    <p style="color:#666;font-size:12px;">Control de Pedidos · Princess Canarias</p>
+    """
+    # Siempre loguear el enlace en el servidor
+    log.info("PASSWORD RESET solicitado por '%s' (id=%s) — enlace: %s",
+             user["username"], user["id"], link)
+
+    email_enviado = _send_email(user["email"], subject, body_html)
+
+    # Fallback: si falla, intentar con ADMIN_EMAIL
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    if not email_enviado and admin_email:
+        admin_body = f"""
+        <p><strong>Solicitud de reset de contraseña</strong></p>
+        <p>El usuario <strong>{user['nombre']}</strong> ({user['username']}) solicitó
+        restablecer su contraseña pero el envío directo falló.</p>
+        <p>Enlace (válido 2h): <a href="{link}">{link}</a></p>
+        <p style="color:#666;font-size:12px;">Reenvía este enlace manualmente al usuario.</p>
+        """
+        _send_email(admin_email, f"[RESET] Contraseña usuario {user['username']}", admin_body)
+
+    # Si no hay email configurado en absoluto, devolver el enlace directamente
+    email_configurado = bool(RESEND_API_KEY or (SMTP_HOST and SMTP_USER))
+    if not email_configurado:
+        return jsonify({
+            "ok": True,
+            "sin_email": True,
+            "link": link,
+            "msg": "Email no configurado en el servidor."
+        })
+
+    return jsonify({"ok": True, "msg": "Si el usuario existe, recibirás un correo."})
+
+
+@app.route("/api/password-reset/validar/<token>", methods=["GET"])
+def validar_reset_token(token):
+    """Comprueba si el token es válido y no ha caducado."""
+    row = query(
+        """SELECT prt.*, u.nombre FROM password_reset_tokens prt
+           JOIN usuarios u ON u.id = prt.usuario_id
+           WHERE prt.token=%s AND prt.usado=0 AND prt.expira_en > NOW()""",
+        (token,), one=True
+    )
+    if not row:
+        return jsonify({"valido": False, "error": "El enlace no es válido o ha caducado"}), 400
+    return jsonify({"valido": True, "nombre": row["nombre"]})
+
+
+@app.route("/api/password-reset/cambiar", methods=["POST"])
+def cambiar_password_con_token():
+    """El usuario envía el token + nueva contraseña elegida por él."""
+    body     = request.get_json(silent=True) or {}
+    token    = (body.get("token") or "").strip()
+    nueva    = (body.get("nueva_password") or "").strip()
+    if not token or not nueva:
+        return jsonify({"error": "Datos incompletos"}), 400
+    if len(nueva) < 6:
+        return jsonify({"error": "La contraseña debe tener al menos 6 caracteres"}), 400
+
+    row = query(
+        "SELECT * FROM password_reset_tokens WHERE token=%s AND usado=0 AND expira_en > NOW()",
+        (token,), one=True
+    )
+    if not row:
+        return jsonify({"error": "El enlace no es válido o ha caducado"}), 400
+
+    db = get_db()
+    execute("UPDATE usuarios SET password=%s WHERE id=%s", (nueva, row["usuario_id"]))
+    execute("UPDATE password_reset_tokens SET usado=1 WHERE token=%s", (token,))
+    db.commit()
+    return jsonify({"ok": True, "msg": "Contraseña actualizada correctamente"})
 
 @app.route("/api/me")
 def me():
