@@ -27,6 +27,7 @@
   /* Estado colores */
   --s-pendiente-compras: #ffeeba;
   --s-pendiente-hotel:   #ffe0a0;
+  --s-pendiente-cotizacion: #e0d4f7;
   --s-enviado:           #c8e6ff;
   --s-parcial:           #fff3cd;
   --s-entregado:         #c8f2d8;
@@ -47,7 +48,8 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);colo
   display:flex;align-items:center;padding:0 24px;gap:16px;flex-shrink:0;
   box-shadow:0 1px 4px rgba(15,32,68,.06)
 }
-#content{flex:1;overflow-y:auto;padding:24px}
+#content{flex:1;overflow-y:auto;padding:24px;display:flex;flex-direction:column;align-items:stretch;justify-content:flex-start}
+#content>div[id^="view-"]{width:100%}
 
 /* ── Sidebar ────────────────────────────────────────────────────────────── */
 .sb-logo{
@@ -78,6 +80,21 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);colo
 }
 
 .sb-bottom{margin-top:auto;padding:16px;border-top:1px solid rgba(255,255,255,.08)}
+.sb-version{
+  text-align:center;padding:8px 0 12px;
+  border-bottom:1px solid rgba(255,255,255,.08);margin-bottom:12px
+}
+.sb-version-badge{
+  display:inline-flex;align-items:center;gap:5px;
+  background:rgba(201,168,76,.12);border:1px solid rgba(201,168,76,.25);
+  border-radius:20px;padding:3px 10px;
+  font-size:10px;font-weight:600;letter-spacing:.04em;color:var(--gold2)
+}
+.sb-firma{
+  text-align:center;padding:6px 0 0;
+  font-size:9px;color:rgba(255,255,255,.55);letter-spacing:.02em;
+  line-height:1.5
+}
 .sb-user{display:flex;align-items:center;gap:10px}
 .sb-avatar{
   width:32px;height:32px;border-radius:50%;background:var(--navy2);
@@ -146,26 +163,57 @@ tbody tr:last-child{border-bottom:none}
   white-space:nowrap
 }
 .badge-pendiente-compras{background:var(--s-pendiente-compras);color:#92400e}
-.badge-pendiente-hotel  {background:var(--s-pendiente-hotel);color:#92400e}
+.badge-pendiente-hotel      {background:var(--s-pendiente-hotel);color:#92400e}
+.badge-pendiente-cotizacion {background:var(--s-pendiente-cotizacion);color:#5b21b6}
 .badge-enviado          {background:var(--s-enviado);color:#1e40af}
 .badge-parcial          {background:var(--s-parcial);color:#78350f}
 .badge-entregado        {background:var(--s-entregado);color:#065f46}
 .badge-anulado          {background:var(--s-anulado);color:#991b1b}
+.badge-cancelado        {background:var(--s-anulado);color:#991b1b}
 
 /* Bool badge */
 .bool-si{color:#059669;font-weight:600}
 .bool-no{color:#d1d5db}
 
+/* Comentarios en tabla */
+.comentarios-cell{max-width:160px}
+.comentarios-text{
+  display:block;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+  color:var(--text);
+  font-size:12px;
+  max-width:160px;
+}
+
+/* Indicador adjuntos en tabla */
+.adj-indicator{
+  display:inline-flex;align-items:center;justify-content:center;
+  width:22px;height:22px;border-radius:50%;
+  background:var(--primary-light, #dbeafe);
+  font-size:13px;cursor:default;
+  transition:transform .15s;
+}
+.adj-indicator:hover{transform:scale(1.2)}
+
 /* ── Filtros ────────────────────────────────────────────────────────────── */
-.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px;align-items:center}
+.filters{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px;align-items:center}
 .filter-input,.filter-select{
   padding:7px 10px;border:1px solid var(--border);border-radius:7px;
   font-family:inherit;font-size:13px;background:var(--white);color:var(--text);
   outline:none;transition:border-color .15s
 }
 .filter-input:focus,.filter-select:focus{border-color:var(--navy2)}
-.filter-input{width:200px}
+.filter-input{width:240px}
 .filter-select{min-width:160px}
+.search-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:16px}
+.search-chips-label{font-size:11px;color:var(--text-muted,#888);margin-right:2px}
+.schip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:500;border:1px solid transparent;cursor:default;user-select:none}
+.schip-dot{width:6px;height:6px;border-radius:50%;flex-shrink:0}
+.schip-pedido{background:#EEEDFE;color:#3C3489;border-color:#AFA9EC}.schip-pedido .schip-dot{background:#534AB7}
+.schip-prov{background:#E1F5EE;color:#085041;border-color:#5DCAA5}.schip-prov .schip-dot{background:#0F6E56}
+.schip-obs{background:#FAEEDA;color:#633806;border-color:#EF9F27}.schip-obs .schip-dot{background:#854F0B}
 
 /* ── Paginación ────────────────────────────────────────────────────────── */
 .pagination{display:flex;align-items:center;gap:4px;justify-content:flex-end;margin-top:16px}
@@ -190,7 +238,7 @@ tbody tr:last-child{border-bottom:none}
 .modal-overlay.open{opacity:1;pointer-events:all}
 .modal{
   background:var(--white);border-radius:14px;
-  width:min(720px,95vw);max-height:90vh;overflow-y:auto;
+  width:min(760px,95vw);max-height:90vh;overflow-y:auto;
   box-shadow:var(--shadow-lg);transform:translateY(20px);transition:transform .2s
 }
 .modal-overlay.open .modal{transform:translateY(0)}
@@ -211,7 +259,7 @@ tbody tr:last-child{border-bottom:none}
 /* ── Formulario ─────────────────────────────────────────────────────────── */
 .form-grid{display:grid;grid-template-columns:1fr 1fr;gap:16px}
 .form-grid.cols-3{grid-template-columns:1fr 1fr 1fr}
-.form-group{display:flex;flex-direction:column;gap:5px}
+.form-group{display:flex;flex-direction:column;gap:5px;min-width:0;overflow:hidden}
 .form-group.full{grid-column:1/-1}
 .form-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .form-control{
@@ -258,9 +306,9 @@ tbody tr:last-child{border-bottom:none}
   display:flex;align-items:center;gap:8px;
   padding:7px 10px;border-radius:8px;
   background:var(--bg);border:1px solid var(--border);
-  font-size:12px;
+  font-size:12px;min-width:0;overflow:hidden;
 }
-.adj-item a{flex:1;color:var(--navy2);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.adj-item a{flex:1;color:var(--navy2);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
 .adj-item a:hover{text-decoration:underline;color:var(--gold)}
 .adj-item .adj-del{cursor:pointer;color:var(--muted);font-size:14px;padding:0 4px;border:none;background:none;line-height:1}
 .adj-item .adj-del:hover{color:#c0392b}
@@ -278,6 +326,18 @@ tbody tr:last-child{border-bottom:none}
 }
 .adj-img-del:hover{background:#c0392b}
 .adj-uploading{opacity:.5;pointer-events:none}
+/* Botones adjunto en campos de fecha */
+.adj-fecha-btn{
+  display:inline-flex;align-items:center;gap:5px;
+  padding:4px 10px;border-radius:6px;
+  border:1.5px dashed var(--border);cursor:pointer;
+  font-size:11px;font-weight:600;color:var(--muted);
+  background:var(--surface,#f8f8f8);transition:border-color .2s,color .2s,background .2s;
+  user-select:none;white-space:nowrap;
+}
+.adj-fecha-btn:hover{border-color:var(--gold);color:var(--navy2);background:rgba(180,140,60,.06)}
+.adj-fecha-list{display:flex;flex-direction:column;gap:4px;margin-top:4px;min-width:0}
+.adj-fecha-list .adj-item{padding:5px 8px;font-size:11px}
 
 
 @import url('https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@300;400;600&display=swap');
@@ -389,7 +449,12 @@ tbody tr:last-child{border-bottom:none}
 
 /* ── Alertas tabla ──────────────────────────────────────────────────────── */
 .alert-row{background:#fffbeb}
+.alert-row-urgente{background:#fff0f0 !important}
 .alert-dias{font-weight:700;color:#b45309;font-family:'DM Mono',monospace}
+.alert-dias.urgente{color:#dc2626}
+.badge-alerta{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700;white-space:nowrap}
+.badge-alerta.urgente{background:#fee2e2;color:#991b1b;border:1px solid #fca5a5}
+.badge-alerta.aviso{background:#fef3c7;color:#92400e;border:1px solid #fde68a}
 
 /* ── Toast ──────────────────────────────────────────────────────────────── */
 #toast-container{position:fixed;bottom:24px;right:24px;display:flex;flex-direction:column;gap:8px;z-index:9999}
@@ -412,6 +477,37 @@ tbody tr:last-child{border-bottom:none}
 .text-muted{color:var(--muted)}
 .flex-1{flex:1}
 .gap-8{gap:8px}
+
+/* Modal Email Alerta (v9.5) */
+.mea-dialog {
+  background: var(--white);
+  border-radius: 10px;
+  width: min(700px, 95vw);
+  max-height: 88vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 60px rgba(0,0,0,.3);
+  transform: translateY(20px);
+  transition: transform .2s;
+}
+.modal-overlay.open .mea-dialog {
+  transform: translateY(0);
+}
+.mea-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  display: grid;
+  gap: 14px;
+}
+.mea-footer {
+  padding: 12px 20px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  flex-shrink: 0;
+}
 </style>
 </head>
 <body>
@@ -433,6 +529,79 @@ tbody tr:last-child{border-bottom:none}
     </div>
     <div id="login-error" class="login-error"></div>
     <button class="login-btn" onclick="doLogin()">Acceder</button>
+    <div style="text-align:center;margin-top:14px;">
+      <a href="#" onclick="mostrarFormReset(event)"
+         style="color:rgba(255,255,255,0.55);font-size:13px;text-decoration:none;">
+        ¿Olvidaste tu contraseña?
+      </a>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL RESET PASSWORD ──────────────────────────────────────────────── -->
+<div id="modal-reset" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+     z-index:2000;align-items:center;justify-content:center;">
+  <div style="background:#1a1a2e;border:1px solid rgba(255,255,255,.15);border-radius:12px;
+       padding:36px 32px;width:360px;max-width:95vw;color:#fff;position:relative;">
+    <button onclick="cerrarModalReset()" style="position:absolute;top:12px;right:16px;
+            background:none;border:none;color:rgba(255,255,255,.5);font-size:22px;
+            cursor:pointer;line-height:1;">&times;</button>
+
+    <!-- Paso 1: solicitar -->
+    <div id="reset-paso1">
+      <h3 style="margin:0 0 6px;font-size:18px;">Restablecer contraseña</h3>
+      <p style="margin:0 0 20px;color:rgba(255,255,255,.6);font-size:13px;">
+        Introduce tu usuario o email y te enviaremos un enlace.
+      </p>
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Usuario o email</label>
+      <input id="reset-usuario" class="login-input" placeholder="usuario o email"
+             style="margin-top:4px;margin-bottom:12px;">
+      <div id="reset-error1" style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:10px;"></div>
+      <button class="login-btn" onclick="enviarSolicitudReset()" style="width:100%;">
+        Enviar enlace
+      </button>
+    </div>
+
+    <!-- Paso 2: confirmación enviado -->
+    <div id="reset-paso2" style="display:none;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">📧</div>
+      <h3 style="margin:0 0 10px;">¡Correo enviado!</h3>
+      <p style="color:rgba(255,255,255,.65);font-size:14px;margin:0;">
+        Si el usuario existe en el sistema, recibirás un correo con el enlace
+        para restablecer tu contraseña. Revisa también la carpeta de spam.
+      </p>
+      <button class="login-btn" onclick="cerrarModalReset()" style="width:100%;margin-top:20px;">
+        Cerrar
+      </button>
+    </div>
+
+    <!-- Paso 3: nueva contraseña (token en URL) -->
+    <div id="reset-paso3" style="display:none;">
+      <h3 style="margin:0 0 6px;font-size:18px;">Nueva contraseña</h3>
+      <p id="reset-bienvenido" style="margin:0 0 20px;color:rgba(255,255,255,.6);font-size:13px;"></p>
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Nueva contraseña</label>
+      <input id="reset-nueva" class="login-input" type="password" placeholder="Mínimo 6 caracteres"
+             style="margin-top:4px;margin-bottom:8px;">
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Repetir contraseña</label>
+      <input id="reset-confirma" class="login-input" type="password" placeholder="Repite la contraseña"
+             style="margin-top:4px;margin-bottom:12px;">
+      <div id="reset-error3" style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:10px;"></div>
+      <button class="login-btn" onclick="guardarNuevaPassword()" style="width:100%;">
+        Guardar contraseña
+      </button>
+    </div>
+
+    <!-- Paso 4: éxito -->
+    <div id="reset-paso4" style="display:none;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">✅</div>
+      <h3 style="margin:0 0 10px;">Contraseña actualizada</h3>
+      <p style="color:rgba(255,255,255,.65);font-size:14px;margin:0;">
+        Tu contraseña ha sido cambiada correctamente. Ya puedes iniciar sesión.
+      </p>
+      <button class="login-btn" onclick="cerrarModalReset()" style="width:100%;margin-top:20px;">
+        Ir al inicio de sesión
+      </button>
+    </div>
   </div>
 </div>
 
@@ -469,8 +638,28 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item admin-only" data-view="eliminados" onclick="showView('eliminados',this)" style="display:none">
       <span class="icon">🗑️</span> Pedidos eliminados
     </div>
+    <div class="sb-item" data-view="techo" onclick="showView('techo',this)">
+      <span class="icon">📉</span> Techo de gastos
+      <span class="sb-badge" id="sb-techo-count" style="display:none;background:#dc3545">!</span>
+    </div>
+    <div class="sb-item admin-only" data-view="familias" onclick="showView('familias',this)" style="display:none">
+      <span class="icon">🏷️</span> Familias artículos
+    </div>
+    <div class="sb-item admin-only" data-view="usuarios" onclick="showView('usuarios',this)" style="display:none">
+      <span class="icon">👥</span> Usuarios
+    </div>
 
     <div class="sb-bottom">
+      <div class="sb-version">
+        <span class="sb-version-badge">
+          <svg width="9" height="9" viewBox="0 0 10 10" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0">
+            <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
+            <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
+          </svg>
+          v 9.5.5
+        </span>
+        <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
+      </div>
       <div class="sb-user">
         <div class="sb-avatar" id="sb-avatar">—</div>
         <div>
@@ -494,14 +683,15 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-gold" onclick="openPedidoModal()" id="btn-nuevo-pedido">
             + Nuevo pedido
           </button>
-          <button class="btn btn-ghost btn-sm" onclick="exportarExcel()" title="Exportar a Excel">⬇ Exportar</button>
+          <button class="btn btn-ghost btn-sm" id="btn-exportar-pedidos" onclick="exportarExcel()" title="Exportar a Excel">⬇ Exportar</button>
           <button class="btn btn-ghost btn-sm" onclick="openImportModal()" title="Importar desde Excel">⬆ Importar</button>
         </div>
 
         <!-- Acciones contextuales: Proveedores -->
         <div id="tb-actions-proveedores" style="display:none;gap:8px;align-items:center">
-          <button class="btn btn-ghost btn-sm" onclick="exportarProveedores()" title="Descargar Excel">⬇ Exportar</button>
-          <button class="btn btn-ghost btn-sm" onclick="openImportProvModal()" title="Importar desde Excel">⬆ Importar</button>
+          <button class="btn btn-ghost btn-sm" id="btn-exportar-prov" onclick="exportarProveedores()" title="Descargar Excel">⬇ Exportar</button>
+          <button class="btn btn-ghost btn-sm" id="btn-importar-prov-trigger" onclick="openImportProvModal()" title="Importar desde Excel" style="display:none">⬆ Importar</button>
+          <button class="btn btn-gold btn-sm" id="btn-nuevo-proveedor" onclick="openNuevoProveedorModal()" style="display:none">+ Nuevo proveedor</button>
         </div>
       </div>
     </div>
@@ -514,7 +704,7 @@ tbody tr:last-child{border-bottom:none}
           <div class="stat-card"><div class="stat-num" id="st-total">—</div><div class="stat-label">Total pedidos</div></div>
           <div class="stat-card"><div class="stat-num" id="st-enviado" style="color:#1e40af">—</div><div class="stat-label">Enviados proveedor</div></div>
           <div class="stat-card"><div class="stat-num" id="st-entregado" style="color:#065f46">—</div><div class="stat-label">Entregados</div></div>
-          <div class="stat-card alert-card"><div class="stat-num" id="st-alertas">—</div><div class="stat-label">⚠ Sin resolver +7 días</div></div>
+          <div class="stat-card alert-card"><div class="stat-num" id="st-alertas">—</div><div class="stat-label">⚠ Pedidos con alerta activa</div></div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px">
           <div class="card">
@@ -531,7 +721,7 @@ tbody tr:last-child{border-bottom:none}
       <!-- VIEW: PEDIDOS ───────────────────────────────────────────────── -->
       <div id="view-pedidos" class="section-hidden">
         <div class="filters">
-          <input class="filter-input" id="f-q" placeholder="🔍 Buscar pedido, proveedor…" oninput="debouncedLoad()">
+          <input class="filter-input" id="f-q" placeholder="🔍 Buscar…" oninput="debouncedLoad()">
           <select class="filter-select" id="f-hotel" onchange="loadPedidos()">
             <option value="">Todos los hoteles</option>
           </select>
@@ -543,6 +733,12 @@ tbody tr:last-child{border-bottom:none}
           </select>
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
         </div>
+        <div class="search-chips">
+          <span class="search-chips-label">Busca por:</span>
+          <span class="schip schip-pedido"><span class="schip-dot"></span>Nº pedido</span>
+          <span class="schip schip-prov"><span class="schip-dot"></span>Proveedor</span>
+          <span class="schip schip-obs"><span class="schip-dot"></span>Observaciones</span>
+        </div>
 
         <div class="card">
           <div id="pedidos-loading" class="loading">Cargando…</div>
@@ -551,9 +747,10 @@ tbody tr:last-child{border-bottom:none}
               <thead>
                 <tr>
                   <th>Nº</th><th>Hotel</th><th>Depto.</th>
-                  <th>F. Solicitud</th><th>Pedido SAP</th>
-                  <th>Estado</th><th>Proveedor</th>
-                  <th>A&B</th><th>Jefe Dep.</th><th>Rotura</th><th>Ampliación</th>
+                  <th>F. Solicitud</th><th>Pedido DALI / SAP</th>
+                  <th>Estado</th><th>F. Tramit.</th><th>Proveedor</th>
+                  <th>Observaciones</th>
+                  <th title="Archivos adjuntos" style="width:36px;text-align:center">📎</th>
                   <th></th>
                 </tr>
               </thead>
@@ -575,14 +772,24 @@ tbody tr:last-child{border-bottom:none}
 
       <!-- VIEW: ALERTAS ───────────────────────────────────────────────── -->
       <div id="view-alertas" class="section-hidden">
+
+        <!-- Alertas de Techo de Gastos -->
+        <div id="techo-alertas-card" class="card" style="display:none;margin-bottom:16px;border-left:4px solid #dc3545">
+          <div class="card-header" style="background:#fff5f5">
+            <span class="card-title">📉 Alertas de Techo de Gastos</span>
+            <span id="techo-alertas-mes" style="margin-left:auto;font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+          <div id="techo-alertas-list" style="padding:0 16px 12px"></div>
+        </div>
+
         <div class="card">
           <div class="card-header">
-            <span class="card-title">⚠️ Pedidos sin resolver más de 7 días</span>
+            <span class="card-title">⚠️ Alertas de seguimiento de pedidos</span>
           </div>
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Nº</th><th>Hotel</th><th>Pedido SAP</th><th>Estado</th><th>Proveedor</th><th>Días</th><th></th></tr>
+                <tr><th>Nº</th><th>Hotel</th><th>Pedido DALI / SAP</th><th>Estado</th><th>Proveedor</th><th>F. Tramitación</th><th>Días</th><th>Nivel</th><th></th></tr>
               </thead>
               <tbody id="alertas-tbody"></tbody>
             </table>
@@ -605,7 +812,7 @@ tbody tr:last-child{border-bottom:none}
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Código</th><th>Nombre</th><th>Contacto</th><th>Email</th><th>Teléfono</th><th>Móvil</th><th>Observaciones</th><th></th></tr>
+                <tr><th>Código</th><th>Nombre</th><th>Contactos</th><th>Observaciones</th><th></th></tr>
               </thead>
               <tbody id="proveedores-tbody"></tbody>
             </table>
@@ -650,9 +857,157 @@ tbody tr:last-child{border-bottom:none}
         </div>
       </div>
 
+      <!-- ── Vista: Techo de Gastos (solo admin) ───────────────────────── -->
+      <div id="view-techo" class="section-hidden">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">📉 Techo de Gastos — Mes en curso</span>
+            <span id="techo-mes-label" style="margin-left:auto;font-size:12px;color:var(--text-secondary)"></span>
+          </div>
+          <div id="techo-resumen-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;padding:16px 0"></div>
+          <div id="techo-empty" class="empty-state section-hidden">
+            <div class="icon">✅</div><div>No hay datos de techo este mes</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Vista: Familias de Artículos (solo admin) ─────────────────── -->
+      <div id="view-familias" class="section-hidden">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">🏷️ Familias de Artículos</span>
+            <button class="btn btn-gold btn-sm" onclick="openModalFamilia()">+ Nueva familia</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr><th>#</th><th>Nombre</th><th style="width:120px">Acciones</th></tr></thead>
+              <tbody id="familias-tbody"></tbody>
+            </table>
+          </div>
+          <div id="familias-empty" class="empty-state section-hidden">
+            <div class="icon">🏷️</div><div>No hay familias configuradas</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Vista: Usuarios (solo admin) ──────────────────────────────── -->
+      <div id="view-usuarios" class="section-hidden">
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">👥 Gestión de Usuarios</span>
+            <button class="btn btn-gold btn-sm" onclick="openModalUsuario()">+ Nuevo usuario</button>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Usuario</th>
+                  <th>Nombre</th>
+                  <th>Email</th>
+                  <th>📱 Móvil</th>
+                  <th>Rol</th>
+                  <th>Estado</th>
+                  <th style="width:160px">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="usuarios-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
     </div><!-- /content -->
   </div><!-- /main -->
 </div><!-- /app -->
+
+<!-- ── MODAL USUARIO ─────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-usuario">
+  <div class="modal-box" style="max-width:480px">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modal-usuario-title">Nuevo usuario</h3>
+      <button class="close-btn" onclick="closeModal('modal-usuario')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px;display:grid;gap:14px">
+      <input type="hidden" id="usr-edit-id">
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label class="form-label">Username *</label>
+          <input class="form-control" id="usr-username" placeholder="ej: comprascan7" autocomplete="off">
+        </div>
+        <div>
+          <label class="form-label">Nombre completo *</label>
+          <input class="form-control" id="usr-nombre" placeholder="Nombre Apellido">
+        </div>
+      </div>
+
+      <div>
+        <label class="form-label">Email</label>
+        <input class="form-control" id="usr-email" type="email" placeholder="usuario@princess.es">
+      </div>
+
+      <div>
+        <label class="form-label">📱 Móvil / WhatsApp</label>
+        <input class="form-control" id="usr-movil" type="tel" placeholder="+34 600 000 000"
+               style="padding-left:10px">
+        <div style="font-size:11px;color:#888;margin-top:3px">
+          Se usará para recibir avisos de alertas por WhatsApp.
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+        <div>
+          <label class="form-label">Rol</label>
+          <select class="form-control" id="usr-rol">
+            <option value="user">Usuario</option>
+            <option value="admin">Administrador</option>
+          </select>
+        </div>
+        <div>
+          <label class="form-label" id="usr-pwd-label">Contraseña *</label>
+          <div style="position:relative">
+            <input class="form-control" id="usr-password" type="password" placeholder="Contraseña" autocomplete="new-password" style="padding-right:36px">
+            <button type="button" onclick="togglePwdVisibility()" title="Mostrar/ocultar"
+              style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;color:#888">👁</button>
+          </div>
+        </div>
+      </div>
+
+      <div id="usr-activo-row" style="display:none">
+        <label class="checkbox-item">
+          <input type="checkbox" id="usr-activo"> Usuario activo
+        </label>
+      </div>
+
+      <div id="usr-pwd-hint" style="font-size:11px;color:#888;display:none">
+        Deja en blanco para no cambiar la contraseña.
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-usuario')">Cancelar</button>
+      <button class="btn btn-gold" onclick="saveUsuario()">Guardar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL FAMILIA ─────────────────────────────────────────────────────── -->
+<div class="modal-overlay" id="modal-familia">
+  <div class="modal-box" style="max-width:420px">
+    <div class="modal-header">
+      <h3 class="modal-title" id="modal-familia-title">Nueva familia</h3>
+      <button class="close-btn" onclick="closeModal('modal-familia')">✕</button>
+    </div>
+    <div class="modal-body" style="padding:20px">
+      <input type="hidden" id="familia-edit-id">
+      <label style="font-size:12px;font-weight:600;color:var(--navy2);display:block;margin-bottom:4px">Nombre *</label>
+      <input class="form-control" id="familia-nombre-input" placeholder="Ej: Limpieza, Menaje, Electrónica…" style="margin-bottom:16px">
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-familia')">Cancelar</button>
+      <button class="btn btn-gold" onclick="saveFamilia()">Guardar</button>
+    </div>
+  </div>
+</div>
 
 <!-- ── MODAL PEDIDO ─────────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-pedido">
@@ -678,39 +1033,120 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-group">
           <label class="form-label">Fecha solicitud</label>
           <input type="date" class="form-control" id="p-f-solicitud">
+          <label class="adj-fecha-btn" id="lbl-solicitud-doc" title="Adjuntar documento o correo a la solicitud" style="margin-top:6px">
+            <input type="file" accept=".xlsx,.xls,.pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'solicitud_doc')">
+            📎 Adjuntar doc. / correo
+          </label>
+          <div id="adj-solicitud-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group">
           <label class="form-label">Fecha envío Vº Bº</label>
           <input type="date" class="form-control" id="p-f-vb">
+          <label class="adj-fecha-btn" id="lbl-vb-eml" title="Adjuntar correo de envío Vº Bº" style="margin-top:6px">
+            <input type="file" accept=".eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'vb_eml')">
+            ✉️ Adjuntar correo
+          </label>
+          <div id="adj-vb-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group">
           <label class="form-label">Fecha tramitación</label>
           <input type="date" class="form-control" id="p-f-tramit">
+          <label class="adj-fecha-btn" id="lbl-tramit-eml" title="Adjuntar correo de tramitación" style="margin-top:6px">
+            <input type="file" accept=".eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'tramit_eml')">
+            ✉️ Adjuntar correo
+          </label>
+          <div id="adj-tramit-list" class="adj-fecha-list"></div>
         </div>
 
-        <!-- Referencias SAP -->
-        <div class="form-section">Referencias SAP</div>
+        <!-- Referencias DALI / SAP -->
+        <div class="form-section">Referencias DALI / SAP</div>
         <div class="form-group">
-          <label class="form-label">Pedido Nº (SAP)</label>
+          <label class="form-label">Nº Pedido (DALI / SAP)</label>
           <input class="form-control monospace" id="p-pedido-num" placeholder="Alfanumérico">
+          <label class="adj-fecha-btn" id="lbl-pedido-doc" title="Adjuntar documento o correo al pedido DALI/SAP" style="margin-top:6px">
+            <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'pedido_doc')">
+            📎 Adjuntar doc. / correo
+          </label>
+          <div id="adj-pedido-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group">
           <label class="form-label">Nº Presupuesto</label>
           <input class="form-control monospace" id="p-presup">
+          <label class="adj-fecha-btn" id="lbl-presup-doc" title="Adjuntar documento o correo al presupuesto" style="margin-top:6px">
+            <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
+                   onchange="subirAdjuntos(this,'presupuesto_doc')">
+            📎 Adjuntar doc. / correo
+          </label>
+          <div id="adj-presupuesto-list" class="adj-fecha-list"></div>
         </div>
-        <div class="form-group">
+
+        <!-- Nº Entrada Albarán con checkboxes y lista dinámica -->
+        <div class="form-group full" id="albaran-section">
           <label class="form-label">Nº Entrada Albarán</label>
-          <input class="form-control monospace" id="p-albaran">
+          <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;flex-wrap:wrap">
+            <label class="checkbox-item" style="font-size:13px;font-weight:500;color:var(--navy2)">
+              <input type="checkbox" id="chk-parcial" onchange="onAlbaranCheckChange('parcial')">
+              <span style="margin-left:4px">SERVIDO PARCIAL</span>
+            </label>
+            <label class="checkbox-item" style="font-size:13px;font-weight:500;color:var(--navy2)">
+              <input type="checkbox" id="chk-total" onchange="onAlbaranCheckChange('total')">
+              <span style="margin-left:4px">SERVIDO TOTAL</span>
+            </label>
+            <label class="checkbox-item" style="font-size:13px;font-weight:500;color:#991b1b">
+              <input type="checkbox" id="chk-cancelado" onchange="onAlbaranCheckChange('cancelado')">
+              <span style="margin-left:4px">CANCELADO</span>
+            </label>
+          </div>
+          <!-- Lista dinámica de entradas de albarán -->
+          <div id="albaran-list" style="display:flex;flex-direction:column;gap:6px"></div>
+          <!-- Botón añadir (sólo visible mientras PARCIAL activo) -->
+          <button type="button" id="btn-add-albaran" onclick="addAlbaranInput()"
+            style="display:none;margin-top:8px;padding:5px 14px;font-size:12px;font-weight:600;
+                   border:1.5px dashed var(--navy2);border-radius:8px;background:transparent;
+                   color:var(--navy2);cursor:pointer;transition:background .15s"
+            onmouseover="this.style.background='rgba(99,102,241,.07)'"
+            onmouseout="this.style.background='transparent'">
+            ＋ Añadir nº entrada
+          </button>
+        </div>
+
+        <!-- Mini-modal: introducir Nº Entrada Albarán al marcar SERVIDO TOTAL -->
+        <div id="modal-albaran-total" style="display:none;position:fixed;inset:0;z-index:3000;
+             background:rgba(0,0,0,.45);align-items:center;justify-content:center">
+          <div style="background:#fff;border-radius:14px;padding:28px 32px;min-width:340px;max-width:420px;
+                      box-shadow:0 8px 32px rgba(0,0,0,.18);position:relative">
+            <div style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:16px">
+              Nº Entrada Albarán
+            </div>
+            <p style="font-size:13px;color:#555;margin-bottom:14px">
+              Introduce el número de entrada de albarán para registrar el servido total.
+            </p>
+            <input class="form-control monospace" id="albaran-total-input"
+                   placeholder="Nº Entrada Albarán"
+                   style="margin-bottom:18px;font-size:14px">
+            <div style="display:flex;gap:10px;justify-content:flex-end">
+              <button type="button" onclick="cerrarModalAlbaranTotal(false)"
+                style="padding:8px 18px;border:1.5px solid #ccc;border-radius:8px;
+                       background:#fff;font-size:13px;cursor:pointer">Omitir</button>
+              <button type="button" onclick="cerrarModalAlbaranTotal(true)"
+                style="padding:8px 18px;border:none;border-radius:8px;background:var(--gold,#b8860b);
+                       color:#fff;font-size:13px;font-weight:600;cursor:pointer">Guardar</button>
+            </div>
+          </div>
         </div>
 
         <!-- Estado -->
         <div class="form-section">Estado</div>
         <div class="form-group full">
           <label class="form-label">Estado del pedido *</label>
-          <select class="form-control" id="p-estado"></select>
+          <select class="form-control" id="p-estado" onchange="onEstadoChange()"></select>
         </div>
         <div class="form-group full">
-          <label class="form-label">Nota (para historial, opcional)</label>
+          <label class="form-label" id="p-nota-label">Nota (para historial, opcional)</label>
           <input class="form-control" id="p-nota" placeholder="Motivo del cambio de estado…">
         </div>
 
@@ -722,7 +1158,7 @@ tbody tr:last-child{border-bottom:none}
             <input class="form-control" id="p-proveedor-input" placeholder="Escribir para buscar proveedor…"
                    autocomplete="off" oninput="buscarProveedor(this.value)" onfocus="buscarProveedor(this.value)">
             <input type="hidden" id="p-proveedor">
-            <div id="prov-dropdown" style="display:none;position:absolute;z-index:9999;width:100%;background:var(--card);border:1px solid var(--border);border-radius:8px;box-shadow:0 4px 16px rgba(0,0,0,.15);max-height:220px;overflow-y:auto;top:calc(100% + 4px)"></div>
+            <div id="prov-dropdown" style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:99999;background:#fff;border:1.5px solid #c7d2fe;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.18),0 2px 8px rgba(99,102,241,.08);max-height:240px;overflow-y:auto;padding:4px 0"></div>
           </div>
         </div>
 
@@ -737,32 +1173,37 @@ tbody tr:last-child{border-bottom:none}
           </div>
         </div>
 
+        <!-- Techo de Gastos -->
+        <div class="form-section">Techo de gastos</div>
+        <div class="form-group full">
+          <div style="background:#f8f4e8;border:1.5px solid #e8d87a;border-radius:10px;padding:14px 16px">
+            <label class="checkbox-item" style="font-weight:600;margin-bottom:12px">
+              <input type="checkbox" id="p-sujeto-techo" onchange="onSujetoTechoChange()">
+              Este pedido computa para el techo de gasto mensual
+            </label>
+            <div id="techo-fields" style="display:none;margin-top:10px;display:none">
+              <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+                <div>
+                  <label class="form-label">Familia de artículos *</label>
+                  <select class="form-control" id="p-familia">
+                    <option value="">— Seleccionar familia —</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="form-label">Importe (€) *</label>
+                  <input class="form-control" type="number" id="p-importe" min="0" step="0.01" placeholder="0.00" oninput="checkTechoPreview()">
+                </div>
+              </div>
+              <div id="techo-preview" style="margin-top:10px;display:none"></div>
+            </div>
+          </div>
+        </div>
+
         <!-- Observaciones -->
-        <div class="form-section">Observaciones</div>
+        <div class="form-section">Observaciones del pedido</div>
         <div class="form-group full">
           <textarea class="form-control" id="p-observaciones" rows="3" placeholder="Texto libre…" style="resize:vertical"></textarea>
-        </div>
-
-        <!-- Adjuntos PDFs Presupuesto -->
-        <div class="form-section">PDFs Presupuesto</div>
-        <div class="form-group full" id="adj-presupuesto-wrap">
-          <div id="adj-presupuesto-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
-          <label class="adj-upload-btn" id="lbl-presupuesto-pdf" title="Subir PDF de presupuesto">
-            <input type="file" accept="application/pdf" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'presupuesto_pdf')">
-            ＋ Adjuntar PDF de presupuesto
-          </label>
-        </div>
-
-        <!-- Adjuntos PDFs Pedido -->
-        <div class="form-section">PDFs Pedido</div>
-        <div class="form-group full" id="adj-pedido-wrap">
-          <div id="adj-pedido-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px"></div>
-          <label class="adj-upload-btn" id="lbl-pedido-pdf" title="Subir PDF de pedido">
-            <input type="file" accept="application/pdf" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'pedido_pdf')">
-            ＋ Adjuntar PDF de pedido
-          </label>
+          <div style="font-size:.78rem;color:var(--text-secondary);margin-top:3px">Observaciones internas de este pedido — independientes de las observaciones del proveedor.</div>
         </div>
 
         <!-- Imágenes de artículos -->
@@ -825,37 +1266,49 @@ tbody tr:last-child{border-bottom:none}
 
 <!-- ── MODAL PROVEEDOR ─────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-proveedor">
-  <div class="modal" style="max-width:520px">
+  <div class="modal" style="max-width:780px">
     <div class="modal-header">
       <div class="modal-title" id="modal-prov-title">Editar proveedor</div>
       <button class="close-btn" onclick="closeModal('modal-proveedor')">✕</button>
     </div>
     <div class="modal-body">
+      <!-- Modo edición: nombre como texto fijo para no-admin -->
       <div class="form-group" id="pv-nombre-group" style="margin-bottom:12px">
         <label class="form-label" style="font-weight:700;color:var(--text-secondary)">Proveedor</label>
         <div id="pv-nombre-display" style="font-size:1rem;font-weight:600;padding:6px 0;color:var(--text)"></div>
       </div>
-      <div class="form-grid" style="grid-template-columns:1fr 1fr">
-        <div class="form-group">
-          <label class="form-label">Persona de contacto</label>
-          <input class="form-control" id="pv-contacto">
+      <!-- Modo creación / admin: campos nombre y código editables -->
+      <div class="form-grid" id="pv-create-fields" style="display:none;grid-template-columns:1fr 1fr;margin-bottom:4px">
+        <div class="form-group" style="grid-column:1/-1">
+          <label class="form-label">Nombre del proveedor <span style="color:#e74c3c">*</span></label>
+          <input class="form-control" id="pv-nombre-input" placeholder="Nombre del proveedor…">
         </div>
         <div class="form-group">
-          <label class="form-label">Email</label>
-          <input class="form-control" id="pv-email" type="email">
+          <label class="form-label">Código SAP <span style="color:#e74c3c">*</span></label>
+          <input class="form-control" id="pv-codigo-input" placeholder="Código SAP…">
         </div>
-        <div class="form-group">
-          <label class="form-label">Teléfono</label>
-          <input class="form-control" id="pv-tel">
-        </div>
-        <div class="form-group">
-          <label class="form-label">Móvil</label>
-          <input class="form-control" id="pv-movil">
-        </div>
+        <div class="form-group"><!-- spacer --></div>
       </div>
-      <div class="form-group">
-        <label class="form-label">Observaciones</label>
-        <textarea class="form-control" id="pv-obs" rows="3" style="resize:vertical"></textarea>
+
+      <!-- ── CONTACTOS MÚLTIPLES ──────────────────────────────────── -->
+      <div style="margin:14px 0 6px 0;display:flex;align-items:center;gap:10px">
+        <label class="form-label" style="margin:0;font-weight:700">Contactos</label>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="pvAddContacto()"
+                style="padding:2px 10px;font-size:.82rem">+ Añadir contacto</button>
+      </div>
+      <div id="pv-contactos-list" style="display:flex;flex-direction:column;gap:10px;max-height:420px;overflow-y:auto;padding-right:4px"></div>
+      <div id="pv-contactos-empty" style="color:var(--text-secondary);font-size:.85rem;padding:8px 0 4px">
+        Sin contactos. Pulsa "+ Añadir contacto" para incluir personas de contacto, teléfonos, móvil/WhatsApp o correos. El primer contacto se marcará como ★ principal (usado para alertas automáticas).
+      </div>
+
+      <!-- Observaciones -->
+      <div class="form-group" style="margin-top:14px">
+        <label class="form-label">Observaciones del proveedor</label>
+        <textarea class="form-control" id="pv-obs" rows="3" style="resize:vertical"
+                  placeholder="Notas internas sobre este proveedor…"></textarea>
+        <div style="font-size:.78rem;color:var(--text-secondary);margin-top:3px">
+          Estas observaciones son del proveedor y no tienen relación con las observaciones de los pedidos.
+        </div>
       </div>
     </div>
     <div class="modal-footer">
@@ -863,7 +1316,7 @@ tbody tr:last-child{border-bottom:none}
               id="btn-borrar-proveedor" onclick="borrarProveedor()">🗑 Borrar</button>
       <div style="flex:1"></div>
       <button class="btn btn-ghost" onclick="closeModal('modal-proveedor')">Cancelar</button>
-      <button class="btn btn-gold" onclick="saveProveedor()">Guardar cambios</button>
+      <button class="btn btn-gold" id="btn-save-proveedor" onclick="saveProveedor()">Guardar cambios</button>
     </div>
   </div>
 </div>
@@ -894,8 +1347,83 @@ tbody tr:last-child{border-bottom:none}
       <div id="prov-import-result" style="display:none;margin-top:12px;padding:10px 14px;border-radius:8px;font-size:.9rem"></div>
     </div>
     <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('modal-import-prov')">Cancelar</button>
-      <button class="btn btn-gold" id="btn-importar-prov" onclick="doImportProv()" disabled style="opacity:.5">Importar</button>
+      <button class="btn btn-ghost" id="btn-cancelar-import-prov" onclick="closeModal('modal-import-prov')">Cancelar</button>
+      <button class="btn btn-gold" id="btn-importar-prov" onclick="onClickImportarProv()" disabled style="opacity:.5">Importar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL ADMIN PROVEEDORES: ¿Ampliar o desde cero? (paso 2 admin)
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-import-prov-modo" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1100;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:36px;width:480px;max-width:95vw;box-shadow:0 12px 48px rgba(0,0,0,.3);">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div style="font-size:2rem;">🏢</div>
+      <div>
+        <div style="font-weight:700;font-size:1.1rem;color:#0f2044;">Modo de importación</div>
+        <div style="color:#888;font-size:.85rem;">Selecciona cómo deseas proceder con los proveedores</div>
+      </div>
+    </div>
+
+    <div style="display:grid;gap:12px;margin-bottom:24px;">
+      <!-- Opción A: Ampliar -->
+      <div id="opt-prov-ampliar"
+           onclick="selectImportProvMode('ampliar')"
+           style="border:2px solid #dee2e6;border-radius:10px;padding:16px 20px;cursor:pointer;transition:.15s;display:flex;align-items:flex-start;gap:14px;">
+        <div style="font-size:1.6rem;margin-top:2px;">➕</div>
+        <div>
+          <div style="font-weight:600;color:#0f2044;margin-bottom:4px;">Ampliar información existente</div>
+          <div style="font-size:.85rem;color:#666;">Los nuevos proveedores del Excel se añadirán al sistema. Los existentes (por código) actualizarán sus datos de contacto.</div>
+        </div>
+      </div>
+      <!-- Opción B: Desde cero -->
+      <div id="opt-prov-reset"
+           onclick="selectImportProvMode('reset')"
+           style="border:2px solid #dee2e6;border-radius:10px;padding:16px 20px;cursor:pointer;transition:.15s;display:flex;align-items:flex-start;gap:14px;">
+        <div style="font-size:1.6rem;margin-top:2px;">🗑️</div>
+        <div>
+          <div style="font-weight:600;color:#8B0000;margin-bottom:4px;">Eliminar todo y empezar desde cero</div>
+          <div style="font-size:.85rem;color:#666;">Se borrarán <strong>todos</strong> los proveedores actuales del sistema y se importarán los del Excel.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn btn-ghost btn-sm" onclick="closeModalImportProvModo()">Cancelar</button>
+      <button class="btn btn-gold" id="btn-confirmar-prov-modo" onclick="confirmarProvModo()" disabled style="opacity:.5">Continuar →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL CONFIRMACIÓN DESTRUCCIÓN PROVEEDORES (paso 3 reset)
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-import-prov-reset-confirm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1200;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:36px;width:480px;max-width:95vw;box-shadow:0 12px 48px rgba(139,0,0,.4);border-top:5px solid #8B0000;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div style="font-size:2.2rem;">⚠️</div>
+      <div>
+        <div style="font-weight:700;font-size:1.1rem;color:#8B0000;">ATENCIÓN: Operación irreversible</div>
+        <div style="color:#888;font-size:.85rem;">Esta acción no se puede deshacer</div>
+      </div>
+    </div>
+
+    <div style="background:#fff3f3;border:1px solid #f5c6cb;border-radius:8px;padding:16px;margin-bottom:20px;font-size:.9rem;color:#721c24;line-height:1.6;">
+      Se procederá a la <strong>eliminación definitiva</strong> de:
+      <ul style="margin:8px 0 0 18px;padding:0;">
+        <li>Todos los proveedores registrados en el sistema</li>
+        <li>Todos sus datos de contacto asociados</li>
+      </ul>
+      <div style="margin-top:12px;font-weight:700;">Los pedidos que referencien esos proveedores podrían quedar sin proveedor asignado.</div>
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+      <button class="btn btn-ghost btn-sm" onclick="closeModalProvResetConfirm()" style="margin-right:auto;">← Cancelar y volver</button>
+      <button class="btn" onclick="doImportProvReset()"
+              style="background:#8B0000;color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;">
+        🗑️ Eliminar todo e importar
+      </button>
     </div>
   </div>
 </div>
@@ -908,8 +1436,8 @@ tbody tr:last-child{border-bottom:none}
    Estado global
 ═══════════════════════════════════════════════════════════════════════════ */
 let G = {
-  user: null, rol: null, nombre: null,
-  maestros: { hoteles:[], departamentos:[], proveedores:[], estados:[] },
+  user: null, rol: null, nombre: null, userId: null,
+  maestros: { hoteles:[], departamentos:[], proveedores:[], estados:[], familias:[] },
   pedidos: [], total: 0, page: 1, pages: 1,
   editingPedidoId: null,
   editingProveedorId: null,
@@ -928,7 +1456,7 @@ async function doLogin() {
   try {
     const r = await api('/api/login', 'POST', {username:u, password:p});
     if (r.error) { err.textContent=r.error; err.style.display='block'; return; }
-    G.user = r.nombre; G.nombre = r.nombre; G.rol = r.rol;
+    G.user = r.nombre; G.nombre = r.nombre; G.rol = r.rol; G.userId = r.id;
     document.getElementById('sb-nombre').textContent = r.nombre;
     document.getElementById('sb-rol').textContent    = r.rol === 'admin' ? 'Administrador' : 'Usuario';
     document.getElementById('sb-avatar').textContent = r.nombre.charAt(0).toUpperCase();
@@ -941,6 +1469,7 @@ async function doLogin() {
     });
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
+    // loadStats (llamado por showView) ya actualiza badge y card de alertas del dashboard.
   } catch(e) { err.textContent='Error de conexión'; err.style.display='block'; }
 }
 
@@ -952,6 +1481,19 @@ async function doLogout() {
 document.getElementById('login-pass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });
 document.getElementById('login-user').addEventListener('keydown', e => { if(e.key==='Enter') document.getElementById('login-pass').focus(); });
 
+// ── Auto-estado: al introducir FECHA DE SOLICITUD → PENDIENTE COTIZACIÓN ──
+document.getElementById('p-f-solicitud').addEventListener('change', function() {
+  const estadoSelect = document.getElementById('p-estado');
+  const estadoActual = estadoSelect.value;
+  const ESTADOS_SIN_TRAMITAR = [
+    'PENDIENTE FIRMA DIRECCION COMPRAS',
+    'PENDIENTE DE FIRMA DIRECCION HOTEL',
+  ];
+  if (this.value && ESTADOS_SIN_TRAMITAR.includes(estadoActual)) {
+    estadoSelect.value = 'PENDIENTE COTIZACIÓN';
+  }
+});
+
 /* ═══════════════════════════════════════════════════════════════════════════
    API helper
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -961,6 +1503,86 @@ async function api(url, method='GET', body=null) {
   const r = await fetch(url, opts);
   return r.json();
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Restablecimiento de contraseña
+═══════════════════════════════════════════════════════════════════════════ */
+let _resetToken = null;
+
+function mostrarFormReset(e) {
+  if (e) e.preventDefault();
+  document.getElementById('modal-reset').style.display = 'flex';
+  document.getElementById('reset-paso1').style.display = '';
+  document.getElementById('reset-paso2').style.display = 'none';
+  document.getElementById('reset-paso3').style.display = 'none';
+  document.getElementById('reset-paso4').style.display = 'none';
+  document.getElementById('reset-usuario').value = '';
+  document.getElementById('reset-error1').style.display = 'none';
+}
+
+function cerrarModalReset() {
+  document.getElementById('modal-reset').style.display = 'none';
+  if (_resetToken) {
+    history.replaceState(null, '', location.pathname);
+    _resetToken = null;
+  }
+}
+
+async function enviarSolicitudReset() {
+  const usuario = document.getElementById('reset-usuario').value.trim();
+  const errEl   = document.getElementById('reset-error1');
+  errEl.style.display = 'none';
+  if (!usuario) { errEl.textContent = 'Introduce tu usuario o email'; errEl.style.display = 'block'; return; }
+  try {
+    const r = await api('/api/password-reset/solicitar', 'POST', { usuario });
+    document.getElementById('reset-paso1').style.display = 'none';
+    document.getElementById('reset-paso2').style.display = '';
+  } catch(err) {
+    errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+    errEl.style.display = 'block';
+  }
+}
+
+async function guardarNuevaPassword() {
+  const nueva    = document.getElementById('reset-nueva').value;
+  const confirma = document.getElementById('reset-confirma').value;
+  const errEl    = document.getElementById('reset-error3');
+  errEl.style.display = 'none';
+  if (!nueva || nueva.length < 6) { errEl.textContent = 'La contraseña debe tener al menos 6 caracteres.'; errEl.style.display = 'block'; return; }
+  if (nueva !== confirma)          { errEl.textContent = 'Las contraseñas no coinciden.'; errEl.style.display = 'block'; return; }
+  try {
+    const r = await api('/api/password-reset/cambiar', 'POST', { token: _resetToken, nueva_password: nueva });
+    if (r.error) { errEl.textContent = r.error; errEl.style.display = 'block'; return; }
+    document.getElementById('reset-paso3').style.display = 'none';
+    document.getElementById('reset-paso4').style.display = '';
+  } catch(err) {
+    errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
+    errEl.style.display = 'block';
+  }
+}
+
+// Comprobar si hay token de reset en la URL al cargar la página
+window.addEventListener('DOMContentLoaded', async function() {
+  const params = new URLSearchParams(location.search);
+  const token  = params.get('reset_token');
+  if (!token) return;
+  _resetToken = token;
+  try {
+    const r = await api('/api/password-reset/validar/' + token, 'GET');
+    if (r.valido) {
+      document.getElementById('reset-bienvenido').textContent =
+        'Hola ' + r.nombre + ', elige tu nueva contraseña.';
+      document.getElementById('modal-reset').style.display = 'flex';
+      document.getElementById('reset-paso1').style.display = 'none';
+      document.getElementById('reset-paso3').style.display = '';
+    } else {
+      alert('El enlace de restablecimiento no es válido o ha caducado. Solicita uno nuevo.');
+      history.replaceState(null, '', location.pathname);
+    }
+  } catch(err) {
+    history.replaceState(null, '', location.pathname);
+  }
+});
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Toast
@@ -984,7 +1606,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -995,16 +1617,19 @@ function showView(view, el) {
 
   if (view==='dashboard')   loadStats();
   if (view==='pedidos')     loadPedidos();
-  if (view==='alertas')     loadAlertas();
-  if (view==='proveedores') loadProveedores();
+  if (view==='alertas')     loadAlertas(); loadTechoAlertas();
+  if (view==='proveedores') { loadProveedores(); _refreshProvAdminControls(); }
   if (view==='eliminados')  loadEliminados();
+  if (view==='techo')       loadTecho();
+  if (view==='familias')    loadFamilias();
+  if (view==='usuarios')    loadUsuarios();
 }
 
 function refreshCurrentView() {
   const view = G.currentView || 'dashboard';
   if (view==='dashboard')   { loadStats(); }
   if (view==='pedidos')     loadPedidos();
-  if (view==='alertas')     loadAlertas();
+  if (view==='alertas')     loadAlertas(); loadTechoAlertas();
   if (view==='proveedores') loadProveedores();
   if (view==='eliminados')  loadEliminados();
 }
@@ -1029,6 +1654,14 @@ async function loadMaestros() {
 
   // Poblar selects del modal pedido
   poblarSelectHoteles(); poblarSelectDeptos(); poblarSelectEstados(); poblarSelectProveedores();
+  poblarSelectFamilias();
+}
+
+function poblarSelectFamilias() {
+  const s = document.getElementById('p-familia');
+  if (!s) return;
+  s.innerHTML = '<option value="">— Seleccionar familia —</option>';
+  (G.maestros.familias || []).forEach(f => s.innerHTML += `<option value="${f.id}">${f.nombre}</option>`);
 }
 
 function poblarSelectHoteles() {
@@ -1054,20 +1687,38 @@ function poblarSelectProveedores() {
    Dashboard / Stats
 ═══════════════════════════════════════════════════════════════════════════ */
 async function loadStats() {
-  const d = await api('/api/stats');
+  // Cargar stats y techo en paralelo para que el badge y el card del dashboard
+  // siempre reflejen ambas fuentes de alerta, sin depender de la cache.
+  const [d, techo] = await Promise.all([
+    api('/api/stats'),
+    api('/api/techo/resumen').catch(() => null)
+  ]);
+  if (techo) _techoCache = techo;
+
+  const nTecho = _techoCache?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0;
 
   document.getElementById('st-total').textContent    = d.total;
-  document.getElementById('st-alertas').textContent  = d.num_alertas;
+  // Bug fix: el card de alertas del dashboard también suma las alertas de techo
+  document.getElementById('st-alertas').textContent  = d.num_alertas + nTecho;
 
   const envi = d.by_estado.find(e=>e.estado==='ENVIADO AL PROVEEDOR');
   const entr = d.by_estado.find(e=>e.estado==='ENTREGADO');
   document.getElementById('st-enviado').textContent   = envi ? envi.total : 0;
   document.getElementById('st-entregado').textContent = entr ? entr.total : 0;
 
-  // Alerta badge sidebar
+  // Alerta badge sidebar — suma pedidos + alertas de techo (ya siempre actualizado)
   const badge = document.getElementById('sb-alert-count');
-  if (d.num_alertas > 0) { badge.textContent=d.num_alertas; badge.style.display=''; }
+  const totalBadge = d.num_alertas + nTecho;
+  if (totalBadge > 0) { badge.textContent=totalBadge; badge.style.display=''; }
   else { badge.style.display='none'; }
+
+  // Badge techo sidebar
+  const badgeTecho = document.getElementById('sb-techo-count');
+  if (badgeTecho) {
+    const rojos = _techoCache?.hoteles?.filter(h => h.semaforo === 'rojo').length || 0;
+    badgeTecho.style.display = rojos > 0 ? '' : 'none';
+    badgeTecho.textContent   = rojos;
+  }
 
   // Gráfico estados
   const maxE = Math.max(...d.by_estado.map(e=>e.total), 1);
@@ -1129,10 +1780,11 @@ function estadoBadge(estado) {
   const map = {
     'PENDIENTE FIRMA DIRECCION COMPRAS': 'pendiente-compras',
     'PENDIENTE DE FIRMA DIRECCION HOTEL': 'pendiente-hotel',
+    'PENDIENTE COTIZACIÓN': 'pendiente-cotizacion',
     'ENVIADO AL PROVEEDOR': 'enviado',
     'ENTREGA PARCIAL': 'parcial',
     'ENTREGADO': 'entregado',
-    'ANULADO': 'anulado',
+    'CANCELADO': 'cancelado',
   };
   const cls = map[estado] || 'pendiente-compras';
   return `<span class="badge badge-${cls}">${estado}</span>`;
@@ -1144,21 +1796,23 @@ function boolCell(v) {
 
 function renderPedidosTable(pedidos) {
   const tbody = document.getElementById('pedidos-tbody');
-  tbody.innerHTML = pedidos.map(p => `
+  tbody.innerHTML = pedidos.map(p => {
+    const techo = p.sujeto_techo ? `<span title="Techo de gastos: ${p.familia_nombre||'familia'} — ${p.importe!=null?Number(p.importe).toLocaleString('es-ES',{minimumFractionDigits:2})+'€':'sin importe'}" style="display:inline-block;background:#fff3cd;border:1px solid #ffc107;color:#856404;border-radius:4px;font-size:10px;padding:1px 5px;margin-left:4px;font-weight:600">📉 TECHO</span>` : '';
+    return `
     <tr onclick="openPedidoModal(${p.id})">
       <td class="monospace">${p.norden||'—'}</td>
       <td><strong>${p.hotel_codigo||'—'}</strong></td>
       <td>${p.departamento_nombre||'—'}</td>
       <td>${fmtDate(p.fecha_solicitud)}</td>
-      <td class="monospace">${p.pedido_num||'—'}</td>
+      <td class="monospace">${p.pedido_num||'—'}${techo}</td>
       <td>${estadoBadge(p.estado)}</td>
+      <td>${fmtDate(p.fecha_tramitacion)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
-      <td>${boolCell(p.comunicado_ab)}</td>
-      <td>${boolCell(p.comunicado_jefe_dep)}</td>
-      <td>${boolCell(p.parte_rotura)}</td>
-      <td>${boolCell(p.parte_ampliacion)}</td>
+      <td class="comentarios-cell" title="${(p.observaciones||'').replace(/"/g,'&quot;')}">${p.observaciones ? `<span class="comentarios-text">${p.observaciones}</span>` : '<span class="bool-no">—</span>'}</td>
+      <td style="text-align:center">${p.has_adjuntos ? `<span class="adj-indicator" title="Tiene archivos adjuntos">📎</span>` : ''}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openPedidoModal(${p.id})">✏ Editar</button></td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
 }
 
 function renderPagination(page, pages, total) {
@@ -1189,15 +1843,19 @@ function clearFilters() {
 async function openPedidoModal(id=null) {
   G.editingPedidoId = id;
   G.currentPedidoData = null;
+  _estadoSelectorPrevio = null;   // reset rastreador al abrir modal
   clearPedidoForm();
   document.getElementById('modal-pedido-title').textContent = id ? 'Editar pedido' : 'Nuevo pedido';
   document.getElementById('btn-delete-pedido').style.display = (id && G.rol==='admin') ? '' : 'none';
   document.getElementById('p-historial-section').style.display = 'none';
 
   // Limpiar adjuntos
-  renderAdjuntosPdf('presupuesto', []);
-  renderAdjuntosPdf('pedido', []);
+  renderAdjuntosFecha('pedido', []);
+  renderAdjuntosFecha('presupuesto', []);
   renderAdjuntosImg([]);
+  renderAdjuntosFecha('solicitud', []);
+  renderAdjuntosFecha('vb', []);
+  renderAdjuntosFecha('tramit', []);
 
   if (id) {
     const d = await api(`/api/pedidos/${id}`);
@@ -1210,8 +1868,9 @@ async function openPedidoModal(id=null) {
     setVal('p-f-tramit', p.fecha_tramitacion);
     setVal('p-pedido-num', p.pedido_num);
     setVal('p-presup', p.presupuesto_num);
-    setVal('p-albaran', p.entrada_albaran_num);
     setVal('p-estado', p.estado);
+    initAlbaranSection(p.entrada_albaran_num || '', p.estado);
+    onEstadoChange();
     document.getElementById('p-proveedor').value = p.proveedor_id || '';
     document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
     setVal('p-observaciones', p.observaciones);
@@ -1219,6 +1878,15 @@ async function openPedidoModal(id=null) {
     document.getElementById('p-jefe').checked     = !!p.comunicado_jefe_dep;
     document.getElementById('p-rotura').checked   = !!p.parte_rotura;
     document.getElementById('p-ampliacion').checked = !!p.parte_ampliacion;
+
+    // Techo de gastos
+    const sujetoTecho = !!p.sujeto_techo;
+    document.getElementById('p-sujeto-techo').checked = sujetoTecho;
+    document.getElementById('techo-fields').style.display = sujetoTecho ? '' : 'none';
+    if (sujetoTecho) {
+      setVal('p-familia', p.familia_id || '');
+      setVal('p-importe', p.importe != null ? Number(p.importe).toFixed(2) : '');
+    }
 
     // Historial
     if (d.historial && d.historial.length) {
@@ -1246,12 +1914,19 @@ async function openPedidoModal(id=null) {
 async function cargarAdjuntos(pedidoId) {
   const d = await api(`/api/pedidos/${pedidoId}/adjuntos`);
   if (!d.ok) return;
-  const pdfsPresup = d.adjuntos.filter(a => a.tipo === 'presupuesto_pdf');
-  const pdfsPedido = d.adjuntos.filter(a => a.tipo === 'pedido_pdf');
-  const imagenes   = d.adjuntos.filter(a => a.tipo === 'imagen_articulo');
-  renderAdjuntosPdf('presupuesto', pdfsPresup);
-  renderAdjuntosPdf('pedido', pdfsPedido);
+  // Adjuntos de los campos DALI/SAP y Presupuesto
+  const pedidoAdj    = d.adjuntos.filter(a => ['pedido_doc','pedido_pdf','pedido_word','pedido_eml'].includes(a.tipo));
+  const presupAdj    = d.adjuntos.filter(a => ['presupuesto_doc','presupuesto_pdf','presupuesto_word','presupuesto_eml'].includes(a.tipo));
+  const imagenes     = d.adjuntos.filter(a => a.tipo === 'imagen_articulo');
+  const solicitudDoc = d.adjuntos.filter(a => a.tipo === 'solicitud_doc');
+  const vbEml        = d.adjuntos.filter(a => a.tipo === 'vb_eml');
+  const tramitEml    = d.adjuntos.filter(a => a.tipo === 'tramit_eml');
+  renderAdjuntosFecha('pedido', pedidoAdj);
+  renderAdjuntosFecha('presupuesto', presupAdj);
   renderAdjuntosImg(imagenes);
+  renderAdjuntosFecha('solicitud', solicitudDoc);
+  renderAdjuntosFecha('vb', vbEml);
+  renderAdjuntosFecha('tramit', tramitEml);
 }
 
 function renderAdjuntosPdf(prefijo, lista) {
@@ -1275,6 +1950,21 @@ function renderAdjuntosImg(lista) {
            title="${a.nombre}" alt="${a.nombre}">
       <button class="adj-img-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
     </div>`).join('');
+}
+
+function renderAdjuntosFecha(prefijo, lista) {
+  const contenedor = document.getElementById(`adj-${prefijo}-list`);
+  if (!contenedor) return;
+  const iconos = {eml:'✉️',msg:'✉️',xlsx:'📊',xls:'📊',docx:'📝',doc:'📝',pdf:'📄',PDF:'📄'};
+  contenedor.innerHTML = lista.map(a => {
+    const ext = (a.nombre.split('.').pop() || '').toLowerCase();
+    const ico = iconos[ext] || '📎';
+    return `<div class="adj-item" id="adj-item-${a.id}">
+      <span style="font-size:14px">${ico}</span>
+      <a href="/api/adjuntos/${a.id}" target="_blank" title="${a.nombre}">${a.nombre}</a>
+      <button class="adj-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
+    </div>`;
+  }).join('');
 }
 
 async function subirAdjuntos(input, tipo) {
@@ -1340,10 +2030,304 @@ async function borrarAdjunto(adjId) {
   }
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Lógica de Nº Entrada Albarán — checkboxes SERVIDO PARCIAL / TOTAL
+═══════════════════════════════════════════════════════════════════════════ */
+
+// Devuelve todos los valores de albarán actuales (no vacíos) como array
+function getAlbaranValues() {
+  return Array.from(document.querySelectorAll('#albaran-list .albaran-input'))
+    .map(i => i.value.trim())
+    .filter(Boolean);
+}
+
+// Construye el string que se guarda: entradas separadas por " | "
+function getAlbaranCombined() {
+  return getAlbaranValues().join(' | ');
+}
+
+// Renderiza la lista desde un array de strings
+function renderAlbaranList(valores, editable) {
+  const list = document.getElementById('albaran-list');
+  list.innerHTML = '';
+  if (!valores || valores.length === 0) {
+    if (editable) addAlbaranInput();   // mínimo una caja cuando está en modo edición
+    return;
+  }
+  valores.forEach((v, idx) => {
+    const row = _makeAlbaranRow(v, editable, idx);
+    list.appendChild(row);
+  });
+}
+
+function _makeAlbaranRow(valor, editable, idx) {
+  const row = document.createElement('div');
+  row.style.cssText = 'display:flex;align-items:center;gap:6px';
+  const prefix = document.createElement('span');
+  prefix.style.cssText = 'font-size:11px;color:#888;min-width:22px;text-align:right;font-weight:600';
+  prefix.textContent = `${(idx !== undefined ? idx : 0) + 1}.`;
+  const input = document.createElement('input');
+  input.className = 'form-control monospace albaran-input';
+  input.placeholder = 'Nº Entrada Albarán';
+  input.value = valor;
+  input.readOnly = !editable;
+  if (!editable) input.style.background = 'var(--surface2,#f4f5f7)';
+  row.appendChild(prefix);
+  row.appendChild(input);
+  if (editable) {
+    const btnDel = document.createElement('button');
+    btnDel.type = 'button';
+    btnDel.innerHTML = '✕';
+    btnDel.title = 'Eliminar esta entrada';
+    btnDel.style.cssText = 'background:none;border:none;color:#dc3545;cursor:pointer;font-size:14px;padding:2px 6px;flex-shrink:0';
+    btnDel.onclick = () => { row.remove(); reindexAlbaranList(); };
+    row.appendChild(btnDel);
+  }
+  return row;
+}
+
+function reindexAlbaranList() {
+  document.querySelectorAll('#albaran-list > div').forEach((row, idx) => {
+    const prefix = row.querySelector('span');
+    if (prefix) prefix.textContent = `${idx + 1}.`;
+  });
+}
+
+function addAlbaranInput() {
+  const list = document.getElementById('albaran-list');
+  const idx = list.children.length;
+  const row = _makeAlbaranRow('', true, idx);
+  list.appendChild(row);
+  const input = row.querySelector('input');
+  if (input) input.focus();
+}
+
+// Maneja el cambio en cualquiera de los tres checkboxes (parcial / total / cancelado)
+function onAlbaranCheckChange(cual) {
+  const chkParcial   = document.getElementById('chk-parcial');
+  const chkTotal     = document.getElementById('chk-total');
+  const chkCancelado = document.getElementById('chk-cancelado');
+  const btnAdd       = document.getElementById('btn-add-albaran');
+  const estadoSel    = document.getElementById('p-estado');
+
+  if (cual === 'parcial') {
+    if (chkParcial.checked) {
+      chkTotal.checked = false;
+      chkCancelado.checked = false;
+      if (estadoSel) estadoSel.value = 'ENTREGA PARCIAL';
+      const vals = getAlbaranValues();
+      renderAlbaranList(vals.length ? vals : [], true);
+      btnAdd.style.display = '';
+      setFormCancelado(false);
+    } else {
+      const vals = getAlbaranValues();
+      renderAlbaranList(vals, false);
+      btnAdd.style.display = 'none';
+    }
+  } else if (cual === 'total') {
+    if (chkTotal.checked) {
+      chkParcial.checked = false;
+      chkCancelado.checked = false;
+      // Si no hay ningún albarán introducido, abrir mini-modal para pedirlo
+      const vals = getAlbaranValues();
+      if (estadoSel) estadoSel.value = 'ENTREGADO';
+      renderAlbaranList(vals, false);
+      btnAdd.style.display = 'none';
+      setFormCancelado(false);
+      if (!vals.length) {
+        abrirModalAlbaranTotal();
+      }
+    } else {
+      const vals = getAlbaranValues();
+      renderAlbaranList(vals, false);
+      btnAdd.style.display = 'none';
+    }
+  } else if (cual === 'cancelado') {
+    if (chkCancelado.checked) {
+      chkParcial.checked = false;
+      chkTotal.checked = false;
+      if (estadoSel) estadoSel.value = 'CANCELADO';
+      const vals = getAlbaranValues();
+      renderAlbaranList(vals, false);
+      btnAdd.style.display = 'none';
+      setFormCancelado(true);
+    } else {
+      setFormCancelado(false);
+    }
+  }
+}
+
+// Bloquea / desbloquea todos los controles editables del modal de pedido
+function setFormCancelado(bloqueado) {
+  // El selector de estado permanece SIEMPRE habilitado para poder cambiar desde CANCELADO
+  const estadoSel = document.getElementById('p-estado');
+  if (estadoSel) { estadoSel.disabled = false; estadoSel.style.opacity = ''; }
+  _setFormCanceladoSilent(bloqueado);
+  if (!bloqueado) onEstadoChange();
+}
+
+// Mini-modal albarán total
+function abrirModalAlbaranTotal() {
+  const modal = document.getElementById('modal-albaran-total');
+  const input = document.getElementById('albaran-total-input');
+  input.value = '';
+  modal.style.display = 'flex';
+  setTimeout(() => input.focus(), 80);
+}
+
+function cerrarModalAlbaranTotal(guardar) {
+  const modal = document.getElementById('modal-albaran-total');
+  const input = document.getElementById('albaran-total-input');
+  modal.style.display = 'none';
+  if (guardar && input.value.trim()) {
+    // Añadir el valor introducido a la lista de albarán (en modo lectura)
+    const list = document.getElementById('albaran-list');
+    list.innerHTML = '';
+    const row = _makeAlbaranRow(input.value.trim(), false, 0);
+    list.appendChild(row);
+  }
+}
+
+// Inicializa la sección albarán al abrir el modal (carga datos existentes)
+function initAlbaranSection(albaranStr, estado) {
+  const chkParcial   = document.getElementById('chk-parcial');
+  const chkTotal     = document.getElementById('chk-total');
+  const chkCancelado = document.getElementById('chk-cancelado');
+  const btnAdd       = document.getElementById('btn-add-albaran');
+
+  chkParcial.checked   = false;
+  chkTotal.checked     = false;
+  chkCancelado.checked = false;
+  btnAdd.style.display = 'none';
+
+  // Limpiar banner cancelado si existiera de una carga anterior
+  const banner = document.getElementById('banner-cancelado');
+  if (banner) banner.remove();
+
+  const valores = albaranStr
+    ? albaranStr.split('|').map(s => s.trim()).filter(Boolean)
+    : [];
+
+  if (estado === 'ENTREGA PARCIAL') {
+    chkParcial.checked = true;
+    renderAlbaranList(valores.length ? valores : [], true);
+    btnAdd.style.display = '';
+  } else if (estado === 'ENTREGADO') {
+    chkTotal.checked = true;
+    renderAlbaranList(valores, false);
+  } else if (estado === 'CANCELADO') {
+    chkCancelado.checked = true;
+    renderAlbaranList(valores, false);
+    setFormCancelado(true);
+  } else {
+    renderAlbaranList(valores, false);
+  }
+}
+
+// Controla obligatoriedad de la nota según el estado actual
+// Rastrea el estado que tenía el selector ANTES del último cambio manual
+// Se actualiza cada vez que el usuario toca el selector
+let _estadoSelectorPrevio = null;
+
+function onEstadoChange() {
+  const estadoSel   = document.getElementById('p-estado');
+  const notaLabel   = document.getElementById('p-nota-label');
+  const notaInput   = document.getElementById('p-nota');
+  const estadoNuevo = estadoSel ? estadoSel.value : null;
+
+  // "Era CANCELADO" si:
+  //   a) el pedido guardado en BD tiene estado CANCELADO, O
+  //   b) el selector venía de CANCELADO en esta misma sesión de edición
+  const estadoBD       = G.currentPedidoData ? G.currentPedidoData.estado : null;
+  const erasCancelado  = (estadoBD === 'CANCELADO') || (_estadoSelectorPrevio === 'CANCELADO');
+
+  // Nota es OBLIGATORIA si se está cambiando DESDE CANCELADO a otro estado
+  const notaObligatoria = erasCancelado && estadoNuevo && estadoNuevo !== 'CANCELADO';
+
+  // Sincronizar checkbox de CANCELADO con el selector
+  const chkCancelado = document.getElementById('chk-cancelado');
+  if (chkCancelado) {
+    const marcado = estadoNuevo === 'CANCELADO';
+    if (chkCancelado.checked !== marcado) {
+      chkCancelado.checked = marcado;
+      // Aplicar bloqueo/desbloqueo visual sin recursión (pasamos false para no volver a llamar onEstadoChange)
+      _setFormCanceladoSilent(marcado);
+    }
+  }
+
+  if (notaLabel) {
+    notaLabel.textContent = notaObligatoria
+      ? 'Nota (obligatorio — motivo del cambio desde CANCELADO) *'
+      : 'Nota (para historial, opcional)';
+    notaLabel.style.color = notaObligatoria ? '#991b1b' : '';
+    notaLabel.style.fontWeight = notaObligatoria ? '700' : '';
+  }
+  if (notaInput) {
+    notaInput.placeholder = notaObligatoria
+      ? 'Indica el motivo por el que se reactiva este pedido…'
+      : 'Motivo del cambio de estado…';
+    notaInput.style.borderColor = notaObligatoria ? '#f5c6cb' : '';
+  }
+
+  // Guardar el estado actual como "previo" para el próximo cambio
+  _estadoSelectorPrevio = estadoNuevo;
+}
+
+// Versión silenciosa de setFormCancelado que NO llama a onEstadoChange (evita bucle)
+function _setFormCanceladoSilent(bloqueado) {
+  const CAMPOS_EDIT = [
+    'p-hotel','p-depto','p-f-solicitud','p-f-vb','p-f-tramit',
+    'p-pedido-num','p-presup','p-observaciones','p-proveedor-input',
+    'p-ab','p-jefe','p-rotura','p-ampliacion'
+  ];
+  CAMPOS_EDIT.forEach(id => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.disabled = bloqueado;
+    el.style.opacity = bloqueado ? '0.55' : '';
+  });
+  ['chk-parcial','chk-total'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) { el.disabled = bloqueado; el.style.opacity = bloqueado ? '0.55' : ''; }
+  });
+  const btnAdd = document.getElementById('btn-add-albaran');
+  if (btnAdd) { btnAdd.disabled = bloqueado; btnAdd.style.display = 'none'; }
+  const nota = document.getElementById('p-nota');
+  if (nota) { nota.disabled = false; nota.style.opacity = ''; }
+  // Banner
+  let banner = document.getElementById('banner-cancelado');
+  if (bloqueado) {
+    if (!banner) {
+      banner = document.createElement('div');
+      banner.id = 'banner-cancelado';
+      banner.style.cssText = 'background:#ffd6d6;border:1.5px solid #f5c6cb;border-radius:8px;' +
+        'padding:10px 16px;font-size:13px;font-weight:600;color:#991b1b;margin-bottom:12px;' +
+        'display:flex;align-items:center;gap:8px';
+      banner.innerHTML = '⛔ Pedido CANCELADO — sólo puedes modificar el estado indicando el motivo en Nota.';
+      const albaranSection = document.getElementById('albaran-section');
+      albaranSection.parentNode.insertBefore(banner, albaranSection);
+    }
+  } else {
+    if (banner) banner.remove();
+  }
+}
+
+
 function clearPedidoForm() {
-  ['p-hotel','p-depto','p-pedido-num','p-presup','p-albaran','p-observaciones','p-nota'].forEach(id=>setVal(id,''));
-  ['p-f-solicitud','p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
-  setVal('p-estado', G.maestros.estados[0]||'');
+  ['p-hotel','p-depto','p-pedido-num','p-presup','p-observaciones','p-nota'].forEach(id=>setVal(id,''));
+  ['p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
+  // Resetear checkbox cancelado y desbloquear formulario
+  const chkCanc = document.getElementById('chk-cancelado');
+  if (chkCanc) chkCanc.checked = false;
+  setFormCancelado(false);
+  // Fecha de solicitud: hoy por defecto en pedidos nuevos
+  const hoy = new Date().toISOString().split('T')[0];
+  setVal('p-f-solicitud', hoy);
+  // Estado por defecto: PENDIENTE COTIZACIÓN (o el primero disponible como fallback)
+  const estadoPendiente = G.maestros.estados.find(e => e === 'PENDIENTE COTIZACIÓN') || G.maestros.estados[0] || '';
+  setVal('p-estado', estadoPendiente);
+  // Reset sección albarán
+  initAlbaranSection('', estadoPendiente);
   document.getElementById('p-proveedor').value = '';
   document.getElementById('p-proveedor-input').value = '';
   document.getElementById('prov-dropdown').style.display = 'none';
@@ -1355,6 +2339,35 @@ async function savePedido() {
   const depto = document.getElementById('p-depto').value;
   if (!hotel) { toast('Selecciona un hotel','error'); return; }
 
+  // Validar nota obligatoria si se cambia desde CANCELADO
+  // (tanto si el estado en BD era CANCELADO como si se puso CANCELADO manualmente en esta sesión)
+  const estadoAnteriorSave = G.currentPedidoData ? G.currentPedidoData.estado : null;
+  const estadoNuevoSave    = val('p-estado');
+  const veniaDeCANCELADO   = (estadoAnteriorSave === 'CANCELADO') || (_estadoSelectorPrevio === 'CANCELADO');
+  if (veniaDeCANCELADO && estadoNuevoSave !== 'CANCELADO') {
+    const notaSave = document.getElementById('p-nota').value.trim();
+    if (!notaSave) {
+      document.getElementById('p-nota').focus();
+      document.getElementById('p-nota').style.borderColor = '#dc3545';
+      toast('Debes indicar el motivo del cambio desde estado CANCELADO', 'error');
+      return;
+    }
+  }
+
+  const sujetoTecho = document.getElementById('p-sujeto-techo').checked;
+  const familiaId   = sujetoTecho ? (val('p-familia') || null) : null;
+  const importeVal  = sujetoTecho ? (parseFloat(val('p-importe')) || null) : null;
+
+  // Validación frontend básica de techo
+  if (sujetoTecho) {
+    if (!familiaId) { toast('Selecciona una familia de artículos para el techo de gastos', 'error'); return; }
+    if (!importeVal || importeVal <= 0) { toast('Introduce el importe del pedido (> 0)', 'error'); return; }
+    if (importeVal > 3000) {
+      const ok = confirm(`⚠️ El importe ${importeVal.toLocaleString('es-ES',{minimumFractionDigits:2})} € supera el límite individual de 3.000 €.\n¿Deseas continuar de todas formas?`);
+      if (!ok) return;
+    }
+  }
+
   const body = {
     hotel_id:             hotel,
     departamento_id:      depto || null,
@@ -1363,7 +2376,7 @@ async function savePedido() {
     fecha_tramitacion:    val('p-f-tramit'),
     pedido_num:           val('p-pedido-num'),
     presupuesto_num:      val('p-presup'),
-    entrada_albaran_num:  val('p-albaran'),
+    entrada_albaran_num:  getAlbaranCombined(),
     estado:               val('p-estado'),
     comunicado_ab:        document.getElementById('p-ab').checked,
     comunicado_jefe_dep:  document.getElementById('p-jefe').checked,
@@ -1372,6 +2385,9 @@ async function savePedido() {
     proveedor_id:         val('p-proveedor') || null,
     observaciones:        val('p-observaciones'),
     nota_historial:       val('p-nota'),
+    sujeto_techo:         sujetoTecho,
+    familia_id:           familiaId,
+    importe:              importeVal,
   };
 
   const btn = document.getElementById('btn-save-pedido');
@@ -1383,13 +2399,23 @@ async function savePedido() {
     } else {
       r = await api('/api/pedidos', 'POST', body);
     }
+    if (r.techo_errores && r.techo_errores.length) {
+      const msg = r.techo_errores.join('\n\n');
+      const forzar = confirm(`Se han detectado problemas con el techo de gastos:\n\n${msg}\n\n¿Deseas guardar igualmente?`);
+      if (!forzar) return;
+      // Reintentar sin validación (añadimos flag)
+      body._forzar_techo = true;
+      r = G.editingPedidoId
+        ? await api(`/api/pedidos/${G.editingPedidoId}`, 'PUT', body)
+        : await api('/api/pedidos', 'POST', body);
+    }
     if (r.error) { toast(r.error,'error'); return; }
     if (G.currentView==='pedidos') loadPedidos();
     if (G.currentView==='dashboard') loadStats();
     if (G.currentView==='alertas') loadAlertas();
+    updateAlertBadge();
 
     if (!G.editingPedidoId && r.id) {
-      // Pedido recién creado: reabrir en modo edición para poder adjuntar archivos
       toast('Pedido creado — ya puedes adjuntar archivos', 'success');
       await openPedidoModal(r.id);
     } else {
@@ -1449,16 +2475,38 @@ async function loadAlertas() {
     tbody.innerHTML=''; empty.classList.remove('section-hidden'); return;
   }
   empty.classList.add('section-hidden');
-  tbody.innerHTML = d.alertas.map(p => `
-    <tr class="alert-row">
+
+  // Agrupamos por nivel para el resumen superior
+  const urgentes = d.alertas.filter(p => p.nivel_alerta === 'urgente');
+  const avisos   = d.alertas.filter(p => p.nivel_alerta === 'aviso');
+
+  tbody.innerHTML = d.alertas.map(p => {
+    const esUrgente = p.nivel_alerta === 'urgente';
+    const rowClass  = esUrgente ? 'alert-row alert-row-urgente' : 'alert-row';
+    const nivelBadge = esUrgente
+      ? '<span class="badge-alerta urgente">🔴 URGENTE</span>'
+      : '<span class="badge-alerta aviso">⚠️ AVISO</span>';
+    const diasLabel = `<span class="alert-dias ${esUrgente ? 'urgente' : ''}">${p.dias_tramitacion} días</span>`;
+    const fechaRef = p.estado === 'PENDIENTE COTIZACIÓN' ? p.fecha_solicitud : p.fecha_tramitacion;
+    const fechaLabel = p.estado === 'PENDIENTE COTIZACIÓN'
+      ? `<span title="Fecha de solicitud">${fmtDate(fechaRef)||'—'}</span>`
+      : (fmtDate(fechaRef)||'—');
+    return `
+    <tr class="${rowClass}">
       <td class="monospace">${p.norden||'—'}</td>
       <td><strong>${p.hotel_codigo||'—'}</strong></td>
       <td class="monospace">${p.pedido_num||'—'}</td>
       <td>${estadoBadge(p.estado)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
-      <td class="alert-dias">${calcDias(p.modificado_en)} días</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="openPedidoModal(${p.id})">✏ Editar</button></td>
-    </tr>`).join('');
+      <td class="monospace" style="font-size:12px">${fechaLabel}</td>
+      <td>${diasLabel}</td>
+      <td>${nivelBadge}</td>
+      <td>
+          <button class="btn btn-ghost btn-sm" onclick="openPedidoModal(${p.id})">✏ Editar</button>
+          <button class="btn btn-sm" style="background:#1a3a6b;color:#fff;margin-left:4px" onclick="abrirModalEmailAlerta(${p.id},${p.dias_tramitacion},'${p.nivel_alerta}')">✉ Notificar</button>
+      </td>
+    </tr>`;
+  }).join('');
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1472,6 +2520,15 @@ function debouncedLoadProveedores() {
 
 // Cache de proveedores para el modal de edición (evita el problema con JSON inline en onclick)
 let _provCache = {};
+
+// ── Mostrar/ocultar controles de admin en proveedores ─────────────────────
+function _refreshProvAdminControls() {
+  const isAdmin = G.rol === 'admin';
+  const btnNuevo = document.getElementById('btn-nuevo-proveedor');
+  if (btnNuevo) btnNuevo.style.display = isAdmin ? 'inline-flex' : 'none';
+  const btnImport = document.getElementById('btn-importar-prov-trigger');
+  if (btnImport) btnImport.style.display = isAdmin ? 'inline-flex' : 'none';
+}
 
 async function loadEliminados() {
   const d = await api('/api/pedidos_eliminados');
@@ -1518,52 +2575,209 @@ async function loadProveedores() {
   // Guardar en cache por id para el modal
   _provCache = {};
   d.forEach(p => { _provCache[p.id] = p; });
-  tbody.innerHTML = d.map(p => `
+  tbody.innerHTML = d.map(p => {
+    const contactos = (p.contactos && p.contactos.length)
+      ? p.contactos.map(c => {
+          const parts = [];
+          const star  = c.es_principal ? '<span title="Contacto principal" style="color:var(--gold,#d4a800)">★</span> ' : '';
+          if (c.nombre)   parts.push(`${star}<span style="font-weight:600">${esc(c.nombre)}</span>`);
+          if (c.telefono) parts.push(`<span style="color:var(--text-secondary)">📞 ${esc(c.telefono)}</span>`);
+          if (c.movil)    parts.push(`<span style="color:var(--text-secondary)">📱 ${esc(c.movil)}</span>`);
+          if (c.email)    parts.push(`<a href="mailto:${esc(c.email)}" style="color:var(--gold)">✉ ${esc(c.email)}</a>`);
+          return `<div style="margin-bottom:2px">${parts.join(' · ')}</div>`;
+        }).join('')
+      : '<span style="color:var(--text-secondary)">—</span>';
+    return `
     <tr>
       <td style="color:var(--text-secondary);font-size:.85rem">${p.codigo||'—'}</td>
       <td><strong>${p.nombre}</strong></td>
-      <td>${p.contacto||'—'}</td>
-      <td>${p.email ? `<a href="mailto:${p.email}" style="color:var(--gold)">${p.email}</a>` : '—'}</td>
-      <td>${p.telefono||'—'}</td>
-      <td>${p.movil||'—'}</td>
+      <td style="font-size:.85rem;line-height:1.5">${contactos}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.observaciones||'')}">${p.observaciones||'—'}</td>
       <td>
         <button class="btn btn-ghost btn-sm" onclick="openProveedorModal(${p.id})">✏ Editar</button>
       </td>
-    </tr>`).join('');
+    </tr>`;
+  }).join('');
+}
+
+/* ── Helpers para contactos múltiples ── */
+function pvContactoRow(c = {}, idx) {
+  const esPrincipal = c.es_principal ? true : false;
+  const borderColor = esPrincipal ? 'var(--gold,#d4a800)' : 'var(--border,#e2e8f0)';
+  const starColor   = esPrincipal ? 'var(--gold,#d4a800)' : '#ccc';
+  const starTitle   = esPrincipal ? 'Contacto principal (para alertas automáticas)' : 'Marcar como principal';
+  const badge       = esPrincipal ? `<span style="font-size:.7rem;font-weight:700;background:var(--gold,#d4a800);color:#fff;border-radius:4px;padding:1px 6px;margin-left:6px;vertical-align:middle">PRINCIPAL</span>` : '';
+  return `<div class="pv-contacto-row" data-idx="${idx}" style="background:var(--bg-card,#f8f9fa);border:1px solid ${borderColor};border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <button type="button" onclick="pvSetPrincipal(this)" title="${starTitle}"
+              class="pv-c-principal-btn"
+              style="background:none;border:none;cursor:pointer;font-size:1.3rem;padding:0;line-height:1;color:${starColor};flex-shrink:0"
+              data-principal="${esPrincipal ? '1' : '0'}">★</button>
+      <input class="form-control pv-c-nombre" placeholder="Nombre del contacto" value="${esc(c.nombre||'')}" style="font-size:.9rem;font-weight:500;flex:1">
+      ${badge}
+      <button type="button" onclick="pvRemoveContacto(this)" title="Eliminar contacto"
+              style="background:none;border:none;color:#e74c3c;cursor:pointer;font-size:1.1rem;padding:0 2px;flex-shrink:0;margin-left:auto">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+      <div style="position:relative">
+        <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.8rem;pointer-events:none">📞</span>
+        <input class="form-control pv-c-tel" placeholder="Teléfono fijo" value="${esc(c.telefono||'')}" style="font-size:.88rem;padding-left:28px">
+      </div>
+      <div style="position:relative">
+        <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.8rem;pointer-events:none">📱</span>
+        <input class="form-control pv-c-movil" placeholder="Móvil / WhatsApp" value="${esc(c.movil||'')}" style="font-size:.88rem;padding-left:28px">
+      </div>
+      <div style="position:relative">
+        <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.8rem;pointer-events:none">✉</span>
+        <input class="form-control pv-c-email" placeholder="Email" type="email" value="${esc(c.email||'')}" style="font-size:.88rem;padding-left:28px">
+      </div>
+    </div>
+  </div>`;
+}
+function pvSetPrincipal(btn) {
+  // Quitar estrella y badge de todos
+  document.querySelectorAll('.pv-c-principal-btn').forEach(b => {
+    b.setAttribute('data-principal', '0');
+    b.style.color = '#ccc';
+    b.title = 'Marcar como principal';
+    const row = b.closest('.pv-contacto-row');
+    row.style.borderColor = 'var(--border,#e2e8f0)';
+    const badge = row.querySelector('.pv-principal-badge');
+    if (badge) badge.remove();
+  });
+  // Activar el pulsado
+  btn.setAttribute('data-principal', '1');
+  btn.style.color = 'var(--gold,#d4a800)';
+  btn.title = 'Contacto principal (para alertas automáticas)';
+  const row = btn.closest('.pv-contacto-row');
+  row.style.borderColor = 'var(--gold,#d4a800)';
+  // Insertar badge junto al input de nombre si no existe ya
+  if (!row.querySelector('.pv-principal-badge')) {
+    const nombreInput = row.querySelector('.pv-c-nombre');
+    const badge = document.createElement('span');
+    badge.className = 'pv-principal-badge';
+    badge.style.cssText = 'font-size:.7rem;font-weight:700;background:var(--gold,#d4a800);color:#fff;border-radius:4px;padding:1px 6px;white-space:nowrap';
+    badge.textContent = 'PRINCIPAL';
+    nombreInput.after(badge);
+  }
+}
+function pvAddContacto(c = {}) {
+  const list = document.getElementById('pv-contactos-list');
+  const idx  = list.children.length;
+  // Si es el primer contacto y no viene marcado como principal, marcarlo automáticamente
+  if (idx === 0 && !c.es_principal) c = Object.assign({}, c, {es_principal: true});
+  list.insertAdjacentHTML('beforeend', pvContactoRow(c, idx));
+  document.getElementById('pv-contactos-empty').style.display = 'none';
+}
+function pvRemoveContacto(btn) {
+  btn.closest('.pv-contacto-row').remove();
+  const list = document.getElementById('pv-contactos-list');
+  if (!list.children.length)
+    document.getElementById('pv-contactos-empty').style.display = '';
+}
+function pvGetContactos() {
+  const rows = Array.from(document.querySelectorAll('.pv-contacto-row'));
+  // Si ninguno tiene principal marcado, marcar el primero automáticamente
+  const hayPrincipal = rows.some(r => r.querySelector('.pv-c-principal-btn')?.getAttribute('data-principal') === '1');
+  return rows.map((row, i) => {
+    const btnPrincipal = row.querySelector('.pv-c-principal-btn');
+    const esPrincipal  = btnPrincipal ? (btnPrincipal.getAttribute('data-principal') === '1') : (i === 0 && !hayPrincipal);
+    return {
+      nombre:       row.querySelector('.pv-c-nombre').value.trim(),
+      telefono:     row.querySelector('.pv-c-tel').value.trim(),
+      movil:        row.querySelector('.pv-c-movil').value.trim(),
+      email:        row.querySelector('.pv-c-email').value.trim(),
+      es_principal: esPrincipal,
+    };
+  }).filter(c => c.nombre || c.telefono || c.movil || c.email);
+}
+function pvSetContactos(contactos) {
+  const list = document.getElementById('pv-contactos-list');
+  list.innerHTML = '';
+  (contactos || []).forEach((c, i) => pvAddContacto(c));
+  document.getElementById('pv-contactos-empty').style.display =
+    list.children.length ? 'none' : '';
 }
 
 function openProveedorModal(pid) {
   const p = _provCache[pid];
   if (!p) return;
+  const isAdmin = G.rol === 'admin';
   G.editingProveedorId = p.id;
-  document.getElementById('pv-nombre-display').textContent = p.nombre || '';
-  setVal('pv-contacto', p.contacto||'');
-  setVal('pv-email',    p.email||'');
-  setVal('pv-tel',      p.telefono||'');
-  setVal('pv-movil',    p.movil||'');
+  document.getElementById('modal-prov-title').textContent = 'Editar proveedor';
+  document.getElementById('btn-save-proveedor').textContent = 'Guardar cambios';
+  document.getElementById('btn-borrar-proveedor').style.display = isAdmin ? 'inline-flex' : 'none';
+  if (isAdmin) {
+    document.getElementById('pv-nombre-group').style.display = 'none';
+    document.getElementById('pv-create-fields').style.display = 'grid';
+    setVal('pv-nombre-input', p.nombre||'');
+    setVal('pv-codigo-input', p.codigo||'');
+  } else {
+    document.getElementById('pv-nombre-group').style.display = 'block';
+    document.getElementById('pv-nombre-display').textContent = p.nombre || '';
+    document.getElementById('pv-create-fields').style.display = 'none';
+  }
+  pvSetContactos(p.contactos || []);
   document.getElementById('pv-obs').value = p.observaciones||'';
-  // El botón borrar siempre visible; el servidor comprobará si tiene pedidos
+  openModal('modal-proveedor');
+}
+
+function openNuevoProveedorModal() {
+  G.editingProveedorId = null;
+  document.getElementById('pv-nombre-group').style.display = 'none';
+  document.getElementById('pv-create-fields').style.display = 'grid';
+  document.getElementById('modal-prov-title').textContent = 'Nuevo proveedor';
+  document.getElementById('btn-save-proveedor').textContent = 'Crear proveedor';
+  document.getElementById('btn-borrar-proveedor').style.display = 'none';
+  setVal('pv-nombre-input', '');
+  setVal('pv-codigo-input', '');
+  pvSetContactos([]);
+  document.getElementById('pv-obs').value = '';
   openModal('modal-proveedor');
 }
 
 async function saveProveedor() {
+  const isNew = !G.editingProveedorId;
   const body = {
-    contacto:     val('pv-contacto'),
-    email:        val('pv-email'),
-    telefono:     val('pv-tel'),
-    movil:        val('pv-movil'),
-    observaciones: document.getElementById('pv-obs').value.trim()
+    observaciones: document.getElementById('pv-obs').value.trim(),
+    contactos:     pvGetContactos(),
   };
-  const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'PUT', body);
-  if (r.error) { toast(r.error,'error'); return; }
-  toast('Proveedor actualizado','success');
+
+  if (isNew) {
+    const nombre = val('pv-nombre-input');
+    if (!nombre) { toast('El nombre del proveedor es obligatorio', 'error'); return; }
+    const codigo = val('pv-codigo-input');
+    if (!codigo) { toast('El código SAP es obligatorio', 'error'); return; }
+    body.nombre = nombre;
+    body.codigo = codigo;
+    const r = await api('/api/proveedores', 'POST', body);
+    if (r.error) { toast(r.error, 'error'); return; }
+    toast('Proveedor creado correctamente', 'success');
+  } else {
+    const createFields = document.getElementById('pv-create-fields');
+    if (createFields.style.display !== 'none') {
+      const nombre = val('pv-nombre-input');
+      if (!nombre) { toast('El nombre del proveedor es obligatorio', 'error'); return; }
+      const codigo = val('pv-codigo-input');
+      if (!codigo) { toast('El código SAP es obligatorio', 'error'); return; }
+      body.nombre = nombre;
+      body.codigo = codigo;
+    } else {
+      body.nombre = document.getElementById('pv-nombre-display').textContent.trim();
+    }
+    const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'PUT', body);
+    if (r.error) { toast(r.error, 'error'); return; }
+    toast('Proveedor actualizado', 'success');
+  }
+
   closeModal('modal-proveedor');
   loadProveedores();
 }
 
 async function borrarProveedor() {
-  const nombre = document.getElementById('pv-nombre-display').textContent || 'este proveedor';
+  const pid = G.editingProveedorId;
+  const pCache = _provCache[pid];
+  const nombre = (pCache && pCache.nombre) || document.getElementById('pv-nombre-display').textContent || 'este proveedor';
   if (!confirm(`¿Seguro que deseas eliminar "${nombre}"?\nEsta acción no se puede deshacer.`)) return;
   const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'DELETE');
   if (r.error) { toast(r.error, 'error'); return; }
@@ -1573,19 +2787,32 @@ async function borrarProveedor() {
 }
 
 async function exportarProveedores() {
-  const a = document.createElement('a');
-  a.href = '/api/proveedores/exportar';
-  a.click();
+  const btn = document.getElementById('btn-exportar-prov');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="btn-spinner-dark"></span>Exportando…'; }
+  try {
+    const a = document.createElement('a');
+    a.href = '/api/proveedores/exportar';
+    a.click();
+    await new Promise(r => setTimeout(r, 2000));
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '⬇ Exportar'; }
+  }
 }
 
 let _provFile = null;
+let _provModoSel = null;  // 'ampliar' | 'reset'
+
 function openImportProvModal() {
   _provFile = null;
+  _provModoSel = null;
   document.getElementById('prov-file-name').textContent = '';
   document.getElementById('btn-importar-prov').disabled = true;
   document.getElementById('btn-importar-prov').style.opacity = '.5';
+  document.getElementById('btn-importar-prov').innerHTML = 'Importar';
   document.getElementById('prov-import-result').style.display = 'none';
   document.getElementById('drop-prov').style.borderColor = 'var(--border)';
+  const btnC = document.getElementById('btn-cancelar-import-prov');
+  if (btnC) btnC.textContent = 'Cancelar';
   openModal('modal-import-prov');
 }
 function onFileProvSelected(input) {
@@ -1602,7 +2829,71 @@ function setProvFile(f) {
   document.getElementById('btn-importar-prov').disabled = false;
   document.getElementById('btn-importar-prov').style.opacity = '1';
 }
+
+/* — Click en "Importar" del modal de proveedores — */
+async function onClickImportarProv() {
+  if (!_provFile) return;
+  if (G.rol === 'admin') {
+    _provModoSel = null;
+    document.getElementById('opt-prov-ampliar').style.border = '2px solid #dee2e6';
+    document.getElementById('opt-prov-ampliar').style.background = '';
+    document.getElementById('opt-prov-reset').style.border   = '2px solid #dee2e6';
+    document.getElementById('opt-prov-reset').style.background = '';
+    document.getElementById('btn-confirmar-prov-modo').disabled = true;
+    document.getElementById('btn-confirmar-prov-modo').style.opacity = '.5';
+    closeModal('modal-import-prov');
+    document.getElementById('modal-import-prov-modo').style.display = 'flex';
+  } else {
+    await doImportProv('ampliar');
+  }
+}
+
+function closeModalImportProvModo() {
+  document.getElementById('modal-import-prov-modo').style.display = 'none';
+}
+
+function closeModalProvResetConfirm() {
+  document.getElementById('modal-import-prov-reset-confirm').style.display = 'none';
+  document.getElementById('modal-import-prov-modo').style.display = 'flex';
+}
+
+function selectImportProvMode(modo) {
+  _provModoSel = modo;
+  const optA = document.getElementById('opt-prov-ampliar');
+  const optB = document.getElementById('opt-prov-reset');
+  const btn  = document.getElementById('btn-confirmar-prov-modo');
+  if (modo === 'ampliar') {
+    optA.style.border     = '2px solid #1a3a6b';
+    optA.style.background = '#f0f4ff';
+    optB.style.border     = '2px solid #dee2e6';
+    optB.style.background = '';
+  } else {
+    optB.style.border     = '2px solid #8B0000';
+    optB.style.background = '#fff3f3';
+    optA.style.border     = '2px solid #dee2e6';
+    optA.style.background = '';
+  }
+  btn.disabled = false; btn.style.opacity = '1';
+}
+
+function confirmarProvModo() {
+  if (!_provModoSel) return;
+  if (_provModoSel === 'ampliar') {
+    document.getElementById('modal-import-prov-modo').style.display = 'none';
+    doImportProv('ampliar');
+  } else {
+    document.getElementById('modal-import-prov-modo').style.display = 'none';
+    document.getElementById('modal-import-prov-reset-confirm').style.display = 'flex';
+  }
+}
+
+function doImportProvReset() {
+  document.getElementById('modal-import-prov-reset-confirm').style.display = 'none';
+  doImportProv('reset');
+}
+
 let _provTimer = null;
+
 async function buscarProveedor(q) {
   const drop = document.getElementById('prov-dropdown');
   const hidden = document.getElementById('p-proveedor');
@@ -1615,14 +2906,19 @@ async function buscarProveedor(q) {
   _provTimer = setTimeout(async () => {
     const res = await api(`/api/proveedores?q=${encodeURIComponent(q)}`);
     if (!res.length) {
-      drop.innerHTML = '<div style="padding:10px 14px;color:var(--text-secondary);font-size:.9rem">Sin resultados</div>';
+      drop.innerHTML = '<div style="padding:14px 16px;color:#9ca3af;font-size:.88rem;text-align:center;font-style:italic">Sin resultados para esa búsqueda</div>';
     } else {
-      drop.innerHTML = res.slice(0,10).map(p => `
-        <div style="padding:9px 14px;cursor:pointer;font-size:.9rem;border-bottom:1px solid var(--border)"
+      drop.innerHTML = res.slice(0,10).map((p, i) => `
+        <div style="
+            display:flex;align-items:center;justify-content:space-between;
+            padding:10px 16px;cursor:pointer;
+            border-bottom:${i < Math.min(res.length,10)-1 ? '1px solid #f0f0f5' : 'none'};
+            transition:background .12s;background:#fff"
              onmousedown="seleccionarProveedor(${p.id}, '${esc(p.nombre)}')"
-             onmouseover="this.style.background='var(--hover)'" onmouseout="this.style.background=''">
-          <span style="font-weight:600">${p.nombre}</span>
-          ${p.codigo ? `<span style="color:var(--text-secondary);margin-left:6px;font-size:.8rem">${p.codigo}</span>` : ''}
+             onmouseover="this.style.background='#eef2ff';this.style.borderRadius='6px'"
+             onmouseout="this.style.background='#fff';this.style.borderRadius='0'">
+          <span style="font-weight:600;font-size:.9rem;color:#1e1b4b;letter-spacing:.01em">${p.nombre}</span>
+          ${p.codigo ? `<span style="color:#6366f1;font-size:.78rem;font-weight:600;background:#eef2ff;padding:2px 8px;border-radius:99px;white-space:nowrap;margin-left:10px">${p.codigo}</span>` : ''}
         </div>`).join('');
     }
     drop.style.display = 'block';
@@ -1642,20 +2938,31 @@ document.addEventListener('click', (e) => {
   }
 });
 
-async function doImportProv() {
+
+
+async function doImportProv(modo) {
   if (!_provFile) return;
+  // Reabrir modal principal para mostrar progreso
+  openModal('modal-import-prov');
+  const btn = document.getElementById('btn-importar-prov');
+  const btnCancel = document.getElementById('btn-cancelar-import-prov');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-spinner"></span>' + (modo === 'reset' ? 'Procesando…' : 'Importando…');
+
   const res = document.getElementById('prov-import-result');
   res.style.display = 'none';
   const fd = new FormData();
   fd.append('archivo', _provFile);
+  const endpoint = modo === 'reset' ? '/api/proveedores/importar/reset' : '/api/proveedores/importar';
   try {
-    const r = await fetch('/api/proveedores/importar', { method:'POST', body:fd, credentials:'same-origin' });
+    const r = await fetch(endpoint, { method:'POST', body:fd, credentials:'same-origin' });
     const contentType = r.headers.get('content-type') || '';
     if (!contentType.includes('application/json')) throw new Error(`Error del servidor (${r.status})`);
     const d = await r.json();
     if (d.ok) {
       res.style.cssText = 'display:block;background:#d1fae5;color:#065f46;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
       res.textContent = `✅ Importación completada: ${d.insertados} nuevos, ${d.actualizados} actualizados.`;
+      if (btnCancel) btnCancel.textContent = 'Cerrar';
       loadProveedores();
     } else {
       res.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
@@ -1665,20 +2972,44 @@ async function doImportProv() {
     res.style.cssText = 'display:block;background:#fee2e2;color:#991b1b;border-radius:8px;padding:10px 14px;font-size:.9rem;margin-top:12px';
     res.textContent = '❌ ' + e.message;
   }
+  btn.disabled = false;
+  btn.innerHTML = 'Importar';
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Exportar
 ═══════════════════════════════════════════════════════════════════════════ */
-function exportarExcel() {
-  window.open('/api/exportar','_blank');
+async function exportarExcel() {
+  const btn = document.getElementById('btn-exportar-pedidos');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="btn-spinner-dark"></span>Exportando…'; }
+  try {
+    const resp = await fetch('/api/exportar');
+    if (!resp.ok) throw new Error('Error al exportar');
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const disposition = resp.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename[^;=\n]*=(['"]?)([^'"\n]*)\1/);
+    a.download = match ? match[2] : 'pedidos.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    alert('Error al exportar: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '⬇ Exportar'; }
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Modales
 ═══════════════════════════════════════════════════════════════════════════ */
 function openModal(id) { document.getElementById(id).classList.add('open'); }
-function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+function closeModal(id) {
+  const el = document.getElementById(id);
+  if (!el) return;
+  el.classList.remove('open');
+}
 document.querySelectorAll('.modal-overlay').forEach(o =>
   o.addEventListener('click', e => { if(e.target===o) o.classList.remove('open'); })
 );
@@ -1712,7 +3043,7 @@ function calcDias(s) {
 (async () => {
   const d = await api('/api/me');
   if (d.logged) {
-    G.user=d.nombre; G.rol=d.rol;
+    G.user=d.nombre; G.rol=d.rol; G.userId=d.id;
     document.getElementById('sb-nombre').textContent = d.nombre;
     document.getElementById('sb-rol').textContent    = d.rol==='admin'?'Administrador':'Usuario';
     document.getElementById('sb-avatar').textContent = d.nombre.charAt(0).toUpperCase();
@@ -1724,12 +3055,15 @@ function calcDias(s) {
 })();
 </script>
 <!-- ── MODAL IMPORTAR EXCEL ──────────────────────────────────────────────── -->
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL IMPORTAR PEDIDOS (paso 1: selección de archivo)
+════════════════════════════════════════════════════════════════════════ -->
 <div id="import-modal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:12px;padding:32px;width:480px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.2);">
+  <div style="background:#fff;border-radius:12px;padding:32px;width:500px;max-width:95vw;box-shadow:0 8px 32px rgba(0,0,0,.2);">
     <h3 style="margin:0 0 8px;color:#0f2044;font-size:1.2rem;">⬆ Importar pedidos desde Excel</h3>
     <p style="margin:0 0 20px;color:#666;font-size:.9rem;">
       El archivo debe tener las mismas columnas que el Excel exportado.<br>
-      Los pedidos se <strong>añaden</strong> a los existentes, no se sustituyen.
+      Los pedidos se añaden <strong>a continuación de los existentes</strong> con numeración correlativa.
     </p>
 
     <div id="import-dropzone"
@@ -1747,17 +3081,105 @@ function calcDias(s) {
     <div id="import-resultado" style="display:none;margin-bottom:16px;padding:12px;border-radius:8px;font-size:.9rem;"></div>
 
     <div style="display:flex;gap:12px;justify-content:flex-end;">
-      <button class="btn btn-ghost btn-sm" onclick="closeImportModal()">Cancelar</button>
-      <button class="btn btn-gold" id="btn-importar" onclick="doImport()" disabled style="opacity:.5">Importar</button>
+      <button class="btn btn-ghost btn-sm" id="btn-cancelar-import" onclick="closeImportModal()">Cancelar</button>
+      <button class="btn btn-gold" id="btn-importar" onclick="onClickImportar()" disabled style="opacity:.5">Importar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL ADMIN: ¿Ampliar o desde cero? (paso 2 admin)
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-import-modo" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:1100;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:36px;width:480px;max-width:95vw;box-shadow:0 12px 48px rgba(0,0,0,.3);">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div style="font-size:2rem;">📋</div>
+      <div>
+        <div style="font-weight:700;font-size:1.1rem;color:#0f2044;">Modo de importación</div>
+        <div style="color:#888;font-size:.85rem;">Selecciona cómo deseas proceder</div>
+      </div>
+    </div>
+
+    <div style="display:grid;gap:12px;margin-bottom:24px;">
+      <!-- Opción A: Ampliar -->
+      <div id="opt-ampliar"
+           onclick="selectImportMode('ampliar')"
+           style="border:2px solid #dee2e6;border-radius:10px;padding:16px 20px;cursor:pointer;transition:.15s;display:flex;align-items:flex-start;gap:14px;">
+        <div style="font-size:1.6rem;margin-top:2px;">➕</div>
+        <div>
+          <div style="font-weight:600;color:#0f2044;margin-bottom:4px;">Ampliar información existente</div>
+          <div style="font-size:.85rem;color:#666;">Los nuevos pedidos del Excel se añadirán a continuación de los que ya hay en el sistema, manteniendo la numeración correlativa actual.</div>
+        </div>
+      </div>
+      <!-- Opción B: Desde cero -->
+      <div id="opt-reset"
+           onclick="selectImportMode('reset')"
+           style="border:2px solid #dee2e6;border-radius:10px;padding:16px 20px;cursor:pointer;transition:.15s;display:flex;align-items:flex-start;gap:14px;">
+        <div style="font-size:1.6rem;margin-top:2px;">🗑️</div>
+        <div>
+          <div style="font-weight:600;color:#8B0000;margin-bottom:4px;">Eliminar todo y empezar desde cero</div>
+          <div style="font-size:.85rem;color:#666;">Se borrarán <strong>todos</strong> los pedidos actuales, incluidos PDFs e imágenes adjuntas. La numeración comenzará desde 1 con el nuevo Excel.</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex;gap:12px;justify-content:flex-end;">
+      <button class="btn btn-ghost btn-sm" onclick="closeModalImportModo()">Cancelar</button>
+      <button class="btn btn-gold" id="btn-confirmar-modo" onclick="confirmarModo()" disabled style="opacity:.5">Continuar →</button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL CONFIRMACIÓN DESTRUCCIÓN (paso 3 reset)
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-import-reset-confirm" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:1200;align-items:center;justify-content:center;">
+  <div style="background:#fff;border-radius:14px;padding:36px;width:480px;max-width:95vw;box-shadow:0 12px 48px rgba(139,0,0,.4);border-top:5px solid #8B0000;">
+    <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+      <div style="font-size:2.2rem;">⚠️</div>
+      <div>
+        <div style="font-weight:700;font-size:1.1rem;color:#8B0000;">ATENCIÓN: Operación irreversible</div>
+        <div style="color:#888;font-size:.85rem;">Esta acción no se puede deshacer</div>
+      </div>
+    </div>
+
+    <div style="background:#fff3f3;border:1px solid #f5c6cb;border-radius:8px;padding:16px;margin-bottom:20px;font-size:.9rem;color:#721c24;line-height:1.6;">
+      Se procederá a la <strong>eliminación definitiva</strong> de:
+      <ul style="margin:8px 0 0 18px;padding:0;">
+        <li>Todos los pedidos registrados en el sistema</li>
+        <li>Todos los PDFs adjuntos (presupuestos y pedidos)</li>
+        <li>Todas las imágenes de artículos</li>
+        <li>Todo el historial de estados</li>
+        <li>El registro de pedidos eliminados</li>
+      </ul>
+      <div style="margin-top:12px;font-weight:700;">¿Deseas realizar una copia de seguridad antes de continuar?</div>
+    </div>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;justify-content:flex-end;">
+      <button class="btn btn-ghost btn-sm" onclick="closeModalResetConfirm()" style="margin-right:auto;">← Cancelar y volver</button>
+      <button class="btn" onclick="descargarBackupYReset()"
+              style="background:#1a3a6b;color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;">
+        💾 Hacer copia de seguridad y continuar
+      </button>
+      <button class="btn" onclick="resetSinBackup()"
+              style="background:#8B0000;color:#fff;border:none;padding:8px 16px;border-radius:8px;cursor:pointer;font-size:.9rem;font-weight:600;">
+        🗑️ Eliminar todo sin backup
+      </button>
     </div>
   </div>
 </div>
 
 <script>
-let importFile = null;
+/* ──────────────────────────────────────────────────────────────────
+   LÓGICA DE IMPORTACIÓN DE PEDIDOS
+────────────────────────────────────────────────────────────────── */
+let importFile       = null;
+let importModoSel    = null;   // 'ampliar' | 'reset'
 
+/* — Apertura / cierre modales — */
 function openImportModal() {
   importFile = null;
+  importModoSel = null;
   document.getElementById('import-filename').textContent = 'Ningún archivo seleccionado';
   document.getElementById('import-resultado').style.display = 'none';
   document.getElementById('import-file-input').value = '';
@@ -1768,8 +3190,20 @@ function openImportModal() {
 
 function closeImportModal() {
   document.getElementById('import-modal').style.display = 'none';
+  document.getElementById('btn-cancelar-import').textContent = 'Cancelar';
 }
 
+function closeModalImportModo() {
+  document.getElementById('modal-import-modo').style.display = 'none';
+}
+
+function closeModalResetConfirm() {
+  document.getElementById('modal-import-reset-confirm').style.display = 'none';
+  // Volver al selector de modo
+  document.getElementById('modal-import-modo').style.display = 'flex';
+}
+
+/* — Drag & drop / selección de archivo — */
 function handleImportDrop(e) {
   e.preventDefault();
   document.getElementById('import-dropzone').style.background = '';
@@ -1789,16 +3223,97 @@ function handleImportFile(f) {
   btn.disabled = false; btn.style.opacity = '1';
 }
 
-async function doImport() {
+/* — Click en "Importar" — */
+async function onClickImportar() {
   if (!importFile) return;
+
+  // Si es admin → mostrar selector de modo
+  if (G.rol === 'admin') {
+    importModoSel = null;
+    // Resetear selección visual
+    document.getElementById('opt-ampliar').style.border = '2px solid #dee2e6';
+    document.getElementById('opt-ampliar').style.background = '';
+    document.getElementById('opt-reset').style.border   = '2px solid #dee2e6';
+    document.getElementById('opt-reset').style.background = '';
+    document.getElementById('btn-confirmar-modo').disabled = true;
+    document.getElementById('btn-confirmar-modo').style.opacity = '.5';
+    document.getElementById('import-modal').style.display = 'none';
+    document.getElementById('modal-import-modo').style.display = 'flex';
+  } else {
+    // Usuario normal → directamente ampliar
+    await doImport('ampliar');
+  }
+}
+
+/* — Selección de modo en el modal admin — */
+function selectImportMode(modo) {
+  importModoSel = modo;
+  const optA = document.getElementById('opt-ampliar');
+  const optB = document.getElementById('opt-reset');
+  const btn  = document.getElementById('btn-confirmar-modo');
+
+  if (modo === 'ampliar') {
+    optA.style.border     = '2px solid #1a3a6b';
+    optA.style.background = '#f0f4ff';
+    optB.style.border     = '2px solid #dee2e6';
+    optB.style.background = '';
+  } else {
+    optB.style.border     = '2px solid #8B0000';
+    optB.style.background = '#fff3f3';
+    optA.style.border     = '2px solid #dee2e6';
+    optA.style.background = '';
+  }
+  btn.disabled = false; btn.style.opacity = '1';
+}
+
+function confirmarModo() {
+  if (!importModoSel) return;
+  if (importModoSel === 'ampliar') {
+    document.getElementById('modal-import-modo').style.display = 'none';
+    doImport('ampliar');
+  } else {
+    // Mostrar confirmación de borrado
+    document.getElementById('modal-import-modo').style.display = 'none';
+    document.getElementById('modal-import-reset-confirm').style.display = 'flex';
+  }
+}
+
+/* — Backup + reset — */
+async function descargarBackupYReset() {
+  // 1. Descargar backup
+  const link = document.createElement('a');
+  link.href = '/api/importar/backup';
+  link.download = '';
+  link.click();
+  // 2. Pequeña espera para que el navegador inicie la descarga
+  await new Promise(r => setTimeout(r, 1200));
+  // 3. Proceder con el reset
+  document.getElementById('modal-import-reset-confirm').style.display = 'none';
+  doImport('reset');
+}
+
+function resetSinBackup() {
+  document.getElementById('modal-import-reset-confirm').style.display = 'none';
+  doImport('reset');
+}
+
+/* — Ejecución de la importación — */
+async function doImport(modo) {
+  if (!importFile) return;
+
+  // Mostrar el modal principal con estado de progreso
+  document.getElementById('import-modal').style.display = 'flex';
   const btn = document.getElementById('btn-importar');
-  btn.disabled = true; btn.textContent = 'Importando…';
+  btn.disabled = true;
+  btn.innerHTML = '<span class="btn-spinner"></span>' + (modo === 'reset' ? 'Procesando…' : 'Importando…');
 
   const fd = new FormData();
   fd.append('archivo', importFile);
 
+  const endpoint = modo === 'reset' ? '/api/importar/reset' : '/api/importar';
+
   try {
-    const r = await fetch('/api/importar', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const r = await fetch(endpoint, { method: 'POST', body: fd, credentials: 'same-origin' });
     const d = await r.json();
     const res = document.getElementById('import-resultado');
     res.style.display = 'block';
@@ -1806,12 +3321,14 @@ async function doImport() {
     if (d.ok) {
       res.style.background = '#d4edda';
       res.style.color = '#155724';
-      let msg = `✅ ${d.insertados} pedido${d.insertados !== 1 ? 's' : ''} importado${d.insertados !== 1 ? 's' : ''} correctamente.`;
+      const accion = modo === 'reset' ? 'importados (desde cero)' : 'importados';
+      let msg = `✅ ${d.insertados} pedido${d.insertados !== 1 ? 's' : ''} ${accion} correctamente.`;
       if (d.errores && d.errores.length) {
         msg += `<br><br>⚠️ <strong>${d.errores.length} fila${d.errores.length > 1 ? 's' : ''} con error:</strong><br>` +
                d.errores.map(e => `• ${e}`).join('<br>');
       }
       res.innerHTML = msg;
+      document.getElementById('btn-cancelar-import').textContent = 'Cerrar';
       loadPedidos(); loadStats();
     } else {
       res.style.background = '#f8d7da';
@@ -1826,14 +3343,621 @@ async function doImport() {
     res.textContent = '❌ Error de conexión: ' + e.message;
   }
 
-  btn.disabled = false; btn.textContent = 'Importar';
+  btn.disabled = false; btn.innerHTML = 'Importar';
 }
 
 // Cerrar modal al hacer clic fuera
 document.getElementById('import-modal').addEventListener('click', function(e) {
   if (e.target === this) closeImportModal();
 });
+document.getElementById('modal-import-modo').addEventListener('click', function(e) {
+  if (e.target === this) closeModalImportModo();
+});
+document.getElementById('modal-familia').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-familia');
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   TECHO DE GASTOS
+═══════════════════════════════════════════════════════════════════════════ */
+
+function onSujetoTechoChange() {
+  const checked = document.getElementById('p-sujeto-techo').checked;
+  document.getElementById('techo-fields').style.display = checked ? '' : 'none';
+  if (!checked) {
+    document.getElementById('techo-preview').style.display = 'none';
+  }
+}
+
+function checkTechoPreview() {
+  const importe = parseFloat(document.getElementById('p-importe').value);
+  const preview = document.getElementById('techo-preview');
+  if (!importe || importe <= 0) { preview.style.display='none'; return; }
+  let html = '';
+  if (importe > 3000) {
+    html = `<div style="background:#f8d7da;border:1px solid #f5c6cb;border-radius:6px;padding:8px 12px;font-size:12px;color:#721c24">
+      ⚠️ <strong>Supera el límite individual de 3.000 €</strong> por pedido. Se mostrará aviso al guardar.
+    </div>`;
+  } else {
+    html = `<div style="background:#d4edda;border:1px solid #c3e6cb;border-radius:6px;padding:8px 12px;font-size:12px;color:#155724">
+      ✅ Importe dentro del límite individual (≤ 3.000 €)
+    </div>`;
+  }
+  preview.innerHTML = html;
+  preview.style.display = '';
+}
+
+async function loadTecho() {
+  const grid  = document.getElementById('techo-resumen-grid');
+  const empty = document.getElementById('techo-empty');
+  grid.innerHTML = '<div style="padding:20px;color:#999;text-align:center">Cargando…</div>';
+  const d = await api('/api/techo/resumen');
+  document.getElementById('techo-mes-label').textContent = `Mes: ${d.mes}`;
+
+  const hotelesCon = d.hoteles.filter(h => h.num_pedidos > 0 || true); // mostrar todos
+  if (!hotelesCon.length) {
+    grid.innerHTML = '';
+    empty.classList.remove('section-hidden');
+    return;
+  }
+  empty.classList.add('section-hidden');
+
+  const semColores = { verde:'#d4edda', amarillo:'#fff3cd', rojo:'#f8d7da' };
+  const semTexto   = { verde:'#155724', amarillo:'#856404', rojo:'#721c24' };
+  const semIcono   = { verde:'🟢', amarillo:'🟡', rojo:'🔴' };
+
+  grid.innerHTML = d.hoteles.map(h => {
+    const pct = Math.min(100, (h.acumulado / h.techo_mes) * 100);
+    const barColor = h.semaforo === 'rojo' ? '#dc3545' : h.semaforo === 'amarillo' ? '#ffc107' : '#28a745';
+    const pedidosHtml = h.pedidos.length ? h.pedidos.map(p => `
+      <div style="display:flex;justify-content:space-between;font-size:11px;padding:3px 0;border-bottom:1px solid #eee">
+        <span>${p.familia_nombre||'Sin familia'}</span>
+        <span style="font-weight:600">${p.importe!=null?Number(p.importe).toLocaleString('es-ES',{minimumFractionDigits:2})+' €':'—'}</span>
+      </div>`).join('') : '<div style="font-size:11px;color:#999;padding:4px 0">Sin pedidos sujetos al techo este mes</div>';
+    return `
+    <div style="background:#fff;border:1.5px solid ${semColores[h.semaforo]};border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <strong style="font-size:14px">${h.hotel_codigo} — ${h.hotel_nombre}</strong>
+        <span style="font-size:18px" title="${h.semaforo}">${semIcono[h.semaforo]}</span>
+      </div>
+      <div style="background:#e9ecef;border-radius:6px;height:8px;margin-bottom:10px;overflow:hidden">
+        <div style="height:100%;width:${pct}%;background:${barColor};border-radius:6px;transition:.3s"></div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:12px;color:#666;margin-bottom:10px">
+        <span>Acumulado: <strong style="color:${semTexto[h.semaforo]}">${h.acumulado.toLocaleString('es-ES',{minimumFractionDigits:2})} €</strong></span>
+        <span>Techo: ${h.techo_mes.toLocaleString('es-ES')} €</span>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-bottom:8px">
+        <span>Pedidos usados: <strong>${h.num_pedidos} / ${h.max_pedidos}</strong></span>
+        <span>Familias: ${h.familias_usadas.length ? h.familias_usadas.join(', ') : '—'}</span>
+      </div>
+      <div style="border-top:1px solid #eee;padding-top:8px">${pedidosHtml}</div>
+    </div>`;
+  }).join('');
+
+  // Actualizar badge del sidebar
+  const rojos = d.hoteles.filter(h => h.semaforo === 'rojo').length;
+  const badge = document.getElementById('sb-techo-count');
+  if (badge) {
+    badge.style.display = rojos > 0 ? '' : 'none';
+    badge.textContent = rojos;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   ALERTAS DE TECHO DE GASTOS — integradas en el panel Alertas
+═══════════════════════════════════════════════════════════════════════════ */
+
+// Cache del último resumen de techo
+let _techoCache = null;
+
+async function loadTechoAlertas() {
+  try {
+    const d = await api('/api/techo/resumen');
+    _techoCache = d;
+    _renderTechoAlertas(d);
+  } catch(e) {
+    console.warn('loadTechoAlertas error:', e);
+  }
+}
+
+function _renderTechoAlertas(d) {
+  const card  = document.getElementById('techo-alertas-card');
+  const list  = document.getElementById('techo-alertas-list');
+  const label = document.getElementById('techo-alertas-mes');
+  if (!d || !d.hoteles) return;
+
+  const alertas = d.hoteles.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo');
+  if (!alertas.length) { card.style.display = 'none'; return; }
+
+  label.textContent = `Mes: ${d.mes}`;
+  card.style.display = '';
+
+  const hayRojo = alertas.some(h => h.semaforo === 'rojo');
+  card.style.borderLeftColor = hayRojo ? '#dc3545' : '#ffc107';
+
+  list.innerHTML = alertas.map(h => {
+    const pct      = Math.min(100, Math.round((h.acumulado / h.techo_mes) * 100));
+    const esRojo   = h.semaforo === 'rojo';
+    const barColor = esRojo ? '#dc3545' : '#ffc107';
+    const bgColor  = esRojo ? '#fff5f5' : '#fffbf0';
+    const icono    = esRojo ? '🔴' : '🟡';
+    const msg      = esRojo
+      ? `Techo mensual <strong>SUPERADO</strong> — ${h.acumulado.toLocaleString('es-ES',{minimumFractionDigits:2})} € de ${h.techo_mes.toLocaleString('es-ES')} €`
+      : `${pct}% del techo mensual consumido — ${h.acumulado.toLocaleString('es-ES',{minimumFractionDigits:2})} € de ${h.techo_mes.toLocaleString('es-ES')} €`;
+    return `
+    <div onclick="showView('techo',document.querySelector('[data-view=\'techo\']'))"
+         title="Ver panel Techo de Gastos"
+         style="display:flex;align-items:center;gap:12px;cursor:pointer;background:${bgColor};margin:0 -16px;padding:10px 16px;border-bottom:1px solid rgba(0,0,0,.06)">
+      <span style="font-size:20px">${icono}</span>
+      <div style="flex:1;min-width:0">
+        <div style="font-weight:600;font-size:13px">${h.hotel_codigo} — ${h.hotel_nombre}</div>
+        <div style="font-size:12px;color:#555;margin-top:2px">${msg}</div>
+        <div style="background:#e9ecef;border-radius:4px;height:5px;margin-top:6px;overflow:hidden">
+          <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px"></div>
+        </div>
+      </div>
+      <span style="font-size:11px;color:#999;white-space:nowrap">Ver detalle →</span>
+    </div>`;
+  }).join('');
+}
+
+// Actualiza el badge del sidebar sumando alertas de pedidos + alertas de techo
+async function updateAlertBadge() {
+  try {
+    const [stats, techo] = await Promise.all([
+      api('/api/stats'),
+      api('/api/techo/resumen')
+    ]);
+    _techoCache = techo;
+
+    const nPedidos = stats.num_alertas || 0;
+    const nTecho   = techo?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0;
+    const total    = nPedidos + nTecho;
+
+    const badge = document.getElementById('sb-alert-count');
+    if (badge) {
+      badge.textContent   = total;
+      badge.style.display = total > 0 ? '' : 'none';
+      badge.style.background = techo?.hoteles?.some(h => h.semaforo === 'rojo') ? '#dc3545' : '';
+    }
+
+    // Badge techo sidebar
+    const badgeTecho = document.getElementById('sb-techo-count');
+    if (badgeTecho) {
+      const rojos = techo?.hoteles?.filter(h => h.semaforo === 'rojo').length || 0;
+      badgeTecho.style.display = rojos > 0 ? '' : 'none';
+      badgeTecho.textContent   = rojos;
+    }
+  } catch(e) {
+    console.warn('updateAlertBadge error:', e);
+  }
+}
+
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   FAMILIAS DE ARTÍCULOS
+═══════════════════════════════════════════════════════════════════════════ */
+
+async function loadFamilias() {
+  const tbody = document.getElementById('familias-tbody');
+  const empty = document.getElementById('familias-empty');
+  const rows = await api('/api/familias');
+  if (!rows.length) {
+    tbody.innerHTML = '';
+    empty.classList.remove('section-hidden');
+    return;
+  }
+  empty.classList.add('section-hidden');
+  tbody.innerHTML = rows.map((f, i) => `
+    <tr>
+      <td class="monospace">${i+1}</td>
+      <td>${f.nombre}</td>
+      <td>
+        <button class="btn btn-ghost btn-sm" onclick="openModalFamilia(${f.id},'${f.nombre.replace(/'/g,"\\'")}')">✏ Editar</button>
+        <button class="btn btn-sm" style="color:#dc3545;border-color:#dc3545;background:#fff" onclick="deleteFamilia(${f.id},'${f.nombre.replace(/'/g,"\\'")}')">✕</button>
+      </td>
+    </tr>`).join('');
+  // Refrescar select en modal pedido
+  G.maestros.familias = rows;
+  poblarSelectFamilias();
+}
+
+function openModalFamilia(id=null, nombre='') {
+  document.getElementById('familia-edit-id').value = id || '';
+  document.getElementById('familia-nombre-input').value = nombre;
+  document.getElementById('modal-familia-title').textContent = id ? 'Editar familia' : 'Nueva familia';
+  openModal('modal-familia');
+}
+
+async function saveFamilia() {
+  const id     = document.getElementById('familia-edit-id').value;
+  const nombre = document.getElementById('familia-nombre-input').value.trim();
+  if (!nombre) { toast('El nombre es obligatorio','error'); return; }
+  const r = id
+    ? await api(`/api/familias/${id}`, 'PUT', {nombre})
+    : await api('/api/familias', 'POST', {nombre});
+  if (r.error) { toast(r.error,'error'); return; }
+  toast(id ? 'Familia actualizada' : 'Familia creada', 'success');
+  closeModal('modal-familia');
+  loadFamilias();
+}
+
+async function deleteFamilia(id, nombre) {
+  if (!confirm(`¿Eliminar la familia "${nombre}"?`)) return;
+  const r = await api(`/api/familias/${id}`, 'DELETE');
+  if (r.error) { toast(r.error,'error'); return; }
+  toast('Familia eliminada','success');
+  loadFamilias();
+}
+
+document.getElementById('modal-usuario').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-usuario');
+});
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   GESTIÓN DE USUARIOS
+═══════════════════════════════════════════════════════════════════════════ */
+
+async function loadUsuarios() {
+  const tbody = document.getElementById('usuarios-tbody');
+  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">Cargando…</td></tr>';
+  const rows = await api('/api/usuarios');
+  if (!rows || !rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">No hay usuarios</td></tr>';
+    return;
+  }
+  tbody.innerHTML = rows.map(u => {
+    const rolBadge = u.rol === 'admin'
+      ? `<span style="background:#1a3a6b;color:#fff;border-radius:4px;font-size:11px;padding:2px 8px;font-weight:600">Admin</span>`
+      : `<span style="background:#e9ecef;color:#555;border-radius:4px;font-size:11px;padding:2px 8px">Usuario</span>`;
+    const activoBadge = u.activo
+      ? `<span style="color:#28a745;font-weight:600;font-size:12px">● Activo</span>`
+      : `<span style="color:#dc3545;font-weight:600;font-size:12px">○ Inactivo</span>`;
+    const esMismo = u.id == G.userId;
+    const movilLink = u.movil
+      ? `<a href="https://wa.me/${u.movil.replace(/[^0-9]/g,'')}" target="_blank"
+            title="Abrir WhatsApp" style="color:#25d366;text-decoration:none;font-size:12px">
+            📱 ${u.movil}</a>`
+      : '<span style="color:#ccc;font-size:12px">—</span>';
+    return `<tr>
+      <td class="monospace" style="font-size:13px">${u.username}</td>
+      <td>${u.nombre}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
+      <td style="font-size:12px;color:#666">${u.email||'—'}</td>
+      <td>${movilLink}</td>
+      <td>${rolBadge}</td>
+      <td>${activoBadge}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="openModalUsuario(${u.id})">✏ Editar</button></td>
+    </tr>`;
+  }).join('');
+}
+
+function openModalUsuario(id=null) {
+  document.getElementById('usr-edit-id').value  = id || '';
+  document.getElementById('modal-usuario-title').textContent = id ? 'Editar usuario' : 'Nuevo usuario';
+  document.getElementById('usr-username').value  = '';
+  document.getElementById('usr-nombre').value    = '';
+  document.getElementById('usr-email').value     = '';
+  document.getElementById('usr-movil').value     = '';
+  document.getElementById('usr-password').value  = '';
+  document.getElementById('usr-rol').value       = 'user';
+  document.getElementById('usr-activo').checked  = true;
+
+  if (id) {
+    document.getElementById('usr-username').disabled        = true;
+    document.getElementById('usr-pwd-label').textContent    = 'Nueva contraseña';
+    document.getElementById('usr-pwd-hint').style.display   = '';
+    document.getElementById('usr-activo-row').style.display = '';
+    api('/api/usuarios').then(rows => {
+      const u = rows.find(r => r.id == id);
+      if (!u) return;
+      document.getElementById('usr-username').value = u.username;
+      document.getElementById('usr-nombre').value   = u.nombre;
+      document.getElementById('usr-email').value    = u.email || '';
+      document.getElementById('usr-movil').value    = u.movil || '';
+      document.getElementById('usr-rol').value      = u.rol;
+      document.getElementById('usr-activo').checked = !!u.activo;
+    });
+  } else {
+    document.getElementById('usr-username').disabled        = false;
+    document.getElementById('usr-pwd-label').textContent    = 'Contraseña *';
+    document.getElementById('usr-pwd-hint').style.display   = 'none';
+    document.getElementById('usr-activo-row').style.display = 'none';
+  }
+  openModal('modal-usuario');
+}
+
+async function saveUsuario() {
+  const id       = document.getElementById('usr-edit-id').value;
+  const username = document.getElementById('usr-username').value.trim().toLowerCase();
+  const nombre   = document.getElementById('usr-nombre').value.trim();
+  const email    = document.getElementById('usr-email').value.trim();
+  const movil    = document.getElementById('usr-movil').value.trim();
+  const rol      = document.getElementById('usr-rol').value;
+  const password = document.getElementById('usr-password').value;
+  const activo   = document.getElementById('usr-activo').checked;
+
+  if (!nombre) { toast('El nombre es obligatorio', 'error'); return; }
+
+  let r;
+  if (id) {
+    const body = { nombre, email, movil, rol, activo };
+    if (password) body.password = password;
+    r = await api(`/api/usuarios/${id}`, 'PUT', body);
+  } else {
+    if (!username) { toast('El username es obligatorio', 'error'); return; }
+    if (!password) { toast('La contraseña es obligatoria', 'error'); return; }
+    r = await api('/api/usuarios', 'POST', { username, nombre, email, movil, rol, password });
+  }
+
+  if (r.error) { toast(r.error, 'error'); return; }
+  toast(id ? 'Usuario actualizado' : 'Usuario creado', 'success');
+  closeModal('modal-usuario');
+  loadUsuarios();
+}
+
+function togglePwdVisibility() {
+  const inp = document.getElementById('usr-password');
+  inp.type = inp.type === 'password' ? 'text' : 'password';
+}
 </script>
 
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL: Propuesta de email por alerta (v9.5)
+════════════════════════════════════════════════════════════════════════ -->
+<div class="modal-overlay" id="modal-email-alerta">
+  <div class="mea-dialog">
+    <div class="mea-header" style="background:#1a3a6b;color:#fff;border-radius:10px 10px 0 0;padding:14px 20px;display:flex;align-items:center;gap:10px;flex-shrink:0">
+      <span style="font-size:20px">✉️</span>
+      <h3 class="modal-title" style="margin:0;font-size:16px;color:#fff" id="mea-title">Propuesta de notificación</h3>
+      <button class="close-btn" onclick="closeModal('modal-email-alerta')" style="margin-left:auto;background:none;border:none;color:#fff;font-size:20px;cursor:pointer">✕</button>
+    </div>
+    <div class="mea-body">
+
+      <!-- Info del pedido -->
+      <div id="mea-pedido-info" style="background:#f8f9fa;border-radius:6px;padding:12px;font-size:13px;display:grid;grid-template-columns:1fr 1fr;gap:6px"></div>
+
+      <!-- Tabs: Email / WhatsApp -->
+      <div style="display:flex;gap:0;border-bottom:2px solid #e0e0e0">
+        <button id="mea-tab-email" onclick="meaSetTab('email')"
+          style="padding:8px 18px;border:none;background:none;font-weight:600;cursor:pointer;border-bottom:3px solid #1a3a6b;color:#1a3a6b;margin-bottom:-2px">
+          ✉ Email
+        </button>
+        <button id="mea-tab-wa" onclick="meaSetTab('wa')"
+          style="padding:8px 18px;border:none;background:none;font-weight:600;cursor:pointer;border-bottom:3px solid transparent;color:#888;margin-bottom:-2px">
+          📱 WhatsApp
+        </button>
+      </div>
+
+      <!-- PANEL EMAIL -->
+      <div id="mea-panel-email">
+        <div style="display:grid;gap:10px">
+          <div>
+            <label class="form-label">Para (destinatario principal)</label>
+            <input class="form-control" id="mea-to" type="email" placeholder="email@proveedor.com">
+            <div id="mea-no-email-warn" style="display:none;margin-top:5px;padding:8px 12px;
+                 background:#fef3c7;border:1px solid #f59e0b;border-radius:4px;font-size:12px;color:#92400e">
+              ⚠️ <strong>Este proveedor no tiene email registrado.</strong>
+              Puedes escribirlo manualmente arriba o
+              <a href="#" onclick="closeModal('modal-email-alerta');showView('proveedores')"
+                 style="color:#92400e;font-weight:bold">ir a Proveedores</a> para añadirlo.
+            </div>
+          </div>
+          <div>
+            <label class="form-label">CC (compradores asignados)</label>
+            <div id="mea-cc-list" style="display:flex;flex-wrap:wrap;gap:6px;min-height:32px;padding:6px;border:1px solid #ddd;border-radius:4px;background:#f9f9f9"></div>
+          </div>
+          <div>
+            <label class="form-label">Asunto</label>
+            <input class="form-control" id="mea-subject" placeholder="Asunto del email">
+          </div>
+          <div>
+            <label class="form-label">Vista previa del cuerpo</label>
+            <div id="mea-body-preview" style="border:1px solid #ddd;border-radius:4px;padding:12px;max-height:260px;overflow-y:auto;background:#fff;font-size:13px"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PANEL WHATSAPP -->
+      <div id="mea-panel-wa" style="display:none">
+        <div style="display:grid;gap:10px">
+          <div style="background:#e7fbe6;border:1px solid #b2dfdb;border-radius:6px;padding:12px;font-size:13px;color:#1b5e20">
+            ℹ️ El envío de WhatsApp se realiza abriendo un enlace <strong>wa.me</strong> en una nueva pestaña.
+            El sistema registrará el intento en el log.
+          </div>
+          <div id="mea-wa-recipients" style="display:grid;gap:8px"></div>
+          <div>
+            <label class="form-label">Mensaje (editable)</label>
+            <textarea class="form-control" id="mea-wa-text" rows="7" style="font-family:monospace;font-size:13px;resize:vertical"></textarea>
+          </div>
+        </div>
+      </div>
+
+    </div>
+    <div class="mea-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-email-alerta')">Cancelar</button>
+      <div id="mea-btn-email-wrap">
+        <button class="btn btn-gold" id="mea-btn-enviar" onclick="meaEnviarEmail()">📤 Enviar email</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ═══════════════════════════════════════════════════════════════════════════
+   Módulo: Email/WhatsApp por alerta (v9.5)
+═══════════════════════════════════════════════════════════════════════════ */
+
+let _meaData = null;  // Preview data del servidor
+
+function meaSetTab(tab) {
+  const isEmail = tab === 'email';
+  document.getElementById('mea-panel-email').style.display = isEmail ? '' : 'none';
+  document.getElementById('mea-panel-wa').style.display   = isEmail ? 'none' : '';
+  document.getElementById('mea-tab-email').style.borderBottomColor = isEmail ? '#1a3a6b' : 'transparent';
+  document.getElementById('mea-tab-email').style.color              = isEmail ? '#1a3a6b' : '#888';
+  document.getElementById('mea-tab-wa').style.borderBottomColor    = isEmail ? 'transparent' : '#25d366';
+  document.getElementById('mea-tab-wa').style.color                 = isEmail ? '#888' : '#1b5e20';
+  const btnWrap = document.getElementById('mea-btn-email-wrap');
+  btnWrap.innerHTML = isEmail
+    ? '<button class="btn btn-gold" id="mea-btn-enviar" onclick="meaEnviarEmail()">📤 Enviar email</button>'
+    : '<button class="btn" style="background:#25d366;color:#fff" onclick="meaEnviarWA()">📱 Abrir WhatsApp</button>';
+}
+
+async function abrirModalEmailAlerta(pedidoId, dias, nivel) {
+  _meaData = null;
+  document.getElementById('mea-pedido-info').innerHTML = '<span style="color:#999">Cargando propuesta…</span>';
+  document.getElementById('mea-body-preview').innerHTML = '';
+  document.getElementById('mea-to').value = '';
+  document.getElementById('mea-no-email-warn').style.display = 'none';
+  document.getElementById('mea-to').style.border = '';
+  document.getElementById('mea-subject').value = '';
+  document.getElementById('mea-cc-list').innerHTML = '';
+  document.getElementById('mea-wa-recipients').innerHTML = '';
+  document.getElementById('mea-wa-text').value = '';
+  meaSetTab('email');
+
+  document.getElementById('modal-email-alerta').classList.add('open');
+
+  const d = await api(`/api/alertas/${pedidoId}/email-preview?dias=${dias}&nivel=${nivel}`);
+  if (d.error) {
+    document.getElementById('mea-pedido-info').innerHTML =
+      `<span style="color:#dc2626">⚠ ${esc(d.error)}</span>`;
+    return;
+  }
+  _meaData = d;
+
+  // Título
+  const nivelLabel = nivel === 'urgente' ? '🔴 URGENTE' : '⚠️ AVISO';
+  document.getElementById('mea-title').textContent =
+    `Notificación de alerta — ${d.hotel_codigo} · Pedido ${d.pedido_num||'—'} [${nivelLabel}]`;
+
+  // Info pedido
+  document.getElementById('mea-pedido-info').innerHTML = `
+    <div><strong>Hotel:</strong> ${esc(d.hotel_nombre||'—')}</div>
+    <div><strong>Proveedor:</strong> ${esc(d.proveedor_nombre||'—')}</div>
+    <div><strong>Estado:</strong> ${esc(d.estado||'—')}</div>
+    <div><strong>Tipo envío:</strong> ${d.es_proveedor ? '📧 Al proveedor' : '🏢 Interno'}</div>`;
+
+  // Campos email
+  const toInput = document.getElementById('mea-to');
+  toInput.value = d.to_email || '';
+  if (!d.to_email) {
+    toInput.style.border = '2px solid #fca5a5';
+    toInput.placeholder = '⚠ Sin email registrado — introdúcelo manualmente';
+    document.getElementById('mea-no-email-warn').style.display = '';
+  } else {
+    toInput.style.border = '';
+    toInput.placeholder = 'email@proveedor.com';
+    document.getElementById('mea-no-email-warn').style.display = 'none';
+  }
+  document.getElementById('mea-subject').value = d.subject  || '';
+  document.getElementById('mea-body-preview').innerHTML = d.body_html || '';
+
+  // CC badges
+  const ccList = document.getElementById('mea-cc-list');
+  if (d.cc_emails && d.cc_emails.length) {
+    ccList.innerHTML = d.cc_emails.map(e =>
+      `<span style="background:#e3f0ff;border:1px solid #90c0f0;border-radius:12px;padding:2px 10px;font-size:12px">
+         📋 ${esc(e)}
+         <button onclick="meaRemoveCC(this)" data-email="${esc(e)}"
+           style="background:none;border:none;cursor:pointer;color:#666;margin-left:4px">✕</button>
+       </span>`).join('');
+  } else {
+    ccList.innerHTML = '<span style="color:#aaa;font-size:12px">Sin copias asignadas para este hotel</span>';
+  }
+
+  // WhatsApp
+  document.getElementById('mea-wa-text').value = d.wa_text || '';
+  const waDiv = document.getElementById('mea-wa-recipients');
+  if (d.wa_recipients && d.wa_recipients.length) {
+    waDiv.innerHTML = d.wa_recipients.map(r => `
+      <div style="display:flex;align-items:center;gap:10px;background:#e7fbe6;padding:8px 12px;border-radius:6px">
+        <span style="font-size:13px">👤 <strong>${esc(r.nombre)}</strong></span>
+        <span style="font-size:13px;color:#1b5e20">📱 ${esc(r.movil)}</span>
+        <button class="btn btn-sm" style="background:#25d366;color:#fff;margin-left:auto"
+          onclick="meaAbrirWAUno('${r.movil.replace(/[^0-9+]/g,'')}')">Abrir WhatsApp</button>
+      </div>`).join('');
+  } else {
+    waDiv.innerHTML = `<div style="color:#888;font-size:13px;padding:8px">
+      ⚠️ Los compradores asignados a este hotel no tienen número de móvil configurado.<br>
+      <a href="#" onclick="showView('usuarios',null);closeModal('modal-email-alerta')"
+         style="color:#1a3a6b">→ Ir a Usuarios para añadir móviles</a>
+    </div>`;
+  }
+}
+
+function meaRemoveCC(btn) {
+  btn.closest('span').remove();
+}
+
+function _meaGetCCs() {
+  return Array.from(
+    document.getElementById('mea-cc-list').querySelectorAll('[data-email]')
+  ).map(el => el.dataset.email);
+}
+
+async function meaEnviarEmail() {
+  if (!_meaData) return;
+  const toEmail = document.getElementById('mea-to').value.trim();
+  const subject = document.getElementById('mea-subject').value.trim();
+  if (!toEmail) { toast('Introduce un email destinatario', 'error'); return; }
+  if (!subject) { toast('El asunto no puede estar vacío', 'error'); return; }
+
+  const btn = document.getElementById('mea-btn-enviar');
+  btn.disabled = true;
+  btn.textContent = 'Enviando…';
+
+  const r = await api(`/api/alertas/${_meaData.pedido_id}/enviar-email`, 'POST', {
+    to_email:   toEmail,
+    cc_emails:  _meaGetCCs(),
+    subject:    subject,
+    body_html:  _meaData.body_html,
+    dias:       _meaData.dias || 0,
+    nivel:      _meaData.nivel || 'aviso',
+    es_proveedor: _meaData.es_proveedor,
+  });
+
+  btn.disabled = false;
+  btn.textContent = '📤 Enviar email';
+
+  if (r.ok) {
+    toast(`✅ Email enviado correctamente a ${toEmail}`, 'success');
+    closeModal('modal-email-alerta');
+  } else {
+    const fallidos = (r.resultados||[]).filter(x=>!x.ok).map(x=>x.email).join(', ');
+    toast(`⚠ Algunos envíos fallaron: ${fallidos||'error desconocido'}`, 'error');
+  }
+}
+
+function meaAbrirWAUno(movil) {
+  if (!_meaData) return;
+  const texto = encodeURIComponent(document.getElementById('mea-wa-text').value);
+  const num   = movil.replace(/[^0-9]/g, '');
+  window.open(`https://wa.me/${num}?text=${texto}`, '_blank');
+  // Log en BD
+  api(`/api/alertas/${_meaData.pedido_id}/log-whatsapp`, 'POST', {
+    destinatario: movil,
+    mensaje: document.getElementById('mea-wa-text').value,
+  });
+}
+
+function meaEnviarWA() {
+  // Enviar a todos los receptores con móvil
+  if (!_meaData || !_meaData.wa_recipients || !_meaData.wa_recipients.length) {
+    toast('No hay números de móvil configurados para este hotel', 'error');
+    return;
+  }
+  _meaData.wa_recipients.forEach(r => {
+    if (r.movil) meaAbrirWAUno(r.movil.replace(/[^0-9+]/g,''));
+  });
+}
+
+document.getElementById('modal-email-alerta').addEventListener('click', function(e) {
+  if (e.target === this) closeModal('modal-email-alerta');
+});
+</script>
 </body>
 </html>
