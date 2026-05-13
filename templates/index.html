@@ -530,17 +530,17 @@ tbody tr:last-child{border-bottom:none}
     <div id="login-error" class="login-error"></div>
     <button class="login-btn" onclick="doLogin()">Acceder</button>
     <div style="text-align:center;margin-top:14px;">
-      <a href="#" onclick="mostrarFormReset(event)"
-         style="color:rgba(255,255,255,0.55);font-size:13px;text-decoration:none;">
+      <button onclick="mostrarFormReset()"
+         style="background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.55);font-size:13px;text-decoration:underline;padding:0;font-family:inherit;">
         ¿Olvidaste tu contraseña?
-      </a>
+      </button>
     </div>
   </div>
 </div>
 
 <!-- ── MODAL RESET PASSWORD ──────────────────────────────────────────────── -->
 <div id="modal-reset" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
-     z-index:2000;align-items:center;justify-content:center;">
+     z-index:10000;align-items:center;justify-content:center;">
   <div style="background:#1a1a2e;border:1px solid rgba(255,255,255,.15);border-radius:12px;
        padding:36px 32px;width:360px;max-width:95vw;color:#fff;position:relative;">
     <button onclick="cerrarModalReset()" style="position:absolute;top:12px;right:16px;
@@ -656,7 +656,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.5.5
+          v 9.5.7
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1509,8 +1509,7 @@ async function api(url, method='GET', body=null) {
 ═══════════════════════════════════════════════════════════════════════════ */
 let _resetToken = null;
 
-function mostrarFormReset(e) {
-  if (e) e.preventDefault();
+function mostrarFormReset() {
   document.getElementById('modal-reset').style.display = 'flex';
   document.getElementById('reset-paso1').style.display = '';
   document.getElementById('reset-paso2').style.display = 'none';
