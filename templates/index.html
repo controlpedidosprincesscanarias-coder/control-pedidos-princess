@@ -679,7 +679,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.7.4
+          v 9.7.5
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1556,19 +1556,55 @@ async function enviarSolicitudReset() {
   const errEl   = document.getElementById('reset-error1');
   errEl.style.display = 'none';
   if (!usuario) { errEl.textContent = 'Introduce tu usuario o email'; errEl.style.display = 'block'; return; }
+
+  const btn = document.querySelector('#reset-paso1 .login-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
+
   try {
     const r = await api('/api/password-reset/solicitar', 'POST', { usuario });
     document.getElementById('reset-paso1').style.display = 'none';
+
     if (r.sin_email && r.link) {
-      // Servidor sin email configurado — mostrar enlace directo
-      document.getElementById('reset-link-directo').textContent = r.link;
-      document.getElementById('reset-paso2b').style.display = '';
+      // Backend sin RESEND — intentar enviar con EmailJS desde el navegador
+      if (r.email) {
+        try {
+          await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+            to_email: r.email,
+            subject:  'Restablecimiento de contraseña – Control de Pedidos',
+            message:  `Hola ${r.nombre || usuario},
+
+Hemos recibido una solicitud para restablecer tu contraseña.
+
+Usa este enlace (válido 2 horas):
+${r.link}
+
+Si no lo solicitaste, ignora este mensaje.
+
+Control de Pedidos · Princess Canarias`,
+            reply_to: r.email,
+          });
+          // EmailJS envió — mostrar confirmación normal
+          document.getElementById('reset-paso2').style.display = '';
+        } catch(ejsErr) {
+          // EmailJS también falló — mostrar enlace directo como último recurso
+          console.warn('[EmailJS reset]', ejsErr);
+          document.getElementById('reset-link-directo').textContent = r.link;
+          document.getElementById('reset-paso2b').style.display = '';
+        }
+      } else {
+        // No hay email en el usuario — mostrar enlace directo
+        document.getElementById('reset-link-directo').textContent = r.link;
+        document.getElementById('reset-paso2b').style.display = '';
+      }
     } else {
+      // Resend funcionó en el backend
       document.getElementById('reset-paso2').style.display = '';
     }
   } catch(err) {
     errEl.textContent = 'Error de conexión. Inténtalo de nuevo.';
     errEl.style.display = 'block';
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Enviar enlace'; }
   }
 }
 

@@ -806,14 +806,17 @@ def solicitar_reset_password():
         """
         _send_email(admin_email, f"[RESET] Contraseña usuario {user['username']}", admin_body)  # best-effort
 
-    # Si no hay email configurado en absoluto, devolver el enlace directamente
+    # Si no hay email configurado en absoluto, devolver el enlace + datos del usuario
+    # para que el frontend lo envíe via EmailJS
     email_configurado = bool(RESEND_API_KEY)
     if not email_configurado:
         return jsonify({
-            "ok": True,
+            "ok":       True,
             "sin_email": True,
-            "link": link,
-            "msg": "Email no configurado en el servidor."
+            "link":     link,
+            "email":    user.get("email", ""),
+            "nombre":   user.get("nombre", user.get("username", "")),
+            "msg":      "Email no configurado en el servidor."
         })
 
     return jsonify({"ok": True, "msg": "Si el usuario existe, recibirás un correo."})
