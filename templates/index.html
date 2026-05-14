@@ -674,7 +674,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.6.0
+          v 9.6.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -3932,6 +3932,45 @@ function _meaGetCCs() {
   ).map(el => el.dataset.email);
 }
 
+// ── construirTextoCorreoPlano ────────────────────────────────────────────────
+// Genera la versión plain-text del cuerpo del correo a partir del preview HTML.
+// Se usa como body_text en Resend y como cuerpo de los fallbacks (Gmail web / mailto:).
+function construirTextoCorreoPlano(data) {
+  // Extrae el texto visible del HTML del preview
+  const tmp = document.createElement('div');
+  tmp.innerHTML = data.body_html || '';
+  return tmp.innerText || tmp.textContent || '';
+}
+
+// ── abrirGmailWebFallback ────────────────────────────────────────────────────
+// Fallback 1: abre Gmail web con todo pre-rellenado (igual que la otra app).
+function abrirGmailWebFallback(toEmail, ccList, subject, bodyText) {
+  const url = new URL('https://mail.google.com/mail/');
+  url.searchParams.set('view', 'cm');
+  url.searchParams.set('fs', '1');
+  url.searchParams.set('to', toEmail);
+  if (ccList && ccList.length) url.searchParams.set('bcc', ccList.join(','));
+  url.searchParams.set('su', subject);
+  url.searchParams.set('body', bodyText + '
+
+[Enviado desde Control Pedidos — fallback Gmail web]');
+  window.open(url.toString(), '_blank', 'noopener');
+}
+
+// ── abrirMailtoFallback ──────────────────────────────────────────────────────
+// Fallback 2: abre el cliente de correo corporativo vía mailto:.
+function abrirMailtoFallback(toEmail, ccList, subject, bodyText) {
+  let mailto = `mailto:${encodeURIComponent(toEmail)}`;
+  const params = [];
+  if (ccList && ccList.length) params.push(`bcc=${encodeURIComponent(ccList.join(','))}`);
+  params.push(`subject=${encodeURIComponent(subject)}`);
+  params.push(`body=${encodeURIComponent(bodyText)}`);
+  if (params.length) mailto += `?${params.join('&')}`;
+  window.location.href = mailto;
+}
+
+// ── meaEnviarEmail ───────────────────────────────────────────────────────────
+// Capa 1: Resend via backend  →  Capa 2: Gmail web  →  Capa 3: mailto:
 async function meaEnviarEmail() {
   if (!_meaData) return;
   const toEmail = document.getElementById('mea-to').value.trim();
@@ -3939,30 +3978,98 @@ async function meaEnviarEmail() {
   if (!toEmail) { toast('Introduce un email destinatario', 'error'); return; }
   if (!subject) { toast('El asunto no puede estar vacío', 'error'); return; }
 
+  const ccList   = _meaGetCCs();
+  const bodyText = construirTextoCorreoPlano(_meaData);
+
   const btn = document.getElementById('mea-btn-enviar');
   btn.disabled = true;
   btn.textContent = 'Enviando…';
 
-  const r = await api(`/api/alertas/${_meaData.pedido_id}/enviar-email`, 'POST', {
-    to_email:   toEmail,
-    cc_emails:  _meaGetCCs(),
-    subject:    subject,
-    body_html:  _meaData.body_html,
-    dias:       _meaData.dias || 0,
-    nivel:      _meaData.nivel || 'aviso',
-    es_proveedor: _meaData.es_proveedor,
-  });
+  // ── Capa 1: Resend via servidor ──────────────────────────────────────────
+  let r = null;
+  try {
+    r = await api(`/api/alertas/${_meaData.pedido_id}/enviar-email`, 'POST', {
+      to_email:     toEmail,
+      cc_emails:    ccList,
+      subject:      subject,
+      body_html:    _meaData.body_html,
+      body_text:    bodyText,
+      dias:         _meaData.dias || 0,
+      nivel:        _meaData.nivel || 'aviso',
+      es_proveedor: _meaData.es_proveedor,
+    });
+  } catch(e) {
+    r = { ok: false, error: 'Error de red: ' + e.message };
+  }
 
   btn.disabled = false;
   btn.textContent = '📤 Enviar email';
 
-  if (r.ok) {
+  if (r && r.ok) {
     toast(`✅ Email enviado correctamente a ${toEmail}`, 'success');
     closeModal('modal-email-alerta');
-  } else {
-    const fallidos = (r.resultados||[]).filter(x=>!x.ok).map(x=>x.email).join(', ');
-    toast(`⚠ Algunos envíos fallaron: ${fallidos||'error desconocido'}`, 'error');
+    return;
   }
+
+  // ── Capa 2 y 3: fallbacks si Resend no está configurado o falla ──────────
+  const errorMsg = r?.error || 'Error desconocido';
+  const esResendNoConf = errorMsg.includes('RESEND_API_KEY');
+
+  // Mostrar panel de fallback en lugar de un simple toast de error
+  _meaMostrarFallback(toEmail, ccList, subject, bodyText, errorMsg, esResendNoConf);
+}
+
+// ── _meaMostrarFallback ──────────────────────────────────────────────────────
+// Sustituye el body del modal por opciones de fallback claras.
+function _meaMostrarFallback(toEmail, ccList, subject, bodyText, errorMsg, esConfigError) {
+  const cuerpo = document.querySelector('#modal-email-alerta .mea-body');
+  if (!cuerpo) return;
+
+  const msgConfig = esConfigError
+    ? `<p style="color:#b45309;background:#fffbeb;border:1px solid #fcd34d;padding:10px 14px;border-radius:6px;font-size:13px">
+         ⚠️ <strong>El servidor no tiene Resend configurado.</strong><br>
+         Añade <code>RESEND_API_KEY</code> en las variables de entorno de Render para habilitar el envío automático.
+       </p>`
+    : `<p style="color:#991b1b;background:#fef2f2;border:1px solid #fca5a5;padding:10px 14px;border-radius:6px;font-size:13px">
+         ❌ <strong>El envío automático falló:</strong> ${errorMsg}
+       </p>`;
+
+  cuerpo.innerHTML = `
+    <div style="padding:8px 0">
+      ${msgConfig}
+      <p style="font-size:13px;color:#374151;margin:12px 0 6px">
+        Puedes enviar el correo igualmente usando una de estas opciones:
+      </p>
+      <div style="display:grid;gap:10px">
+        <button class="btn btn-gold" style="justify-content:center;gap:8px"
+          onclick="_meaFallbackGmail()">
+          📧 Abrir en Gmail web <span style="font-size:11px;opacity:.8">(recomendado)</span>
+        </button>
+        <button class="btn btn-ghost" style="justify-content:center"
+          onclick="_meaFallbackMailto()">
+          ✉️ Abrir en cliente de correo (Outlook / Mail)
+        </button>
+      </div>
+      <p style="font-size:11px;color:#9ca3af;margin-top:14px">
+        Destinatario: <strong>${toEmail}</strong>
+        ${ccList.length ? ` · CCO: ${ccList.join(', ')}` : ''}
+      </p>
+    </div>`;
+
+  // Guardar los datos para los botones de fallback
+  window._meaFallbackData = { toEmail, ccList, subject, bodyText };
+}
+
+function _meaFallbackGmail() {
+  if (!window._meaFallbackData) return;
+  const { toEmail, ccList, subject, bodyText } = window._meaFallbackData;
+  abrirGmailWebFallback(toEmail, ccList, subject, bodyText);
+}
+
+function _meaFallbackMailto() {
+  if (!window._meaFallbackData) return;
+  const { toEmail, ccList, subject, bodyText } = window._meaFallbackData;
+  abrirMailtoFallback(toEmail, ccList, subject, bodyText);
 }
 
 function meaAbrirWAUno(movil) {

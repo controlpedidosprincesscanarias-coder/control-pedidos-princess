@@ -247,59 +247,50 @@ def current_user_id():
 
 # ── Email (Resend preferido, SMTP como fallback) ───────────────────────────────
 
-def _send_email(to: str, subject: str, body_html: str) -> bool:
-    # ── Resend ────────────────────────────────────────────────────────────────
+def _send_email(to: str, subject: str, body_html: str,
+                bcc: list = None, body_text: str = None) -> dict:
+    """
+    Envía un email usando Resend API (único método fiable en Render Free).
+    SMTP de Gmail está bloqueado en Render Free — no se usa.
+
+    Devuelve dict: { ok: bool, error: str|None, mode: str }
+    """
+    import urllib.request, urllib.error
+
+    to_list  = [t.strip() for t in to.split(",") if t.strip()] if to else []
+    bcc_list = [b.strip() for b in (bcc or []) if b.strip()]
+
+    # ── Resend API ─────────────────────────────────────────────────────────────
     if RESEND_API_KEY:
         try:
-            import urllib.request
-            payload = json.dumps({
-                "from":    EMAIL_FROM,
-                "to":      [to],
-                "subject": subject,
-                "html":    body_html,
-            }).encode()
+            payload = {"from": EMAIL_FROM, "to": to_list, "subject": subject, "html": body_html}
+            if bcc_list:
+                payload["bcc"] = bcc_list
+            if body_text:
+                payload["text"] = body_text
+
             req = urllib.request.Request(
                 "https://api.resend.com/emails",
-                data=payload,
-                headers={
-                    "Authorization": f"Bearer {RESEND_API_KEY}",
-                    "Content-Type":  "application/json",
-                },
+                data=json.dumps(payload).encode(),
+                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
                 method="POST",
             )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                return resp.status in (200, 201, 202)
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                ok = resp.status in (200, 201, 202)
+                return {"ok": ok, "error": None if ok else f"Resend HTTP {resp.status}", "mode": "resend"}
+        except urllib.error.HTTPError as e:
+            body = e.read().decode(errors="replace")
+            log.error("Resend HTTP %s para %s: %s", e.code, to, body)
+            return {"ok": False, "error": f"Resend HTTP {e.code}: {body[:200]}", "mode": "resend"}
         except Exception as e:
-            log.error("Resend error enviando a %s: %s", to, e)
-            return False
+            log.error("Resend error para %s: %s", to, e)
+            return {"ok": False, "error": str(e), "mode": "resend"}
 
-    # ── SMTP fallback ─────────────────────────────────────────────────────────
-    if SMTP_HOST and SMTP_USER and SMTP_PASSWORD:
-        try:
-            import smtplib
-            from email.mime.text import MIMEText
-            from email.mime.multipart import MIMEMultipart
-            msg = MIMEMultipart("alternative")
-            msg["Subject"] = subject
-            msg["From"]    = EMAIL_FROM
-            msg["To"]      = to
-            msg.attach(MIMEText(body_html, "html", "utf-8"))
-            if SMTP_PORT == 465:
-                with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=10) as s:
-                    s.login(SMTP_USER, SMTP_PASSWORD)
-                    s.sendmail(EMAIL_FROM, [to], msg.as_string())
-            else:
-                with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=10) as s:
-                    s.starttls()
-                    s.login(SMTP_USER, SMTP_PASSWORD)
-                    s.sendmail(EMAIL_FROM, [to], msg.as_string())
-            return True
-        except Exception as e:
-            log.error("SMTP error enviando a %s: %s", to, e)
-            return False
-
-    log.warning("Email no configurado — omitido para %s", to)
-    return False
+    # ── Sin proveedor configurado ──────────────────────────────────────────────
+    # NOTA: Gmail SMTP no es viable en Render Free (puerto 465/587 bloqueado).
+    # Configura RESEND_API_KEY en las variables de entorno de Render.
+    log.warning("Email no enviado — RESEND_API_KEY no configurada. Destino: %s", to)
+    return {"ok": False, "error": "RESEND_API_KEY no configurada en el servidor", "mode": "none"}
 
 def _log_email(db, pedido_id, tipo, destinatario, asunto, enviado, error=None):
     with db.cursor() as cur:
@@ -335,8 +326,9 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         <p><strong>Estado actual:</strong> {estado_nuevo}</p>
         <p>Atentamente,<br>Departamento de Compras<br>Princess Hotels &amp; Resorts — Canarias</p>
         """
-        ok = _send_email(pedido["proveedor_email"], subject, body)
-        _log_email(db, pedido_id, "proveedor", pedido["proveedor_email"], subject, ok)
+        res = _send_email(pedido["proveedor_email"], subject, body)
+        _log_email(db, pedido_id, "proveedor", pedido["proveedor_email"], subject,
+                   res["ok"], res.get("error"))
 
     if estado_nuevo in ESTADOS_EMAIL_INTERNO and EMAILS_INTERNOS:
         subject = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {estado_nuevo}"
@@ -352,8 +344,9 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         </table>
         """
         for dest in EMAILS_INTERNOS:
-            ok = _send_email(dest, subject, body)
-            _log_email(db, pedido_id, "interno", dest, subject, ok)
+            res = _send_email(dest, subject, body)
+            _log_email(db, pedido_id, "interno", dest, subject,
+                       res["ok"], res.get("error"))
 
 # ── Helper norden ──────────────────────────────────────────────────────────────
 
@@ -658,13 +651,14 @@ def alerta_email_preview(pedido_id):
 @login_required
 def alerta_enviar_email(pedido_id):
     """Envía el email de alerta al destinatario/s indicados y lo registra en emails_log."""
-    data     = request.get_json(silent=True) or {}
-    to_email = (data.get("to_email") or "").strip()
+    data      = request.get_json(silent=True) or {}
+    to_email  = (data.get("to_email") or "").strip()
     cc_emails = [e.strip() for e in (data.get("cc_emails") or []) if e.strip()]
-    subject  = (data.get("subject") or "").strip()
+    subject   = (data.get("subject") or "").strip()
     body_html = data.get("body_html") or ""
-    dias     = int(data.get("dias", 0))
-    nivel    = data.get("nivel", "aviso")
+    body_text = data.get("body_text") or ""
+    dias      = int(data.get("dias", 0))
+    nivel     = data.get("nivel", "aviso")
 
     if not to_email or not subject:
         return jsonify({"error": "Faltan destinatario o asunto"}), 400
@@ -672,21 +666,17 @@ def alerta_enviar_email(pedido_id):
     db = get_db()
     resultados = []
 
-    # Envío al destinatario principal
-    ok = _send_email(to_email, subject, body_html)
-    _log_email(db, pedido_id, "alerta_proveedor" if data.get("es_proveedor") else "alerta_interno",
-               to_email, subject, ok)
-    resultados.append({"email": to_email, "ok": ok})
-
-    # Envío a copias (compradores)
-    for cc in cc_emails:
-        ok_cc = _send_email(cc, f"[CC] {subject}", body_html)
-        _log_email(db, pedido_id, "alerta_cc", cc, subject, ok_cc)
-        resultados.append({"email": cc, "ok": ok_cc})
+    # Envío único: TO principal + BCC compradores en una sola llamada a Resend
+    tipo_log = "alerta_proveedor" if data.get("es_proveedor") else "alerta_interno"
+    res = _send_email(to_email, subject, body_html, bcc=cc_emails, body_text=body_text)
+    _log_email(db, pedido_id, tipo_log, to_email, subject, res["ok"], res.get("error"))
+    resultados.append({"email": to_email, "ok": res["ok"], "error": res.get("error"), "mode": res.get("mode")})
 
     db.commit()
     todos_ok = all(r["ok"] for r in resultados)
-    return jsonify({"ok": todos_ok, "resultados": resultados})
+    # Devuelve el error detallado para que el frontend active el fallback si procede
+    primer_error = next((r["error"] for r in resultados if not r["ok"]), None)
+    return jsonify({"ok": todos_ok, "resultados": resultados, "error": primer_error})
 
 @app.route("/api/alertas/<int:pedido_id>/log-whatsapp", methods=["POST"])
 @login_required
@@ -801,7 +791,8 @@ def solicitar_reset_password():
     log.info("PASSWORD RESET solicitado por '%s' (id=%s) — enlace: %s",
              user["username"], user["id"], link)
 
-    email_enviado = _send_email(user["email"], subject, body_html)
+    res_email = _send_email(user["email"], subject, body_html)
+    email_enviado = res_email["ok"]
 
     # Fallback: si falla, intentar con ADMIN_EMAIL
     admin_email = os.environ.get("ADMIN_EMAIL", "")
@@ -813,10 +804,10 @@ def solicitar_reset_password():
         <p>Enlace (válido 2h): <a href="{link}">{link}</a></p>
         <p style="color:#666;font-size:12px;">Reenvía este enlace manualmente al usuario.</p>
         """
-        _send_email(admin_email, f"[RESET] Contraseña usuario {user['username']}", admin_body)
+        _send_email(admin_email, f"[RESET] Contraseña usuario {user['username']}", admin_body)  # best-effort
 
     # Si no hay email configurado en absoluto, devolver el enlace directamente
-    email_configurado = bool(RESEND_API_KEY or (SMTP_HOST and SMTP_USER))
+    email_configurado = bool(RESEND_API_KEY)
     if not email_configurado:
         return jsonify({
             "ok": True,
