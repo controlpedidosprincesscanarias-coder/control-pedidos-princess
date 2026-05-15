@@ -373,7 +373,7 @@ HOTEL_COMPRADOR = {
 }
 
 # ── Telegram Bot — alertas automáticas ─────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8907888491:AAHcidl8pl9XeLLQcyEEPxnnoIyOdiopKqk")
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 # Chat IDs de cada comprador (obtenidos via getUpdates)
 # comprascan (Victor Martin) y dcompras (J.Curbelo) reciben TODOS los hoteles
