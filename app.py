@@ -643,7 +643,8 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
 
 
 def _get_compradores_cc(hotel_codigo: str):
-    """Devuelve lista de dicts {email, nombre, movil} de los compradores responsables del hotel."""
+    """Devuelve lista de dicts {email, nombre, movil} de los compradores responsables del hotel.
+    El orden respeta HOTEL_COMPRADOR: el comprador principal (responsable directo) va siempre primero."""
     usernames = HOTEL_COMPRADOR.get((hotel_codigo or "").upper(), [])
     if not usernames:
         return []
@@ -652,6 +653,10 @@ def _get_compradores_cc(hotel_codigo: str):
         f"SELECT username, nombre, email, movil FROM usuarios WHERE username IN ({placeholders}) AND activo=1",
         tuple(usernames)
     ))
+    # Reordenar segun el orden definido en HOTEL_COMPRADOR para garantizar que
+    # el comprador responsable del hotel (posicion 0) aparezca siempre primero.
+    orden = {u: i for i, u in enumerate(usernames)}
+    rows.sort(key=lambda r: orden.get(r.get("username", ""), 999))
     return rows
 
 # ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
@@ -670,19 +675,13 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
         <p>Estimado/a proveedor/a,</p>
         <p>Nos ponemos en contacto con usted en relación al pedido que figura a continuación,
            el cual fue tramitado hace <strong>{dias} días</strong> y aún no hemos recibido confirmación de entrega.</p>
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Pedido Nº</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('pedido_num','—')}</td></tr>
-          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Hotel</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
-          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Estado actual</td>
-              <td style="padding:8px 12px;border:1px solid #ddd;color:#8B0000;font-weight:bold">ENVIADO AL PROVEEDOR</td></tr>
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días transcurridos</td>
-              <td style="padding:8px 12px;border:1px solid #ddd"><strong style="color:{'#dc2626' if urgente else '#b45309'}">{dias} días</strong></td></tr>
-          {f'<tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
-        </table>
+        <p style="margin:16px 0;line-height:2;font-size:14px">
+          <strong>Pedido Nº:</strong> {pedido.get('pedido_num','—')}<br>
+          <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
+          <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
+          <strong>Estado actual:</strong> <span style="color:#8B0000">{pedido.get('estado','ENVIADO AL PROVEEDOR')}</span><br>
+          <strong>Días transcurridos:</strong> <span style="color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</span>{('<br><strong>Observaciones:</strong> ' + pedido['observaciones']) if pedido.get('observaciones') else ''}
+        </p>
         <p>Le rogamos que nos confirme el estado actual del pedido y la fecha estimada de entrega
            a la mayor brevedad posible.</p>
         {'<p style="color:#dc2626;font-weight:bold;border:1px solid #fca5a5;background:#fee2e2;padding:10px;border-radius:4px">⚠️ ATENCIÓN: Esta es una solicitud urgente. Por favor, responda en el día de hoy.</p>' if urgente else ''}
@@ -753,19 +752,13 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
         <p>Estimado/a proveedor/a,</p>
         <p>Le contactamos en relación al pedido indicado, cuya entrega se registró de forma
            <strong>parcial</strong> hace <strong>{dias} días</strong> y aún está pendiente de completarse.</p>
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Pedido Nº</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('pedido_num','—')}</td></tr>
-          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Hotel</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
-          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Estado actual</td>
-              <td style="padding:8px 12px;border:1px solid #ddd;color:#8B0000;font-weight:bold">ENTREGA PARCIAL</td></tr>
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días transcurridos</td>
-              <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">{dias} días</td></tr>
-          {f'<tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
-        </table>
+        <p style="margin:16px 0;line-height:2;font-size:14px">
+          <strong>Pedido Nº:</strong> {pedido.get('pedido_num','—')}<br>
+          <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
+          <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
+          <strong>Estado actual:</strong> <span style="color:#8B0000">ENTREGA PARCIAL</span><br>
+          <strong>Días transcurridos:</strong> <span style="color:#b45309;font-weight:bold">{dias} días</span>{('<br><strong>Observaciones:</strong> ' + pedido['observaciones']) if pedido.get('observaciones') else ''}
+        </p>
         <p>Le rogamos que nos informe sobre la fecha prevista para completar la entrega pendiente.</p>
         <p>Muchas gracias.</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
@@ -792,19 +785,13 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
         <p>Estimado/a proveedor/a,</p>
         <p>Le recordamos que hace <strong>{dias} días</strong> se le solicitó cotización
            para el siguiente pedido y aún estamos a la espera de su propuesta económica.</p>
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Pedido Nº</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('pedido_num','—')}</td></tr>
-          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Hotel</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
-          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Estado actual</td>
-              <td style="padding:8px 12px;border:1px solid #ddd;color:#8B0000;font-weight:bold">PENDIENTE COTIZACIÓN</td></tr>
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días transcurridos</td>
-              <td style="padding:8px 12px;border:1px solid #ddd;color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</td></tr>
-          {f'<tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
-        </table>
+        <p style="margin:16px 0;line-height:2;font-size:14px">
+          <strong>Pedido Nº:</strong> {pedido.get('pedido_num','—')}<br>
+          <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
+          <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
+          <strong>Estado actual:</strong> <span style="color:#8B0000">PENDIENTE COTIZACIÓN</span><br>
+          <strong>Días transcurridos:</strong> <span style="color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</span>{('<br><strong>Observaciones:</strong> ' + pedido['observaciones']) if pedido.get('observaciones') else ''}
+        </p>
         {'<p style="color:#dc2626;font-weight:bold;border:1px solid #fca5a5;background:#fee2e2;padding:10px;border-radius:4px">⚠️ URGENTE: Necesitamos su cotización hoy para no retrasar la tramitación del pedido.</p>' if urgente else '<p>Le agradecemos que nos envíe su mejor oferta a la mayor brevedad posible.</p>'}
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <p style="font-size:12px;color:#666">Atentamente,<br>
@@ -946,27 +933,50 @@ def alerta_enviar_email(pedido_id):
     """Envía el email de alerta al destinatario/s indicados y lo registra en emails_log."""
     data      = request.get_json(silent=True) or {}
     to_email  = (data.get("to_email") or "").strip()
-    cc_emails = [e.strip() for e in (data.get("cc_emails") or []) if e.strip()]
     subject   = (data.get("subject") or "").strip()
     body_html = data.get("body_html") or ""
     body_text = data.get("body_text") or ""
     dias      = int(data.get("dias", 0))
     nivel     = data.get("nivel", "aviso")
+    es_proveedor = data.get("es_proveedor", False)
 
     if not to_email or not subject:
         return jsonify({"error": "Faltan destinatario o asunto"}), 400
+
+    # ── Recalcular CC en backend para no depender del frontend ────────────────
+    # El frontend puede no enviar cc_emails o enviarlos incompletos.
+    # Siempre recalculamos los compradores asignados al hotel del pedido.
+    pedido_data = row_to_dict(query(f"{PEDIDO_SELECT_ALERTA} WHERE p.id=%s", (pedido_id,), one=True))
+    if pedido_data:
+        hotel_codigo = pedido_data.get("hotel_codigo", "")
+        compradores_hotel = _get_compradores_cc(hotel_codigo)
+        # CC = todos los compradores del hotel excepto si su email coincide con el TO principal
+        cc_emails_backend = [
+            c["email"] for c in compradores_hotel
+            if c.get("email") and c["email"].strip() != to_email
+        ]
+    else:
+        cc_emails_backend = []
+
+    # Combinar con cualquier CC extra que venga del frontend (sin duplicados)
+    cc_frontend = [e.strip() for e in (data.get("cc_emails") or []) if e.strip()]
+    cc_emails = list(dict.fromkeys(cc_emails_backend + [e for e in cc_frontend if e not in cc_emails_backend]))
+
+    log.info("Alerta email pedido %s → TO: %s | CC/BCC: %s", pedido_id, to_email, cc_emails)
 
     db = get_db()
     resultados = []
 
     # Envío único: TO principal + BCC compradores en una sola llamada a Resend
-    tipo_log = "alerta_proveedor" if data.get("es_proveedor") else "alerta_interno"
+    tipo_log = "alerta_proveedor" if es_proveedor else "alerta_interno"
     res = _send_email(to_email, subject, body_html, bcc=cc_emails, body_text=body_text)
     _log_email(db, pedido_id, tipo_log, to_email, subject, res["ok"], res.get("error"))
     resultados.append({"email": to_email, "ok": res["ok"], "error": res.get("error"), "mode": res.get("mode")})
 
     # ── Telegram automático — se dispara siempre al enviar la alerta ──────────
-    pedido_data = row_to_dict(query(f"{PEDIDO_SELECT_ALERTA} WHERE p.id=%s", (pedido_id,), one=True))
+    # pedido_data ya fue cargado arriba para calcular los CC
+    if not pedido_data:
+        pedido_data = row_to_dict(query(f"{PEDIDO_SELECT_ALERTA} WHERE p.id=%s", (pedido_id,), one=True))
     telegram_resultados = []
     if pedido_data:
         telegram_resultados = _enviar_telegram_compradores(pedido_data, dias, nivel)
