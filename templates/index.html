@@ -679,7 +679,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.8.3
+          v 9.8.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -4053,23 +4053,6 @@ async function meaEnviarEmail() {
 
     btn.disabled = false;
     btn.textContent = '📤 Enviar email';
-
-    // Mostrar resultado Telegram en el tab
-    if (r && r.telegram && r.telegram.length) {
-      const okList  = r.telegram.filter(t => t.ok).map(t => t.username).join(', ');
-      const errList = r.telegram.filter(t => !t.ok).map(t => t.username).join(', ');
-      const tgStatus = document.getElementById('mea-telegram-status');
-      if (tgStatus) {
-        tgStatus.style.display = '';
-        tgStatus.innerHTML = okList
-          ? `<div style="background:#e8f4fd;border:1px solid #90caf9;border-radius:6px;padding:8px 12px;font-size:12px;color:#0d47a1">
-               ✈️ Telegram enviado a: <strong>${okList}</strong>${errList ? ` · ⚠️ Falló: ${errList}` : ''}
-             </div>`
-          : `<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:8px 12px;font-size:12px;color:#991b1b">
-               ⚠️ Telegram falló para: ${errList}
-             </div>`;
-      }
-    }
 
     toast(`✅ Email enviado a ${toEmail}`, 'success');
     closeModal('modal-email-alerta');
