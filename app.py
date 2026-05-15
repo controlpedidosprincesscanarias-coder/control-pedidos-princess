@@ -3,9 +3,11 @@ Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase) + Resend
 Despliegue: Render.com  |  BD: Supabase  |  Email: Resend
 """
 
-import os, json, logging, secrets
-from datetime import datetime, timedelta
+import os, json, logging, secrets, atexit
+from datetime import datetime, timedelta, date as _date
 from functools import wraps
+
+from apscheduler.schedulers.background import BackgroundScheduler
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -440,6 +442,180 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
         log.info("Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
         resultados.append({"username": username, "chat_id": chat_id, **res})
     return resultados
+
+# ── Job diario: alertas por fecha (independiente del usuario) ──────────────────
+
+UMBRALES_ALERTAS = {
+    "ENVIADO AL PROVEEDOR": {
+        "primera": 15, "urgente": 25, "ciclo": 10,
+    },
+    "PENDIENTE FIRMA DIRECCION COMPRAS": {
+        "primera": 8, "urgente": None, "ciclo": 8,
+    },
+    "PENDIENTE DE FIRMA DIRECCION HOTEL": {
+        "primera": 5, "urgente": None, "ciclo": 5,
+    },
+    "ENTREGA PARCIAL": {
+        "primera": 10, "urgente": None, "ciclo": 10,
+    },
+    "PENDIENTE COTIZACIÓN": {
+        "primera": 2, "urgente": 3, "ciclo": None, "fecha_ref": "fecha_solicitud",
+    },
+}
+
+def _dias_desde_fecha(fecha_str):
+    """Calcula días transcurridos desde una fecha (string o date/datetime)."""
+    if not fecha_str:
+        return None
+    try:
+        from datetime import datetime as _dt, date as _d
+        if hasattr(fecha_str, 'date'):
+            f = fecha_str.date()
+        elif isinstance(fecha_str, _d):
+            f = fecha_str
+        else:
+            f = _dt.strptime(str(fecha_str)[:10], "%Y-%m-%d").date()
+        return (_date.today() - f).days
+    except Exception:
+        return None
+
+def _ya_notificado_hoy(pedido_id: int) -> bool:
+    """
+    Devuelve True si ya se envió un telegram_auto para este pedido HOY.
+    Evita duplicar notificaciones si el job se ejecuta varias veces.
+    """
+    try:
+        row = query(
+            """SELECT COUNT(*) as n FROM whatsapp_log
+               WHERE pedido_id=%s AND tipo='telegram_auto'
+                 AND DATE(creado_en) = CURRENT_DATE""",
+            (pedido_id,), one=True
+        )
+        return (row["n"] if row else 0) > 0
+    except Exception:
+        return False
+
+def _job_alertas_diarias():
+    """
+    Job automático diario: calcula alertas por fecha y envía Telegram
+    a los compradores responsables sin ninguna interacción del usuario.
+    Se ejecuta cada día a las 08:00 hora Canarias.
+    """
+    log.info("▶ [SCHEDULER] Inicio job alertas diarias — %s", _date.today())
+    try:
+        alertas_raw = rows_to_list(query(f"""
+            {PEDIDO_SELECT_ALERTA}
+            WHERE p.estado IN (
+                'ENVIADO AL PROVEEDOR',
+                'PENDIENTE FIRMA DIRECCION COMPRAS',
+                'PENDIENTE DE FIRMA DIRECCION HOTEL',
+                'ENTREGA PARCIAL',
+                'PENDIENTE COTIZACIÓN'
+            )
+              AND (
+                p.fecha_tramitacion IS NOT NULL
+                OR (p.estado = 'PENDIENTE COTIZACIÓN' AND p.fecha_solicitud IS NOT NULL)
+              )
+            ORDER BY p.fecha_tramitacion ASC
+        """))
+    except Exception as exc:
+        log.error("[SCHEDULER] Error consultando pedidos: %s", exc)
+        return
+
+    enviados = 0
+    omitidos = 0
+
+    for p in alertas_raw:
+        cfg = UMBRALES_ALERTAS.get(p["estado"])
+        if not cfg:
+            continue
+
+        fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
+        dias = _dias_desde_fecha(p.get(fecha_ref_campo))
+        if dias is None or dias < cfg["primera"]:
+            continue
+
+        nivel = "urgente" if (cfg["urgente"] and dias >= cfg["urgente"]) else "aviso"
+
+        # No enviar si ya se notificó hoy
+        if _ya_notificado_hoy(p["id"]):
+            omitidos += 1
+            continue
+
+        resultados = _enviar_telegram_compradores(p, dias, nivel)
+
+        # Registrar en whatsapp_log
+        try:
+            db = get_db()
+            for r in resultados:
+                _log_whatsapp(
+                    db, p["id"], "telegram_auto",
+                    r.get("username", "?"),
+                    f"Alerta automática {nivel} — {dias}d sin respuesta",
+                    r.get("ok", False),
+                    r.get("error"),
+                )
+            db.commit()
+        except Exception as exc:
+            log.error("[SCHEDULER] Error guardando log pedido %s: %s", p["id"], exc)
+
+        enviados += 1
+
+    log.info("✅ [SCHEDULER] Job finalizado — %d alertas enviadas, %d omitidas (ya notificadas hoy)", enviados, omitidos)
+
+
+def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, familia_nombre: str):
+    """
+    Envía Telegram inmediato cuando se crea un pedido sujeto al techo de gastos.
+    Se dispara en el momento del INSERT, sin esperar al job diario.
+    """
+    try:
+        pedido = row_to_dict(query(f"{PEDIDO_SELECT_ALERTA} WHERE p.id=%s", (pedido_id,), one=True))
+        if not pedido:
+            return
+
+        hotel_cod = (hotel_codigo or pedido.get("hotel_codigo") or "").upper()
+        usernames = HOTEL_COMPRADOR.get(hotel_cod, [])
+        if not usernames:
+            log.warning("[TECHO] Sin compradores para hotel %s", hotel_cod)
+            return
+
+        mes_txt = _date.today().strftime("%B %Y")
+        texto = (
+            "🏦 *Alerta Techo de Gastos*\n"
+            f"Hotel: *{pedido.get('hotel_codigo','?')}* — {pedido.get('hotel_nombre','')}\n"
+            f"Pedido: *{pedido.get('pedido_num') or ('Nº Orden ' + str(pedido.get('norden','?')))}*\n"
+            f"Familia: {familia_nombre or '—'}\n"
+            f"Importe: *{importe:,.2f} €*\n"
+            f"Mes: {mes_txt}\n"
+            "⚠️ Este pedido está sujeto al techo de gastos mensual.\n"
+            "— Control Pedidos Princess Canarias"
+        )
+
+        resultados = []
+        for username in usernames:
+            chat_id = TELEGRAM_CHAT_IDS.get(username)
+            if not chat_id:
+                continue
+            res = _send_telegram(chat_id, texto)
+            log.info("[TECHO] Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
+            resultados.append({"username": username, "chat_id": chat_id, **res})
+
+        # Registrar en log
+        db = get_db()
+        for r in resultados:
+            _log_whatsapp(
+                db, pedido_id, "telegram_techo",
+                r.get("username", "?"),
+                f"Alerta techo gastos — {importe:,.2f} € — {familia_nombre}",
+                r.get("ok", False),
+                r.get("error"),
+            )
+        db.commit()
+
+    except Exception as exc:
+        log.error("[TECHO] Error enviando telegram techo pedido %s: %s", pedido_id, exc)
+
 
 def _get_compradores_cc(hotel_codigo: str):
     """Devuelve lista de dicts {email, nombre, movil} de los compradores responsables del hotel."""
@@ -1949,6 +2125,17 @@ def create_pedido():
     db.commit()
 
     enviar_emails_estado(db, pedido_id, estado)
+
+    # ── Telegram inmediato si el pedido está sujeto al techo de gastos ────────
+    if sujeto_techo:
+        nombre_familia = None
+        if familia_id:
+            row_f = query("SELECT nombre FROM familias WHERE id=%s", (familia_id,), one=True)
+            nombre_familia = row_f["nombre"] if row_f else None
+        hotel_codigo = query("SELECT codigo FROM hoteles WHERE id=%s", (data.get("hotel_id"),), one=True)
+        hotel_cod = hotel_codigo["codigo"] if hotel_codigo else ""
+        _telegram_alerta_techo(pedido_id, hotel_cod, float(importe or 0), nombre_familia or "—")
+
     return jsonify({"ok": True, "id": pedido_id, "norden": norden}), 201
 
 @app.route("/api/pedidos/<int:pid>", methods=["PUT"])
@@ -2853,6 +3040,27 @@ def unhandled_exception(e):
     if request.path.startswith("/api/"):
         return jsonify({"ok": False, "error": f"Error inesperado: {str(e)}"}), 500
     return jsonify({"ok": False, "error": str(e)}), 500
+
+# ── Scheduler: alertas automáticas por Telegram ───────────────────────────────
+# Corre dentro del mismo proceso gunicorn — sin Redis, sin Celery, sin workers.
+# Cada día a las 08:00 hora Canarias revisa todos los pedidos activos y envía
+# Telegram a los compradores cuyo umbral de días se haya superado.
+
+def _iniciar_scheduler():
+    scheduler = BackgroundScheduler(timezone="Atlantic/Canary")
+    scheduler.add_job(
+        _job_alertas_diarias,
+        trigger="cron",
+        hour=8, minute=0,
+        id="alertas_diarias",
+        replace_existing=True,
+        misfire_grace_time=3600,  # si el servidor estaba caído, ejecuta hasta 1h tarde
+    )
+    scheduler.start()
+    log.info("✅ Scheduler iniciado — alertas diarias a las 08:00 (Atlantic/Canary)")
+    atexit.register(lambda: scheduler.shutdown(wait=False))
+
+_iniciar_scheduler()
 
 # ── Arranque ───────────────────────────────────────────────────────────────────
 
