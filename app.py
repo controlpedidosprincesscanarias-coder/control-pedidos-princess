@@ -350,37 +350,38 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 
 # ── Helper norden ──────────────────────────────────────────────────────────────
 
-# ── Asignación de compradores por hotel (v9.8) ─────────────────────────────────
-# comprascan (Victor)  →  TODOS los hoteles (supervisión general)
-# MG - TA - SU         →  comprascan2 (Said)
-# GC - MT              →  comprascan4 (Fran)
-# FV - JN              →  comprascan3 (David)
-# GY - IT - LP         →  comprascan6 (Maria Cruz) + comprascan6b (J.Curbelo) + comprascan
+# ── Asignación de compradores por hotel (v9.8.1) ────────────────────────────────
+# comprascan  (Victor)    →  TODOS los hoteles (supervisión general)
+# dcompras (J.Curbelo) →  TODOS los hoteles (supervisión general)
+# MG - TA - SU            →  comprascan2 (Said)
+# GC - MT                 →  comprascan4 (Fran)
+# FV - JN                 →  comprascan3 (David)
+# GY - IT - LP            →  comprascan6 (Maria Cruz)
 HOTEL_COMPRADOR = {
-    "MG": ["comprascan2", "comprascan"],
-    "TA": ["comprascan2", "comprascan"],
-    "SU": ["comprascan2", "comprascan"],
-    "GC": ["comprascan4", "comprascan"],
-    "MT": ["comprascan4", "comprascan"],
-    "FV": ["comprascan3", "comprascan"],
-    "JN": ["comprascan3", "comprascan"],
-    "GY": ["comprascan6", "comprascan6b", "comprascan"],
-    "IT": ["comprascan6", "comprascan6b", "comprascan"],
-    "LP": ["comprascan6", "comprascan6b", "comprascan"],
+    "MG": ["comprascan2", "dcompras", "comprascan"],
+    "TA": ["comprascan2", "dcompras", "comprascan"],
+    "SU": ["comprascan2", "dcompras", "comprascan"],
+    "GC": ["comprascan4", "dcompras", "comprascan"],
+    "MT": ["comprascan4", "dcompras", "comprascan"],
+    "FV": ["comprascan3", "dcompras", "comprascan"],
+    "JN": ["comprascan3", "dcompras", "comprascan"],
+    "GY": ["comprascan6", "dcompras", "comprascan"],
+    "IT": ["comprascan6", "dcompras", "comprascan"],
+    "LP": ["comprascan6", "dcompras", "comprascan"],
 }
 
 # ── Telegram Bot — alertas automáticas ─────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8907888491:AAHcidl8pl9XeLLQcyEEPxnnoIyOdiopKqk")
 
 # Chat IDs de cada comprador (obtenidos via getUpdates)
-# comprascan (Victor Martin) recibe TODOS los avisos de todos los hoteles
+# comprascan (Victor Martin) y dcompras (J.Curbelo) reciben TODOS los hoteles
 TELEGRAM_CHAT_IDS = {
-    "comprascan":  "8951368652",   # Victor Martin   — TODOS los hoteles
+    "comprascan":  "8951368652",   # Victor Martin   — TODOS los hoteles (supervisión)
     "comprascan2": "8680179211",   # Said Dris        — TA·SU·MG
     "comprascan3": "8644286751",   # David Compras    — FV·JN
     "comprascan4": "8047794100",   # Fran             — MT·GC
     "comprascan6": "8761059937",   # Maria Cruz       — GY·IT·LP
-    "comprascan6b": "8214256843",  # J. Curbelo       — GY·IT·LP (secundario)
+    "dcompras": "8214256843",  # J. Curbelo       — TODOS los hoteles (supervisión)
 }
 
 def _send_telegram(chat_id: str, text: str) -> dict:
