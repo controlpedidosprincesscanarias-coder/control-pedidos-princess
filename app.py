@@ -319,14 +319,23 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         return
 
     if estado_nuevo in ESTADOS_EMAIL_PROVEEDOR and pedido.get("proveedor_email"):
-        subject = f"Pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels"
+        subject = f"Pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
+        # Obtener email del comprador responsable del hotel
+        _compradores_estado = _get_compradores_cc(pedido.get("hotel_codigo",""))
+        _email_comprador_estado = _compradores_estado[0]["email"] if _compradores_estado and _compradores_estado[0].get("email") else "compras@princess.es"
         body = f"""
-        <p>Estimado/a <strong>{pedido.get('proveedor_nombre','')}</strong>,</p>
-        <p>Le informamos que el pedido <strong>Nº {pedido.get('pedido_num','—')}</strong>
-           del hotel <strong>{pedido.get('hotel_nombre','')}</strong>
-           ({pedido.get('departamento_nombre','')}) ha sido tramitado.</p>
-        <p><strong>Estado actual:</strong> {estado_nuevo}</p>
-        <p>Atentamente,<br>Departamento de Compras<br>Princess Hotels &amp; Resorts — Canarias</p>
+        <p>Estimado/a proveedor/a,</p>
+        <p>Le informamos que el pedido que figura a continuación ha sido tramitado:</p>
+        <p>
+          <strong>Pedido Nº:</strong> {pedido.get('pedido_num','—')}<br>
+          <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
+          <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
+          <strong>Estado actual:</strong> {estado_nuevo}
+        </p>
+        <p>Atentamente,<br>
+           <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
+           Princess Hotels &amp; Resorts<br>
+           <a href="mailto:{_email_comprador_estado}">{_email_comprador_estado}</a></p>
         """
         res = _send_email(pedido["proveedor_email"], subject, body)
         _log_email(db, pedido_id, "proveedor", pedido["proveedor_email"], subject,
@@ -647,7 +656,7 @@ def _get_compradores_cc(hotel_codigo: str):
 
 # ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
 
-def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool) -> tuple:
+def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, comprador_email: str = "compras@princess.es") -> tuple:
     """Pedido enviado al proveedor sin acuse de recibo tras varios días."""
     nivel = "URGENTE" if urgente else "Recordatorio"
     subject = f"[{nivel}] Seguimiento pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
@@ -655,10 +664,10 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool) ->
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
         <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
-        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Departamento Central de Compras</p>
+        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
-        <p>Estimado/a <strong>{pedido.get('proveedor_contacto_nombre') or pedido.get('proveedor_nombre','')}</strong>,</p>
+        <p>Estimado/a proveedor/a,</p>
         <p>Nos ponemos en contacto con usted en relación al pedido que figura a continuación,
            el cual fue tramitado hace <strong>{dias} días</strong> y aún no hemos recibido confirmación de entrega.</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
@@ -680,9 +689,9 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool) ->
         <p>Muchas gracias por su colaboración.</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <p style="font-size:12px;color:#666">Atentamente,<br>
-           <strong>Departamento Central de Compras</strong><br>
-           Princess Hotels &amp; Resorts — Canarias<br>
-           <a href="mailto:compras@princess.es" style="color:#8B0000">compras@princess.es</a></p>
+           <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
+           Princess Hotels &amp; Resorts<br>
+           <a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a></p>
       </div>
     </div>
     """
@@ -731,17 +740,17 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
     """
     return subject, body
 
-def _email_template_entrega_parcial(pedido: dict, dias: int) -> tuple:
+def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: str = "compras@princess.es") -> tuple:
     """Pedido con entrega parcial sin cierre."""
     subject = f"[Seguimiento] Pedido Nº {pedido.get('pedido_num','—')} — Entrega parcial pendiente de completar"
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
         <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
-        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Departamento Central de Compras</p>
+        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
-        <p>Estimado/a <strong>{pedido.get('proveedor_contacto_nombre') or pedido.get('proveedor_nombre','')}</strong>,</p>
+        <p>Estimado/a proveedor/a,</p>
         <p>Le contactamos en relación al pedido indicado, cuya entrega se registró de forma
            <strong>parcial</strong> hace <strong>{dias} días</strong> y aún está pendiente de completarse.</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
@@ -751,22 +760,25 @@ def _email_template_entrega_parcial(pedido: dict, dias: int) -> tuple:
               <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
           <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
               <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
-          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días desde entrega parcial</td>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Estado actual</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;color:#8B0000;font-weight:bold">ENTREGA PARCIAL</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días transcurridos</td>
               <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">{dias} días</td></tr>
-          {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
+          {f'<tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
         </table>
         <p>Le rogamos que nos informe sobre la fecha prevista para completar la entrega pendiente.</p>
         <p>Muchas gracias.</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <p style="font-size:12px;color:#666">Atentamente,<br>
-           <strong>Departamento Central de Compras</strong><br>
-           Princess Hotels &amp; Resorts — Canarias</p>
+           <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
+           Princess Hotels &amp; Resorts<br>
+           <a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a></p>
       </div>
     </div>
     """
     return subject, body
 
-def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool) -> tuple:
+def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool, comprador_email: str = "compras@princess.es") -> tuple:
     """Pedido pendiente de cotización del proveedor."""
     nivel = "URGENTE" if urgente else "Solicitud de cotización"
     subject = f"[{nivel}] Cotización solicitada — {pedido.get('hotel_nombre','Princess Hotels')} — Princess Hotels & Resorts"
@@ -774,29 +786,31 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool)
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
         <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
-        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Departamento Central de Compras</p>
+        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
-        <p>Estimado/a <strong>{pedido.get('proveedor_contacto_nombre') or pedido.get('proveedor_nombre','')}</strong>,</p>
+        <p>Estimado/a proveedor/a,</p>
         <p>Le recordamos que hace <strong>{dias} días</strong> se le solicitó cotización
            para el siguiente pedido y aún estamos a la espera de su propuesta económica.</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
-          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Nº de Solicitud</td>
-              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('norden','—')}</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Pedido Nº</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('pedido_num','—')}</td></tr>
           <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Hotel</td>
               <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
           <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
               <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
-          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días pendiente</td>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Estado actual</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;color:#8B0000;font-weight:bold">PENDIENTE COTIZACIÓN</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días transcurridos</td>
               <td style="padding:8px 12px;border:1px solid #ddd;color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</td></tr>
-          {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Descripción / Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
+          {f'<tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
         </table>
         {'<p style="color:#dc2626;font-weight:bold;border:1px solid #fca5a5;background:#fee2e2;padding:10px;border-radius:4px">⚠️ URGENTE: Necesitamos su cotización hoy para no retrasar la tramitación del pedido.</p>' if urgente else '<p>Le agradecemos que nos envíe su mejor oferta a la mayor brevedad posible.</p>'}
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <p style="font-size:12px;color:#666">Atentamente,<br>
-           <strong>Departamento Central de Compras</strong><br>
-           Princess Hotels &amp; Resorts — Canarias<br>
-           <a href="mailto:compras@princess.es" style="color:#8B0000">compras@princess.es</a></p>
+           <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
+           Princess Hotels &amp; Resorts<br>
+           <a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a></p>
       </div>
     </div>
     """
@@ -806,17 +820,20 @@ def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
     """Selecciona la plantilla correcta según el estado del pedido y devuelve (subject, body, es_proveedor)."""
     estado    = pedido.get("estado", "")
     urgente   = nivel == "urgente"
+    # Obtener email del comprador responsable del hotel para incluir en la firma
+    _compradores = _get_compradores_cc(pedido.get("hotel_codigo",""))
+    _comprador_email = _compradores[0]["email"] if _compradores and _compradores[0].get("email") else "compras@princess.es"
     if estado == "ENVIADO AL PROVEEDOR":
-        s, b = _email_template_enviado_proveedor(pedido, dias, urgente)
+        s, b = _email_template_enviado_proveedor(pedido, dias, urgente, _comprador_email)
         return s, b, True
     elif estado in ("PENDIENTE FIRMA DIRECCION COMPRAS", "PENDIENTE DE FIRMA DIRECCION HOTEL"):
         s, b = _email_template_pendiente_firma(pedido, dias, estado)
         return s, b, False
     elif estado == "ENTREGA PARCIAL":
-        s, b = _email_template_entrega_parcial(pedido, dias)
+        s, b = _email_template_entrega_parcial(pedido, dias, _comprador_email)
         return s, b, True
     elif estado == "PENDIENTE COTIZACIÓN":
-        s, b = _email_template_pendiente_cotizacion(pedido, dias, urgente)
+        s, b = _email_template_pendiente_cotizacion(pedido, dias, urgente, _comprador_email)
         return s, b, True
     return None, None, False
 
