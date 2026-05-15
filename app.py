@@ -495,6 +495,22 @@ def _ya_notificado_hoy(pedido_id: int) -> bool:
     except Exception:
         return False
 
+# SQL inline para el job (no depende de PEDIDO_SELECT_ALERTA que se define más abajo)
+_JOB_PEDIDO_SQL = """
+    SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
+           p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
+           h.codigo as hotel_codigo, h.nombre as hotel_nombre,
+           d.nombre as departamento_nombre,
+           pr.nombre as proveedor_nombre,
+           (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!=\'\' AND es_principal=1 LIMIT 1) as proveedor_email,
+           (SELECT COALESCE(NULLIF(movil,\'\'),NULLIF(telefono,\'\')) FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_movil,
+           (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_contacto_nombre
+    FROM pedidos p
+    LEFT JOIN hoteles h ON p.hotel_id = h.id
+    LEFT JOIN departamentos d ON p.departamento_id = d.id
+    LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
+"""
+
 def _job_alertas_diarias():
     """
     Job automático diario: calcula alertas por fecha y envía Telegram
@@ -503,18 +519,18 @@ def _job_alertas_diarias():
     """
     log.info("▶ [SCHEDULER] Inicio job alertas diarias — %s", _date.today())
     try:
-        alertas_raw = rows_to_list(query(f"""
-            {PEDIDO_SELECT_ALERTA}
+        alertas_raw = rows_to_list(query(
+            _JOB_PEDIDO_SQL + """
             WHERE p.estado IN (
-                'ENVIADO AL PROVEEDOR',
-                'PENDIENTE FIRMA DIRECCION COMPRAS',
-                'PENDIENTE DE FIRMA DIRECCION HOTEL',
-                'ENTREGA PARCIAL',
-                'PENDIENTE COTIZACIÓN'
+                \'ENVIADO AL PROVEEDOR\',
+                \'PENDIENTE FIRMA DIRECCION COMPRAS\',
+                \'PENDIENTE DE FIRMA DIRECCION HOTEL\',
+                \'ENTREGA PARCIAL\',
+                \'PENDIENTE COTIZACIÓN\'
             )
               AND (
                 p.fecha_tramitacion IS NOT NULL
-                OR (p.estado = 'PENDIENTE COTIZACIÓN' AND p.fecha_solicitud IS NOT NULL)
+                OR (p.estado = \'PENDIENTE COTIZACIÓN\' AND p.fecha_solicitud IS NOT NULL)
               )
             ORDER BY p.fecha_tramitacion ASC
         """))
@@ -3048,16 +3064,20 @@ def unhandled_exception(e):
 
 def _iniciar_scheduler():
     scheduler = BackgroundScheduler(timezone="Atlantic/Canary")
-    scheduler.add_job(
-        _job_alertas_diarias,
-        trigger="cron",
-        hour=8, minute=0,
-        id="alertas_diarias",
-        replace_existing=True,
-        misfire_grace_time=3600,  # si el servidor estaba caído, ejecuta hasta 1h tarde
-    )
+    # Dos ejecuciones diarias: 08:00 y 14:00 hora Canarias.
+    # misfire_grace_time=7200 → si Render reinició el servidor justo antes
+    # de la hora programada, ejecuta el job hasta 2h tarde.
+    for hora in (8, 14):
+        scheduler.add_job(
+            _job_alertas_diarias,
+            trigger="cron",
+            hour=hora, minute=0,
+            id=f"alertas_diarias_{hora}h",
+            replace_existing=True,
+            misfire_grace_time=7200,
+        )
     scheduler.start()
-    log.info("✅ Scheduler iniciado — alertas diarias a las 08:00 (Atlantic/Canary)")
+    log.info("✅ Scheduler iniciado — alertas diarias a las 08:00 y 14:00 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
