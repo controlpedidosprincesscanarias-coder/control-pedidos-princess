@@ -668,7 +668,7 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
+        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
         <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
@@ -708,7 +708,7 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#1a3a6b;padding:16px 24px;border-radius:6px 6px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
+        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
         <p style="color:#a8c0e8;margin:4px 0 0;font-size:13px">Control de Pedidos — Aviso interno</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
@@ -733,7 +733,7 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
            para no retrasar el proceso de compra.</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <p style="font-size:12px;color:#666">Mensaje automático generado por el sistema de Control de Pedidos.<br>
-           <strong>Princess Hotels &amp; Resorts — Canarias</strong></p>
+           <strong>Princess Hotels &amp; Resorts</strong></p>
       </div>
     </div>
     """
@@ -745,7 +745,7 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
+        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
         <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
@@ -778,7 +778,7 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts — Canarias</h2>
+        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
         <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
