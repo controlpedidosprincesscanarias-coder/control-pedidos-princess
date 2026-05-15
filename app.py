@@ -3081,6 +3081,23 @@ def _iniciar_scheduler():
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
+# ── Endpoint manual para forzar el job de alertas (admin only) ────────────────
+
+@app.route("/api/admin/test-scheduler", methods=["POST"])
+@admin_required
+def test_scheduler():
+    """
+    Ejecuta el job de alertas inmediatamente.
+    Útil para verificar que el scheduler funciona sin esperar a las 08:00/14:00.
+    POST /api/admin/test-scheduler
+    """
+    import threading
+    resultados = {"iniciado": True, "mensaje": "Job ejecutándose en segundo plano — revisa los móviles en unos segundos."}
+    t = threading.Thread(target=_job_alertas_diarias, daemon=True)
+    t.start()
+    log.info("▶ [MANUAL] Job alertas lanzado manualmente por admin")
+    return jsonify({"ok": True, **resultados})
+
 
 # ── Arranque ───────────────────────────────────────────────────────────────────
 
