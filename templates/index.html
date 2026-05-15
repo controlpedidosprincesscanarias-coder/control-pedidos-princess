@@ -679,7 +679,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.9.2
+          v 9.9.3
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -3980,10 +3980,21 @@ const EMAILJS_TEMPLATE_ID = 'template_krpvmda';
 
 // ── construirTextoCorreoPlano ────────────────────────────────────────────────
 // Extrae texto plano del HTML del preview (para EmailJS y fallbacks).
+// Convierte <br> y <p> en saltos de línea antes de extraer el texto,
+// para evitar que campos consecutivos se peguen sin separación.
 function construirTextoCorreoPlano(data) {
+  let html = data.body_html || '';
+  // Reemplazar <br> y </p> por salto de línea antes de parsear
+  html = html.replace(/<br\s*\/?>/gi, '\n');
+  html = html.replace(/<\/p>/gi, '\n');
+  html = html.replace(/<\/div>/gi, '\n');
+  html = html.replace(/<hr[^>]*>/gi, '\n─────────────────────\n');
   const tmp = document.createElement('div');
-  tmp.innerHTML = data.body_html || '';
-  return tmp.innerText || tmp.textContent || '';
+  tmp.innerHTML = html;
+  // Limpiar líneas vacías múltiples
+  return (tmp.innerText || tmp.textContent || '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
 }
 
 // ── abrirGmailWebFallback ────────────────────────────────────────────────────
@@ -4034,7 +4045,7 @@ async function meaEnviarEmail() {
     await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
       to_email: toEmail,
       subject:  subject,
-      message:  _meaData.body_html || bodyText,
+      message:  bodyText,
       bcc:      ccList.join(',') || '',
       email:    toEmail,
     });
