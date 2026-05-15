@@ -679,7 +679,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.7.6
+          v 9.8.1
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -3801,7 +3801,7 @@ function togglePwdVisibility() {
         </button>
         <button id="mea-tab-wa" onclick="meaSetTab('wa')"
           style="padding:8px 18px;border:none;background:none;font-weight:600;cursor:pointer;border-bottom:3px solid transparent;color:#888;margin-bottom:-2px">
-          📱 WhatsApp
+          ✈️ Telegram
         </button>
       </div>
 
@@ -3834,18 +3834,15 @@ function togglePwdVisibility() {
         </div>
       </div>
 
-      <!-- PANEL WHATSAPP -->
+      <!-- PANEL TELEGRAM AUTOMÁTICO -->
       <div id="mea-panel-wa" style="display:none">
-        <div style="display:grid;gap:10px">
-          <div style="background:#e7fbe6;border:1px solid #b2dfdb;border-radius:6px;padding:12px;font-size:13px;color:#1b5e20">
-            ℹ️ El envío de WhatsApp se realiza abriendo un enlace <strong>wa.me</strong> en una nueva pestaña.
-            El sistema registrará el intento en el log.
+        <div style="display:grid;gap:12px">
+          <div style="background:#e8f4fd;border:1px solid #90caf9;border-radius:6px;padding:12px;font-size:13px;color:#0d47a1">
+            🤖 <strong>Telegram automático.</strong> Al enviar el email, se notifica automáticamente
+            por Telegram a los compradores asignados al hotel. No requiere acción manual.
           </div>
-          <div id="mea-wa-recipients" style="display:grid;gap:8px"></div>
-          <div>
-            <label class="form-label">Mensaje (editable)</label>
-            <textarea class="form-control" id="mea-wa-text" rows="7" style="font-family:monospace;font-size:13px;resize:vertical"></textarea>
-          </div>
+          <div id="mea-telegram-recipients" style="display:grid;gap:8px"></div>
+          <div id="mea-telegram-status" style="display:none"></div>
         </div>
       </div>
 
@@ -3872,12 +3869,13 @@ function meaSetTab(tab) {
   document.getElementById('mea-panel-wa').style.display   = isEmail ? 'none' : '';
   document.getElementById('mea-tab-email').style.borderBottomColor = isEmail ? '#1a3a6b' : 'transparent';
   document.getElementById('mea-tab-email').style.color              = isEmail ? '#1a3a6b' : '#888';
-  document.getElementById('mea-tab-wa').style.borderBottomColor    = isEmail ? 'transparent' : '#25d366';
-  document.getElementById('mea-tab-wa').style.color                 = isEmail ? '#888' : '#1b5e20';
+  document.getElementById('mea-tab-wa').style.borderBottomColor    = isEmail ? 'transparent' : '#1976d2';
+  document.getElementById('mea-tab-wa').style.color                 = isEmail ? '#888' : '#1976d2';
   const btnWrap = document.getElementById('mea-btn-email-wrap');
+  // El botón de Telegram no hace nada manual — el envío es automático al pulsar Email
   btnWrap.innerHTML = isEmail
     ? '<button class="btn btn-gold" id="mea-btn-enviar" onclick="meaEnviarEmail()">📤 Enviar email</button>'
-    : '<button class="btn" style="background:#25d366;color:#fff" onclick="meaEnviarWA()">📱 Abrir WhatsApp</button>';
+    : '<button class="btn" style="background:#1976d2;color:#fff;opacity:.6;cursor:default">✈️ Se envía automáticamente con el email</button>';
 }
 
 async function abrirModalEmailAlerta(pedidoId, dias, nivel) {
@@ -3889,8 +3887,8 @@ async function abrirModalEmailAlerta(pedidoId, dias, nivel) {
   document.getElementById('mea-to').style.border = '';
   document.getElementById('mea-subject').value = '';
   document.getElementById('mea-cc-list').innerHTML = '';
-  document.getElementById('mea-wa-recipients').innerHTML = '';
-  document.getElementById('mea-wa-text').value = '';
+  document.getElementById('mea-telegram-recipients').innerHTML = '';
+  document.getElementById('mea-telegram-status').style.display = 'none';
   meaSetTab('email');
 
   document.getElementById('modal-email-alerta').classList.add('open');
@@ -3943,22 +3941,24 @@ async function abrirModalEmailAlerta(pedidoId, dias, nivel) {
     ccList.innerHTML = '<span style="color:#aaa;font-size:12px">Sin copias asignadas para este hotel</span>';
   }
 
-  // WhatsApp
-  document.getElementById('mea-wa-text').value = d.wa_text || '';
-  const waDiv = document.getElementById('mea-wa-recipients');
-  if (d.wa_recipients && d.wa_recipients.length) {
-    waDiv.innerHTML = d.wa_recipients.map(r => `
-      <div style="display:flex;align-items:center;gap:10px;background:#e7fbe6;padding:8px 12px;border-radius:6px">
-        <span style="font-size:13px">👤 <strong>${esc(r.nombre)}</strong></span>
-        <span style="font-size:13px;color:#1b5e20">📱 ${esc(r.movil)}</span>
-        <button class="btn btn-sm" style="background:#25d366;color:#fff;margin-left:auto"
-          onclick="meaAbrirWAUno('${r.movil.replace(/[^0-9+]/g,'')}')">Abrir WhatsApp</button>
+  // Telegram — mostrar destinatarios asignados al hotel
+  const tgDiv = document.getElementById('mea-telegram-recipients');
+  const tgRecipients = d.telegram_recipients || [];
+  if (tgRecipients.length) {
+    tgDiv.innerHTML = tgRecipients.map(r => `
+      <div style="display:flex;align-items:center;gap:10px;background:#e8f4fd;padding:8px 12px;border-radius:6px">
+        <span style="font-size:20px">✈️</span>
+        <div>
+          <div style="font-size:13px;font-weight:600">${esc(r.username)}</div>
+          <div style="font-size:11px;color:#546e7a">Chat ID: ${esc(String(r.chat_id))}</div>
+        </div>
+        <span style="margin-left:auto;font-size:11px;background:#1976d2;color:#fff;padding:2px 8px;border-radius:10px">
+          Auto ✓
+        </span>
       </div>`).join('');
   } else {
-    waDiv.innerHTML = `<div style="color:#888;font-size:13px;padding:8px">
-      ⚠️ Los compradores asignados a este hotel no tienen número de móvil configurado.<br>
-      <a href="#" onclick="showView('usuarios',null);closeModal('modal-email-alerta')"
-         style="color:#1a3a6b">→ Ir a Usuarios para añadir móviles</a>
+    tgDiv.innerHTML = `<div style="color:#888;font-size:13px;padding:8px">
+      ⚠️ No hay compradores con Telegram asignados a este hotel.
     </div>`;
   }
 }
@@ -4053,6 +4053,24 @@ async function meaEnviarEmail() {
 
     btn.disabled = false;
     btn.textContent = '📤 Enviar email';
+
+    // Mostrar resultado Telegram en el tab
+    if (r && r.telegram && r.telegram.length) {
+      const okList  = r.telegram.filter(t => t.ok).map(t => t.username).join(', ');
+      const errList = r.telegram.filter(t => !t.ok).map(t => t.username).join(', ');
+      const tgStatus = document.getElementById('mea-telegram-status');
+      if (tgStatus) {
+        tgStatus.style.display = '';
+        tgStatus.innerHTML = okList
+          ? `<div style="background:#e8f4fd;border:1px solid #90caf9;border-radius:6px;padding:8px 12px;font-size:12px;color:#0d47a1">
+               ✈️ Telegram enviado a: <strong>${okList}</strong>${errList ? ` · ⚠️ Falló: ${errList}` : ''}
+             </div>`
+          : `<div style="background:#fef2f2;border:1px solid #fca5a5;border-radius:6px;padding:8px 12px;font-size:12px;color:#991b1b">
+               ⚠️ Telegram falló para: ${errList}
+             </div>`;
+      }
+    }
+
     toast(`✅ Email enviado a ${toEmail}`, 'success');
     closeModal('modal-email-alerta');
 

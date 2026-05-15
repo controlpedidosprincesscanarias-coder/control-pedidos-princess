@@ -350,20 +350,95 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 
 # ── Helper norden ──────────────────────────────────────────────────────────────
 
-# ── Asignación de compradores por hotel (v9.5) ─────────────────────────────────
-# MG - TA - SU  →  comprascan2
-# GC - MT       →  comprascan4
-# GY - IT - LP  →  comprascan6  y  comprascan
+# ── Asignación de compradores por hotel (v9.8) ─────────────────────────────────
+# comprascan (Victor)  →  TODOS los hoteles (supervisión general)
+# MG - TA - SU         →  comprascan2 (Said)
+# GC - MT              →  comprascan4 (Fran)
+# FV - JN              →  comprascan3 (David)
+# GY - IT - LP         →  comprascan6 (Maria Cruz) + comprascan6b (J.Curbelo) + comprascan
 HOTEL_COMPRADOR = {
-    "MG": ["comprascan2"],
-    "TA": ["comprascan2"],
-    "SU": ["comprascan2"],
-    "GC": ["comprascan4"],
-    "MT": ["comprascan4"],
-    "GY": ["comprascan6", "comprascan"],
-    "IT": ["comprascan6", "comprascan"],
-    "LP": ["comprascan6", "comprascan"],
+    "MG": ["comprascan2", "comprascan"],
+    "TA": ["comprascan2", "comprascan"],
+    "SU": ["comprascan2", "comprascan"],
+    "GC": ["comprascan4", "comprascan"],
+    "MT": ["comprascan4", "comprascan"],
+    "FV": ["comprascan3", "comprascan"],
+    "JN": ["comprascan3", "comprascan"],
+    "GY": ["comprascan6", "comprascan6b", "comprascan"],
+    "IT": ["comprascan6", "comprascan6b", "comprascan"],
+    "LP": ["comprascan6", "comprascan6b", "comprascan"],
 }
+
+# ── Telegram Bot — alertas automáticas ─────────────────────────────────────────
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8907888491:AAHcidl8pl9XeLLQcyEEPxnnoIyOdiopKqk")
+
+# Chat IDs de cada comprador (obtenidos via getUpdates)
+# comprascan (Victor Martin) recibe TODOS los avisos de todos los hoteles
+TELEGRAM_CHAT_IDS = {
+    "comprascan":  "8951368652",   # Victor Martin   — TODOS los hoteles
+    "comprascan2": "8680179211",   # Said Dris        — TA·SU·MG
+    "comprascan3": "8644286751",   # David Compras    — FV·JN
+    "comprascan4": "8047794100",   # Fran             — MT·GC
+    "comprascan6": "8761059937",   # Maria Cruz       — GY·IT·LP
+    "comprascan6b": "8214256843",  # J. Curbelo       — GY·IT·LP (secundario)
+}
+
+def _send_telegram(chat_id: str, text: str) -> dict:
+    """Envía un mensaje de Telegram al chat_id indicado. Devuelve {ok, error}."""
+    import urllib.request, urllib.error
+    try:
+        payload = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}).encode()
+        req = urllib.request.Request(
+            f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
+            data=payload,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            result = json.loads(resp.read().decode())
+            return {"ok": result.get("ok", False), "error": None}
+    except urllib.error.HTTPError as e:
+        body = e.read().decode(errors="replace")
+        log.error("Telegram HTTP %s para chat_id %s: %s", e.code, chat_id, body)
+        return {"ok": False, "error": f"HTTP {e.code}: {body[:200]}"}
+    except Exception as e:
+        log.error("Telegram error para chat_id %s: %s", chat_id, e)
+        return {"ok": False, "error": str(e)}
+
+def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
+    """
+    Envía alerta automática por Telegram a los compradores responsables del hotel.
+    Devuelve lista de resultados [{username, chat_id, ok, error}].
+    """
+    hotel_codigo = (pedido.get("hotel_codigo") or "").upper()
+    usernames    = HOTEL_COMPRADOR.get(hotel_codigo, [])
+    if not usernames:
+        log.warning("Telegram: sin compradores para hotel %s", hotel_codigo)
+        return []
+
+    emoji  = "🔴" if nivel == "urgente" else "⚠️"
+    nivel_txt = "URGENTE" if nivel == "urgente" else "Recordatorio"
+    partes = [
+        emoji + " *Alerta " + nivel_txt + "*",
+        "Hotel: *" + str(pedido.get("hotel_codigo","?")) + "* - " + str(pedido.get("hotel_nombre","")),
+        "Pedido: *" + str(pedido.get("pedido_num","?")) + "*",
+        "Proveedor: " + str(pedido.get("proveedor_nombre","?")),
+        "Estado: " + str(pedido.get("estado","?")),
+        "Dias sin respuesta: *" + str(dias) + "*",
+        "- Control Pedidos Princess Canarias",
+    ]
+    texto = "\n".join(partes)
+    resultados = []
+    for username in usernames:
+        chat_id = TELEGRAM_CHAT_IDS.get(username)
+        if not chat_id:
+            log.warning("Telegram: sin chat_id para %s", username)
+            resultados.append({"username": username, "chat_id": None, "ok": False, "error": "Sin chat_id"})
+            continue
+        res = _send_telegram(chat_id, texto)
+        log.info("Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
+        resultados.append({"username": username, "chat_id": chat_id, **res})
+    return resultados
 
 def _get_compradores_cc(hotel_codigo: str):
     """Devuelve lista de dicts {email, nombre, movil} de los compradores responsables del hotel."""
@@ -625,9 +700,16 @@ def alerta_email_preview(pedido_id):
 
     cc_emails = [c["email"] for c in compradores if c.get("email") and c["email"] != to_email]
 
-    # WhatsApp text para compradores
+    # WhatsApp text para compradores (legacy manual)
     wa_text = _whatsapp_text(pedido, dias, nivel)
     wa_recipients = [{"nombre": c["nombre"], "movil": c.get("movil","")} for c in compradores if c.get("movil")]
+
+    # Telegram — compradores asignados al hotel
+    usernames_hotel = HOTEL_COMPRADOR.get(hotel_codigo.upper(), [])
+    telegram_recipients = [
+        {"username": u, "chat_id": TELEGRAM_CHAT_IDS.get(u), "nombre": u}
+        for u in usernames_hotel if TELEGRAM_CHAT_IDS.get(u)
+    ]
 
     return jsonify({
         "pedido_id":     pedido_id,
@@ -645,6 +727,7 @@ def alerta_email_preview(pedido_id):
         "body_html":     body_html,
         "wa_text":       wa_text,
         "wa_recipients": wa_recipients,
+        "telegram_recipients": telegram_recipients,
     })
 
 @app.route("/api/alertas/<int:pedido_id>/enviar-email", methods=["POST"])
@@ -672,11 +755,26 @@ def alerta_enviar_email(pedido_id):
     _log_email(db, pedido_id, tipo_log, to_email, subject, res["ok"], res.get("error"))
     resultados.append({"email": to_email, "ok": res["ok"], "error": res.get("error"), "mode": res.get("mode")})
 
+    # ── Telegram automático — se dispara siempre al enviar la alerta ──────────
+    pedido_data = row_to_dict(query(f"{PEDIDO_SELECT_ALERTA} WHERE p.id=%s", (pedido_id,), one=True))
+    telegram_resultados = []
+    if pedido_data:
+        telegram_resultados = _enviar_telegram_compradores(pedido_data, dias, nivel)
+        for tr in telegram_resultados:
+            _log_whatsapp(db, pedido_id, "telegram_auto",
+                          f"{tr['username']}:{tr.get('chat_id','')}",
+                          f"Alerta {nivel} — {pedido_data.get('hotel_codigo')} · Pedido {pedido_data.get('pedido_num')}",
+                          tr["ok"], tr.get("error"))
+
     db.commit()
     todos_ok = all(r["ok"] for r in resultados)
-    # Devuelve el error detallado para que el frontend active el fallback si procede
     primer_error = next((r["error"] for r in resultados if not r["ok"]), None)
-    return jsonify({"ok": todos_ok, "resultados": resultados, "error": primer_error})
+    return jsonify({
+        "ok": todos_ok,
+        "resultados": resultados,
+        "error": primer_error,
+        "telegram": telegram_resultados,
+    })
 
 @app.route("/api/alertas/<int:pedido_id>/log-whatsapp", methods=["POST"])
 @login_required
@@ -691,6 +789,32 @@ def alerta_log_whatsapp(pedido_id):
     _log_whatsapp(db, pedido_id, "alerta_comprador", destinatario, mensaje, True)
     db.commit()
     return jsonify({"ok": True})
+
+
+@app.route("/api/alertas/<int:pedido_id>/enviar-telegram", methods=["POST"])
+@login_required
+def alerta_enviar_telegram(pedido_id):
+    """Envía alerta automática por Telegram a los compradores del hotel."""
+    data  = request.get_json(silent=True) or {}
+    dias  = int(data.get("dias", 0))
+    nivel = data.get("nivel", "aviso")
+
+    pedido = row_to_dict(query(f"{PEDIDO_SELECT_ALERTA} WHERE p.id=%s", (pedido_id,), one=True))
+    if not pedido:
+        return jsonify({"error": "Pedido no encontrado"}), 404
+
+    resultados = _enviar_telegram_compradores(pedido, dias, nivel)
+
+    db = get_db()
+    for tr in resultados:
+        _log_whatsapp(db, pedido_id, "telegram_auto",
+                      f"{tr['username']}:{tr.get('chat_id','')}",
+                      f"Alerta {nivel} — {pedido.get('hotel_codigo')} · Pedido {pedido.get('pedido_num')}",
+                      tr["ok"], tr.get("error"))
+    db.commit()
+
+    todos_ok = all(r["ok"] for r in resultados)
+    return jsonify({"ok": todos_ok, "resultados": resultados})
 
 
 
