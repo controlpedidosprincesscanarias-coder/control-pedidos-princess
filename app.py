@@ -142,6 +142,26 @@ def _auto_migrate():
                     PRIMARY KEY (usuario_id, hotel_id)
                 )
             """)
+            # ── Tabla asignación hoteles a usuario compras (v9.9.8) ───────────
+            # Permite gestionar desde admin qué hoteles atiende cada comprador,
+            # reemplazando el diccionario HOTEL_COMPRADOR hardcodeado.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS usuario_comprador_hoteles (
+                    usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                    hotel_id   INTEGER NOT NULL REFERENCES hoteles(id)  ON DELETE CASCADE,
+                    PRIMARY KEY (usuario_id, hotel_id)
+                )
+            """)
+            # ── Columna telegram_chat_id en usuarios (v9.9.8) ─────────────────
+            cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT")
+            # ── Modelo 1 hotel → 1 comprador (v9.9.9) ────────────────────────
+            # Añade índice único sobre hotel_id para garantizar a nivel de BD
+            # que ningún hotel pueda tener más de un comprador asignado.
+            # Se usa CREATE UNIQUE INDEX IF NOT EXISTS para ser idempotente.
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS uq_comprador_hotel
+                ON usuario_comprador_hoteles (hotel_id)
+            """)
             # ── Log de WhatsApp (v9.5) ───────────────────────────────────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS whatsapp_log (
@@ -386,39 +406,40 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 
 # ── Helper norden ──────────────────────────────────────────────────────────────
 
-# ── Asignación de compradores por hotel (v9.8.1) ────────────────────────────────
-# comprascan  (Victor)    →  TODOS los hoteles (supervisión general)
-# dcompras (J.Curbelo) →  TODOS los hoteles (supervisión general)
-# MG - TA - SU            →  comprascan2 (Said)
-# GC - MT                 →  comprascan4 (Fran)
-# FV - JN                 →  comprascan3 (David)
-# GY - IT - LP            →  comprascan6 (Maria Cruz)
-HOTEL_COMPRADOR = {
-    "MG": ["comprascan2", "dcompras", "comprascan"],
-    "TA": ["comprascan2", "dcompras", "comprascan"],
-    "SU": ["comprascan2", "dcompras", "comprascan"],
-    "GC": ["comprascan4", "dcompras", "comprascan"],
-    "MT": ["comprascan4", "dcompras", "comprascan"],
-    "FV": ["comprascan3", "dcompras", "comprascan"],
-    "JN": ["comprascan3", "dcompras", "comprascan"],
-    "GY": ["comprascan6", "dcompras", "comprascan"],
-    "IT": ["comprascan6", "dcompras", "comprascan"],
-    "LP": ["comprascan6", "dcompras", "comprascan"],
-}
+# ── Asignación de compradores por hotel (v9.9.8 — dinámica desde BD) ───────────
+# La asignación ya no está hardcodeada: se gestiona desde el panel de admin
+# en Usuarios → sección "Hoteles asignados (compras)".
+# La función _get_compradores_hotel(hotel_codigo) sustituye al antiguo diccionario
+# HOTEL_COMPRADOR y lee en tiempo real qué compradores tienen ese hotel asignado.
 
 # ── Telegram Bot — alertas automáticas ─────────────────────────────────────────
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
-# Chat IDs de cada comprador (obtenidos via getUpdates)
-# comprascan (Victor Martin) y dcompras (J.Curbelo) reciben TODOS los hoteles
-TELEGRAM_CHAT_IDS = {
-    "comprascan":  "8951368652",   # Victor Martin   — TODOS los hoteles (supervisión)
-    "comprascan2": "8680179211",   # Said Dris        — TA·SU·MG
-    "comprascan3": "8644286751",   # David Compras    — FV·JN
-    "comprascan4": "8047794100",   # Fran             — MT·GC
-    "comprascan6": "8761059937",   # Maria Cruz       — GY·IT·LP
-    "dcompras": "8214256843",  # J. Curbelo       — TODOS los hoteles (supervisión)
-}
+
+def _get_compradores_hotel(hotel_codigo: str) -> list:
+    """
+    Devuelve lista de dicts {username, nombre, email, movil, telegram_chat_id}
+    de los usuarios con rol 'compras' que tienen asignado el hotel indicado.
+
+    Sustituye al antiguo diccionario HOTEL_COMPRADOR hardcodeado.
+    La asignación se gestiona desde admin: Usuarios → Hoteles asignados (compras).
+    """
+    if not hotel_codigo:
+        return []
+    hotel_codigo = hotel_codigo.upper()
+    hotel_row = query("SELECT id FROM hoteles WHERE codigo=%s AND activo=1", (hotel_codigo,), one=True)
+    if not hotel_row:
+        return []
+    hotel_id = hotel_row["id"]
+    rows = rows_to_list(query(
+        """SELECT u.id, u.username, u.nombre, u.email, u.movil, u.telegram_chat_id
+           FROM usuarios u
+           JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
+           WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'
+           ORDER BY u.nombre""",
+        (hotel_id,)
+    ))
+    return rows
 
 def _send_telegram(chat_id: str, text: str) -> dict:
     """Envía un mensaje de Telegram al chat_id indicado. Devuelve {ok, error}."""
@@ -445,15 +466,16 @@ def _send_telegram(chat_id: str, text: str) -> dict:
 def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
     """
     Envía alerta automática por Telegram a los compradores responsables del hotel.
+    Los compradores se obtienen dinámicamente desde BD via _get_compradores_hotel().
     Devuelve lista de resultados [{username, chat_id, ok, error}].
     """
     hotel_codigo = (pedido.get("hotel_codigo") or "").upper()
-    usernames    = HOTEL_COMPRADOR.get(hotel_codigo, [])
-    if not usernames:
+    compradores  = _get_compradores_hotel(hotel_codigo)
+    if not compradores:
         log.warning("Telegram: sin compradores para hotel %s", hotel_codigo)
         return []
 
-    emoji  = "🔴" if nivel == "urgente" else "⚠️"
+    emoji     = "🔴" if nivel == "urgente" else "⚠️"
     nivel_txt = "URGENTE" if nivel == "urgente" else "Recordatorio"
     partes = [
         emoji + " *Alerta " + nivel_txt + "*",
@@ -466,11 +488,12 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
     ]
     texto = "\n".join(partes)
     resultados = []
-    for username in usernames:
-        chat_id = TELEGRAM_CHAT_IDS.get(username)
+    for comp in compradores:
+        username = comp.get("username", "?")
+        chat_id  = comp.get("telegram_chat_id")
         if not chat_id:
-            log.warning("Telegram: sin chat_id para %s", username)
-            resultados.append({"username": username, "chat_id": None, "ok": False, "error": "Sin chat_id"})
+            log.warning("Telegram: sin telegram_chat_id para %s", username)
+            resultados.append({"username": username, "chat_id": None, "ok": False, "error": "Sin telegram_chat_id"})
             continue
         res = _send_telegram(chat_id, texto)
         log.info("Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
@@ -534,9 +557,9 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
             log.warning("[ESTADO] Pedido %s no encontrado para Telegram", pedido_id)
             return
 
-        hotel_cod = (pedido.get("hotel_codigo") or "").upper()
-        usernames = HOTEL_COMPRADOR.get(hotel_cod, [])
-        if not usernames:
+        hotel_cod   = (pedido.get("hotel_codigo") or "").upper()
+        compradores = _get_compradores_hotel(hotel_cod)
+        if not compradores:
             log.warning("[ESTADO] Sin compradores para hotel %s", hotel_cod)
             return
 
@@ -567,12 +590,13 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
 
         # ── Envío ──────────────────────────────────────────────────────────────
         resultados = []
-        for username in usernames:
-            chat_id = TELEGRAM_CHAT_IDS.get(username)
+        for comp in compradores:
+            username = comp.get("username", "?")
+            chat_id  = comp.get("telegram_chat_id")
             if not chat_id:
-                log.warning("[ESTADO] Sin chat_id para %s", username)
+                log.warning("[ESTADO] Sin telegram_chat_id para %s", username)
                 resultados.append({"username": username, "chat_id": None,
-                                   "ok": False, "error": "Sin chat_id"})
+                                   "ok": False, "error": "Sin telegram_chat_id"})
                 continue
             res = _send_telegram(chat_id, texto)
             log.info("[ESTADO] Telegram → %s (%s): %s",
@@ -749,9 +773,9 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
         if not pedido:
             return
 
-        hotel_cod = (hotel_codigo or pedido.get("hotel_codigo") or "").upper()
-        usernames = HOTEL_COMPRADOR.get(hotel_cod, [])
-        if not usernames:
+        hotel_cod   = (hotel_codigo or pedido.get("hotel_codigo") or "").upper()
+        compradores = _get_compradores_hotel(hotel_cod)
+        if not compradores:
             log.warning("[TECHO] Sin compradores para hotel %s", hotel_cod)
             return
 
@@ -768,8 +792,9 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
         )
 
         resultados = []
-        for username in usernames:
-            chat_id = TELEGRAM_CHAT_IDS.get(username)
+        for comp in compradores:
+            username = comp.get("username", "?")
+            chat_id  = comp.get("telegram_chat_id")
             if not chat_id:
                 continue
             res = _send_telegram(chat_id, texto)
@@ -794,20 +819,8 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
 
 def _get_compradores_cc(hotel_codigo: str):
     """Devuelve lista de dicts {email, nombre, movil} de los compradores responsables del hotel.
-    El orden respeta HOTEL_COMPRADOR: el comprador principal (responsable directo) va siempre primero."""
-    usernames = HOTEL_COMPRADOR.get((hotel_codigo or "").upper(), [])
-    if not usernames:
-        return []
-    placeholders = ",".join(["%s"] * len(usernames))
-    rows = rows_to_list(query(
-        f"SELECT username, nombre, email, movil FROM usuarios WHERE username IN ({placeholders}) AND activo=1",
-        tuple(usernames)
-    ))
-    # Reordenar segun el orden definido en HOTEL_COMPRADOR para garantizar que
-    # el comprador responsable del hotel (posicion 0) aparezca siempre primero.
-    orden = {u: i for i, u in enumerate(usernames)}
-    rows.sort(key=lambda r: orden.get(r.get("username", ""), 999))
-    return rows
+    Usa _get_compradores_hotel() para obtener los compradores dinámicamente desde BD."""
+    return _get_compradores_hotel(hotel_codigo)
 
 # ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
 
@@ -1051,11 +1064,11 @@ def alerta_email_preview(pedido_id):
     wa_text = _whatsapp_text(pedido, dias, nivel)
     wa_recipients = [{"nombre": c["nombre"], "movil": c.get("movil","")} for c in compradores if c.get("movil")]
 
-    # Telegram — compradores asignados al hotel
-    usernames_hotel = HOTEL_COMPRADOR.get(hotel_codigo.upper(), [])
+    # Telegram — compradores asignados al hotel (dinámico desde BD)
+    _compradores_telegram = _get_compradores_hotel(hotel_codigo.upper())
     telegram_recipients = [
-        {"username": u, "chat_id": TELEGRAM_CHAT_IDS.get(u), "nombre": u}
-        for u in usernames_hotel if TELEGRAM_CHAT_IDS.get(u)
+        {"username": c.get("username"), "chat_id": c.get("telegram_chat_id"), "nombre": c.get("nombre", c.get("username"))}
+        for c in _compradores_telegram if c.get("telegram_chat_id")
     ]
 
     return jsonify({
@@ -1449,7 +1462,7 @@ def delete_familia(fid):
 @admin_required
 def get_usuarios():
     rows = rows_to_list(query(
-        "SELECT id, username, nombre, email, movil, rol, activo, creado_en FROM usuarios ORDER BY nombre"
+        "SELECT id, username, nombre, email, movil, rol, activo, creado_en, telegram_chat_id FROM usuarios ORDER BY nombre"
     ))
     return jsonify(rows)
 
@@ -1466,9 +1479,13 @@ def create_usuario():
     if existing:
         return jsonify({"error": "Ya existe un usuario con ese username"}), 409
     db  = get_db()
+    rol = data.get("rol", "user")
+    if rol not in ("admin", "user", "hotel", "compras"):
+        rol = "user"
     cur = execute(
-        "INSERT INTO usuarios (username, nombre, email, movil, password, rol, activo) VALUES (%s,%s,%s,%s,%s,%s,1) RETURNING id",
-        (username, nombre, data.get("email",""), data.get("movil",""), password, data.get("rol","user"))
+        "INSERT INTO usuarios (username, nombre, email, movil, password, rol, activo, telegram_chat_id) VALUES (%s,%s,%s,%s,%s,%s,1,%s) RETURNING id",
+        (username, nombre, data.get("email",""), data.get("movil",""), password, rol,
+         (data.get("telegram_chat_id") or "").strip() or None)
     )
     new_id = cur.fetchone()["id"]
     db.commit()
@@ -1480,7 +1497,7 @@ def update_usuario(uid):
     data = request.get_json(silent=True) or {}
     db   = get_db()
     # No permitir que el admin se quite el rol a sí mismo
-    if uid == current_user_id() and data.get("rol") in ("user", "hotel"):
+    if uid == current_user_id() and data.get("rol") in ("user", "hotel", "compras"):
         return jsonify({"error": "No puedes quitarte el rol de administrador a ti mismo"}), 400
     # Construir UPDATE dinámico solo con campos enviados
     fields, args = [], []
@@ -1490,12 +1507,39 @@ def update_usuario(uid):
         fields.append("email=%s"); args.append(data["email"].strip())
     if "movil" in data:
         fields.append("movil=%s"); args.append((data["movil"] or "").strip())
-    if "rol" in data and data["rol"] in ("admin", "user", "hotel"):
+    if "rol" in data and data["rol"] in ("admin", "user", "hotel", "compras"):
         fields.append("rol=%s"); args.append(data["rol"])
     if "activo" in data:
+        # ── Protección: no desactivar comprador si deja hoteles huérfanos ────
+        desactivando = (not data["activo"]) or (data["activo"] == 0)
+        if desactivando:
+            usuario_actual = query("SELECT rol, activo FROM usuarios WHERE id=%s", (uid,), one=True)
+            if usuario_actual and usuario_actual["rol"] == "compras" and usuario_actual["activo"] == 1:
+                huerfanos = rows_to_list(query("""
+                    SELECT h.codigo FROM hoteles h
+                    JOIN usuario_comprador_hoteles uch ON uch.hotel_id = h.id
+                    WHERE uch.usuario_id = %s
+                      AND h.activo = 1
+                      AND NOT EXISTS (
+                          SELECT 1 FROM usuario_comprador_hoteles uch2
+                          JOIN usuarios u2 ON u2.id = uch2.usuario_id
+                          WHERE uch2.hotel_id = h.id
+                            AND uch2.usuario_id != %s
+                            AND u2.activo = 1
+                            AND u2.rol = 'compras'
+                      )
+                """, (uid, uid)))
+                if huerfanos:
+                    codigos = ", ".join(r["codigo"] for r in huerfanos)
+                    return jsonify({
+                        "error": f"⚠️ No se puede desactivar: los hoteles {codigos} quedarían sin comprador asignado. "
+                                 f"Reasígnalos a otro comprador antes de desactivar este usuario."
+                    }), 409
         fields.append("activo=%s"); args.append(1 if data["activo"] else 0)
     if "password" in data and data["password"].strip():
         fields.append("password=%s"); args.append(data["password"].strip())
+    if "telegram_chat_id" in data:
+        fields.append("telegram_chat_id=%s"); args.append((data["telegram_chat_id"] or "").strip() or None)
     if not fields:
         return jsonify({"error": "Nada que actualizar"}), 400
     args.append(uid)
@@ -1528,6 +1572,161 @@ def set_usuario_hoteles(uid):
     db.commit()
     return jsonify({"ok": True})
 
+# ── API Hoteles de usuario compras (rol compras) ──────────────────────────────
+# Permite asignar/desasignar hoteles a compradores desde el panel de admin,
+# sustituyendo el diccionario HOTEL_COMPRADOR hardcodeado.
+
+@app.route("/api/usuarios/<int:uid>/hoteles-compras", methods=["GET"])
+@admin_required
+def get_usuario_comprador_hoteles(uid):
+    """Devuelve los hotel_id asignados a un usuario compras."""
+    rows = rows_to_list(query(
+        "SELECT hotel_id FROM usuario_comprador_hoteles WHERE usuario_id=%s", (uid,)
+    ))
+    return jsonify([r["hotel_id"] for r in rows])
+
+
+@app.route("/api/usuarios/<int:uid>/hoteles-compras", methods=["PUT"])
+@admin_required
+def set_usuario_comprador_hoteles(uid):
+    """
+    Reemplaza completamente los hoteles asignados a un usuario compras.
+
+    Modelo: 1 hotel → 1 comprador.
+    Si algún hotel ya tiene otro comprador asignado, devuelve 409 con la lista
+    de conflictos para que el frontend muestre la confirmación de reasignación.
+    Si se envía forzar=true, los hoteles en conflicto se reasignan automáticamente
+    (se eliminan del comprador anterior).
+    """
+    data      = request.get_json(silent=True) or {}
+    hotel_ids = data.get("hotel_ids", [])
+    forzar    = bool(data.get("forzar", False))
+    db        = get_db()
+
+    # ── Protección: hoteles que este comprador va a PERDER → ¿quedarán huérfanos? ──
+    # Se calcula antes de cualquier DELETE. Un hotel queda huérfano si:
+    #   - está actualmente asignado a este comprador
+    #   - NO está en la nueva lista hotel_ids
+    #   - NO tiene otro comprador alternativo activo
+    hoteles_actuales = [
+        r["hotel_id"] for r in rows_to_list(
+            query("SELECT hotel_id FROM usuario_comprador_hoteles WHERE usuario_id=%s", (uid,))
+        )
+    ]
+    hoteles_a_perder = [hid for hid in hoteles_actuales if hid not in hotel_ids]
+    huerfanos_por_vaciado = []
+    for hid in hoteles_a_perder:
+        otro_comprador = query(
+            """SELECT u.id FROM usuario_comprador_hoteles uch
+               JOIN usuarios u ON u.id = uch.usuario_id
+               WHERE uch.hotel_id = %s AND uch.usuario_id != %s
+                 AND u.activo = 1 AND u.rol = 'compras'
+               LIMIT 1""",
+            (hid, uid), one=True
+        )
+        if not otro_comprador:
+            hotel = query("SELECT codigo, nombre FROM hoteles WHERE id=%s AND activo=1", (hid,), one=True)
+            if hotel:
+                huerfanos_por_vaciado.append({
+                    "hotel_id":     hid,
+                    "hotel_codigo": hotel["codigo"],
+                    "hotel_nombre": hotel["nombre"],
+                })
+    if huerfanos_por_vaciado:
+        codigos = ", ".join(h["hotel_codigo"] for h in huerfanos_por_vaciado)
+        return jsonify({
+            "ok": False,
+            "error": f"⚠️ Los hoteles {codigos} quedarían sin comprador asignado. "
+                     f"Asígnalos a otro comprador antes de quitárselos a este usuario.",
+            "huerfanos": huerfanos_por_vaciado,
+        }), 409
+
+    # ── Detectar conflictos: hoteles ya asignados a otro comprador ───────────
+    conflictos = []
+    for hid in hotel_ids:
+        otro = query(
+            """SELECT u.id, u.nombre
+               FROM usuario_comprador_hoteles uch
+               JOIN usuarios u ON u.id = uch.usuario_id
+               WHERE uch.hotel_id = %s AND uch.usuario_id != %s
+               LIMIT 1""",
+            (hid, uid), one=True
+        )
+        if otro:
+            hotel = query("SELECT codigo, nombre FROM hoteles WHERE id=%s", (hid,), one=True)
+            conflictos.append({
+                "hotel_id":               hid,
+                "hotel_codigo":           hotel["codigo"]  if hotel else str(hid),
+                "hotel_nombre":           hotel["nombre"]  if hotel else "",
+                "comprador_actual_id":    otro["id"],
+                "comprador_actual_nombre": otro["nombre"],
+            })
+
+    # Si hay conflictos y no se ha confirmado la reasignación, devolver 409
+    if conflictos and not forzar:
+        return jsonify({"ok": False, "conflictos": conflictos}), 409
+
+    # ── Reasignación: quitar estos hoteles de cualquier comprador anterior ────
+    for hid in hotel_ids:
+        execute("DELETE FROM usuario_comprador_hoteles WHERE hotel_id=%s", (hid,))
+
+    # ── Borrar asignaciones previas de este comprador y aplicar las nuevas ────
+    execute("DELETE FROM usuario_comprador_hoteles WHERE usuario_id=%s", (uid,))
+    for hid in hotel_ids:
+        execute(
+            "INSERT INTO usuario_comprador_hoteles (usuario_id, hotel_id) VALUES (%s,%s)",
+            (uid, hid)
+        )
+    db.commit()
+    reasignados = len(conflictos) if forzar else 0
+    log.info(
+        "Hoteles-compras actualizados: usuario_id=%s hoteles=%s reasignados=%s",
+        uid, hotel_ids, reasignados
+    )
+    return jsonify({"ok": True, "reasignados": reasignados})
+
+
+@app.route("/api/compradores-por-hotel")
+@admin_required
+def get_compradores_por_hotel():
+    """
+    Devuelve un resumen de todos los hoteles con sus compradores asignados.
+    Incluye campo sin_comprador=True para los hoteles que no tienen comprador,
+    y un resumen de integridad global al final.
+    Útil para que admin visualice la distribución actual y detecte huérfanos.
+    """
+    hoteles = rows_to_list(query("SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"))
+    resultado = []
+    huerfanos = 0
+    for hotel in hoteles:
+        compradores = rows_to_list(query(
+            """SELECT u.id, u.username, u.nombre, u.email, u.movil, u.telegram_chat_id
+               FROM usuarios u
+               JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
+               WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'
+               ORDER BY u.nombre""",
+            (hotel["id"],)
+        ))
+        sin_comprador = len(compradores) == 0
+        if sin_comprador:
+            huerfanos += 1
+        resultado.append({
+            "hotel_id":      hotel["id"],
+            "hotel_codigo":  hotel["codigo"],
+            "hotel_nombre":  hotel["nombre"],
+            "compradores":   compradores,
+            "sin_comprador": sin_comprador,
+        })
+    return jsonify({
+        "hoteles":   resultado,
+        "integridad": {
+            "total_hoteles":       len(resultado),
+            "hoteles_sin_comprador": huerfanos,
+            "ok":                  huerfanos == 0,
+        },
+    })
+
+
 @app.route("/api/usuarios/<int:uid>", methods=["DELETE"])
 @admin_required
 def delete_usuario(uid):
@@ -1540,6 +1739,29 @@ def delete_usuario(uid):
         return jsonify({"error": "Usuario no encontrado"}), 404
     nombre = user["nombre"]
     db = get_db()
+    # ── Protección: no eliminar comprador si deja hoteles huérfanos ──────────
+    if user_row := query("SELECT rol FROM usuarios WHERE id=%s", (uid,), one=True):
+        if user_row["rol"] == "compras":
+            huerfanos = rows_to_list(query("""
+                SELECT h.codigo FROM hoteles h
+                JOIN usuario_comprador_hoteles uch ON uch.hotel_id = h.id
+                WHERE uch.usuario_id = %s
+                  AND h.activo = 1
+                  AND NOT EXISTS (
+                      SELECT 1 FROM usuario_comprador_hoteles uch2
+                      JOIN usuarios u2 ON u2.id = uch2.usuario_id
+                      WHERE uch2.hotel_id = h.id
+                        AND uch2.usuario_id != %s
+                        AND u2.activo = 1
+                        AND u2.rol = 'compras'
+                  )
+            """, (uid, uid)))
+            if huerfanos:
+                codigos = ", ".join(r["codigo"] for r in huerfanos)
+                return jsonify({
+                    "error": f"⚠️ No se puede eliminar: los hoteles {codigos} quedarían sin comprador asignado. "
+                             f"Reasígnalos a otro comprador antes de eliminar este usuario."
+                }), 409
     # ── Congelar nombre en pedidos antes de que la FK quede NULL ─────────────
     execute("""
         UPDATE pedidos SET creado_por_nombre = %s
