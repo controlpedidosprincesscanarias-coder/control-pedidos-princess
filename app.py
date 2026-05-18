@@ -117,6 +117,23 @@ def _auto_migrate():
             """)
             # ── Columna móvil en usuarios (v9.5) ─────────────────────────────
             cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS movil TEXT")
+            # ── Columnas nombre cache en pedidos e historial (v9.9.7) ─────────
+            cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS creado_por_nombre TEXT")
+            cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS modificado_por_nombre TEXT")
+            cur.execute("ALTER TABLE historial_estados ADD COLUMN IF NOT EXISTS usuario_nombre TEXT")
+            # Rellenar cache para registros existentes (ejecución única, segura)
+            cur.execute("""
+                UPDATE pedidos p SET creado_por_nombre = u.nombre
+                FROM usuarios u WHERE u.id = p.creado_por_id AND p.creado_por_nombre IS NULL
+            """)
+            cur.execute("""
+                UPDATE pedidos p SET modificado_por_nombre = u.nombre
+                FROM usuarios u WHERE u.id = p.modificado_por_id AND p.modificado_por_nombre IS NULL
+            """)
+            cur.execute("""
+                UPDATE historial_estados h SET usuario_nombre = u.nombre
+                FROM usuarios u WHERE u.id = h.usuario_id AND h.usuario_nombre IS NULL
+            """)
             # ── Tabla asignación hoteles a usuario hotel (v9.9.5) ─────────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS usuario_hoteles (
@@ -1388,6 +1405,36 @@ def set_usuario_hoteles(uid):
     db.commit()
     return jsonify({"ok": True})
 
+@app.route("/api/usuarios/<int:uid>", methods=["DELETE"])
+@admin_required
+def delete_usuario(uid):
+    # No puede eliminarse a sí mismo
+    if uid == current_user_id():
+        return jsonify({"error": "No puedes eliminar tu propio usuario"}), 400
+    # Verificar que existe y obtener nombre
+    user = query("SELECT id, username, nombre FROM usuarios WHERE id=%s", (uid,), one=True)
+    if not user:
+        return jsonify({"error": "Usuario no encontrado"}), 404
+    nombre = user["nombre"]
+    db = get_db()
+    # ── Congelar nombre en pedidos antes de que la FK quede NULL ─────────────
+    execute("""
+        UPDATE pedidos SET creado_por_nombre = %s
+        WHERE creado_por_id = %s AND (creado_por_nombre IS NULL OR creado_por_nombre = '')
+    """, (nombre, uid))
+    execute("""
+        UPDATE pedidos SET modificado_por_nombre = %s
+        WHERE modificado_por_id = %s AND (modificado_por_nombre IS NULL OR modificado_por_nombre = '')
+    """, (nombre, uid))
+    execute("""
+        UPDATE historial_estados SET usuario_nombre = %s
+        WHERE usuario_id = %s AND (usuario_nombre IS NULL OR usuario_nombre = '')
+    """, (nombre, uid))
+    # ── Eliminar usuario (usuario_hoteles y password_reset_tokens en CASCADE) ─
+    execute("DELETE FROM usuarios WHERE id=%s", (uid,))
+    db.commit()
+    return jsonify({"ok": True})
+
 # ── API Proveedores ────────────────────────────────────────────────────────────
 
 def _prov_with_contactos(rows):
@@ -2073,8 +2120,8 @@ PEDIDO_SELECT = """
                   (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_contacto_nombre,
            (SELECT telefono FROM proveedor_contactos WHERE proveedor_id=pr.id AND telefono IS NOT NULL AND telefono!='' ORDER BY orden,id LIMIT 1) as proveedor_telefono,
            (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id ORDER BY orden,id LIMIT 1) as proveedor_contacto,
-           u1.nombre as creado_por_nombre,
-           u2.nombre as modificado_por_nombre,
+           COALESCE(p.creado_por_nombre,    u1.nombre) as creado_por_nombre,
+           COALESCE(p.modificado_por_nombre, u2.nombre) as modificado_por_nombre,
            f.nombre  as familia_nombre,
            EXISTS (
                SELECT 1 FROM pedido_adjuntos pa WHERE pa.pedido_id = p.id
@@ -2165,7 +2212,7 @@ def get_pedido(pid):
     if not p:
         return jsonify({"error": "No encontrado"}), 404
     historial = rows_to_list(query(
-        """SELECT h.*, u.nombre as usuario_nombre
+        """SELECT h.*, COALESCE(h.usuario_nombre, u.nombre) as usuario_nombre
            FROM historial_estados h LEFT JOIN usuarios u ON h.usuario_id=u.id
            WHERE h.pedido_id=%s ORDER BY h.creado_en DESC""", (pid,)
     ))
@@ -2201,8 +2248,9 @@ def create_pedido():
             parte_rotura, parte_ampliacion,
             proveedor_id, observaciones,
             familia_id, importe, sujeto_techo,
-            creado_por_id, modificado_por_id
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            creado_por_id, modificado_por_id,
+            creado_por_nombre, modificado_por_nombre
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         RETURNING id
     """, (
         norden,
@@ -2219,12 +2267,13 @@ def create_pedido():
         data.get("proveedor_id"), data.get("observaciones"),
         familia_id, importe, sujeto_techo,
         uid, uid,
+        session.get("nombre"), session.get("nombre"),
     ))
     pedido_id = cur.fetchone()["id"]
 
     execute(
-        "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,nota) VALUES (%s,%s,%s,%s)",
-        (pedido_id, estado, uid, "Pedido creado")
+        "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s)",
+        (pedido_id, estado, uid, session.get("nombre"), "Pedido creado")
     )
     db.commit()
 
@@ -2267,14 +2316,14 @@ def update_pedido(pid):
         execute("""
             UPDATE pedidos SET
                 entrada_albaran_num=%s, estado=%s,
-                modificado_por_id=%s, modificado_en=NOW()
+                modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
             WHERE id=%s
-        """, (albaran_val, estado_solicitado, uid, pid))
+        """, (albaran_val, estado_solicitado, uid, session.get("nombre"), pid))
         estado_antes = pedido_actual["estado"]
         if estado_solicitado != estado_antes:
             execute(
-                "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,nota) VALUES (%s,%s,%s,%s,%s)",
-                (pid, estado_antes, estado_solicitado, uid, data.get("nota_historial", ""))
+                "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
+                (pid, estado_antes, estado_solicitado, uid, session.get("nombre"), data.get("nota_historial", ""))
             )
         db.commit()
         return jsonify({"ok": True, "id": pid})
@@ -2321,7 +2370,7 @@ def update_pedido(pid):
             parte_rotura=%s, parte_ampliacion=%s,
             proveedor_id=%s, observaciones=%s,
             familia_id=%s, importe=%s, sujeto_techo=%s,
-            modificado_por_id=%s, modificado_en=NOW()
+            modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
         WHERE id=%s
     """, (
         data.get("hotel_id",            pedido_actual["hotel_id"]),
@@ -2340,13 +2389,13 @@ def update_pedido(pid):
         data.get("proveedor_id",  pedido_actual["proveedor_id"]),
         data.get("observaciones", pedido_actual["observaciones"]),
         familia_id, importe, sujeto_techo,
-        uid, pid,
+        uid, session.get("nombre"), pid,
     ))
 
     if estado_nuevo != estado_antes:
         execute(
-            "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,nota) VALUES (%s,%s,%s,%s,%s)",
-            (pid, estado_antes, estado_nuevo, uid, data.get("nota_historial", ""))
+            "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
+            (pid, estado_antes, estado_nuevo, uid, session.get("nombre"), data.get("nota_historial", ""))
         )
 
     db.commit()
@@ -2723,6 +2772,7 @@ def reset_e_importar():
         insertados = 0
         if filas_validas:
             from psycopg2.extras import execute_values
+            _nombre = session.get("nombre")
             with db.cursor() as cur_i:
                 pedido_rows = [
                     (f["norden"], f["hotel_id"], f["depto_id"],
@@ -2730,7 +2780,7 @@ def reset_e_importar():
                      f["pedido_num"], f["presup_num"], f["albaran_num"],
                      f["estado"], f["com_ab"], f["com_jefe"],
                      f["p_rotura"], f["p_amplia"], f["prov_id"],
-                     f["obs"], uid, uid)
+                     f["obs"], uid, uid, _nombre, _nombre)
                     for f in filas_validas
                 ]
                 ids = execute_values(cur_i, """
@@ -2741,18 +2791,19 @@ def reset_e_importar():
                         estado, comunicado_ab, comunicado_jefe_dep,
                         parte_rotura, parte_ampliacion,
                         proveedor_id, observaciones,
-                        creado_por_id, modificado_por_id
+                        creado_por_id, modificado_por_id,
+                        creado_por_nombre, modificado_por_nombre
                     ) VALUES %s RETURNING id
                 """, pedido_rows, fetch=True)
 
                 insertados = len(ids)
 
                 historial_rows = [
-                    (ids[idx]["id"], filas_validas[idx]["estado"], uid, "Importado desde Excel (reset completo)")
+                    (ids[idx]["id"], filas_validas[idx]["estado"], uid, _nombre, "Importado desde Excel (reset completo)")
                     for idx in range(len(ids))
                 ]
                 execute_values(cur_i, """
-                    INSERT INTO historial_estados (pedido_id, estado_nuevo, usuario_id, nota)
+                    INSERT INTO historial_estados (pedido_id, estado_nuevo, usuario_id, usuario_nombre, nota)
                     VALUES %s
                 """, historial_rows)
 
@@ -2883,6 +2934,7 @@ def importar_excel():
         insertados = 0
         if filas_validas:
             from psycopg2.extras import execute_values
+            _nombre = session.get("nombre")
             with db.cursor() as cur_i:
                 pedido_rows = [
                     (f["norden"], f["hotel_id"], f["depto_id"],
@@ -2890,7 +2942,7 @@ def importar_excel():
                      f["pedido_num"], f["presup_num"], f["albaran_num"],
                      f["estado"], f["com_ab"], f["com_jefe"],
                      f["p_rotura"], f["p_amplia"], f["prov_id"],
-                     f["obs"], uid, uid)
+                     f["obs"], uid, uid, _nombre, _nombre)
                     for f in filas_validas
                 ]
                 ids = execute_values(cur_i, """
@@ -2901,18 +2953,19 @@ def importar_excel():
                         estado, comunicado_ab, comunicado_jefe_dep,
                         parte_rotura, parte_ampliacion,
                         proveedor_id, observaciones,
-                        creado_por_id, modificado_por_id
+                        creado_por_id, modificado_por_id,
+                        creado_por_nombre, modificado_por_nombre
                     ) VALUES %s RETURNING id
                 """, pedido_rows, fetch=True)
 
                 insertados = len(ids)
 
                 historial_rows = [
-                    (ids[idx]["id"], filas_validas[idx]["estado"], uid, "Importado desde Excel")
+                    (ids[idx]["id"], filas_validas[idx]["estado"], uid, _nombre, "Importado desde Excel")
                     for idx in range(len(ids))
                 ]
                 execute_values(cur_i, """
-                    INSERT INTO historial_estados (pedido_id, estado_nuevo, usuario_id, nota)
+                    INSERT INTO historial_estados (pedido_id, estado_nuevo, usuario_id, usuario_nombre, nota)
                     VALUES %s
                 """, historial_rows)
 

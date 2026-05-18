@@ -679,7 +679,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.9.6
+          10.0.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -3852,7 +3852,10 @@ async function loadUsuarios() {
       <td>${rolBadge}</td>
       <td>${hotelesCell}</td>
       <td>${activoBadge}</td>
-      <td><button class="btn btn-ghost btn-sm" onclick="openModalUsuario(${u.id})">✏ Editar</button></td>
+      <td style="white-space:nowrap">
+        <button class="btn btn-ghost btn-sm" onclick="openModalUsuario(${u.id})">✏ Editar</button>
+        ${esMismo ? '' : `<button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="confirmarEliminarUsuario(${u.id},'${u.username.replace(/'/g,"\\'")}')">🗑</button>`}
+      </td>
     </tr>`;
   }).join('');
 }
@@ -3968,6 +3971,18 @@ async function saveUsuario() {
 function togglePwdVisibility() {
   const inp = document.getElementById('usr-password');
   inp.type = inp.type === 'password' ? 'text' : 'password';
+}
+
+function confirmarEliminarUsuario(uid, username) {
+  if (!confirm(`¿Eliminar el usuario "${username}"?\n\nEsta acción no se puede deshacer.`)) return;
+  deleteUsuario(uid, username);
+}
+
+async function deleteUsuario(uid, username) {
+  const r = await api(`/api/usuarios/${uid}`, 'DELETE');
+  if (r && r.error) { toast(r.error, 'error'); return; }
+  toast(`Usuario "${username}" eliminado`, 'success');
+  loadUsuarios();
 }
 </script>
 

@@ -94,6 +94,8 @@ SQL_STATEMENTS = [
         sujeto_techo            INTEGER NOT NULL DEFAULT 0,
         creado_por_id           INTEGER REFERENCES usuarios(id),
         modificado_por_id       INTEGER REFERENCES usuarios(id),
+        creado_por_nombre       TEXT,
+        modificado_por_nombre   TEXT,
         creado_en               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
         modificado_en           TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
@@ -120,6 +122,7 @@ SQL_STATEMENTS = [
         estado_antes TEXT,
         estado_nuevo TEXT NOT NULL,
         usuario_id   INTEGER REFERENCES usuarios(id),
+        usuario_nombre TEXT,
         nota         TEXT,
         creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
