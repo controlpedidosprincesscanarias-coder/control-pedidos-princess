@@ -925,6 +925,8 @@ def alerta_email_preview(pedido_id):
         "wa_text":       wa_text,
         "wa_recipients": wa_recipients,
         "telegram_recipients": telegram_recipients,
+        "dias":            dias,
+        "nivel":           nivel,
     })
 
 @app.route("/api/alertas/<int:pedido_id>/enviar-email", methods=["POST"])
