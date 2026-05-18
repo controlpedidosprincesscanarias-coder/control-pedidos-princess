@@ -117,6 +117,14 @@ def _auto_migrate():
             """)
             # ── Columna móvil en usuarios (v9.5) ─────────────────────────────
             cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS movil TEXT")
+            # ── Tabla asignación hoteles a usuario hotel (v9.9.5) ─────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS usuario_hoteles (
+                    usuario_id INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                    hotel_id   INTEGER NOT NULL REFERENCES hoteles(id)  ON DELETE CASCADE,
+                    PRIMARY KEY (usuario_id, hotel_id)
+                )
+            """)
             # ── Log de WhatsApp (v9.5) ───────────────────────────────────────
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS whatsapp_log (
@@ -1082,8 +1090,14 @@ def login():
     session["username"] = user["username"]
     session["nombre"]   = user["nombre"]
     session["rol"]      = user["rol"]
+    # Para usuario hotel: cargar sus hoteles asignados
+    hoteles_ids = []
+    if user["rol"] == "hotel":
+        rows = query("SELECT hotel_id FROM usuario_hoteles WHERE usuario_id=%s", (user["id"],))
+        hoteles_ids = [r["hotel_id"] for r in rows]
+    session["hoteles_ids"] = hoteles_ids
     return jsonify({"ok": True, "id": user["id"], "username": user["username"],
-                    "nombre": user["nombre"], "rol": user["rol"]})
+                    "nombre": user["nombre"], "rol": user["rol"], "hoteles_ids": hoteles_ids})
 
 @app.route("/api/logout", methods=["POST"])
 def logout():
@@ -1213,14 +1227,26 @@ def me():
     if "user_id" not in session:
         return jsonify({"logged": False})
     return jsonify({"logged": True, "id": session["user_id"], "username": session["username"],
-                    "nombre": session["nombre"], "rol": session["rol"]})
+                    "nombre": session["nombre"], "rol": session["rol"],
+                    "hoteles_ids": session.get("hoteles_ids", [])})
 
 # ── API Maestros ───────────────────────────────────────────────────────────────
 
 @app.route("/api/maestros")
 @login_required
 def get_maestros():
-    hoteles       = rows_to_list(query("SELECT * FROM hoteles WHERE activo=1 ORDER BY codigo"))
+    if session.get("rol") == "hotel":
+        hoteles_ids = session.get("hoteles_ids", [])
+        if hoteles_ids:
+            placeholders = ",".join(["%s"] * len(hoteles_ids))
+            hoteles = rows_to_list(query(
+                f"SELECT * FROM hoteles WHERE activo=1 AND id IN ({placeholders}) ORDER BY codigo",
+                tuple(hoteles_ids)
+            ))
+        else:
+            hoteles = []
+    else:
+        hoteles = rows_to_list(query("SELECT * FROM hoteles WHERE activo=1 ORDER BY codigo"))
     departamentos = rows_to_list(query("SELECT * FROM departamentos WHERE activo=1 ORDER BY nombre"))
     familias      = rows_to_list(query("SELECT * FROM familias WHERE activo=1 ORDER BY nombre"))
     return jsonify({
@@ -1314,7 +1340,7 @@ def update_usuario(uid):
     data = request.get_json(silent=True) or {}
     db   = get_db()
     # No permitir que el admin se quite el rol a sí mismo
-    if uid == current_user_id() and data.get("rol") == "user":
+    if uid == current_user_id() and data.get("rol") in ("user", "hotel"):
         return jsonify({"error": "No puedes quitarte el rol de administrador a ti mismo"}), 400
     # Construir UPDATE dinámico solo con campos enviados
     fields, args = [], []
@@ -1324,7 +1350,7 @@ def update_usuario(uid):
         fields.append("email=%s"); args.append(data["email"].strip())
     if "movil" in data:
         fields.append("movil=%s"); args.append((data["movil"] or "").strip())
-    if "rol" in data and data["rol"] in ("admin","user"):
+    if "rol" in data and data["rol"] in ("admin", "user", "hotel"):
         fields.append("rol=%s"); args.append(data["rol"])
     if "activo" in data:
         fields.append("activo=%s"); args.append(1 if data["activo"] else 0)
@@ -1338,6 +1364,28 @@ def update_usuario(uid):
     # Si cambié mi propio nombre, actualizar sesión
     if uid == current_user_id() and "nombre" in data:
         session["nombre"] = data["nombre"].strip()
+    return jsonify({"ok": True})
+
+# ── API Hoteles de usuario (rol hotel) ────────────────────────────────────────
+
+@app.route("/api/usuarios/<int:uid>/hoteles", methods=["GET"])
+@admin_required
+def get_usuario_hoteles(uid):
+    rows = rows_to_list(query(
+        "SELECT hotel_id FROM usuario_hoteles WHERE usuario_id=%s", (uid,)
+    ))
+    return jsonify([r["hotel_id"] for r in rows])
+
+@app.route("/api/usuarios/<int:uid>/hoteles", methods=["PUT"])
+@admin_required
+def set_usuario_hoteles(uid):
+    data = request.get_json(silent=True) or {}
+    hotel_ids = data.get("hotel_ids", [])
+    db = get_db()
+    execute("DELETE FROM usuario_hoteles WHERE usuario_id=%s", (uid,))
+    for hid in hotel_ids:
+        execute("INSERT INTO usuario_hoteles (usuario_id, hotel_id) VALUES (%s,%s) ON CONFLICT DO NOTHING", (uid, hid))
+    db.commit()
     return jsonify({"ok": True})
 
 # ── API Proveedores ────────────────────────────────────────────────────────────
@@ -2045,6 +2093,15 @@ PEDIDO_SELECT = """
 def get_pedidos():
     wheres, args = [], []
 
+    # Restricción por rol hotel: solo ve sus hoteles asignados
+    if session.get("rol") == "hotel":
+        hoteles_ids = session.get("hoteles_ids", [])
+        if not hoteles_ids:
+            return jsonify({"pedidos": [], "total": 0, "page": 1, "page_size": 20, "pages": 1})
+        placeholders = ",".join(["%s"] * len(hoteles_ids))
+        wheres.append(f"p.hotel_id IN ({placeholders})")
+        args += hoteles_ids
+
     q      = request.args.get("q", "").strip()
     hotel  = request.args.get("hotel_id", "")
     estado = request.args.get("estado", "")
@@ -2195,6 +2252,33 @@ def update_pedido(pid):
     pedido_actual = row_to_dict(query("SELECT * FROM pedidos WHERE id=%s", (pid,), one=True))
     if not pedido_actual:
         return jsonify({"error": "No encontrado"}), 404
+
+    # ── Restricción rol hotel: solo puede modificar entrada_albaran_num, sin CANCELADO ──
+    if session.get("rol") == "hotel":
+        hoteles_ids = session.get("hoteles_ids", [])
+        if pedido_actual["hotel_id"] not in hoteles_ids:
+            return jsonify({"error": "Sin acceso a este pedido"}), 403
+        # Solo permitir campos de albarán; ignorar todo lo demás
+        albaran_val = data.get("entrada_albaran_num", pedido_actual["entrada_albaran_num"])
+        # Determinar estado: SERVIDO PARCIAL / TOTAL según albarán, pero nunca CANCELADO
+        estado_solicitado = data.get("estado", pedido_actual["estado"])
+        if estado_solicitado == "CANCELADO":
+            return jsonify({"error": "El usuario Hotel no puede cancelar pedidos"}), 403
+        execute("""
+            UPDATE pedidos SET
+                entrada_albaran_num=%s, estado=%s,
+                modificado_por_id=%s, modificado_en=NOW()
+            WHERE id=%s
+        """, (albaran_val, estado_solicitado, uid, pid))
+        estado_antes = pedido_actual["estado"]
+        if estado_solicitado != estado_antes:
+            execute(
+                "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,nota) VALUES (%s,%s,%s,%s,%s)",
+                (pid, estado_antes, estado_solicitado, uid, data.get("nota_historial", ""))
+            )
+        db.commit()
+        return jsonify({"ok": True, "id": pid})
+    # ── Fin restricción hotel ──────────────────────────────────────────────────
 
     estado_antes = pedido_actual["estado"]
     estado_nuevo = data.get("estado", estado_antes)

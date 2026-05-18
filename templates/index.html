@@ -679,7 +679,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          v 9.9.4
+          v 9.9.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -929,6 +929,7 @@ tbody tr:last-child{border-bottom:none}
                   <th>Email</th>
                   <th>📱 Móvil</th>
                   <th>Rol</th>
+                  <th>Hoteles</th>
                   <th>Estado</th>
                   <th style="width:160px">Acciones</th>
                 </tr>
@@ -981,8 +982,9 @@ tbody tr:last-child{border-bottom:none}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
         <div>
           <label class="form-label">Rol</label>
-          <select class="form-control" id="usr-rol">
-            <option value="user">Usuario</option>
+          <select class="form-control" id="usr-rol" onchange="onUsrRolChange()">
+            <option value="user">Compras</option>
+            <option value="hotel">Hotel</option>
             <option value="admin">Administrador</option>
           </select>
         </div>
@@ -1004,6 +1006,15 @@ tbody tr:last-child{border-bottom:none}
 
       <div id="usr-pwd-hint" style="font-size:11px;color:#888;display:none">
         Deja en blanco para no cambiar la contraseña.
+      </div>
+
+      <!-- Sección hoteles asignados (solo visible para rol Hotel) -->
+      <div id="usr-hoteles-section" style="display:none">
+        <label class="form-label" style="color:#1a3a6b;font-weight:600">🏨 Hoteles asignados</label>
+        <div id="usr-hoteles-checkboxes" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;max-height:180px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;padding:10px">
+          <span style="color:#999;font-size:12px">Cargando…</span>
+        </div>
+        <div style="font-size:11px;color:#888;margin-top:4px">Selecciona los hoteles que este usuario podrá visualizar y gestionar.</div>
       </div>
     </div>
     <div class="modal-footer">
@@ -1480,8 +1491,9 @@ async function doLogin() {
     const r = await api('/api/login', 'POST', {username:u, password:p});
     if (r.error) { err.textContent=r.error; err.style.display='block'; return; }
     G.user = r.nombre; G.nombre = r.nombre; G.rol = r.rol; G.userId = r.id;
+    G.hotelesIds = r.hoteles_ids || [];
     document.getElementById('sb-nombre').textContent = r.nombre;
-    document.getElementById('sb-rol').textContent    = r.rol === 'admin' ? 'Administrador' : 'Usuario';
+    document.getElementById('sb-rol').textContent    = r.rol === 'admin' ? 'Administrador' : r.rol === 'hotel' ? '🏨 Hotel' : 'Compras';
     document.getElementById('sb-avatar').textContent = r.nombre.charAt(0).toUpperCase();
     document.getElementById('login-screen').style.display='none';
     document.getElementById('app').style.display='flex';
@@ -1490,6 +1502,9 @@ async function doLogin() {
     document.querySelectorAll('.admin-only').forEach(el => {
       el.style.display = G.rol === 'admin' ? '' : 'none';
     });
+    // Ocultar botón nuevo pedido para usuario hotel (solo lectura + albarán)
+    const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
+    if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     // loadStats (llamado por showView) ya actualiza badge y card de alertas del dashboard.
@@ -1979,11 +1994,90 @@ async function openPedidoModal(id=null) {
     cargarAdjuntos(id);
   }
   openModal('modal-pedido');
+
+  // ── Restricciones visuales para rol Hotel ───────────────────────────────
+  _applyHotelRolePedidoModal(!!id);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Adjuntos del pedido
 ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Restricciones modales para rol Hotel ─────────────────────────────── */
+function _applyHotelRolePedidoModal(isEdit) {
+  const isHotel = G.rol === 'hotel';
+  // IDs de secciones/campos a ocultar/deshabilitar para hotel
+  const hideIds = [
+    'p-hotel','p-depto',                          // hotel y departamento
+    'p-f-solicitud','p-f-vb','p-f-tramit',        // fechas
+    'p-pedido-num','p-presup',                    // números SAP/presupuesto
+    'p-proveedor-input',                          // proveedor
+    'p-observaciones',                            // observaciones
+    'p-ab','p-jefe','p-rotura','p-ampliacion',    // checkboxes comunicados
+    'p-sujeto-techo',                             // techo gastos
+    'p-familia','p-importe',                      // familia/importe
+    'p-nota',                                     // nota historial
+  ];
+  // Secciones de bloque (form-section, form-group) a ocultar por selector
+  const hideSelectors = [
+    '.form-section',                              // todos los divs de sección
+  ];
+
+  if (isHotel) {
+    // Ocultar el título "Estado del pedido" y select de estado para hotel
+    // pero dejar la sección de albarán siempre visible
+    // Estrategia: ocultar todo el form excepto albaran-section y estado
+    const modal = document.getElementById('modal-pedido');
+    // Hacer todos los form-group ocultos salvo los de albarán
+    modal.querySelectorAll('.form-group').forEach(el => {
+      const hasAlbaran = el.id === 'albaran-section' || el.querySelector('#albaran-section');
+      const hasEstado  = el.querySelector('#p-estado');
+      if (!hasAlbaran && !hasEstado) el.style.display = 'none';
+    });
+    // Ocultar form-section headers
+    modal.querySelectorAll('.form-section').forEach(el => el.style.display = 'none');
+    // Ocultar sección adjuntos
+    modal.querySelectorAll('.adj-section, [id^="adj-"], .adj-fecha-section').forEach(el => el.style.display = 'none');
+    // Ocultar techo-fields
+    const tf = document.getElementById('techo-fields');
+    if (tf) tf.style.display = 'none';
+    // Ocultar historial
+    document.getElementById('p-historial-section').style.display = 'none';
+    // Deshabilitar checkboxes CANCELADO
+    const chkCancelado = document.getElementById('chk-cancelado');
+    if (chkCancelado) {
+      chkCancelado.disabled = true;
+      chkCancelado.parentElement.style.opacity = '0.4';
+      chkCancelado.parentElement.title = 'No permitido para usuario Hotel';
+    }
+    // Eliminar opción CANCELADO del select de estado si existe
+    const estadoSel = document.getElementById('p-estado');
+    if (estadoSel) {
+      [...estadoSel.options].forEach(opt => {
+        if (opt.value === 'CANCELADO') opt.disabled = true;
+      });
+    }
+    // Poner título informativo
+    document.getElementById('modal-pedido-title').textContent = isEdit ? 'Actualizar Nº Entrada Albarán' : '';
+    // Ocultar botón nuevo (hotel no crea pedidos)
+    if (!isEdit) { closeModal('modal-pedido'); return; }
+  } else {
+    // Restaurar visibilidad para otros roles
+    const modal = document.getElementById('modal-pedido');
+    modal.querySelectorAll('.form-group').forEach(el => el.style.display = '');
+    modal.querySelectorAll('.form-section').forEach(el => el.style.display = '');
+    const chkCancelado = document.getElementById('chk-cancelado');
+    if (chkCancelado) {
+      chkCancelado.disabled = false;
+      chkCancelado.parentElement.style.opacity = '1';
+      chkCancelado.parentElement.title = '';
+    }
+    const estadoSel = document.getElementById('p-estado');
+    if (estadoSel) {
+      [...estadoSel.options].forEach(opt => opt.disabled = false);
+    }
+  }
+}
 
 async function cargarAdjuntos(pedidoId) {
   const d = await api(`/api/pedidos/${pedidoId}/adjuntos`);
@@ -2409,6 +2503,30 @@ function clearPedidoForm() {
 }
 
 async function savePedido() {
+  // ── Modo Hotel: solo guardar albarán ─────────────────────────────────
+  if (G.rol === 'hotel') {
+    const id = G.editingPedidoId;
+    if (!id) return;
+    const estadoNuevo = val('p-estado');
+    if (estadoNuevo === 'CANCELADO') {
+      toast('No tienes permiso para cancelar pedidos', 'error'); return;
+    }
+    const body = {
+      entrada_albaran_num: getAlbaranCombined(),
+      estado: estadoNuevo,
+    };
+    const btn = document.getElementById('btn-save-pedido');
+    btn.disabled = true;
+    const r = await api(`/api/pedidos/${id}`, 'PUT', body);
+    btn.disabled = false;
+    if (r && r.error) { toast(r.error, 'error'); return; }
+    toast('Albarán actualizado', 'success');
+    closeModal('modal-pedido');
+    loadPedidos();
+    return;
+  }
+  // ── Fin modo Hotel ────────────────────────────────────────────────────
+
   const hotel = document.getElementById('p-hotel').value;
   const depto = document.getElementById('p-depto').value;
   if (!hotel) { toast('Selecciona un hotel','error'); return; }
@@ -3117,12 +3235,19 @@ function calcDias(s) {
 (async () => {
   const d = await api('/api/me');
   if (d.logged) {
-    G.user=d.nombre; G.rol=d.rol; G.userId=d.id;
+    G.user=d.nombre; G.rol=d.rol; G.userId=d.id; G.nombre=d.nombre;
+    G.hotelesIds = d.hoteles_ids || [];
     document.getElementById('sb-nombre').textContent = d.nombre;
-    document.getElementById('sb-rol').textContent    = d.rol==='admin'?'Administrador':'Usuario';
+    document.getElementById('sb-rol').textContent    = d.rol==='admin'?'Administrador': d.rol==='hotel'?'🏨 Hotel':'Compras';
     document.getElementById('sb-avatar').textContent = d.nombre.charAt(0).toUpperCase();
     document.getElementById('login-screen').style.display='none';
     document.getElementById('app').style.display='flex';
+    if (G.rol !== 'admin') document.getElementById('btn-delete-pedido').style.display='none';
+    document.querySelectorAll('.admin-only').forEach(el => {
+      el.style.display = G.rol === 'admin' ? '' : 'none';
+    });
+    const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
+    if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
   }
@@ -3676,16 +3801,35 @@ document.getElementById('modal-usuario').addEventListener('click', function(e) {
 
 async function loadUsuarios() {
   const tbody = document.getElementById('usuarios-tbody');
-  tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">Cargando…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">Cargando…</td></tr>';
   const rows = await api('/api/usuarios');
   if (!rows || !rows.length) {
-    tbody.innerHTML = '<tr><td colspan="6" style="text-align:center;color:#999;padding:20px">No hay usuarios</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">No hay usuarios</td></tr>';
     return;
   }
+  // Para usuarios hotel, cargar sus hoteles asignados
+  const maestros = await api('/api/maestros');
+  const todosHoteles = (maestros && maestros.hoteles) ? maestros.hoteles : [];
+  const hotelMap = {};
+  todosHoteles.forEach(h => hotelMap[h.id] = h.codigo);
+
+  // Cargar asignaciones de hoteles para usuarios tipo hotel
+  const asignMap = {};
+  await Promise.all(
+    rows.filter(u => u.rol === 'hotel').map(async u => {
+      try {
+        const ids = await api(`/api/usuarios/${u.id}/hoteles`);
+        asignMap[u.id] = (ids || []).map(id => hotelMap[id] || id);
+      } catch(e) { asignMap[u.id] = []; }
+    })
+  );
+
   tbody.innerHTML = rows.map(u => {
     const rolBadge = u.rol === 'admin'
       ? `<span style="background:#1a3a6b;color:#fff;border-radius:4px;font-size:11px;padding:2px 8px;font-weight:600">Admin</span>`
-      : `<span style="background:#e9ecef;color:#555;border-radius:4px;font-size:11px;padding:2px 8px">Usuario</span>`;
+      : u.rol === 'hotel'
+      ? `<span style="background:#0d6e6e;color:#fff;border-radius:4px;font-size:11px;padding:2px 8px;font-weight:600">🏨 Hotel</span>`
+      : `<span style="background:#e9ecef;color:#555;border-radius:4px;font-size:11px;padding:2px 8px">Compras</span>`;
     const activoBadge = u.activo
       ? `<span style="color:#28a745;font-weight:600;font-size:12px">● Activo</span>`
       : `<span style="color:#dc3545;font-weight:600;font-size:12px">○ Inactivo</span>`;
@@ -3695,12 +3839,18 @@ async function loadUsuarios() {
             title="Abrir WhatsApp" style="color:#25d366;text-decoration:none;font-size:12px">
             📱 ${u.movil}</a>`
       : '<span style="color:#ccc;font-size:12px">—</span>';
+    const hotelesCell = u.rol === 'hotel'
+      ? (asignMap[u.id] && asignMap[u.id].length
+          ? `<span style="font-size:12px;color:#0d6e6e;font-weight:600">${asignMap[u.id].join(', ')}</span>`
+          : '<span style="color:#ccc;font-size:12px">Sin asignar</span>')
+      : '<span style="color:#ddd;font-size:12px">—</span>';
     return `<tr>
       <td class="monospace" style="font-size:13px">${u.username}</td>
       <td>${u.nombre}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
       <td style="font-size:12px;color:#666">${u.email||'—'}</td>
       <td>${movilLink}</td>
       <td>${rolBadge}</td>
+      <td>${hotelesCell}</td>
       <td>${activoBadge}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="openModalUsuario(${u.id})">✏ Editar</button></td>
     </tr>`;
@@ -3717,6 +3867,10 @@ function openModalUsuario(id=null) {
   document.getElementById('usr-password').value  = '';
   document.getElementById('usr-rol').value       = 'user';
   document.getElementById('usr-activo').checked  = true;
+  document.getElementById('usr-hoteles-section').style.display = 'none';
+
+  // Cargar checkboxes de hoteles (siempre, para tenerlos listos)
+  _loadHotelesCheckboxes(id);
 
   if (id) {
     document.getElementById('usr-username').disabled        = true;
@@ -3732,6 +3886,9 @@ function openModalUsuario(id=null) {
       document.getElementById('usr-movil').value    = u.movil || '';
       document.getElementById('usr-rol').value      = u.rol;
       document.getElementById('usr-activo').checked = !!u.activo;
+      if (u.rol === 'hotel') {
+        document.getElementById('usr-hoteles-section').style.display = '';
+      }
     });
   } else {
     document.getElementById('usr-username').disabled        = false;
@@ -3740,6 +3897,34 @@ function openModalUsuario(id=null) {
     document.getElementById('usr-activo-row').style.display = 'none';
   }
   openModal('modal-usuario');
+}
+
+function onUsrRolChange() {
+  const rol = document.getElementById('usr-rol').value;
+  document.getElementById('usr-hoteles-section').style.display = rol === 'hotel' ? '' : 'none';
+}
+
+async function _loadHotelesCheckboxes(usuarioId) {
+  const container = document.getElementById('usr-hoteles-checkboxes');
+  container.innerHTML = '<span style="color:#999;font-size:12px">Cargando…</span>';
+  // Cargar todos los hoteles disponibles
+  const maestros = await api('/api/maestros');
+  const hoteles  = maestros ? maestros.hoteles : [];
+  // Cargar hoteles ya asignados al usuario (si es edición)
+  let asignados = [];
+  if (usuarioId) {
+    try { asignados = await api(`/api/usuarios/${usuarioId}/hoteles`) || []; } catch(e) {}
+  }
+  if (!hoteles || !hoteles.length) {
+    container.innerHTML = '<span style="color:#999;font-size:12px">No hay hoteles disponibles</span>';
+    return;
+  }
+  container.innerHTML = hoteles.map(h => `
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:2px 4px;border-radius:4px">
+      <input type="checkbox" data-hotel-id="${h.id}"
+             ${asignados.includes(h.id) ? 'checked' : ''}>
+      <span>${h.codigo} <span style="color:#999;font-size:11px">${h.nombre||''}</span></span>
+    </label>`).join('');
 }
 
 async function saveUsuario() {
@@ -3766,6 +3951,15 @@ async function saveUsuario() {
   }
 
   if (r.error) { toast(r.error, 'error'); return; }
+
+  // Si es rol hotel, guardar hoteles asignados
+  const uid = id || r.id;
+  if (rol === 'hotel' && uid) {
+    const checks = document.querySelectorAll('#usr-hoteles-checkboxes input[type=checkbox]');
+    const hotel_ids = [...checks].filter(c => c.checked).map(c => parseInt(c.dataset.hotelId));
+    await api(`/api/usuarios/${uid}/hoteles`, 'PUT', { hotel_ids });
+  }
+
   toast(id ? 'Usuario actualizado' : 'Usuario creado', 'success');
   closeModal('modal-usuario');
   loadUsuarios();
