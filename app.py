@@ -477,6 +477,87 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
         resultados.append({"username": username, "chat_id": chat_id, **res})
     return resultados
 
+# ── Telegram inmediato por cambio de estado en edición de pedido ───────────────
+
+# Estados que activan Telegram inmediato al cambiar durante una edición.
+# Se excluyen estados terminales sin acción pendiente (SERVIDO TOTAL, CANCELADO).
+ESTADOS_TELEGRAM_INMEDIATO = {
+    "ENVIADO AL PROVEEDOR",
+    "PENDIENTE FIRMA DIRECCION COMPRAS",
+    "PENDIENTE DE FIRMA DIRECCION HOTEL",
+    "ENTREGA PARCIAL",
+    "PENDIENTE COTIZACIÓN",
+}
+
+def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str,
+                             usuario_nombre: str = "") -> None:
+    """
+    Envía Telegram inmediato cuando un pedido cambia a un estado relevante
+    durante la edición manual (PUT /api/pedidos/<pid>).
+
+    Reglas:
+    - Solo dispara si estado_nuevo está en ESTADOS_TELEGRAM_INMEDIATO.
+    - Protección anti-spam: no reenvía si ya se notificó hoy con tipo
+      'telegram_estado' para este pedido (permite 1 Telegram por pedido/día
+      por cambios de estado, independiente del job diario).
+    - Registra en whatsapp_log con tipo='telegram_estado' para trazabilidad.
+    """
+    if estado_nuevo not in ESTADOS_TELEGRAM_INMEDIATO:
+        return                        # estado sin interés (SERVIDO TOTAL, etc.)
+
+    if _ya_notificado_hoy(pedido_id, "telegram_estado"):
+        log.info("[ESTADO] Telegram omitido — ya notificado hoy (pedido %s)", pedido_id)
+        return
+
+    try:
+        pedido = row_to_dict(query(f"{PEDIDO_SELECT_ALERTA} WHERE p.id=%s", (pedido_id,), one=True))
+        if not pedido:
+            log.warning("[ESTADO] Pedido %s no encontrado para Telegram", pedido_id)
+            return
+
+        hotel_cod = (pedido.get("hotel_codigo") or "").upper()
+        usernames = HOTEL_COMPRADOR.get(hotel_cod, [])
+        if not usernames:
+            log.warning("[ESTADO] Sin compradores para hotel %s", hotel_cod)
+            return
+
+        texto = (
+            "🔔 *Cambio de estado*\n"
+            f"Hotel: *{pedido.get('hotel_codigo','?')}* — {pedido.get('hotel_nombre','')}\n"
+            f"Pedido: *{pedido.get('pedido_num') or ('Nº Orden ' + str(pedido.get('norden','?')))}*\n"
+            f"Proveedor: {pedido.get('proveedor_nombre','—')}\n"
+            f"Estado anterior: {estado_antes or '—'}\n"
+            f"Estado nuevo: *{estado_nuevo}*\n"
+            + (f"Modificado por: {usuario_nombre}\n" if usuario_nombre else "")
+            + "— Control Pedidos Princess Canarias"
+        )
+
+        resultados = []
+        for username in usernames:
+            chat_id = TELEGRAM_CHAT_IDS.get(username)
+            if not chat_id:
+                log.warning("[ESTADO] Sin chat_id para %s", username)
+                resultados.append({"username": username, "chat_id": None, "ok": False, "error": "Sin chat_id"})
+                continue
+            res = _send_telegram(chat_id, texto)
+            log.info("[ESTADO] Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
+            resultados.append({"username": username, "chat_id": chat_id, **res})
+
+        # Registrar en whatsapp_log (tipo distinto al job para no interferir)
+        for r in resultados:
+            _log_whatsapp(
+                db, pedido_id, "telegram_estado",
+                r.get("username", "?"),
+                f"Cambio estado: {estado_antes} → {estado_nuevo}",
+                r.get("ok", False),
+                r.get("error"),
+            )
+        db.commit()
+
+    except Exception as exc:
+        log.exception("[ESTADO] Error enviando Telegram cambio estado pedido %s: %s", pedido_id, exc)
+
+
 # ── Job diario: alertas por fecha (independiente del usuario) ──────────────────
 
 UMBRALES_ALERTAS = {
@@ -513,17 +594,19 @@ def _dias_desde_fecha(fecha_str):
     except Exception:
         return None
 
-def _ya_notificado_hoy(pedido_id: int) -> bool:
+def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
     """
-    Devuelve True si ya se envió un telegram_auto para este pedido HOY.
-    Evita duplicar notificaciones si el job se ejecuta varias veces.
+    Devuelve True si ya se envió una notificación del tipo indicado para este pedido HOY.
+    - tipo='telegram_auto'   → job diario de alertas por fecha
+    - tipo='telegram_estado' → cambio de estado inmediato desde update_pedido
+    Evita duplicar notificaciones si la misma acción se dispara varias veces.
     """
     try:
         row = query(
             """SELECT COUNT(*) as n FROM whatsapp_log
-               WHERE pedido_id=%s AND tipo='telegram_auto'
+               WHERE pedido_id=%s AND tipo=%s
                  AND DATE(creado_en) = CURRENT_DATE""",
-            (pedido_id,), one=True
+            (pedido_id, tipo), one=True
         )
         return (row["n"] if row else 0) > 0
     except Exception:
@@ -589,8 +672,8 @@ def _job_alertas_diarias():
 
         nivel = "urgente" if (cfg["urgente"] and dias >= cfg["urgente"]) else "aviso"
 
-        # No enviar si ya se notificó hoy
-        if _ya_notificado_hoy(p["id"]):
+        # No enviar si ya se notificó hoy (job diario)
+        if _ya_notificado_hoy(p["id"], "telegram_auto"):
             omitidos += 1
             continue
 
@@ -2402,6 +2485,9 @@ def update_pedido(pid):
 
     if estado_nuevo != estado_antes:
         enviar_emails_estado(db, pid, estado_nuevo, estado_antes)
+        # ── Telegram inmediato por cambio de estado ────────────────────────────
+        _telegram_cambio_estado(db, pid, estado_nuevo, estado_antes,
+                                usuario_nombre=session.get("nombre", ""))
 
     return jsonify({"ok": True})
 
