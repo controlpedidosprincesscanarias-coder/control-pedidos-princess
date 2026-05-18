@@ -522,9 +522,11 @@ _JOB_PEDIDO_SQL = """
 
 def _job_alertas_diarias():
     """
-    Job automático diario: calcula alertas por fecha y envía Telegram
+    Job automático: calcula alertas por fecha y envía Telegram
     a los compradores responsables sin ninguna interacción del usuario.
-    Se ejecuta cada día a las 08:00 hora Canarias.
+    Se ejecuta cada 60 segundos en horario 07:00-16:00 hora Canarias.
+    _ya_notificado_hoy() garantiza que cada pedido recibe como máximo
+    una alerta por día, aunque el job corra cientos de veces.
     """
     log.info("▶ [SCHEDULER] Inicio job alertas diarias — %s", _date.today())
     try:
@@ -3088,25 +3090,29 @@ def unhandled_exception(e):
 
 # ── Scheduler: alertas automáticas por Telegram ───────────────────────────────
 # Corre dentro del mismo proceso gunicorn — sin Redis, sin Celery, sin workers.
-# Cada día a las 08:00 hora Canarias revisa todos los pedidos activos y envía
-# Telegram a los compradores cuyo umbral de días se haya superado.
+# Cada 60 segundos, en horario 07:00-16:00 hora Canarias (todos los días),
+# revisa todos los pedidos activos y envía Telegram si procede.
+# La protección _ya_notificado_hoy() evita duplicados: aunque el job corra
+# 540 veces al día, cada pedido solo recibe UNA alerta por día.
 
 def _iniciar_scheduler():
     scheduler = BackgroundScheduler(timezone="Atlantic/Canary")
-    # Dos ejecuciones diarias: 08:00 y 14:00 hora Canarias.
-    # misfire_grace_time=7200 → si Render reinició el servidor justo antes
-    # de la hora programada, ejecuta el job hasta 2h tarde.
-    for hora in (8, 14):
-        scheduler.add_job(
-            _job_alertas_diarias,
-            trigger="cron",
-            hour=hora, minute=0,
-            id=f"alertas_diarias_{hora}h",
-            replace_existing=True,
-            misfire_grace_time=7200,
-        )
+    # Intervalo: cada 60 segundos, solo entre las 07:00 y las 16:00 locales.
+    # hour='7-15' → APScheduler ejecuta mientras hour esté en [7..15],
+    # es decir desde las 07:00:00 hasta las 15:59:59 — el último ciclo
+    # arranca a las 15:59 y el siguiente ya sería las 16:00, fuera de rango.
+    scheduler.add_job(
+        _job_alertas_diarias,
+        trigger="cron",
+        hour="7-15",          # 07:00 → 15:59 (inclusive)
+        minute="*",
+        second="0",           # en punto de cada minuto
+        id="alertas_cada_minuto",
+        replace_existing=True,
+        misfire_grace_time=60,
+    )
     scheduler.start()
-    log.info("✅ Scheduler iniciado — alertas diarias a las 08:00 y 14:00 (Atlantic/Canary)")
+    log.info("✅ Scheduler iniciado — alertas cada 60s en horario 07:00-16:00 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
