@@ -679,7 +679,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.0.6
+          V 10.0.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -983,7 +983,7 @@ tbody tr:last-child{border-bottom:none}
         <div>
           <label class="form-label">Rol</label>
           <select class="form-control" id="usr-rol" onchange="onUsrRolChange()">
-            <option value="user">Compras</option>
+            <option value="compras">Compras</option>
             <option value="hotel">Hotel</option>
             <option value="admin">Administrador</option>
           </select>
@@ -1015,6 +1015,15 @@ tbody tr:last-child{border-bottom:none}
           <span style="color:#999;font-size:12px">Cargando…</span>
         </div>
         <div style="font-size:11px;color:#888;margin-top:4px">Selecciona los hoteles que este usuario podrá visualizar y gestionar.</div>
+      </div>
+
+      <!-- Sección hoteles compras (solo visible para rol Compras) -->
+      <div id="usr-comprador-hoteles-section" style="display:none">
+        <label class="form-label" style="color:#7a5c00;font-weight:600">🛒 Hoteles asignados (Compras)</label>
+        <div id="usr-comprador-hoteles-checkboxes" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;max-height:180px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;padding:10px">
+          <span style="color:#999;font-size:12px">Cargando…</span>
+        </div>
+        <div style="font-size:11px;color:#888;margin-top:4px">Hoteles que atendera este comprador. Cada hotel solo puede tener <strong>un comprador</strong> asignado.</div>
       </div>
     </div>
     <div class="modal-footer">
@@ -3824,6 +3833,17 @@ async function loadUsuarios() {
     })
   );
 
+  // Cargar asignaciones de hoteles para usuarios tipo compras
+  const compradorMap = {};
+  await Promise.all(
+    rows.filter(u => u.rol === 'compras' || u.rol === 'user').map(async u => {
+      try {
+        const ids = await api(`/api/usuarios/${u.id}/hoteles-compras`);
+        compradorMap[u.id] = (ids || []).map(id => hotelMap[id] || id);
+      } catch(e) { compradorMap[u.id] = []; }
+    })
+  );
+
   tbody.innerHTML = rows.map(u => {
     const rolBadge = u.rol === 'admin'
       ? `<span style="background:#1a3a6b;color:#fff;border-radius:4px;font-size:11px;padding:2px 8px;font-weight:600">Admin</span>`
@@ -3842,6 +3862,10 @@ async function loadUsuarios() {
     const hotelesCell = u.rol === 'hotel'
       ? (asignMap[u.id] && asignMap[u.id].length
           ? `<span style="font-size:12px;color:#0d6e6e;font-weight:600">${asignMap[u.id].join(', ')}</span>`
+          : '<span style="color:#ccc;font-size:12px">Sin asignar</span>')
+      : (u.rol === 'compras' || u.rol === 'user')
+      ? (compradorMap[u.id] && compradorMap[u.id].length
+          ? `<span style="font-size:12px;color:#7a5c00;font-weight:600">${compradorMap[u.id].join(', ')}</span>`
           : '<span style="color:#ccc;font-size:12px">Sin asignar</span>')
       : '<span style="color:#ddd;font-size:12px">—</span>';
     return `<tr>
@@ -3868,12 +3892,14 @@ function openModalUsuario(id=null) {
   document.getElementById('usr-email').value     = '';
   document.getElementById('usr-movil').value     = '';
   document.getElementById('usr-password').value  = '';
-  document.getElementById('usr-rol').value       = 'user';
+  document.getElementById('usr-rol').value       = 'compras';
   document.getElementById('usr-activo').checked  = true;
   document.getElementById('usr-hoteles-section').style.display = 'none';
+  document.getElementById('usr-comprador-hoteles-section').style.display = 'none';
 
   // Cargar checkboxes de hoteles (siempre, para tenerlos listos)
   _loadHotelesCheckboxes(id);
+  _loadCompradorHotelesCheckboxes(id);
 
   if (id) {
     document.getElementById('usr-username').disabled        = true;
@@ -3887,10 +3913,13 @@ function openModalUsuario(id=null) {
       document.getElementById('usr-nombre').value   = u.nombre;
       document.getElementById('usr-email').value    = u.email || '';
       document.getElementById('usr-movil').value    = u.movil || '';
-      document.getElementById('usr-rol').value      = u.rol;
+      // Backward-compat: rol='user' (legacy) se muestra como 'compras'
+      document.getElementById('usr-rol').value      = (u.rol === 'user') ? 'compras' : u.rol;
       document.getElementById('usr-activo').checked = !!u.activo;
       if (u.rol === 'hotel') {
         document.getElementById('usr-hoteles-section').style.display = '';
+      } else if (u.rol === 'compras' || u.rol === 'user') {
+        document.getElementById('usr-comprador-hoteles-section').style.display = '';
       }
     });
   } else {
@@ -3905,6 +3934,12 @@ function openModalUsuario(id=null) {
 function onUsrRolChange() {
   const rol = document.getElementById('usr-rol').value;
   document.getElementById('usr-hoteles-section').style.display = rol === 'hotel' ? '' : 'none';
+  document.getElementById('usr-comprador-hoteles-section').style.display = rol === 'compras' ? '' : 'none';
+  // Cargar checkboxes compras al cambiar al rol compras (usuario nuevo o cambio de rol)
+  if (rol === 'compras') {
+    const uid = document.getElementById('usr-edit-id').value || null;
+    _loadCompradorHotelesCheckboxes(uid ? parseInt(uid) : null);
+  }
 }
 
 async function _loadHotelesCheckboxes(usuarioId) {
@@ -3925,6 +3960,28 @@ async function _loadHotelesCheckboxes(usuarioId) {
   container.innerHTML = hoteles.map(h => `
     <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:2px 4px;border-radius:4px">
       <input type="checkbox" data-hotel-id="${h.id}"
+             ${asignados.includes(h.id) ? 'checked' : ''}>
+      <span>${h.codigo} <span style="color:#999;font-size:11px">${h.nombre||''}</span></span>
+    </label>`).join('');
+}
+
+async function _loadCompradorHotelesCheckboxes(usuarioId) {
+  const container = document.getElementById('usr-comprador-hoteles-checkboxes');
+  if (!container) return;
+  container.innerHTML = '<span style="color:#999;font-size:12px">Cargando…</span>';
+  const maestros = await api('/api/maestros');
+  const hoteles  = maestros ? maestros.hoteles : [];
+  let asignados = [];
+  if (usuarioId) {
+    try { asignados = await api(`/api/usuarios/${usuarioId}/hoteles-compras`) || []; } catch(e) {}
+  }
+  if (!hoteles || !hoteles.length) {
+    container.innerHTML = '<span style="color:#999;font-size:12px">No hay hoteles disponibles</span>';
+    return;
+  }
+  container.innerHTML = hoteles.map(h => `
+    <label style="display:flex;align-items:center;gap:6px;font-size:13px;cursor:pointer;padding:2px 4px;border-radius:4px">
+      <input type="checkbox" data-comprador-hotel-id="${h.id}"
              ${asignados.includes(h.id) ? 'checked' : ''}>
       <span>${h.codigo} <span style="color:#999;font-size:11px">${h.nombre||''}</span></span>
     </label>`).join('');
@@ -3961,6 +4018,28 @@ async function saveUsuario() {
     const checks = document.querySelectorAll('#usr-hoteles-checkboxes input[type=checkbox]');
     const hotel_ids = [...checks].filter(c => c.checked).map(c => parseInt(c.dataset.hotelId));
     await api(`/api/usuarios/${uid}/hoteles`, 'PUT', { hotel_ids });
+  }
+
+  // Si es rol compras, guardar hoteles comprador asignados (con manejo de 409)
+  if (rol === 'compras' && uid) {
+    const checks = document.querySelectorAll('#usr-comprador-hoteles-checkboxes input[type=checkbox]');
+    const hotel_ids = [...checks].filter(c => c.checked).map(c => parseInt(c.dataset.compradorHotelId));
+    const rc = await api(`/api/usuarios/${uid}/hoteles-compras`, 'PUT', { hotel_ids });
+    if (rc && rc.ok === false) {
+      if (rc.huerfanos && rc.huerfanos.length) {
+        // Hoteles que quedarían sin comprador — bloquear operación
+        toast(rc.error || '⚠️ Algunos hoteles quedarían sin comprador asignado.', 'error');
+        return;
+      }
+      if (rc.conflictos && rc.conflictos.length) {
+        // Hoteles ya asignados a otro comprador — pedir confirmación de reasignación
+        const lista = rc.conflictos.map(c => `  • ${c.hotel_codigo} (ahora: ${c.comprador_actual_nombre})`).join('\n');
+        const ok = confirm(`⚠️ Estos hoteles ya tienen comprador asignado:\n\n${lista}\n\n¿Reasignar a ${nombre}?`);
+        if (!ok) return;
+        const rf = await api(`/api/usuarios/${uid}/hoteles-compras`, 'PUT', { hotel_ids, forzar: true });
+        if (rf && rf.ok === false) { toast(rf.error || 'Error al reasignar hoteles', 'error'); return; }
+      }
+    }
   }
 
   toast(id ? 'Usuario actualizado' : 'Usuario creado', 'success');

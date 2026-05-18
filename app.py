@@ -504,7 +504,8 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
 
 # Estados que activan Telegram inmediato al cambiar durante una edición.
 # Se excluyen estados terminales sin acción pendiente (SERVIDO TOTAL, CANCELADO).
-def _calcular_info_alerta(pedido: dict, estado_nuevo: str) -> dict | None:
+def _calcular_info_alerta(pedido: dict, estado_nuevo: str,
+                          ignorar_si_modificacion_manual: bool = False) -> dict | None:
     """
     Dado un pedido y su nuevo estado, calcula si ese estado genera una condición
     de alerta según UMBRALES_ALERTAS, y devuelve un dict con:
@@ -513,7 +514,29 @@ def _calcular_info_alerta(pedido: dict, estado_nuevo: str) -> dict | None:
 
     Se usa para enriquecer el mensaje de Telegram con contexto de alerta
     cuando el cambio de estado recae en un estado vigilado.
+
+    Parámetro ignorar_si_modificacion_manual:
+    ─────────────────────────────────────────
+    Cuando True, suprime SIEMPRE la alerta temporal aunque el estado esté en
+    UMBRALES_ALERTAS y los días superen el umbral.
+
+    Motivación: las alertas de tipo "N días desde tramitación" están pensadas
+    para detectar pedidos *parados* sin acción. Cuando el operador acaba de
+    cambiar el estado manualmente (p. ej. PENDIENTE → ENVIADO AL PROVEEDOR),
+    añadir "⚠️ 15 días desde tramitación" es contradictorio — el usuario
+    literalmente acaba de actuar. El job diario (_job_alertas_diarias) ya
+    recoge esa alerta en su próxima ejecución si el pedido sigue sin avanzar.
+
+    Por tanto:
+    - ignorar_si_modificacion_manual=False (default) → comportamiento normal,
+      usado por el job diario y consultas de diagnóstico.
+    - ignorar_si_modificacion_manual=True → sin bloque de alerta, usado desde
+      _telegram_cambio_estado (cambios manuales desde update_pedido).
     """
+    # ── Guard: si es cambio manual, la alerta temporal es contradictoria ──────
+    if ignorar_si_modificacion_manual:
+        return None
+
     cfg = UMBRALES_ALERTAS.get(estado_nuevo)
     if not cfg:
         return None  # estado no vigilado (SERVIDO TOTAL, CANCELADO, etc.)
@@ -534,20 +557,24 @@ def _calcular_info_alerta(pedido: dict, estado_nuevo: str) -> dict | None:
 
 
 def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str,
-                             usuario_nombre: str = "") -> None:
+                             usuario_nombre: str = "",
+                             es_cambio_manual: bool = True) -> None:
     """
-    Envía Telegram inmediato en CADA cambio de estado manual (PUT /api/pedidos/<pid>).
+    Envía Telegram inmediato en CADA cambio de estado (PUT /api/pedidos/<pid>).
 
     Comportamiento:
     - Dispara SIEMPRE que estado_nuevo != estado_antes, sin filtro de estados.
     - El mensaje base incluye: pedido, hotel, proveedor, usuario que editó,
       estado anterior → nuevo estado.
-    - Si el nuevo estado además genera una condición de alerta (según
-      UMBRALES_ALERTAS + fecha de referencia del pedido), se añade al mensaje:
-      tipo de alerta, nivel (aviso/urgente) y motivo (días transcurridos).
-    - SIN protección _ya_notificado_hoy: si el usuario cambia el estado
-      manualmente, el Telegram llega siempre. El job diario usa su propia
-      deduplicación (tipo='telegram_auto') y no interfiere.
+    - Si el nuevo estado genera una condición de alerta (UMBRALES_ALERTAS)
+      Y es_cambio_manual=False, se añade al mensaje: nivel y motivo (días).
+    - Con es_cambio_manual=True (default para cambios desde update_pedido):
+      el bloque de alerta temporal se suprime. Motivo: las alertas de "N días
+      desde tramitación" detectan pedidos parados sin acción; mostrarla justo
+      cuando el operador acaba de actuar sería contradictorio. El job diario
+      recoge la alerta en su próxima ejecución si el pedido sigue sin avanzar.
+    - SIN protección _ya_notificado_hoy: los cambios manuales siempre llegan.
+      El job diario usa su propia deduplicación (tipo='telegram_auto').
     - Registra en whatsapp_log con tipo='telegram_estado' para trazabilidad
       separada del job automático.
     """
@@ -576,7 +603,10 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
             lineas.append(f"Modificado por: {usuario_nombre}")
 
         # ── Bloque de alerta: solo si el nuevo estado genera alerta ───────────
-        info_alerta = _calcular_info_alerta(pedido, estado_nuevo)
+        # ignorar_si_modificacion_manual suprime alertas temporales contradictorias
+        # cuando el operador acaba de actuar (ver docstring de _calcular_info_alerta)
+        info_alerta = _calcular_info_alerta(pedido, estado_nuevo,
+                                            ignorar_si_modificacion_manual=es_cambio_manual)
         if info_alerta:
             emoji_nivel = "🔴" if info_alerta["nivel"] == "urgente" else "⚠️"
             lineas += [
@@ -620,6 +650,34 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
     except Exception as exc:
         log.exception("[ESTADO] Error enviando Telegram cambio estado pedido %s: %s",
                       pedido_id, exc)
+
+
+def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str,
+                              usuario_nombre: str = "") -> None:
+    """
+    Centraliza todas las notificaciones de un cambio de estado manual.
+
+    Llama en orden a:
+      1. enviar_emails_estado  → correo al proveedor y/o internos
+      2. _telegram_cambio_estado → mensaje Telegram inmediato (sin alerta temporal)
+
+    Uso en update_pedido (y cualquier flujo futuro que cambie estado):
+
+        if estado_nuevo != estado_antes:
+            _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
+                                     usuario_nombre=session.get("nombre", ""))
+
+    Ventajas de centralizar aquí:
+    - update_pedido no acumula lógica de negocio de notificaciones.
+    - Si en el futuro se añade un canal más (SMS, push, webhook), se añade
+      solo aquí sin tocar los endpoints.
+    - es_cambio_manual=True queda encapsulado: el caller no necesita saber
+      el detalle de la supresión de alertas contradictorias.
+    """
+    enviar_emails_estado(db, pedido_id, estado_nuevo, estado_antes)
+    _telegram_cambio_estado(db, pedido_id, estado_nuevo, estado_antes,
+                             usuario_nombre=usuario_nombre,
+                             es_cambio_manual=True)
 
 
 # ── Job diario: alertas por fecha (independiente del usuario) ──────────────────
@@ -2671,6 +2729,15 @@ def update_pedido(pid):
                 (pid, estado_antes, estado_solicitado, uid, session.get("nombre"), data.get("nota_historial", ""))
             )
         db.commit()
+        if estado_solicitado != estado_antes:
+            _telegram_cambio_estado(
+                db,
+                pid,
+                estado_solicitado,
+                estado_antes,
+                usuario_nombre=session.get("nombre", ""),
+                es_cambio_manual=True
+            )
         return jsonify({"ok": True, "id": pid})
     # ── Fin restricción hotel ──────────────────────────────────────────────────
 
@@ -2746,10 +2813,8 @@ def update_pedido(pid):
     db.commit()
 
     if estado_nuevo != estado_antes:
-        enviar_emails_estado(db, pid, estado_nuevo, estado_antes)
-        # ── Telegram inmediato por cambio de estado ────────────────────────────
-        _telegram_cambio_estado(db, pid, estado_nuevo, estado_antes,
-                                usuario_nombre=session.get("nombre", ""))
+        _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
+                                 usuario_nombre=session.get("nombre", ""))
 
     return jsonify({"ok": True})
 
