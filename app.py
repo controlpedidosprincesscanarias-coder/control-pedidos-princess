@@ -754,13 +754,51 @@ _JOB_PEDIDO_SQL = """
     LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
 """
 
+def _nunca_notificado(pedido_id: int) -> bool:
+    """Devuelve True si el pedido nunca ha recibido un telegram_auto."""
+    try:
+        row = query(
+            "SELECT COUNT(*) as n FROM whatsapp_log WHERE pedido_id=%s AND tipo='telegram_auto'",
+            (pedido_id,), one=True
+        )
+        return (row["n"] if row else 0) == 0
+    except Exception:
+        return True  # En caso de error, asumir que nunca se notificó
+
+def _dias_ultima_notificacion(pedido_id: int):
+    """Devuelve cuántos días han pasado desde la última telegram_auto enviada (enviado=1)."""
+    try:
+        row = query(
+            """SELECT DATE(MAX(creado_en)) as ultima FROM whatsapp_log
+               WHERE pedido_id=%s AND tipo='telegram_auto' AND enviado=1""",
+            (pedido_id,), one=True
+        )
+        if not row or not row["ultima"]:
+            return None
+        from datetime import date as _d
+        ultima = row["ultima"]
+        if hasattr(ultima, "date"):
+            ultima = ultima.date()
+        return (_d.today() - ultima).days
+    except Exception:
+        return None
+
+# Umbral crítico: a partir de este número de días se notifica siempre,
+# ignorando el ciclo, para garantizar que ningún pedido quede en silencio.
+DIAS_CRITICO = 60
+
 def _job_alertas_diarias():
     """
     Job automático: calcula alertas por fecha y envía Telegram
     a los compradores responsables sin ninguna interacción del usuario.
     Se ejecuta cada 60 segundos en horario 07:00-16:00 hora Canarias.
-    _ya_notificado_hoy() garantiza que cada pedido recibe como máximo
-    una alerta por día, aunque el job corra cientos de veces.
+
+    Lógica de envío (por pedido):
+      1. Nunca ha recibido telegram_auto  → envía siempre (primer aviso)
+      2. días >= DIAS_CRITICO (60d)       → envía siempre (umbral crítico)
+      3. Resto                            → solo envía si han pasado >= ciclo días
+                                            desde la última notificación
+    En todos los casos, _ya_notificado_hoy() evita duplicados dentro del mismo día.
     """
     log.info("▶ [SCHEDULER] Inicio job alertas diarias — %s", _date.today())
     try:
@@ -798,10 +836,41 @@ def _job_alertas_diarias():
 
         nivel = "urgente" if (cfg["urgente"] and dias >= cfg["urgente"]) else "aviso"
 
-        # No enviar si ya se notificó hoy (job diario)
+        # No enviar si ya se notificó hoy (evita duplicados por los 60 ciclos diarios)
         if _ya_notificado_hoy(p["id"], "telegram_auto"):
             omitidos += 1
             continue
+
+        # ── Decisión de envío ────────────────────────────────────────────────
+        # 1) Primer aviso: el pedido nunca recibió telegram_auto → enviar siempre
+        # 2) Umbral crítico: >= 60 días → enviar siempre
+        # 3) Resto: respetar ciclo — solo si han pasado >= ciclo días desde el último
+        debe_enviar = False
+        motivo_omision = ""
+
+        if _nunca_notificado(p["id"]):
+            debe_enviar = True
+            log.info("[SCHEDULER] Pedido %s — primer aviso (%dd)", p["id"], dias)
+        elif dias >= DIAS_CRITICO:
+            debe_enviar = True
+            log.info("[SCHEDULER] Pedido %s — umbral crítico (%dd >= %dd)", p["id"], dias, DIAS_CRITICO)
+        else:
+            ciclo = cfg.get("ciclo")
+            if ciclo:
+                dias_desde_ultimo = _dias_ultima_notificacion(p["id"])
+                if dias_desde_ultimo is None or dias_desde_ultimo >= ciclo:
+                    debe_enviar = True
+                    log.info("[SCHEDULER] Pedido %s — ciclo OK (%dd desde último)", p["id"], dias_desde_ultimo or 0)
+                else:
+                    motivo_omision = f"ciclo no cumplido ({dias_desde_ultimo}d < {ciclo}d)"
+            else:
+                motivo_omision = "sin ciclo, ya notificado anteriormente"
+
+        if not debe_enviar:
+            log.debug("[SCHEDULER] Pedido %s omitido — %s", p["id"], motivo_omision)
+            omitidos += 1
+            continue
+        # ────────────────────────────────────────────────────────────────────
 
         resultados = _enviar_telegram_compradores(p, dias, nivel)
 
@@ -822,7 +891,7 @@ def _job_alertas_diarias():
 
         enviados += 1
 
-    log.info("✅ [SCHEDULER] Job finalizado — %d alertas enviadas, %d omitidas (ya notificadas hoy)", enviados, omitidos)
+    log.info("✅ [SCHEDULER] Job finalizado — %d alertas enviadas, %d omitidas", enviados, omitidos)
 
 
 def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, familia_nombre: str):
@@ -1209,7 +1278,7 @@ def alerta_enviar_email(pedido_id):
         telegram_resultados = _enviar_telegram_compradores(pedido_data, dias, nivel)
         for tr in telegram_resultados:
             _log_whatsapp(db, pedido_id, "telegram_auto",
-                          f"{tr['username']}:{tr.get('chat_id','')}",
+                          tr.get("username", "?"),
                           f"Alerta {nivel} — {pedido_data.get('hotel_codigo')} · Pedido {pedido_data.get('pedido_num')}",
                           tr["ok"], tr.get("error"))
 
@@ -1255,7 +1324,7 @@ def alerta_enviar_telegram(pedido_id):
     db = get_db()
     for tr in resultados:
         _log_whatsapp(db, pedido_id, "telegram_auto",
-                      f"{tr['username']}:{tr.get('chat_id','')}",
+                      tr.get("username", "?"),
                       f"Alerta {nivel} — {pedido.get('hotel_codigo')} · Pedido {pedido.get('pedido_num')}",
                       tr["ok"], tr.get("error"))
     db.commit()
