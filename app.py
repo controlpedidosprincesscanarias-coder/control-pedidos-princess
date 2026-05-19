@@ -3860,17 +3860,51 @@ def _validar_integridad_operativa() -> dict:
     }
 
 
-def _job_health_check():
+def _job_health_check(force: bool = False):
     """
     Job diario (07:05 hora Canarias): valida integridad operativa y envía
     Telegram al administrador si detecta problemas de configuración.
+    Si force=True (llamada manual desde el botón admin), envía siempre
+    aunque no haya problemas, para confirmar que el canal funciona.
     Nunca bloquea operaciones — solo alerta.
     """
     log.info("▶ [HEALTH] Inicio job integridad operativa — %s", _date.today())
     resultado = _validar_integridad_operativa()
 
+    # ── Destinatarios: todos los admins activos con telegram_chat_id en BD ──
+    # Si ninguno tiene chat_id, fallback a ADMIN_TELEGRAM_CHAT_ID (env var).
+    try:
+        admins_bd = rows_to_list(query(
+            "SELECT username, nombre, telegram_chat_id FROM usuarios "
+            "WHERE rol='admin' AND activo=1 AND telegram_chat_id IS NOT NULL "
+            "AND TRIM(telegram_chat_id) != ''"
+        )) or []
+    except Exception:
+        admins_bd = []
+
+    # Fallback: variable de entorno si no hay admins con chat_id en BD
+    fallback_chat = (ADMIN_TELEGRAM_CHAT_ID or "").strip()
+    if not admins_bd and fallback_chat:
+        admins_bd = [{"username": "admin_env", "nombre": "Admin (env)", "telegram_chat_id": fallback_chat}]
+
+    def _enviar_a_admins(texto_msg):
+        for adm in admins_bd:
+            res = _send_telegram(adm["telegram_chat_id"], texto_msg)
+            log.info("[HEALTH] Telegram → %s (%s): %s",
+                     adm["username"], adm["telegram_chat_id"],
+                     "OK" if res.get("ok") else res.get("error"))
+
     if resultado.get("ok"):
         log.info("✅ [HEALTH] Integridad OK — sin problemas detectados")
+        if force and admins_bd:
+            _enviar_a_admins(
+                "✅ *Control Pedidos — Integridad OK*\n\n"
+                f"Sistema en buen estado — ningún problema detectado.\n"
+                f"🏨 Hoteles activos: {resultado['resumen']['total_hoteles_activos']}\n"
+                f"🛒 Compradores activos: {resultado['resumen']['total_compradores']}"
+            )
+        elif force:
+            log.warning("[HEALTH] Sin admins con Telegram configurado — no se envió confirmación")
         return
 
     # Construir mensaje de alerta
@@ -3912,16 +3946,11 @@ def _job_health_check():
 
     texto = "\n".join(lineas)
 
-    # Enviar a ADMIN_TELEGRAM_CHAT_ID si está configurado
-    admin_chat = ADMIN_TELEGRAM_CHAT_ID.strip() if ADMIN_TELEGRAM_CHAT_ID else ""
-    if admin_chat:
-        res = _send_telegram(admin_chat, texto)
-        if res.get("ok"):
-            log.info("✅ [HEALTH] Alerta de integridad enviada al admin via Telegram")
-        else:
-            log.error("❌ [HEALTH] Fallo Telegram admin: %s", res.get("error"))
+    # Enviar a todos los admins con Telegram configurado
+    if admins_bd:
+        _enviar_a_admins(texto)
     else:
-        log.warning("[HEALTH] ADMIN_TELEGRAM_CHAT_ID no configurado — alerta solo en log")
+        log.warning("[HEALTH] Sin admins con Telegram configurado — alerta solo en log")
 
     log.warning("[HEALTH] %d problema(s) de integridad detectados: %s",
                 resultado["resumen"]["total_problemas"],
@@ -4007,7 +4036,7 @@ def test_health_check():
     POST /api/admin/test-health
     """
     import threading
-    t = threading.Thread(target=_job_health_check, daemon=True)
+    t = threading.Thread(target=lambda: _job_health_check(force=True), daemon=True)
     t.start()
     log.info("▶ [MANUAL] Job health-check lanzado manualmente por admin")
     return jsonify({"ok": True, "mensaje": "Health check ejecutándose — revisa Telegram en unos segundos."})
