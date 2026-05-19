@@ -418,6 +418,66 @@ TELEGRAM_BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 # Configurar en Render/entorno igual que TELEGRAM_BOT_TOKEN.
 ADMIN_TELEGRAM_CHAT_ID  = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "")
 
+# ── Tipos de alerta que generan copia de supervisión a los administradores ──────
+# "urgente"       → job diario con nivel urgente (pedidos críticos parados)
+# "techo"         → alerta de techo de gastos (supervisión financiera)
+# "cambio_estado" → cambio de estado CON bloque de alerta activo
+# "aviso"         → recordatorio diario → NO se copia (evitar saturación)
+TIPOS_SUPERVISION_ADMIN = {"urgente", "techo", "cambio_estado"}
+
+
+def _get_admins_telegram() -> list:
+    """
+    Devuelve lista de dicts {username, nombre, telegram_chat_id} de todos los
+    administradores activos que tienen telegram_chat_id configurado en BD.
+    Fallback: ADMIN_TELEGRAM_CHAT_ID (variable de entorno).
+    """
+    try:
+        admins = rows_to_list(query(
+            "SELECT username, nombre, telegram_chat_id FROM usuarios "
+            "WHERE rol='admin' AND activo=1 AND telegram_chat_id IS NOT NULL "
+            "AND TRIM(telegram_chat_id) != ''"
+        )) or []
+    except Exception:
+        admins = []
+
+    if not admins:
+        fallback = (ADMIN_TELEGRAM_CHAT_ID or "").strip()
+        if fallback:
+            admins = [{"username": "admin_env", "nombre": "Admin (env)",
+                       "telegram_chat_id": fallback}]
+    return admins
+
+
+def _enviar_supervision_admins(texto: str, tipo_supervision: str) -> None:
+    """
+    Envía copia de supervisión a todos los admins con Telegram configurado,
+    SOLO si el tipo_supervision está en TIPOS_SUPERVISION_ADMIN.
+
+    Parámetros:
+        texto             – Mensaje ya construido (igual que el enviado al comprador).
+        tipo_supervision  – "urgente" | "techo" | "cambio_estado" | "aviso" | …
+    """
+    if tipo_supervision not in TIPOS_SUPERVISION_ADMIN:
+        return  # Este tipo no requiere copia a admins
+
+    admins = _get_admins_telegram()
+    if not admins:
+        log.debug("[SUPERVISION] Sin admins con Telegram — tipo=%s", tipo_supervision)
+        return
+
+    prefijo = "\U0001F4CB *[Supervisión Admin]* — copia automática\n\n"
+    texto_admin = prefijo + texto
+
+    for adm in admins:
+        chat_id = adm.get("telegram_chat_id")
+        if not chat_id:
+            continue
+        res = _send_telegram(chat_id, texto_admin)
+        log.info("[SUPERVISION] Telegram admin → %s (%s) tipo=%s: %s",
+                 adm.get("username"), chat_id, tipo_supervision,
+                 "OK" if res.get("ok") else res.get("error"))
+
 
 def _get_compradores_hotel(hotel_codigo: str) -> list:
     """
@@ -501,6 +561,11 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
         res = _send_telegram(chat_id, texto)
         log.info("Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
         resultados.append({"username": username, "chat_id": chat_id, **res})
+
+    # ── Copia de supervisión a admins (solo alertas urgentes) ─────────────────
+    # Las alertas de tipo "aviso" (recordatorio) no se copian para evitar saturación.
+    _enviar_supervision_admins(texto, nivel)  # nivel="urgente" → copia; "aviso" → omite
+
     return resultados
 
 # ── Telegram inmediato por cambio de estado en edición de pedido ───────────────
@@ -635,6 +700,11 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
             log.info("[ESTADO] Telegram → %s (%s): %s",
                      username, chat_id, "OK" if res["ok"] else res["error"])
             resultados.append({"username": username, "chat_id": chat_id, **res})
+
+        # ── Copia de supervisión a admins (solo si hay bloque de alerta activo) ─
+        # Los cambios de estado sin alerta no se copian para no saturar a los admins.
+        if info_alerta:
+            _enviar_supervision_admins(texto, "cambio_estado")
 
         # ── Log en whatsapp_log (tipo separado del job diario) ─────────────────
         nota_log = f"Cambio estado: {estado_antes} → {estado_nuevo}"
@@ -935,6 +1005,9 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
             res = _send_telegram(chat_id, texto)
             log.info("[TECHO] Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
             resultados.append({"username": username, "chat_id": chat_id, **res})
+
+        # ── Copia de supervisión a admins (techo de gastos → siempre) ────────────
+        _enviar_supervision_admins(texto, "techo")
 
         # Registrar en log
         db = get_db()
