@@ -800,6 +800,10 @@ def _job_alertas_diarias():
                                             desde la última notificación
     En todos los casos, _ya_notificado_hoy() evita duplicados dentro del mismo día.
     """
+    with app.app_context():
+        _job_alertas_diarias_inner()
+
+def _job_alertas_diarias_inner():
     log.info("▶ [SCHEDULER] Inicio job alertas diarias — %s", _date.today())
     try:
         alertas_raw = rows_to_list(query(
@@ -3868,6 +3872,10 @@ def _job_health_check(force: bool = False):
     aunque no haya problemas, para confirmar que el canal funciona.
     Nunca bloquea operaciones — solo alerta.
     """
+    with app.app_context():
+        _job_health_check_inner(force)
+
+def _job_health_check_inner(force: bool = False):
     log.info("▶ [HEALTH] Inicio job integridad operativa — %s", _date.today())
     resultado = _validar_integridad_operativa()
 
