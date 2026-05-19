@@ -413,7 +413,10 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 # HOTEL_COMPRADOR y lee en tiempo real qué compradores tienen ese hotel asignado.
 
 # ── Telegram Bot — alertas automáticas ─────────────────────────────────────────
-TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+# Chat-id del administrador del sistema (para recibir alertas de integridad).
+# Configurar en Render/entorno igual que TELEGRAM_BOT_TOKEN.
+ADMIN_TELEGRAM_CHAT_ID  = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "")
 
 
 def _get_compradores_hotel(hotel_codigo: str) -> list:
@@ -658,10 +661,10 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
     Centraliza todas las notificaciones de un cambio de estado manual.
 
     Llama en orden a:
-      1. enviar_emails_estado  → correo al proveedor y/o internos
-      2. _telegram_cambio_estado → mensaje Telegram inmediato (sin alerta temporal)
+      1. enviar_emails_estado       → correo al proveedor y/o internos
+      2. _telegram_cambio_estado    → mensaje Telegram inmediato (sin alerta temporal)
 
-    Uso en update_pedido (y cualquier flujo futuro que cambie estado):
+    Uso en update_pedido — tanto flujo normal como flujo hotel:
 
         if estado_nuevo != estado_antes:
             _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
@@ -669,8 +672,9 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
 
     Ventajas de centralizar aquí:
     - update_pedido no acumula lógica de negocio de notificaciones.
-    - Si en el futuro se añade un canal más (SMS, push, webhook), se añade
-      solo aquí sin tocar los endpoints.
+    - El flujo hotel pasa por aquí igual que el flujo normal: cualquier
+      canal futuro (Teams, Slack, push, webhook) queda cubierto automáticamente
+      para ambos flujos con un único cambio en este método.
     - es_cambio_manual=True queda encapsulado: el caller no necesita saber
       el detalle de la supresión de alertas contradictorias.
     """
@@ -2730,13 +2734,12 @@ def update_pedido(pid):
             )
         db.commit()
         if estado_solicitado != estado_antes:
-            _telegram_cambio_estado(
+            _notificar_cambio_estado(
                 db,
                 pid,
                 estado_solicitado,
                 estado_antes,
                 usuario_nombre=session.get("nombre", ""),
-                es_cambio_manual=True
             )
         return jsonify({"ok": True, "id": pid})
     # ── Fin restricción hotel ──────────────────────────────────────────────────
@@ -3638,6 +3641,224 @@ def unhandled_exception(e):
         return jsonify({"ok": False, "error": f"Error inesperado: {str(e)}"}), 500
     return jsonify({"ok": False, "error": str(e)}), 500
 
+# ── Health Monitoring — validación de integridad operativa ────────────────────
+# _validar_integridad_operativa() detecta configuraciones incompletas que
+# causarían fallos silenciosos en alertas, emails y Telegram:
+#   · hoteles activos sin comprador asignado
+#   · compradores (rol='compras') sin ningún hotel asignado
+#   · usuarios activos con rol compras/hotel sin email
+#   · usuarios activos con rol compras sin telegram_chat_id
+#   · emails vacíos en usuarios admin
+# Devuelve un dict con todos los problemas encontrados y un flag global ok=True/False.
+
+def _validar_integridad_operativa() -> dict:
+    """
+    Analiza la configuración de usuarios, hoteles y compradores y detecta
+    huecos que provocarían fallos silenciosos en alertas, Telegram y emails.
+    Devuelve:
+      {
+        "ok": bool,
+        "timestamp": "ISO-8601",
+        "problemas": {
+          "hoteles_sin_comprador":    [...],
+          "compradores_sin_hoteles":  [...],
+          "compradores_sin_telegram": [...],
+          "compradores_sin_email":    [...],
+          "admins_sin_email":         [...],
+          "hoteles_duplicados":       [...],   # hoteles con > 1 comprador (violación uq)
+        },
+        "resumen": {
+          "total_hoteles_activos": int,
+          "total_compradores":     int,
+          "total_problemas":       int,
+        }
+      }
+    """
+    from datetime import datetime as _dt
+
+    problemas: dict = {
+        "hoteles_sin_comprador":    [],
+        "compradores_sin_hoteles":  [],
+        "compradores_sin_telegram": [],
+        "compradores_sin_email":    [],
+        "admins_sin_email":         [],
+        "hoteles_duplicados":       [],
+    }
+
+    try:
+        # ── Hoteles activos sin ningún comprador asignado ────────────────────
+        hoteles_activos = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+        ))
+        for hotel in hoteles_activos:
+            comp = rows_to_list(query(
+                """SELECT u.id FROM usuarios u
+                   JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
+                   WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'""",
+                (hotel["id"],)
+            ))
+            if not comp:
+                problemas["hoteles_sin_comprador"].append({
+                    "hotel_id":     hotel["id"],
+                    "hotel_codigo": hotel["codigo"],
+                    "hotel_nombre": hotel["nombre"],
+                })
+
+        # ── Compradores sin ningún hotel asignado ────────────────────────────
+        compradores = rows_to_list(query(
+            """SELECT id, username, nombre, email, movil, telegram_chat_id
+               FROM usuarios WHERE rol='compras' AND activo=1 ORDER BY nombre"""
+        ))
+        for comp in compradores:
+            hoteles_comp = rows_to_list(query(
+                "SELECT hotel_id FROM usuario_comprador_hoteles WHERE usuario_id=%s",
+                (comp["id"],)
+            ))
+            if not hoteles_comp:
+                problemas["compradores_sin_hoteles"].append({
+                    "usuario_id":       comp["id"],
+                    "username":         comp["username"],
+                    "nombre":           comp["nombre"],
+                })
+
+        # ── Compradores sin telegram_chat_id ─────────────────────────────────
+        for comp in compradores:
+            if not (comp.get("telegram_chat_id") or "").strip():
+                problemas["compradores_sin_telegram"].append({
+                    "usuario_id": comp["id"],
+                    "username":   comp["username"],
+                    "nombre":     comp["nombre"],
+                })
+
+        # ── Compradores sin email ─────────────────────────────────────────────
+        for comp in compradores:
+            if not (comp.get("email") or "").strip():
+                problemas["compradores_sin_email"].append({
+                    "usuario_id": comp["id"],
+                    "username":   comp["username"],
+                    "nombre":     comp["nombre"],
+                })
+
+        # ── Admins sin email ──────────────────────────────────────────────────
+        admins = rows_to_list(query(
+            "SELECT id, username, nombre, email FROM usuarios WHERE rol='admin' AND activo=1"
+        ))
+        for adm in admins:
+            if not (adm.get("email") or "").strip():
+                problemas["admins_sin_email"].append({
+                    "usuario_id": adm["id"],
+                    "username":   adm["username"],
+                    "nombre":     adm["nombre"],
+                })
+
+        # ── Hoteles con más de un comprador (no debería ocurrir por uq_comprador_hotel) ──
+        duplicados = rows_to_list(query(
+            """SELECT h.codigo, h.nombre, COUNT(uch.usuario_id) as n_compradores
+               FROM hoteles h
+               JOIN usuario_comprador_hoteles uch ON uch.hotel_id = h.id
+               JOIN usuarios u ON u.id = uch.usuario_id AND u.activo=1 AND u.rol='compras'
+               WHERE h.activo=1
+               GROUP BY h.id, h.codigo, h.nombre
+               HAVING COUNT(uch.usuario_id) > 1"""
+        ))
+        for d in duplicados:
+            problemas["hoteles_duplicados"].append({
+                "hotel_codigo":   d["codigo"],
+                "hotel_nombre":   d["nombre"],
+                "n_compradores":  d["n_compradores"],
+            })
+
+    except Exception as exc:
+        log.error("[INTEGRIDAD] Error validando integridad: %s", exc)
+        return {
+            "ok": False,
+            "timestamp": _dt.utcnow().isoformat(),
+            "error": str(exc),
+            "problemas": problemas,
+            "resumen": {"total_hoteles_activos": 0, "total_compradores": 0, "total_problemas": -1},
+        }
+
+    total_problemas = sum(len(v) for v in problemas.values())
+    return {
+        "ok": total_problemas == 0,
+        "timestamp": _dt.utcnow().isoformat(),
+        "problemas": problemas,
+        "resumen": {
+            "total_hoteles_activos": len(hoteles_activos),
+            "total_compradores":     len(compradores),
+            "total_problemas":       total_problemas,
+        },
+    }
+
+
+def _job_health_check():
+    """
+    Job diario (07:05 hora Canarias): valida integridad operativa y envía
+    Telegram al administrador si detecta problemas de configuración.
+    Nunca bloquea operaciones — solo alerta.
+    """
+    log.info("▶ [HEALTH] Inicio job integridad operativa — %s", _date.today())
+    resultado = _validar_integridad_operativa()
+
+    if resultado.get("ok"):
+        log.info("✅ [HEALTH] Integridad OK — sin problemas detectados")
+        return
+
+    # Construir mensaje de alerta
+    probs = resultado["problemas"]
+    lineas = ["🚨 *ALERTA DE CONFIGURACIÓN — Control Pedidos*", ""]
+
+    if probs["hoteles_sin_comprador"]:
+        lineas.append(f"❌ *Hoteles sin comprador ({len(probs['hoteles_sin_comprador'])})* — CRÍTICO:")
+        for h in probs["hoteles_sin_comprador"]:
+            lineas.append(f"  · {h['hotel_codigo']} — {h['hotel_nombre']}")
+        lineas.append("")
+
+    if probs["compradores_sin_hoteles"]:
+        lineas.append(f"⚠️ *Compradores sin hoteles ({len(probs['compradores_sin_hoteles'])})* :")
+        for u in probs["compradores_sin_hoteles"]:
+            lineas.append(f"  · {u['nombre']} ({u['username']})")
+        lineas.append("")
+
+    if probs["compradores_sin_telegram"]:
+        lineas.append(f"⚠️ *Compradores sin Telegram ({len(probs['compradores_sin_telegram'])})* :")
+        for u in probs["compradores_sin_telegram"]:
+            lineas.append(f"  · {u['nombre']} ({u['username']})")
+        lineas.append("")
+
+    if probs["compradores_sin_email"]:
+        lineas.append(f"⚠️ *Compradores sin email ({len(probs['compradores_sin_email'])})* :")
+        for u in probs["compradores_sin_email"]:
+            lineas.append(f"  · {u['nombre']} ({u['username']})")
+        lineas.append("")
+
+    if probs["admins_sin_email"]:
+        lineas.append(f"⚠️ *Admins sin email ({len(probs['admins_sin_email'])})* :")
+        for u in probs["admins_sin_email"]:
+            lineas.append(f"  · {u['nombre']} ({u['username']})")
+        lineas.append("")
+
+    lineas.append(f"📋 Total problemas: *{resultado['resumen']['total_problemas']}*")
+    lineas.append("— Accede al panel admin → Integridad para ver el detalle.")
+
+    texto = "\n".join(lineas)
+
+    # Enviar a ADMIN_TELEGRAM_CHAT_ID si está configurado
+    admin_chat = ADMIN_TELEGRAM_CHAT_ID.strip() if ADMIN_TELEGRAM_CHAT_ID else ""
+    if admin_chat:
+        res = _send_telegram(admin_chat, texto)
+        if res.get("ok"):
+            log.info("✅ [HEALTH] Alerta de integridad enviada al admin via Telegram")
+        else:
+            log.error("❌ [HEALTH] Fallo Telegram admin: %s", res.get("error"))
+    else:
+        log.warning("[HEALTH] ADMIN_TELEGRAM_CHAT_ID no configurado — alerta solo en log")
+
+    log.warning("[HEALTH] %d problema(s) de integridad detectados: %s",
+                resultado["resumen"]["total_problemas"],
+                {k: len(v) for k, v in probs.items() if v})
+
+
 # ── Scheduler: alertas automáticas por Telegram ───────────────────────────────
 # Corre dentro del mismo proceso gunicorn — sin Redis, sin Celery, sin workers.
 # Cada 60 segundos, en horario 07:00-16:00 hora Canarias (todos los días),
@@ -3661,8 +3882,20 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=60,
     )
+    # Job de integridad: una vez al día a las 07:05 hora Canarias
+    scheduler.add_job(
+        _job_health_check,
+        trigger="cron",
+        hour="7",
+        minute="5",
+        second="0",
+        id="health_check_diario",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
     scheduler.start()
     log.info("✅ Scheduler iniciado — alertas cada 60s en horario 07:00-16:00 (Atlantic/Canary)")
+    log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
@@ -3682,6 +3915,33 @@ def test_scheduler():
     t.start()
     log.info("▶ [MANUAL] Job alertas lanzado manualmente por admin")
     return jsonify({"ok": True, **resultados})
+
+
+@app.route("/api/admin/integridad", methods=["GET"])
+@admin_required
+def get_integridad():
+    """
+    Ejecuta _validar_integridad_operativa() en tiempo real y devuelve el resultado.
+    Usado por el panel de admin para mostrar el badge de aviso y el detalle de problemas.
+    GET /api/admin/integridad
+    """
+    resultado = _validar_integridad_operativa()
+    return jsonify(resultado)
+
+
+@app.route("/api/admin/test-health", methods=["POST"])
+@admin_required
+def test_health_check():
+    """
+    Fuerza el job de health check inmediatamente (mismo que corre a las 07:05).
+    Envía Telegram al admin si hay problemas.
+    POST /api/admin/test-health
+    """
+    import threading
+    t = threading.Thread(target=_job_health_check, daemon=True)
+    t.start()
+    log.info("▶ [MANUAL] Job health-check lanzado manualmente por admin")
+    return jsonify({"ok": True, "mensaje": "Health check ejecutándose — revisa Telegram en unos segundos."})
 
 
 # ── Arranque ───────────────────────────────────────────────────────────────────

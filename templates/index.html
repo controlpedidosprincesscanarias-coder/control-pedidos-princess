@@ -671,6 +671,10 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item admin-only" data-view="usuarios" onclick="showView('usuarios',this)" style="display:none">
       <span class="icon">👥</span> Usuarios
     </div>
+    <div class="sb-item admin-only" data-view="integridad" onclick="showView('integridad',this)" style="display:none">
+      <span class="icon">🔍</span> Integridad
+      <span class="sb-badge" id="sb-integridad-badge" style="display:none;background:#dc3545">!</span>
+    </div>
 
     <div class="sb-bottom">
       <div class="sb-version">
@@ -679,7 +683,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.0.8
+          V 10.1.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -909,6 +913,25 @@ tbody tr:last-child{border-bottom:none}
           </div>
           <div id="familias-empty" class="empty-state section-hidden">
             <div class="icon">🏷️</div><div>No hay familias configuradas</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Vista: Integridad del Sistema (solo admin) ─────────────────── -->
+      <div id="view-integridad" class="section-hidden">
+        <div class="card">
+          <div class="card-header" style="display:flex;align-items:center;gap:12px">
+            <span class="card-title">🔍 Integridad Operativa del Sistema</span>
+            <span id="integridad-estado-badge" style="display:none;font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px"></span>
+            <button onclick="loadIntegridad()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Actualizar</button>
+            <button onclick="testHealthCheck()" style="padding:5px 14px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#8B0000;color:#fff">📤 Enviar Telegram admin</button>
+          </div>
+          <div id="integridad-loading" style="text-align:center;padding:32px;color:var(--text-secondary)">Analizando sistema…</div>
+          <div id="integridad-content" style="display:none;padding:12px 0">
+            <!-- Resumen global -->
+            <div id="integridad-resumen" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px"></div>
+            <!-- Bloques de problemas -->
+            <div id="integridad-bloques"></div>
           </div>
         </div>
       </div>
@@ -1517,6 +1540,7 @@ async function doLogin() {
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     // loadStats (llamado por showView) ya actualiza badge y card de alertas del dashboard.
+    _checkIntegridadBadge();  // badge silencioso en sidebar para admin
   } catch(e) { err.textContent='Error de conexión'; err.style.display='block'; }
 }
 
@@ -1704,7 +1728,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -1721,6 +1745,7 @@ function showView(view, el) {
   if (view==='techo')       loadTecho();
   if (view==='familias')    loadFamilias();
   if (view==='usuarios')    loadUsuarios();
+  if (view==='integridad')  loadIntegridad();
 }
 
 function refreshCurrentView() {
@@ -3259,6 +3284,7 @@ function calcDias(s) {
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
+    _checkIntegridadBadge();  // badge silencioso en sidebar para admin
   }
 })();
 </script>
@@ -3807,6 +3833,179 @@ document.getElementById('modal-usuario').addEventListener('click', function(e) {
 /* ═══════════════════════════════════════════════════════════════════════════
    GESTIÓN DE USUARIOS
 ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Integridad Operativa ──────────────────────────────────────────────────── */
+async function loadIntegridad() {
+  const loading = document.getElementById('integridad-loading');
+  const content = document.getElementById('integridad-content');
+  const badge   = document.getElementById('integridad-estado-badge');
+  loading.style.display = 'block';
+  content.style.display = 'none';
+
+  const data = await api('/api/admin/integridad');
+  if (!data) { loading.textContent = 'Error al cargar.'; return; }
+
+  loading.style.display = 'none';
+  content.style.display = 'block';
+
+  // Badge estado global
+  badge.style.display = '';
+  if (data.ok) {
+    badge.textContent = '✅ Sistema OK';
+    badge.style.background = '#28a745';
+    badge.style.color = '#fff';
+  } else {
+    badge.textContent = `⚠️ ${data.resumen.total_problemas} problema(s)`;
+    badge.style.background = '#dc3545';
+    badge.style.color = '#fff';
+  }
+
+  // Actualizar badge sidebar
+  const sbBadge = document.getElementById('sb-integridad-badge');
+  if (sbBadge) sbBadge.style.display = data.ok ? 'none' : '';
+
+  // Resumen
+  const resumen = document.getElementById('integridad-resumen');
+  const { total_hoteles_activos, total_compradores, total_problemas } = data.resumen;
+  resumen.innerHTML = `
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:130px">
+      <div style="font-size:24px;font-weight:700;color:var(--primary)">${total_hoteles_activos}</div>
+      <div style="font-size:11px;color:var(--text-secondary)">Hoteles activos</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:130px">
+      <div style="font-size:24px;font-weight:700;color:var(--primary)">${total_compradores}</div>
+      <div style="font-size:11px;color:var(--text-secondary)">Compradores activos</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:130px;border-color:${total_problemas>0?'#dc3545':'#28a745'}">
+      <div style="font-size:24px;font-weight:700;color:${total_problemas>0?'#dc3545':'#28a745'}">${total_problemas}</div>
+      <div style="font-size:11px;color:var(--text-secondary)">Problemas detectados</div>
+    </div>
+  `;
+
+  // Bloques de problemas
+  const bloques = document.getElementById('integridad-bloques');
+  const probs = data.problemas;
+
+  const CHECKS = [
+    {
+      key: 'hoteles_sin_comprador',
+      titulo: '❌ Hoteles sin comprador asignado',
+      gravedad: 'critico',
+      desc: 'Crítico — alertas Telegram, emails y seguimiento sin destinatario.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.hotel_codigo}</td><td style="padding:6px 10px">${u.hotel_nombre}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Código</th><th style="padding:6px 10px;text-align:left">Hotel</th></tr>',
+    },
+    {
+      key: 'compradores_sin_hoteles',
+      titulo: '⚠️ Compradores sin hoteles asignados',
+      gravedad: 'aviso',
+      desc: 'El usuario tiene rol compras pero no gestionará ningún hotel.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
+    },
+    {
+      key: 'compradores_sin_telegram',
+      titulo: '⚠️ Compradores sin Telegram Chat ID',
+      gravedad: 'aviso',
+      desc: 'Las alertas automáticas no llegarán a este comprador.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
+    },
+    {
+      key: 'compradores_sin_email',
+      titulo: '⚠️ Compradores sin email',
+      gravedad: 'aviso',
+      desc: 'Los emails de estado no tendrán destinatario para este comprador.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
+    },
+    {
+      key: 'admins_sin_email',
+      titulo: '⚠️ Administradores sin email',
+      gravedad: 'info',
+      desc: 'El sistema usa el email de admin para notificaciones de sistema.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
+    },
+    {
+      key: 'hoteles_duplicados',
+      titulo: '🔴 Hoteles con múltiples compradores (violación unicidad)',
+      gravedad: 'critico',
+      desc: 'Anómalo — el índice uq_comprador_hotel debería impedirlo.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.hotel_codigo}</td><td style="padding:6px 10px">${u.hotel_nombre}</td><td style="padding:6px 10px;color:#dc3545;font-weight:700">${u.n_compradores}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Código</th><th style="padding:6px 10px;text-align:left">Hotel</th><th style="padding:6px 10px;text-align:left">Nº compradores</th></tr>',
+    },
+  ];
+
+  const COLORS = { critico: '#dc3545', aviso: '#fd7e14', info: '#6c757d' };
+
+  let html = '';
+  let haySinProblemas = [];
+
+  for (const check of CHECKS) {
+    const lista = probs[check.key] || [];
+    if (lista.length === 0) {
+      haySinProblemas.push(check.titulo.replace(/^[^\w]+/, ''));
+      continue;
+    }
+    const color = COLORS[check.gravedad] || '#fd7e14';
+    html += `
+      <div style="margin-bottom:16px;border:1px solid ${color};border-radius:8px;overflow:hidden">
+        <div style="background:${color}15;padding:10px 16px;border-bottom:1px solid ${color}40;display:flex;align-items:center;gap:10px">
+          <span style="font-weight:700;font-size:14px;color:${color}">${check.titulo}</span>
+          <span style="margin-left:auto;background:${color};color:#fff;border-radius:10px;padding:2px 8px;font-size:11px;font-weight:700">${lista.length}</span>
+        </div>
+        <div style="padding:8px 16px;font-size:12px;color:var(--text-secondary)">${check.desc}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:13px">
+          <thead style="background:var(--surface);color:var(--text-secondary);font-size:11px">${check.cabecera}</thead>
+          <tbody>${lista.map(check.renderFila).join('')}</tbody>
+        </table>
+      </div>`;
+  }
+
+  if (haySinProblemas.length > 0) {
+    html += `<div style="border:1px solid #28a74540;border-radius:8px;padding:12px 16px;background:#28a74510;font-size:13px;color:#28a745">
+      ✅ <strong>Sin problemas en:</strong> ${haySinProblemas.join(' · ')}
+    </div>`;
+  }
+
+  if (data.ok) {
+    html = `<div style="text-align:center;padding:32px;color:#28a745;font-size:16px;font-weight:600">
+      ✅ Sistema en buen estado — ningún problema de integridad detectado.
+    </div>`;
+  }
+
+  bloques.innerHTML = html;
+
+  // Actualizar badge sidebar al cargar cualquier vista (si es admin)
+  _refreshIntegridadBadge(data);
+}
+
+function _refreshIntegridadBadge(data) {
+  const badge = document.getElementById('sb-integridad-badge');
+  if (!badge) return;
+  if (data && !data.ok) {
+    badge.textContent = data.resumen.total_problemas;
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+
+async function _checkIntegridadBadge() {
+  // Llamada silenciosa al arrancar para mostrar badge si hay problemas
+  if (G.rol !== 'admin') return;
+  try {
+    const data = await api('/api/admin/integridad');
+    if (data) _refreshIntegridadBadge(data);
+  } catch(e) { /* silencioso */ }
+}
+
+async function testHealthCheck() {
+  const res = await api('/api/admin/test-health', {method:'POST'});
+  if (res && res.ok) showToast(res.mensaje || 'Health check ejecutándose…', 'success');
+  else showToast('Error al ejecutar health check', 'error');
+}
 
 async function loadUsuarios() {
   const tbody = document.getElementById('usuarios-tbody');
