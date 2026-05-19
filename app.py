@@ -3131,6 +3131,151 @@ def get_stats():
         "num_alertas": len(alertas),
     })
 
+# ── API Bridge Agenda — alertas filtradas por usuario (v10.3) ─────────────────
+#
+# Endpoint consumido por pedidos_agenda_bridge.py en cada instancia de
+# main_agenda. Devuelve SOLO las alertas que corresponden al usuario logado:
+#
+#   rol='compras' → alertas de los hoteles asignados en usuario_comprador_hoteles
+#   rol='admin'   → todas las alertas (supervisión global)
+#   rol='hotel'   → alertas de los hoteles asignados en usuario_hoteles (lectura)
+#
+# Misma lógica de umbrales y niveles que /api/stats pero filtrada.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/bridge/alertas")
+@login_required
+def bridge_alertas_usuario():
+    """
+    Devuelve las alertas activas filtradas por el usuario de la sesión.
+    Usado por pedidos_agenda_bridge.py para mostrar popups personalizados
+    en main_agenda sin mezclar avisos entre compradores.
+    """
+    from datetime import date as _date, datetime as _dt
+
+    rol      = session.get("rol", "")
+    user_id  = session.get("user_id")
+
+    # ── Determinar qué hotel_ids aplican al usuario ───────────────────────────
+    if rol == "admin":
+        # Admin ve todo: sin filtro de hotel
+        filtro_hotel_sql = ""
+        filtro_args      = []
+    elif rol == "compras":
+        # Hoteles asignados al comprador en usuario_comprador_hoteles
+        rows = rows_to_list(query(
+            "SELECT hotel_id FROM usuario_comprador_hoteles WHERE usuario_id=%s",
+            (user_id,)
+        ))
+        hotel_ids = [r["hotel_id"] for r in rows]
+        if not hotel_ids:
+            return jsonify({"alertas": [], "num_alertas": 0,
+                            "usuario": session.get("username"), "rol": rol})
+        placeholders = ",".join(["%s"] * len(hotel_ids))
+        filtro_hotel_sql = f"AND p.hotel_id IN ({placeholders})"
+        filtro_args      = hotel_ids
+    elif rol == "hotel":
+        # Hoteles de lectura asignados al usuario hotel
+        hotel_ids = session.get("hoteles_ids", [])
+        if not hotel_ids:
+            return jsonify({"alertas": [], "num_alertas": 0,
+                            "usuario": session.get("username"), "rol": rol})
+        placeholders = ",".join(["%s"] * len(hotel_ids))
+        filtro_hotel_sql = f"AND p.hotel_id IN ({placeholders})"
+        filtro_args      = hotel_ids
+    else:
+        # Rol desconocido: sin alertas
+        return jsonify({"alertas": [], "num_alertas": 0,
+                        "usuario": session.get("username"), "rol": rol})
+
+    # ── Consulta de pedidos en estados alertables ─────────────────────────────
+    sql = f"""
+        SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
+               p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
+               h.codigo as hotel_codigo, h.nombre as hotel_nombre,
+               d.nombre as departamento_nombre,
+               pr.nombre as proveedor_nombre
+        FROM pedidos p
+        LEFT JOIN hoteles       h  ON p.hotel_id        = h.id
+        LEFT JOIN departamentos d  ON p.departamento_id = d.id
+        LEFT JOIN proveedores   pr ON p.proveedor_id    = pr.id
+        WHERE p.estado IN (
+            'ENVIADO AL PROVEEDOR',
+            'PENDIENTE FIRMA DIRECCION COMPRAS',
+            'PENDIENTE DE FIRMA DIRECCION HOTEL',
+            'ENTREGA PARCIAL',
+            'PENDIENTE COTIZACION'
+        )
+          AND (
+            p.fecha_tramitacion IS NOT NULL
+            OR (p.estado = 'PENDIENTE COTIZACION' AND p.fecha_solicitud IS NOT NULL)
+          )
+          {filtro_hotel_sql}
+        ORDER BY p.fecha_tramitacion ASC
+    """
+    alertas_raw = rows_to_list(query(sql, filtro_args))
+
+    def _dias_desde(fecha_str):
+        if not fecha_str:
+            return None
+        try:
+            if hasattr(fecha_str, 'date'):
+                f = fecha_str.date()
+            elif isinstance(fecha_str, _date):
+                f = fecha_str
+            else:
+                s = str(fecha_str)[:10]
+                f = _dt.strptime(s, "%Y-%m-%d").date()
+            return (_date.today() - f).days
+        except Exception:
+            return None
+
+    UMBRALES_BRIDGE = {
+        "ENVIADO AL PROVEEDOR": {
+            "primera": 15, "urgente": 25, "ciclo": 10,
+        },
+        "PENDIENTE FIRMA DIRECCION COMPRAS": {
+            "primera": 8, "urgente": None, "ciclo": 8,
+        },
+        "PENDIENTE DE FIRMA DIRECCION HOTEL": {
+            "primera": 5, "urgente": None, "ciclo": 5,
+        },
+        "ENTREGA PARCIAL": {
+            "primera": 10, "urgente": None, "ciclo": 10,
+        },
+        "PENDIENTE COTIZACION": {
+            "primera": 2, "urgente": 3, "ciclo": None, "fecha_ref": "fecha_solicitud",
+        },
+    }
+
+    alertas = []
+    for p in alertas_raw:
+        cfg = UMBRALES_BRIDGE.get(p["estado"])
+        if not cfg:
+            continue
+        fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
+        dias = _dias_desde(p.get(fecha_ref_campo))
+        if dias is None:
+            continue
+        if dias < cfg["primera"]:
+            continue
+        nivel = "urgente" if (cfg.get("urgente") and dias >= cfg["urgente"]) else "aviso"
+        p["dias_tramitacion"] = dias
+        p["nivel_alerta"]     = nivel
+        alertas.append(p)
+
+    alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1,
+                                 -x["dias_tramitacion"]))
+
+    return jsonify({
+        "alertas":     alertas,
+        "num_alertas": len(alertas),
+        "usuario":     session.get("username"),
+        "nombre":      session.get("nombre"),
+        "rol":         rol,
+    })
+
+
 # ── API Reset completo (admin only) ───────────────────────────────────────────
 
 @app.route("/api/importar/backup", methods=["GET"])
