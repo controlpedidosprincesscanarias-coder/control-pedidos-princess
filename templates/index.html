@@ -683,7 +683,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.1.0
+          V 10.1.1
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -951,6 +951,7 @@ tbody tr:last-child{border-bottom:none}
                   <th>Nombre</th>
                   <th>Email</th>
                   <th>📱 Móvil</th>
+                  <th>✈️ Telegram</th>
                   <th>Rol</th>
                   <th>Hoteles</th>
                   <th>Estado</th>
@@ -999,6 +1000,19 @@ tbody tr:last-child{border-bottom:none}
                style="padding-left:10px">
         <div style="font-size:11px;color:#888;margin-top:3px">
           Se usará para recibir avisos de alertas por WhatsApp.
+        </div>
+      </div>
+
+      <div id="usr-telegram-section">
+        <label class="form-label">✈️ Telegram Chat ID</label>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input class="form-control" id="usr-telegram-chat-id" type="text"
+                 placeholder="ej: 721839192"
+                 style="font-family:monospace;letter-spacing:0.5px">
+          <span id="usr-telegram-status" style="font-size:18px;flex-shrink:0"></span>
+        </div>
+        <div style="font-size:11px;color:#888;margin-top:3px">
+          El comprador debe escribir <strong>/start</strong> al bot de Telegram y copiar aquí el ID numérico recibido.
         </div>
       </div>
 
@@ -4009,10 +4023,10 @@ async function testHealthCheck() {
 
 async function loadUsuarios() {
   const tbody = document.getElementById('usuarios-tbody');
-  tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">Cargando…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;padding:20px">Cargando…</td></tr>';
   const rows = await api('/api/usuarios');
   if (!rows || !rows.length) {
-    tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#999;padding:20px">No hay usuarios</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;padding:20px">No hay usuarios</td></tr>';
     return;
   }
   // Para usuarios hotel, cargar sus hoteles asignados
@@ -4067,11 +4081,17 @@ async function loadUsuarios() {
           ? `<span style="font-size:12px;color:#7a5c00;font-weight:600">${compradorMap[u.id].join(', ')}</span>`
           : '<span style="color:#ccc;font-size:12px">Sin asignar</span>')
       : '<span style="color:#ddd;font-size:12px">—</span>';
+    const tgCell = (u.rol === 'compras' || u.rol === 'user')
+      ? ((u.telegram_chat_id || '').trim()
+          ? `<span title="Chat ID: ${u.telegram_chat_id}" style="font-size:13px;cursor:default">✅ <span style="font-family:monospace;font-size:11px;color:#555">${u.telegram_chat_id}</span></span>`
+          : `<span style="color:#dc3545;font-size:12px;font-weight:600">❌ Sin ID</span>`)
+      : '<span style="color:#ddd;font-size:12px">—</span>';
     return `<tr>
       <td class="monospace" style="font-size:13px">${u.username}</td>
       <td>${u.nombre}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
       <td style="font-size:12px;color:#666">${u.email||'—'}</td>
       <td>${movilLink}</td>
+      <td>${tgCell}</td>
       <td>${rolBadge}</td>
       <td>${hotelesCell}</td>
       <td>${activoBadge}</td>
@@ -4090,6 +4110,8 @@ function openModalUsuario(id=null) {
   document.getElementById('usr-nombre').value    = '';
   document.getElementById('usr-email').value     = '';
   document.getElementById('usr-movil').value     = '';
+  document.getElementById('usr-telegram-chat-id').value = '';
+  document.getElementById('usr-telegram-status').textContent = '';
   document.getElementById('usr-password').value  = '';
   document.getElementById('usr-rol').value       = 'compras';
   document.getElementById('usr-activo').checked  = true;
@@ -4112,6 +4134,9 @@ function openModalUsuario(id=null) {
       document.getElementById('usr-nombre').value   = u.nombre;
       document.getElementById('usr-email').value    = u.email || '';
       document.getElementById('usr-movil').value    = u.movil || '';
+      const tgVal = u.telegram_chat_id || '';
+      document.getElementById('usr-telegram-chat-id').value = tgVal;
+      document.getElementById('usr-telegram-status').textContent = tgVal.trim() ? '✅' : '❌';
       // Backward-compat: rol='user' (legacy) se muestra como 'compras'
       document.getElementById('usr-rol').value      = (u.rol === 'user') ? 'compras' : u.rol;
       document.getElementById('usr-activo').checked = !!u.activo;
@@ -4192,6 +4217,7 @@ async function saveUsuario() {
   const nombre   = document.getElementById('usr-nombre').value.trim();
   const email    = document.getElementById('usr-email').value.trim();
   const movil    = document.getElementById('usr-movil').value.trim();
+  const telegram_chat_id = document.getElementById('usr-telegram-chat-id').value.trim();
   const rol      = document.getElementById('usr-rol').value;
   const password = document.getElementById('usr-password').value;
   const activo   = document.getElementById('usr-activo').checked;
@@ -4200,13 +4226,13 @@ async function saveUsuario() {
 
   let r;
   if (id) {
-    const body = { nombre, email, movil, rol, activo };
+    const body = { nombre, email, movil, telegram_chat_id, rol, activo };
     if (password) body.password = password;
     r = await api(`/api/usuarios/${id}`, 'PUT', body);
   } else {
     if (!username) { toast('El username es obligatorio', 'error'); return; }
     if (!password) { toast('La contraseña es obligatoria', 'error'); return; }
-    r = await api('/api/usuarios', 'POST', { username, nombre, email, movil, rol, password });
+    r = await api('/api/usuarios', 'POST', { username, nombre, email, movil, telegram_chat_id, rol, password });
   }
 
   if (r.error) { toast(r.error, 'error'); return; }
