@@ -683,7 +683,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.1.6
+          V 10.1.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -4016,8 +4016,8 @@ async function _checkIntegridadBadge() {
 }
 
 async function testHealthCheck() {
-  const res = await api('/api/admin/test-health', {method:'POST'});
-  if (res && res.ok) showToast(res.mensaje || 'Health check ejecutándose…', 'success');
+  const res = await api('/api/admin/test-health', 'POST');
+  if (res && res.ok) showToast(res.mensaje || 'Health check ejecutándose — revisa Telegram.', 'success');
   else showToast('Error al ejecutar health check', 'error');
 }
 
