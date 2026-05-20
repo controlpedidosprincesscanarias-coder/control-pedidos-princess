@@ -540,6 +540,12 @@ tbody tr:last-child{border-bottom:none}
         ¿Olvidaste tu contraseña?
       </button>
     </div>
+    <div style="text-align:center;margin-top:8px;">
+      <button onclick="mostrarSolicitudUsuario()"
+         style="background:none;border:none;cursor:pointer;color:rgba(201,168,76,0.75);font-size:13px;text-decoration:underline;padding:0;font-family:inherit;">
+        Solicitar usuario
+      </button>
+    </div>
   </div>
 </div>
 
@@ -628,6 +634,97 @@ tbody tr:last-child{border-bottom:none}
   </div>
 </div>
 
+<!-- ── MODAL SOLICITAR USUARIO ──────────────────────────────────────────────── -->
+<div id="modal-solicitar-usuario" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+     z-index:10000;align-items:center;justify-content:center;">
+  <div style="background:#1a1a2e;border:1px solid rgba(201,168,76,0.4);border-radius:12px;
+       padding:36px 32px;width:420px;max-width:95vw;color:#fff;position:relative;max-height:90vh;overflow-y:auto;">
+    <button onclick="cerrarSolicitudUsuario()" style="position:absolute;top:12px;right:16px;
+            background:none;border:none;color:rgba(255,255,255,.5);font-size:22px;
+            cursor:pointer;line-height:1;">&times;</button>
+
+    <!-- Formulario -->
+    <div id="solicitar-form">
+      <h3 style="margin:0 0 4px;font-size:18px;color:#c9a84c;">Solicitar acceso al sistema</h3>
+      <p style="margin:0 0 20px;color:rgba(255,255,255,.6);font-size:13px;">
+        Rellena el formulario y los administradores recibirán tu solicitud de usuario.
+      </p>
+
+      <!-- Usuario Windows (auto-detectado) -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Usuario Windows del PC</label>
+      <div style="position:relative;margin-top:4px;margin-bottom:12px;">
+        <input id="sol-usuario-windows" class="login-input" readonly
+               style="background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.5);cursor:not-allowed;"
+               placeholder="Detectando…">
+        <div id="sol-windows-error" style="display:none;color:#ff6b6b;font-size:12px;margin-top:4px;"></div>
+      </div>
+
+      <!-- Nombre -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Nombre *</label>
+      <input id="sol-nombre" class="login-input"
+             style="margin-top:4px;margin-bottom:12px;" placeholder="Tu nombre">
+
+      <!-- Apellidos -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Apellidos *</label>
+      <input id="sol-apellidos" class="login-input"
+             style="margin-top:4px;margin-bottom:12px;" placeholder="Tus apellidos">
+
+      <!-- Email -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Correo electrónico *</label>
+      <input id="sol-email" class="login-input" type="email"
+             style="margin-top:4px;margin-bottom:12px;" placeholder="correo@ejemplo.com">
+
+      <!-- Hotel -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Hotel *</label>
+      <select id="sol-hotel" style="width:100%;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);
+              border-radius:8px;padding:10px 14px;color:#fff;font-size:14px;margin-top:4px;margin-bottom:12px;
+              font-family:inherit;cursor:pointer;outline:none;">
+        <option value="" style="background:#1a1a2e;">— Selecciona tu hotel —</option>
+        <option value="Guayarmina Princess" style="background:#1a1a2e;">Guayarmina Princess</option>
+        <option value="Princess Inspire Tenerife" style="background:#1a1a2e;">Princess Inspire Tenerife</option>
+        <option value="La Palma Princess" style="background:#1a1a2e;">La Palma Princess</option>
+        <option value="Taurito Princess" style="background:#1a1a2e;">Taurito Princess</option>
+        <option value="TUI Blue Suite Princess" style="background:#1a1a2e;">TUI Blue Suite Princess</option>
+        <option value="Mogan Princess" style="background:#1a1a2e;">Mogan Princess</option>
+        <option value="Gran Canaria Princess" style="background:#1a1a2e;">Gran Canaria Princess</option>
+        <option value="Maspalomas &amp; Tabaiba Princess" style="background:#1a1a2e;">Maspalomas &amp; Tabaiba Princess</option>
+        <option value="Club Jandia Princess" style="background:#1a1a2e;">Club Jandia Princess</option>
+        <option value="Fuerteventura Princess" style="background:#1a1a2e;">Fuerteventura Princess</option>
+        <option value="Central Compras (Oficina)" style="background:#1a1a2e;">Central Compras (Oficina)</option>
+      </select>
+
+      <div id="sol-error" style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:10px;
+           background:rgba(255,107,107,0.1);border-radius:6px;padding:8px 12px;"></div>
+
+      <button class="login-btn" onclick="enviarSolicitudUsuario()" style="width:100%;">
+        Enviar solicitud
+      </button>
+    </div>
+
+    <!-- Confirmación enviado -->
+    <div id="solicitar-ok" style="display:none;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">✅</div>
+      <h3 style="margin:0 0 10px;color:#c9a84c;">¡Solicitud enviada!</h3>
+      <p style="color:rgba(255,255,255,.65);font-size:14px;margin:0 0 20px;">
+        Los administradores han recibido tu solicitud y se pondrán en contacto contigo en breve.
+      </p>
+      <button class="login-btn" onclick="cerrarSolicitudUsuario()" style="width:100%;">
+        Cerrar
+      </button>
+    </div>
+
+    <!-- Error grave -->
+    <div id="solicitar-error-grave" style="display:none;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
+      <h3 style="margin:0 0 10px;color:#ff6b6b;">Error al enviar</h3>
+      <p id="solicitar-error-grave-msg" style="color:rgba(255,255,255,.65);font-size:14px;margin:0 0 20px;"></p>
+      <button class="login-btn" onclick="cerrarSolicitudUsuario()" style="width:100%;">
+        Cerrar
+      </button>
+    </div>
+  </div>
+</div>
+
 <!-- ── APP ────────────────────────────────────────────────────────────────── -->
 <div id="app" style="display:none">
   <!-- Sidebar -->
@@ -683,7 +780,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.2.2
+          V 10.2.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1677,6 +1774,133 @@ function copiarEnlaceReset() {
   }).catch(() => {
     prompt('Copia este enlace:', link);
   });
+}
+
+// ── Solicitar Usuario ─────────────────────────────────────────────────────────
+
+function mostrarSolicitudUsuario() {
+  // Resetear estado del modal
+  document.getElementById('solicitar-form').style.display = '';
+  document.getElementById('solicitar-ok').style.display = 'none';
+  document.getElementById('solicitar-error-grave').style.display = 'none';
+  document.getElementById('sol-error').style.display = 'none';
+  document.getElementById('sol-nombre').value = '';
+  document.getElementById('sol-apellidos').value = '';
+  document.getElementById('sol-email').value = '';
+  document.getElementById('sol-hotel').value = '';
+  document.getElementById('sol-usuario-windows').value = 'Detectando…';
+  document.getElementById('sol-windows-error').style.display = 'none';
+
+  // Mostrar modal
+  document.getElementById('modal-solicitar-usuario').style.display = 'flex';
+
+  // Intentar obtener usuario Windows
+  _detectarUsuarioWindows();
+}
+
+function cerrarSolicitudUsuario() {
+  document.getElementById('modal-solicitar-usuario').style.display = 'none';
+}
+
+async function _detectarUsuarioWindows() {
+  const input = document.getElementById('sol-usuario-windows');
+  const errEl = document.getElementById('sol-windows-error');
+  try {
+    // Intentar obtener el usuario Windows desde el backend
+    const r = await fetch('/api/solicitar-usuario/detectar-windows', { method: 'GET' });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.usuario_windows) {
+        input.value = data.usuario_windows;
+        errEl.style.display = 'none';
+        return;
+      }
+    }
+  } catch(e) {}
+  // Fallback: mostrar error
+  input.value = '';
+  input.placeholder = 'No se pudo detectar automáticamente';
+  errEl.textContent = '⚠ No se pudo detectar el usuario Windows automáticamente. Introduce tu usuario de Windows manualmente:';
+  errEl.style.display = 'block';
+  // Hacer el campo editable si no se pudo detectar
+  input.removeAttribute('readonly');
+  input.style.background = '';
+  input.style.color = '';
+  input.style.cursor = '';
+  input.placeholder = 'Escribe tu usuario de Windows';
+}
+
+async function enviarSolicitudUsuario() {
+  const errEl = document.getElementById('sol-error');
+  errEl.style.display = 'none';
+
+  const usuarioWindows = document.getElementById('sol-usuario-windows').value.trim();
+  const nombre         = document.getElementById('sol-nombre').value.trim();
+  const apellidos      = document.getElementById('sol-apellidos').value.trim();
+  const email          = document.getElementById('sol-email').value.trim();
+  const hotel          = document.getElementById('sol-hotel').value.trim();
+
+  // Validaciones
+  if (!usuarioWindows) {
+    errEl.textContent = '⚠ El usuario Windows es obligatorio. No se puede enviar la solicitud.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (!nombre) {
+    errEl.textContent = '⚠ El nombre es obligatorio.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (!apellidos) {
+    errEl.textContent = '⚠ Los apellidos son obligatorios.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (!email) {
+    errEl.textContent = '⚠ El correo electrónico es obligatorio.';
+    errEl.style.display = 'block';
+    return;
+  }
+  // Validar formato email
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    errEl.textContent = '⚠ El formato del correo electrónico no es válido.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (!hotel) {
+    errEl.textContent = '⚠ Debes seleccionar un hotel.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  // Enviar solicitud
+  const btn = document.querySelector('#solicitar-form .login-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
+
+  try {
+    const r = await api('/api/solicitar-usuario', 'POST', {
+      usuario_windows: usuarioWindows,
+      nombre,
+      apellidos,
+      email,
+      hotel
+    });
+    if (r.error) {
+      errEl.textContent = '⚠ ' + r.error;
+      errEl.style.display = 'block';
+      if (btn) { btn.disabled = false; btn.textContent = 'Enviar solicitud'; }
+      return;
+    }
+    // Éxito
+    document.getElementById('solicitar-form').style.display = 'none';
+    document.getElementById('solicitar-ok').style.display = '';
+  } catch(err) {
+    document.getElementById('solicitar-form').style.display = 'none';
+    document.getElementById('solicitar-error-grave-msg').textContent =
+      'No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.';
+    document.getElementById('solicitar-error-grave').style.display = '';
+  }
 }
 
 async function guardarNuevaPassword() {

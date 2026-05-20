@@ -1583,6 +1583,148 @@ def cambiar_password_con_token():
     db.commit()
     return jsonify({"ok": True, "msg": "Contraseña actualizada correctamente"})
 
+# ── Solicitar acceso de usuario ───────────────────────────────────────────────
+
+@app.route("/api/solicitar-usuario/detectar-windows", methods=["GET"])
+def detectar_usuario_windows():
+    """
+    Intenta detectar el usuario Windows del cliente.
+    En entornos web no es posible acceder directamente al usuario del sistema operativo
+    del cliente, por lo que devuelve None para que el frontend lo gestione.
+    """
+    import os as _os
+    # Intentar obtener el usuario del servidor (útil en despliegue local/intranet)
+    usuario = _os.environ.get("USERNAME") or _os.environ.get("USER") or ""
+    if usuario and usuario not in ("root", "www-data", "nobody", "daemon"):
+        return jsonify({"usuario_windows": usuario})
+    return jsonify({"usuario_windows": None})
+
+@app.route("/api/solicitar-usuario", methods=["POST"])
+def solicitar_usuario():
+    """
+    Recibe la solicitud de alta de usuario y envía un email a los administradores.
+    """
+    body            = request.get_json(silent=True) or {}
+    usuario_windows = (body.get("usuario_windows") or "").strip()
+    nombre          = (body.get("nombre") or "").strip()
+    apellidos       = (body.get("apellidos") or "").strip()
+    email_solicitante = (body.get("email") or "").strip()
+    hotel           = (body.get("hotel") or "").strip()
+
+    # Validaciones
+    if not usuario_windows:
+        return jsonify({"error": "El usuario Windows es obligatorio"}), 400
+    if not nombre:
+        return jsonify({"error": "El nombre es obligatorio"}), 400
+    if not apellidos:
+        return jsonify({"error": "Los apellidos son obligatorios"}), 400
+    if not email_solicitante:
+        return jsonify({"error": "El correo electrónico es obligatorio"}), 400
+    import re as _re
+    if not _re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email_solicitante):
+        return jsonify({"error": "El formato del correo electrónico no es válido"}), 400
+    if not hotel:
+        return jsonify({"error": "Debes seleccionar un hotel"}), 400
+
+    # Validación: comprobar si el usuario Windows ya existe en el sistema
+    usuario_existente = query(
+        "SELECT id, activo FROM usuarios WHERE LOWER(username)=LOWER(%s)",
+        (usuario_windows,), one=True
+    )
+    if usuario_existente:
+        if usuario_existente["activo"]:
+            return jsonify({
+                "error": (
+                    f"El usuario Windows '{usuario_windows}' ya tiene una cuenta activa "
+                    f"en el sistema. Si tienes problemas de acceso, usa la opción "
+                    f"'¿Olvidaste tu contraseña?' en la pantalla de inicio de sesión."
+                )
+            }), 409
+        else:
+            return jsonify({
+                "error": (
+                    f"El usuario Windows '{usuario_windows}' ya existe en el sistema "
+                    f"pero está desactivado. Contacta con el administrador para reactivar tu cuenta."
+                )
+            }), 409
+
+    nombre_completo = f"{nombre} {apellidos}"
+    asunto = f"Solicitud de creación de usuario – {nombre_completo}"
+
+    body_html = f"""
+    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+      <h2 style="color:#c9a84c;border-bottom:2px solid #c9a84c;padding-bottom:8px;">
+        Solicitud de creación de usuario
+      </h2>
+      <p>Se ha recibido una nueva solicitud de acceso al sistema <strong>Control de Pedidos</strong>.</p>
+      <table border="1" cellpadding="8" cellspacing="0"
+             style="border-collapse:collapse;width:100%;font-size:14px;">
+        <tr style="background:#f5f5f5;">
+          <td style="width:200px;font-weight:bold;">Usuario Windows del PC</td>
+          <td>{usuario_windows}</td>
+        </tr>
+        <tr>
+          <td style="font-weight:bold;">Nombre</td>
+          <td>{nombre}</td>
+        </tr>
+        <tr style="background:#f5f5f5;">
+          <td style="font-weight:bold;">Apellidos</td>
+          <td>{apellidos}</td>
+        </tr>
+        <tr>
+          <td style="font-weight:bold;">Correo electrónico</td>
+          <td><a href="mailto:{email_solicitante}">{email_solicitante}</a></td>
+        </tr>
+        <tr style="background:#f5f5f5;">
+          <td style="font-weight:bold;">Hotel</td>
+          <td>{hotel}</td>
+        </tr>
+      </table>
+      <p style="margin-top:20px;color:#666;font-size:13px;">
+        Por favor, crea el usuario en el sistema y notifica al solicitante.<br>
+        <strong>Dpto. Central de Compras Princess en Canarias</strong> — Sistema automático
+      </p>
+    </div>
+    """
+
+    body_text = (
+        f"SOLICITUD DE CREACIÓN DE USUARIO\n"
+        f"{'='*40}\n"
+        f"Usuario Windows del PC : {usuario_windows}\n"
+        f"Nombre                 : {nombre}\n"
+        f"Apellidos              : {apellidos}\n"
+        f"Correo electrónico     : {email_solicitante}\n"
+        f"Hotel                  : {hotel}\n"
+        f"{'='*40}\n"
+        f"Por favor, crea el usuario en el sistema y notifica al solicitante."
+    )
+
+    # Obtener destinatarios: EMAILS_INTERNOS o ADMIN_EMAIL como fallback
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    destinatarios = []
+    if EMAILS_INTERNOS:
+        destinatarios = EMAILS_INTERNOS
+    elif admin_email:
+        destinatarios = [admin_email]
+
+    if not destinatarios:
+        log.warning("[SOLICITAR_USUARIO] No hay emails de administradores configurados. Solicitud de: %s", nombre_completo)
+        # Aún así devolvemos OK para no bloquear al usuario
+        return jsonify({"ok": True, "msg": "Solicitud registrada (sin email de administradores configurado)"})
+
+    enviado_alguno = False
+    for dest in destinatarios:
+        res = _send_email(dest, asunto, body_html, body_text=body_text)
+        if res.get("ok"):
+            enviado_alguno = True
+        else:
+            log.warning("[SOLICITAR_USUARIO] No se pudo enviar a %s: %s", dest, res.get("error"))
+
+    if not enviado_alguno:
+        return jsonify({"error": "No se pudo enviar el correo a los administradores. Contacta directamente con el departamento de compras."}), 500
+
+    return jsonify({"ok": True, "msg": "Solicitud enviada correctamente a los administradores"})
+
 @app.route("/api/me")
 def me():
     if "user_id" not in session:
