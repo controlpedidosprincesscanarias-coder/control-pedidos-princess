@@ -968,6 +968,173 @@ def _job_alertas_diarias_inner():
     log.info("✅ [SCHEDULER] Job finalizado — %d alertas enviadas, %d omitidas", enviados, omitidos)
 
 
+# ── Job de alertas de techo mensual ───────────────────────────────────────────
+
+def _ya_notificado_techo_mes_hoy(hotel_codigo: str, semaforo: str) -> bool:
+    """
+    Devuelve True si ya se envió hoy una alerta de techo mensual para este hotel
+    con el mismo nivel de semáforo (rojo/amarillo).
+    Usa whatsapp_log con pedido_id=NULL y tipo='telegram_techo_mes_<semaforo>'.
+    """
+    tipo = f"telegram_techo_mes_{semaforo}"
+    try:
+        row = query(
+            """SELECT COUNT(*) as n FROM whatsapp_log
+               WHERE pedido_id IS NULL
+                 AND tipo = %s
+                 AND destinatario LIKE %s
+                 AND DATE(creado_en) = CURRENT_DATE""",
+            (tipo, f"%{hotel_codigo}%"), one=True
+        )
+        return (row["n"] if row else 0) > 0
+    except Exception:
+        return False
+
+
+def _log_whatsapp_techo_mes(hotel_codigo: str, semaforo: str, destinatario: str,
+                             mensaje: str, enviado: bool, error=None) -> None:
+    """Registra en whatsapp_log una notificación de techo mensual (sin pedido_id)."""
+    tipo = f"telegram_techo_mes_{semaforo}"
+    try:
+        db = get_db()
+        db.cursor().execute(
+            "INSERT INTO whatsapp_log (pedido_id,tipo,destinatario,mensaje,enviado,error) "
+            "VALUES (NULL,%s,%s,%s,%s,%s)",
+            (tipo, destinatario, mensaje, 1 if enviado else 0, error)
+        )
+        db.commit()
+    except Exception as exc:
+        log.error("[TECHO-MES] Error guardando log %s %s: %s", hotel_codigo, destinatario, exc)
+
+
+def _job_alertas_techo_mensual() -> None:
+    """
+    Job diario que notifica por Telegram el estado del techo de gastos mensual por hotel.
+
+    Lógica:
+      - semáforo ROJO  (techo superado o nº pedidos >= máximo):
+          → alerta URGENTE al comprador del hotel  +  copia supervisión a admins
+      - semáforo AMARILLO (>= 75 % del techo o nº pedidos == máximo - 1):
+          → aviso al comprador del hotel  (sin copia a admins)
+      - semáforo VERDE  → sin notificación
+
+    Deduplicación: solo envía una vez por hotel y nivel en el mismo día natural.
+    """
+    from datetime import date as _date_local
+    hoy   = _date_local.today()
+    year  = hoy.year
+    month = hoy.month
+
+    log.info("▶ [TECHO-MES] Inicio job techo mensual — %s", hoy)
+
+    try:
+        hoteles = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+        ))
+    except Exception as exc:
+        log.error("[TECHO-MES] Error consultando hoteles: %s", exc)
+        return
+
+    enviados = 0
+    omitidos = 0
+
+    for hotel in hoteles:
+        hotel_id     = hotel["id"]
+        hotel_codigo = (hotel["codigo"] or "").upper()
+        hotel_nombre = hotel["nombre"] or ""
+
+        # ── Calcular acumulado del mes ────────────────────────────────────────
+        try:
+            pedidos = rows_to_list(query("""
+                SELECT p.importe, p.familia_id, f.nombre as familia_nombre
+                FROM pedidos p
+                LEFT JOIN familias f ON p.familia_id = f.id
+                WHERE p.hotel_id = %s
+                  AND p.sujeto_techo = 1
+                  AND p.estado NOT IN ('CANCELADO')
+                  AND EXTRACT(YEAR  FROM p.creado_en) = %s
+                  AND EXTRACT(MONTH FROM p.creado_en) = %s
+            """, (hotel_id, year, month)))
+        except Exception as exc:
+            log.error("[TECHO-MES] Error consultando pedidos hotel %s: %s", hotel_codigo, exc)
+            continue
+
+        acumulado   = sum(float(p["importe"] or 0) for p in pedidos)
+        num_pedidos = len(pedidos)
+
+        if num_pedidos >= TECHO_MAX_PEDIDOS or acumulado >= TECHO_MAX_MES:
+            semaforo = "rojo"
+        elif num_pedidos == TECHO_MAX_PEDIDOS - 1 or acumulado >= TECHO_MAX_MES * 0.75:
+            semaforo = "amarillo"
+        else:
+            omitidos += 1
+            log.debug("[TECHO-MES] Hotel %s — verde, sin notificación", hotel_codigo)
+            continue
+
+        # ── Deduplicación diaria por hotel + nivel ────────────────────────────
+        if _ya_notificado_techo_mes_hoy(hotel_codigo, semaforo):
+            omitidos += 1
+            log.debug("[TECHO-MES] Hotel %s — ya notificado hoy (%s)", hotel_codigo, semaforo)
+            continue
+
+        compradores = _get_compradores_hotel(hotel_codigo)
+        if not compradores:
+            log.warning("[TECHO-MES] Sin compradores para hotel %s", hotel_codigo)
+            continue
+
+        # ── Construir mensaje ─────────────────────────────────────────────────
+        mes_txt      = hoy.strftime("%B %Y")
+        pct          = int(acumulado / TECHO_MAX_MES * 100) if TECHO_MAX_MES else 0
+        familias_txt = ", ".join({
+            p["familia_nombre"] for p in pedidos if p.get("familia_nombre")
+        }) or "—"
+
+        if semaforo == "rojo":
+            emoji    = "🔴"
+            nivel_txt = "URGENTE — Techo Mensual SUPERADO"
+        else:
+            emoji    = "⚠️"
+            nivel_txt = "Aviso — Techo Mensual al " + str(pct) + " %"
+
+        texto = (
+            f"{emoji} *{nivel_txt}*\n"
+            f"Hotel: *{hotel_codigo}* — {hotel_nombre}\n"
+            f"Acumulado mes: *{acumulado:,.2f} €* de {TECHO_MAX_MES:,.0f} €\n"
+            f"Pedidos sujetos a techo: {num_pedidos} / {TECHO_MAX_PEDIDOS}\n"
+            f"Familias: {familias_txt}\n"
+            f"Mes: {mes_txt}\n"
+            "— Control Pedidos Princess Canarias"
+        )
+
+        # ── Enviar a compradores ──────────────────────────────────────────────
+        for comp in compradores:
+            username = comp.get("username", "?")
+            chat_id  = comp.get("telegram_chat_id")
+            if not chat_id:
+                log.warning("[TECHO-MES] Sin telegram_chat_id para %s", username)
+                continue
+            res = _send_telegram(chat_id, texto)
+            ok  = res.get("ok", False)
+            log.info("[TECHO-MES] → %s (%s): %s", username, hotel_codigo,
+                     "OK" if ok else res.get("error"))
+            _log_whatsapp_techo_mes(
+                hotel_codigo, semaforo,
+                f"{username}|{hotel_codigo}",
+                f"Techo mensual {semaforo} — {acumulado:,.2f} € — {mes_txt}",
+                ok, res.get("error")
+            )
+
+        # ── Copia a admins solo si es rojo (urgente) ──────────────────────────
+        if semaforo == "rojo":
+            _enviar_supervision_admins(texto, "techo")
+            log.info("[TECHO-MES] Copia supervisión admins enviada — hotel %s", hotel_codigo)
+
+        enviados += 1
+
+    log.info("✅ [TECHO-MES] Job finalizado — %d hoteles notificados, %d omitidos",
+             enviados, omitidos)
+
+
 def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, familia_nombre: str):
     """
     Envía Telegram inmediato cuando se crea un pedido sujeto al techo de gastos.
@@ -4348,6 +4515,17 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=60,
     )
+    # Job de techo mensual: una vez al día a las 08:00 hora Canarias
+    scheduler.add_job(
+        _job_alertas_techo_mensual,
+        trigger="cron",
+        hour="8",
+        minute="0",
+        second="0",
+        id="alertas_techo_mensual",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
     # Job de integridad: una vez al día a las 07:05 hora Canarias
     scheduler.add_job(
         _job_health_check,
@@ -4361,6 +4539,7 @@ def _iniciar_scheduler():
     )
     scheduler.start()
     log.info("✅ Scheduler iniciado — alertas cada 60s en horario 07:00-16:00 (Atlantic/Canary)")
+    log.info("✅ Scheduler — alertas techo mensual diarias a las 08:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
@@ -4381,6 +4560,25 @@ def test_scheduler():
     t.start()
     log.info("▶ [MANUAL] Job alertas lanzado manualmente por admin")
     return jsonify({"ok": True, **resultados})
+
+
+@app.route("/api/admin/test-techo-mensual", methods=["POST"])
+@admin_required
+def test_techo_mensual():
+    """
+    Ejecuta el job de alertas de techo mensual inmediatamente.
+    Útil para verificar que las notificaciones de techo funcionan sin esperar a las 08:00.
+    POST /api/admin/test-techo-mensual
+    """
+    import threading
+    t = threading.Thread(target=_job_alertas_techo_mensual, daemon=True)
+    t.start()
+    log.info("▶ [MANUAL] Job techo mensual lanzado manualmente por admin")
+    return jsonify({
+        "ok": True,
+        "iniciado": True,
+        "mensaje": "Job techo mensual ejecutándose en segundo plano — revisa los móviles en unos segundos."
+    })
 
 
 @app.route("/api/admin/integridad", methods=["GET"])
