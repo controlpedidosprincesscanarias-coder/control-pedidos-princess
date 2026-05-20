@@ -650,14 +650,48 @@ tbody tr:last-child{border-bottom:none}
         Rellena el formulario y los administradores recibirán tu solicitud de usuario.
       </p>
 
-      <!-- Usuario Windows (auto-detectado) -->
-      <label style="font-size:12px;color:rgba(255,255,255,.6);">Usuario Windows del PC</label>
-      <div style="position:relative;margin-top:4px;margin-bottom:12px;">
+      <!-- Usuario Windows (auto-detectado / manual) -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Usuario Windows del PC *</label>
+      <div style="position:relative;margin-top:4px;margin-bottom:4px;display:flex;gap:8px;align-items:center;">
         <input id="sol-usuario-windows" class="login-input" readonly
-               style="background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.5);cursor:not-allowed;"
+               style="flex:1;background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.4);cursor:not-allowed;"
                placeholder="Detectando…">
-        <div id="sol-windows-error" style="display:none;color:#ff6b6b;font-size:12px;margin-top:4px;"></div>
+        <button id="btn-detectar-windows" onclick="_detectarUsuarioWindows()"
+                style="white-space:nowrap;padding:10px 14px;background:rgba(201,168,76,0.15);
+                       border:1px solid rgba(201,168,76,0.5);border-radius:8px;color:#c9a84c;
+                       font-size:12px;cursor:pointer;font-family:inherit;transition:background .2s;"
+                onmouseover="this.style.background='rgba(201,168,76,0.28)'"
+                onmouseout="this.style.background='rgba(201,168,76,0.15)'">&#128269; Detectar</button>
       </div>
+      <!-- Panel instrucciones cuando no se detecta automaticamente -->
+      <div id="sol-windows-instrucciones" style="display:none;margin-bottom:12px;">
+        <div style="background:rgba(201,168,76,0.08);border:1px solid rgba(201,168,76,0.3);
+                    border-radius:8px;padding:12px 14px;font-size:12px;color:rgba(255,255,255,0.75);">
+          <p style="margin:0 0 8px;font-weight:600;color:#c9a84c;">&#9888; No se pudo detectar automaticamente</p>
+          <p style="margin:0 0 8px;">Para detectarlo sin escribirlo, copia este enlace y <strong>pegalo en la barra de direcciones del Explorador de Windows</strong> (no en el navegador):</p>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;">
+            <code id="sol-enlace-windows" style="flex:1;background:rgba(0,0,0,0.3);padding:6px 10px;
+                  border-radius:6px;font-size:11px;color:#c9a84c;word-break:break-all;"></code>
+            <button onclick="_copiarEnlaceWindows()" id="btn-copiar-enlace"
+                    style="padding:6px 10px;background:rgba(201,168,76,0.2);border:1px solid rgba(201,168,76,0.4);
+                           border-radius:6px;color:#c9a84c;font-size:11px;cursor:pointer;font-family:inherit;"
+                    title="Copiar enlace">&#128203; Copiar</button>
+          </div>
+          <p style="margin:0 0 6px;color:rgba(255,255,255,0.5);">--- o bien escribelo manualmente ---</p>
+          <input id="sol-usuario-windows-manual" class="login-input"
+                 style="margin-bottom:8px;"
+                 placeholder="Tu usuario de Windows (ej: JCURBELO)"
+                 oninput="_actualizarUsuarioManual(this.value)">
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:12px;">
+            <input type="checkbox" id="sol-confirmar-usuario"
+                   style="margin-top:2px;accent-color:#c9a84c;"
+                   onchange="_toggleConfirmacion(this.checked)">
+            <span>Confirmo que <strong id="sol-preview-usuario" style="color:#c9a84c;">___</strong> es mi usuario de Windows correcto</span>
+          </label>
+        </div>
+      </div>
+      <div id="sol-windows-ok" style="display:none;margin-bottom:12px;font-size:12px;color:#4ade80;">&#10003; Usuario detectado correctamente</div>
+      <div id="sol-windows-error" style="display:none;color:#ff6b6b;font-size:12px;margin-bottom:12px;"></div>
 
       <!-- Nombre -->
       <label style="font-size:12px;color:rgba(255,255,255,.6);">Nombre *</label>
@@ -780,7 +814,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.2.6
+          V 10.2.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1788,13 +1822,20 @@ function mostrarSolicitudUsuario() {
   document.getElementById('sol-apellidos').value = '';
   document.getElementById('sol-email').value = '';
   document.getElementById('sol-hotel').value = '';
-  document.getElementById('sol-usuario-windows').value = 'Detectando…';
+  const _wInput = document.getElementById('sol-usuario-windows');
+  _wInput.value = ''; _wInput.placeholder = 'Detectando…';
+  _wInput.setAttribute('readonly',''); _wInput.style.color = 'rgba(255,255,255,0.4)'; _wInput.style.cursor = 'not-allowed';
   document.getElementById('sol-windows-error').style.display = 'none';
+  document.getElementById('sol-windows-ok').style.display = 'none';
+  document.getElementById('sol-windows-instrucciones').style.display = 'none';
+  const _manualEl = document.getElementById('sol-usuario-windows-manual'); if (_manualEl) _manualEl.value = '';
+  const _chkEl = document.getElementById('sol-confirmar-usuario'); if (_chkEl) _chkEl.checked = false;
+  const _prevEl = document.getElementById('sol-preview-usuario'); if (_prevEl) _prevEl.textContent = '___';
 
   // Mostrar modal
   document.getElementById('modal-solicitar-usuario').style.display = 'flex';
 
-  // Intentar obtener usuario Windows
+  // Intentar detectar usuario Windows
   _detectarUsuarioWindows();
 }
 
@@ -1803,31 +1844,94 @@ function cerrarSolicitudUsuario() {
 }
 
 async function _detectarUsuarioWindows() {
-  const input = document.getElementById('sol-usuario-windows');
-  const errEl = document.getElementById('sol-windows-error');
+  const input  = document.getElementById('sol-usuario-windows');
+  const okEl   = document.getElementById('sol-windows-ok');
+  const instEl = document.getElementById('sol-windows-instrucciones');
+  const btnDet = document.getElementById('btn-detectar-windows');
+
+  // Reset visual
+  document.getElementById('sol-windows-error').style.display = 'none';
+  okEl.style.display   = 'none';
+  instEl.style.display = 'none';
+  input.value = ''; input.placeholder = 'Detectando…';
+  if (btnDet) { btnDet.disabled = true; btnDet.textContent = '&#9203; Detectando…'; }
+
+  // 1) Leer ?wu= de la URL (enlace especial pegado en Explorador de Windows)
+  const params  = new URLSearchParams(window.location.search);
+  const wuParam = (params.get('wu') || '').trim();
+  if (wuParam && wuParam !== '%USERNAME%') {
+    _marcarUsuarioDetectado(wuParam);
+    if (btnDet) { btnDet.disabled = false; btnDet.textContent = '&#128269; Detectar'; }
+    return;
+  }
+
+  // 2) Intentar backend (util en intranet local)
   try {
-    // Intentar obtener el usuario Windows desde el backend
     const r = await fetch('/api/solicitar-usuario/detectar-windows', { method: 'GET' });
     if (r.ok) {
       const data = await r.json();
       if (data.usuario_windows) {
-        input.value = data.usuario_windows;
-        errEl.style.display = 'none';
+        _marcarUsuarioDetectado(data.usuario_windows);
+        if (btnDet) { btnDet.disabled = false; btnDet.textContent = '&#128269; Detectar'; }
         return;
       }
     }
   } catch(e) {}
-  // Fallback: mostrar error
-  input.value = '';
-  input.placeholder = 'No se pudo detectar automáticamente';
-  errEl.textContent = '⚠ No se pudo detectar el usuario Windows automáticamente. Introduce tu usuario de Windows manualmente:';
-  errEl.style.display = 'block';
-  // Hacer el campo editable si no se pudo detectar
-  input.removeAttribute('readonly');
-  input.style.background = '';
-  input.style.color = '';
-  input.style.cursor = '';
-  input.placeholder = 'Escribe tu usuario de Windows';
+
+  // 3) No detectado: mostrar panel de instrucciones
+  input.placeholder = 'Pendiente de confirmar';
+  const urlBase = window.location.origin + window.location.pathname;
+  const enlaceEl = document.getElementById('sol-enlace-windows');
+  if (enlaceEl) enlaceEl.textContent = urlBase + '?wu=%USERNAME%';
+  instEl.style.display = 'block';
+  if (btnDet) { btnDet.disabled = false; btnDet.textContent = '&#128269; Detectar'; }
+}
+
+function _marcarUsuarioDetectado(usuario) {
+  const input = document.getElementById('sol-usuario-windows');
+  const okEl  = document.getElementById('sol-windows-ok');
+  input.value = usuario.toUpperCase();
+  input.style.color = '#fff';
+  okEl.textContent = '✓ Usuario detectado: ' + usuario.toUpperCase();
+  okEl.style.display = 'block';
+  document.getElementById('sol-windows-instrucciones').style.display = 'none';
+}
+
+function _actualizarUsuarioManual(valor) {
+  const preview = document.getElementById('sol-preview-usuario');
+  const chk     = document.getElementById('sol-confirmar-usuario');
+  if (preview) preview.textContent = valor.trim().toUpperCase() || '___';
+  if (chk) { chk.checked = false; _toggleConfirmacion(false); }
+}
+
+function _toggleConfirmacion(marcado) {
+  const manual = document.getElementById('sol-usuario-windows-manual');
+  const input  = document.getElementById('sol-usuario-windows');
+  const okEl   = document.getElementById('sol-windows-ok');
+  if (marcado && manual && manual.value.trim()) {
+    const usuario = manual.value.trim().toUpperCase();
+    input.value = usuario;
+    input.style.color = '#fff';
+    okEl.textContent = '✓ Usuario confirmado manualmente: ' + usuario;
+    okEl.style.display = 'block';
+  } else {
+    if (!input.value) okEl.style.display = 'none';
+  }
+}
+
+async function _copiarEnlaceWindows() {
+  const enlaceEl = document.getElementById('sol-enlace-windows');
+  const btn      = document.getElementById('btn-copiar-enlace');
+  if (!enlaceEl) return;
+  try {
+    await navigator.clipboard.writeText(enlaceEl.textContent);
+    if (btn) { btn.textContent = '✓ Copiado!'; setTimeout(() => { btn.textContent = '&#128203; Copiar'; }, 2000); }
+  } catch(e) {
+    const range = document.createRange();
+    range.selectNode(enlaceEl);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
+  }
 }
 
 async function enviarSolicitudUsuario() {
