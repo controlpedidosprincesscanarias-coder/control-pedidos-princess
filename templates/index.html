@@ -814,7 +814,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.4.0
+          V 10.4.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -4018,9 +4018,13 @@ async function loadTecho() {
     const barColor = h.semaforo === 'rojo' ? '#dc3545' : h.semaforo === 'amarillo' ? '#ffc107' : '#28a745';
     const pedidosHtml = h.pedidos.length ? h.pedidos.map(p => `
       <div style="padding:4px 0;border-bottom:1px solid #eee">
-        <div style="display:flex;justify-content:space-between;font-size:11px">
+        <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px">
           <span style="font-weight:600">${p.familia_nombre||'Sin familia'}</span>
-          <span style="font-weight:700">${p.importe!=null?Number(p.importe).toLocaleString('es-ES',{minimumFractionDigits:2})+' €':'—'}</span>
+          <div style="display:flex;align-items:center;gap:8px">
+            <span style="font-weight:700">${p.importe!=null?Number(p.importe).toLocaleString('es-ES',{minimumFractionDigits:2})+' €':'—'}</span>
+            <button onclick="event.stopPropagation();openPedidoModal(${p.id})"
+                    style="font-size:10px;padding:2px 7px;border:1px solid #1a73e8;border-radius:4px;background:#fff;color:#1a73e8;cursor:pointer">✏ Editar</button>
+          </div>
         </div>
         <div style="font-size:10px;color:#888;margin-top:1px">
           Pedido ${p.pedido_num||('#'+p.norden)} — ${p.proveedor_nombre||'Sin proveedor'}
@@ -4098,8 +4102,8 @@ function _renderTechoAlertas(d) {
       ? `Techo mensual <strong>SUPERADO</strong> — ${h.acumulado.toLocaleString('es-ES',{minimumFractionDigits:2})} € de ${h.techo_mes.toLocaleString('es-ES')} €`
       : `${pct}% del techo mensual consumido — ${h.acumulado.toLocaleString('es-ES',{minimumFractionDigits:2})} € de ${h.techo_mes.toLocaleString('es-ES')} €`;
     return `
-    <div onclick="showView('techo',document.querySelector('[data-view=\'techo\']'))"
-         title="Ver panel Techo de Gastos"
+    <div onclick="irATechoHotel('${h.hotel_codigo}')"
+         title="Ver detalle en Techo de Gastos"
          style="display:flex;align-items:center;gap:12px;cursor:pointer;background:${bgColor};margin:0 -16px;padding:10px 16px;border-bottom:1px solid rgba(0,0,0,.06)">
       <span style="font-size:20px">${icono}</span>
       <div style="flex:1;min-width:0">
@@ -4109,12 +4113,30 @@ function _renderTechoAlertas(d) {
           <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px"></div>
         </div>
       </div>
-      <span style="font-size:11px;color:#999;white-space:nowrap">Ver detalle →</span>
+      <span style="font-size:11px;color:#1a73e8;white-space:nowrap;font-weight:600">Ver detalle →</span>
     </div>`;
   }).join('');
 }
 
 // Actualiza el badge del sidebar sumando alertas de pedidos + alertas de techo
+function irATechoHotel(hotelCodigo) {
+  // Navega a la vista Techo de Gastos y hace scroll + highlight a la tarjeta del hotel
+  showView('techo', document.querySelector('[data-view="techo"]'));
+  setTimeout(() => {
+    const cards = document.querySelectorAll('#techo-resumen-grid > div');
+    for (const card of cards) {
+      if (card.innerText.startsWith(hotelCodigo + ' ')) {
+        card.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        const orig = card.style.outline;
+        card.style.outline = '3px solid #1a73e8';
+        card.style.transition = 'outline 0.3s';
+        setTimeout(() => { card.style.outline = orig; }, 2500);
+        break;
+      }
+    }
+  }, 350);
+}
+
 async function updateAlertBadge() {
   try {
     const [stats, techo] = await Promise.all([
