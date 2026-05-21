@@ -1020,6 +1020,12 @@ def _job_alertas_techo_mensual() -> None:
 
     Deduplicación: solo envía una vez por hotel y nivel en el mismo día natural.
     """
+    with app.app_context():
+        _job_alertas_techo_mensual_inner()
+
+
+def _job_alertas_techo_mensual_inner() -> None:
+    """Lógica interna del job — llamada siempre dentro de app.app_context()."""
     from datetime import date as _date_local
     hoy   = _date_local.today()
     year  = hoy.year
@@ -1074,9 +1080,11 @@ def _job_alertas_techo_mensual() -> None:
         # ── Deduplicación diaria por hotel + nivel ────────────────────────────
         if _ya_notificado_techo_mes_hoy(hotel_codigo, semaforo):
             omitidos += 1
-            log.debug("[TECHO-MES] Hotel %s — ya notificado hoy (%s)", hotel_codigo, semaforo)
+            log.info("[TECHO-MES] Hotel %s — YA NOTIFICADO HOY semaforo=%s, omitiendo", hotel_codigo, semaforo)
             continue
 
+        log.info("[TECHO-MES] Hotel %s — semaforo=%s acumulado=%.2f pedidos=%d -> enviando",
+                 hotel_codigo, semaforo, acumulado, num_pedidos)
         compradores = _get_compradores_hotel(hotel_codigo)
         if not compradores:
             log.warning("[TECHO-MES] Sin compradores para hotel %s", hotel_codigo)
@@ -4608,6 +4616,32 @@ def test_techo_mensual():
         "iniciado": True,
         "mensaje": "Job techo mensual ejecutándose en segundo plano — revisa los móviles en unos segundos."
     })
+
+
+@app.route("/api/admin/techo-dedup-reset", methods=["POST"])
+@admin_required
+def techo_dedup_reset():
+    """
+    Borra los registros de deduplicación de techo del día actual en whatsapp_log,
+    permitiendo que el job vuelva a enviar las alertas aunque ya lo haya hecho hoy.
+    POST /api/admin/techo-dedup-reset
+    """
+    try:
+        db  = get_db()
+        cur = db.cursor()
+        cur.execute(
+            """DELETE FROM whatsapp_log
+               WHERE tipo LIKE 'telegram_techo_mes_%'
+                 AND DATE(creado_en) = CURRENT_DATE"""
+        )
+        deleted = cur.rowcount
+        db.commit()
+        log.info("[TECHO-DEDUP-RESET] Eliminados %d registros de dedup del dia — forzado por admin", deleted)
+        return jsonify({"ok": True, "eliminados": deleted,
+                        "mensaje": f"{deleted} registros de deduplicacion eliminados. Ahora puedes lanzar test-techo-mensual."})
+    except Exception as exc:
+        log.error("[TECHO-DEDUP-RESET] Error: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/admin/integridad", methods=["GET"])
