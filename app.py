@@ -423,7 +423,9 @@ ADMIN_TELEGRAM_CHAT_ID  = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "")
 # "techo"         → alerta de techo de gastos (supervisión financiera)
 # "cambio_estado" → cambio de estado CON bloque de alerta activo
 # "aviso"         → recordatorio diario → NO se copia (evitar saturación)
-TIPOS_SUPERVISION_ADMIN = {"urgente", "techo", "cambio_estado"}
+# Solo las alertas URGENTES llegan a admins por supervisión automática.
+# techo-rojo usa tipo="urgente"; techo-amarillo y cambio_estado sin alerta urgente NO llegan a admins.
+TIPOS_SUPERVISION_ADMIN = {"urgente"}
 
 
 def _get_admins_telegram() -> list:
@@ -701,10 +703,11 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
                      username, chat_id, "OK" if res["ok"] else res["error"])
             resultados.append({"username": username, "chat_id": chat_id, **res})
 
-        # ── Copia de supervisión a admins (solo si hay bloque de alerta activo) ─
-        # Los cambios de estado sin alerta no se copian para no saturar a los admins.
-        if info_alerta:
-            _enviar_supervision_admins(texto, "cambio_estado")
+        # ── Copia de supervisión a admins: solo si la alerta es urgente ────────
+        # Cambio de estado normal o con alerta no urgente → solo al comprador.
+        # Cambio de estado con alerta urgente → comprador + admins.
+        if info_alerta and info_alerta.get("nivel") == "urgente":
+            _enviar_supervision_admins(texto, "urgente")
 
         # ── Log en whatsapp_log (tipo separado del job diario) ─────────────────
         nota_log = f"Cambio estado: {estado_antes} → {estado_nuevo}"
@@ -1132,13 +1135,12 @@ def _job_alertas_techo_mensual_inner() -> None:
                 ok, res.get("error")
             )
 
-        # ── Copia a admins: rojo (urgente) siempre; amarillo también como aviso financiero ──
-        # Mismo criterio que alertas de pedidos: urgente → admins; aviso → admins si techo.
-        # "techo" está en TIPOS_SUPERVISION_ADMIN, así que _enviar_supervision_admins
-        # enviará para ambos niveles. El prefijo del mensaje ya indica el nivel.
-        _enviar_supervision_admins(texto, "techo")
-        log.info("[TECHO-MES] Copia supervisión admins enviada — hotel %s semáforo=%s",
-                 hotel_codigo, semaforo)
+        # ── Copia a admins: solo si es rojo (urgente) ───────────────────────
+        # Amarillo → solo al comprador, no satura a los admins.
+        if semaforo == "rojo":
+            _enviar_supervision_admins(texto, "urgente")
+            log.info("[TECHO-MES] Copia supervisión admins enviada — hotel %s semáforo=rojo",
+                     hotel_codigo)
 
         enviados += 1
 
@@ -1184,8 +1186,8 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
             log.info("[TECHO] Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
             resultados.append({"username": username, "chat_id": chat_id, **res})
 
-        # ── Copia de supervisión a admins (techo de gastos → siempre) ────────────
-        _enviar_supervision_admins(texto, "techo")
+        # ── Copia de supervisión a admins: creación de pedido sujeto a techo es siempre urgente ──
+        _enviar_supervision_admins(texto, "urgente")
 
         # Registrar en log
         db = get_db()
