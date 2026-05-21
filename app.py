@@ -2969,9 +2969,10 @@ def techo_resumen():
     for hotel in hoteles:
         pedidos = rows_to_list(query("""
             SELECT p.id, p.importe, p.familia_id, f.nombre as familia_nombre,
-                   p.pedido_num, p.estado, p.norden
+                   p.pedido_num, p.estado, p.norden, pr.nombre as proveedor_nombre
             FROM pedidos p
             LEFT JOIN familias f ON p.familia_id = f.id
+            LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
             WHERE p.hotel_id = %s
               AND p.sujeto_techo = 1
               AND p.estado NOT IN ('CANCELADO')
