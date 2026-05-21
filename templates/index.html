@@ -814,7 +814,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.2.8
+          V 10.3.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1996,7 +1996,38 @@ async function enviarSolicitudUsuario() {
       if (btn) { btn.disabled = false; btn.textContent = 'Enviar solicitud'; }
       return;
     }
-    // Éxito
+
+    // ── Fallback EmailJS (igual que reset de contraseña) ──────────────────────
+    // El backend devuelve sin_email:true cuando Resend no está configurado
+    // o cuando falló (dominio no verificado, API key inválida, etc.)
+    if (r.sin_email && r.destinatarios && r.destinatarios.length > 0) {
+      try {
+        // Enviamos al primer admin como destinatario principal (TO).
+        // Si hay más de uno, los añadimos en BCC — igual que meaEnviarEmail.
+        const restoCopias = r.destinatarios.slice(1).join(',');
+        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+          to_email: r.destinatarios[0],
+          subject:  r.asunto,
+          message:  r.body_text,
+          reply_to: r.reply_to,
+          bcc:      restoCopias,   // admins adicionales en copia oculta
+        });
+        // EmailJS envió OK → mostrar confirmación normal
+        console.info('[EmailJS solicitud] Enviado a', r.destinatarios[0],
+                     restoCopias ? '(BCC: ' + restoCopias + ')' : '');
+      } catch(ejsErr) {
+        // EmailJS también falló → informar al usuario
+        console.warn('[EmailJS solicitud]', ejsErr);
+        document.getElementById('solicitar-form').style.display = 'none';
+        document.getElementById('solicitar-error-grave-msg').textContent =
+          'No se pudo enviar la solicitud automáticamente. Por favor, contacta directamente con el departamento de compras: centralcomprascanarias.princess@gmail.com';
+        document.getElementById('solicitar-error-grave').style.display = '';
+        if (btn) { btn.disabled = false; btn.textContent = 'Enviar solicitud'; }
+        return;
+      }
+    }
+
+    // Éxito (Resend envió OK, o EmailJS envió OK)
     document.getElementById('solicitar-form').style.display = 'none';
     document.getElementById('solicitar-ok').style.display = '';
   } catch(err) {

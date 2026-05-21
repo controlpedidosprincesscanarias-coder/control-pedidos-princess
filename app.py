@@ -1124,10 +1124,13 @@ def _job_alertas_techo_mensual() -> None:
                 ok, res.get("error")
             )
 
-        # ── Copia a admins solo si es rojo (urgente) ──────────────────────────
-        if semaforo == "rojo":
-            _enviar_supervision_admins(texto, "techo")
-            log.info("[TECHO-MES] Copia supervisión admins enviada — hotel %s", hotel_codigo)
+        # ── Copia a admins: rojo (urgente) siempre; amarillo también como aviso financiero ──
+        # Mismo criterio que alertas de pedidos: urgente → admins; aviso → admins si techo.
+        # "techo" está en TIPOS_SUPERVISION_ADMIN, así que _enviar_supervision_admins
+        # enviará para ambos niveles. El prefijo del mensaje ya indica el nivel.
+        _enviar_supervision_admins(texto, "techo")
+        log.info("[TECHO-MES] Copia supervisión admins enviada — hotel %s semáforo=%s",
+                 hotel_codigo, semaforo)
 
         enviados += 1
 
@@ -1879,16 +1882,42 @@ def solicitar_usuario():
         # Aún así devolvemos OK para no bloquear al usuario
         return jsonify({"ok": True, "msg": "Solicitud registrada (sin email de administradores configurado)"})
 
+    # ── Si Resend no está configurado → fallback a EmailJS desde el navegador ──
+    if not RESEND_API_KEY:
+        log.warning("[SOLICITAR_USUARIO] RESEND_API_KEY no configurada — devolviendo datos para EmailJS. Solicitante: %s", nombre_completo)
+        return jsonify({
+            "ok":           True,
+            "sin_email":    True,
+            "destinatarios": destinatarios,
+            "asunto":       asunto,
+            "body_text":    body_text,
+            "reply_to":     email_solicitante,
+        })
+
     enviado_alguno = False
+    errores = []
     for dest in destinatarios:
         res = _send_email(dest, asunto, body_html, body_text=body_text)
         if res.get("ok"):
             enviado_alguno = True
         else:
-            log.warning("[SOLICITAR_USUARIO] No se pudo enviar a %s: %s", dest, res.get("error"))
+            err_detail = res.get("error", "desconocido")
+            log.warning("[SOLICITAR_USUARIO] No se pudo enviar a %s: %s", dest, err_detail)
+            errores.append(f"{dest}: {err_detail}")
 
     if not enviado_alguno:
-        return jsonify({"error": "No se pudo enviar el correo a los administradores. Contacta directamente con el departamento de compras."}), 500
+        # Resend está configurado pero falló (dominio no verificado, key inválida, etc.)
+        # Devolver datos para que el frontend intente con EmailJS como último recurso
+        log.error("[SOLICITAR_USUARIO] Resend falló para todos los destinatarios: %s", errores)
+        return jsonify({
+            "ok":           True,
+            "sin_email":    True,
+            "destinatarios": destinatarios,
+            "asunto":       asunto,
+            "body_text":    body_text,
+            "reply_to":     email_solicitante,
+            "resend_error": errores,
+        })
 
     return jsonify({"ok": True, "msg": "Solicitud enviada correctamente a los administradores"})
 
@@ -4524,7 +4553,7 @@ def _iniciar_scheduler():
         second="0",
         id="alertas_techo_mensual",
         replace_existing=True,
-        misfire_grace_time=300,
+        misfire_grace_time=3600,  # 1 hora — tolera reinicios de Render tras el cron de 08:00
     )
     # Job de integridad: una vez al día a las 07:05 hora Canarias
     scheduler.add_job(
