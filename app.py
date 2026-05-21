@@ -4646,6 +4646,32 @@ def techo_dedup_reset():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/admin/reset-alertas-hoy", methods=["POST"])
+@admin_required
+def reset_alertas_hoy():
+    """
+    Borra los registros de deduplicacion del dia actual para alertas de pedidos (telegram_auto),
+    permitiendo que el job diario vuelva a enviar como si fuera la primera vez hoy.
+    POST /api/admin/reset-alertas-hoy
+    """
+    try:
+        db  = get_db()
+        cur = db.cursor()
+        cur.execute(
+            """DELETE FROM whatsapp_log
+               WHERE tipo = 'telegram_auto'
+                 AND DATE(creado_en) = CURRENT_DATE"""
+        )
+        deleted = cur.rowcount
+        db.commit()
+        log.info("[ALERTAS-RESET] Eliminados %d registros telegram_auto del dia — forzado por admin", deleted)
+        return jsonify({"ok": True, "eliminados": deleted,
+                        "mensaje": f"{deleted} registros de dedup de pedidos eliminados. Ahora puedes lanzar test-scheduler."})
+    except Exception as exc:
+        log.error("[ALERTAS-RESET] Error: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 @app.route("/api/admin/integridad", methods=["GET"])
 @admin_required
 def get_integridad():
