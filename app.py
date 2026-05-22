@@ -993,10 +993,6 @@ def _dias_ultima_notificacion(pedido_id: int):
     except Exception:
         return None
 
-# Umbral crítico: a partir de este número de días se notifica siempre,
-# ignorando el ciclo, para garantizar que ningún pedido quede en silencio.
-DIAS_CRITICO = 60
-
 def _job_alertas_diarias():
     """
     Job automático: calcula alertas por fecha y envía Telegram
@@ -1005,7 +1001,7 @@ def _job_alertas_diarias():
 
     Lógica de envío (por pedido):
       1. Nunca ha recibido telegram_auto  → envía siempre (primer aviso)
-      2. días >= DIAS_CRITICO (60d)       → envía siempre (umbral crítico)
+      2. días >= get_config()['dias_critico'] → envía siempre (umbral crítico)
       3. Resto                            → solo envía si han pasado >= ciclo días
                                             desde la última notificación
     En todos los casos, _ya_notificado_hoy() evita duplicados dentro del mismo día.
