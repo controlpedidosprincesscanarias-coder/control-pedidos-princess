@@ -1984,6 +1984,7 @@ def solicitar_usuario_fase1():
     nombre    = (body.get("nombre") or "").strip()
     apellidos = (body.get("apellidos") or "").strip()
     email_sol = (body.get("email") or "").strip()
+    movil_sol = (body.get("movil") or "").strip()
     hoteles   = (body.get("hoteles") or body.get("hotel") or "").strip()
 
     if not nombre:
@@ -1994,6 +1995,8 @@ def solicitar_usuario_fase1():
         return jsonify({"error": "El correo electrónico es obligatorio"}), 400
     if not _re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email_sol):
         return jsonify({"error": "El formato del correo electrónico no es válido"}), 400
+    if not movil_sol:
+        return jsonify({"error": "El teléfono móvil de empresa es obligatorio"}), 400
     if not hoteles:
         return jsonify({"error": "Debes seleccionar al menos un hotel"}), 400
 
@@ -2047,6 +2050,10 @@ def solicitar_usuario_fase1():
             </td>
           </tr>
           <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 0;color:#888;">Móvil empresa</td>
+            <td style="padding:10px 0;">{movil_sol}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
             <td style="padding:10px 0;color:#888;">Hotel(es)</td>
             <td style="padding:10px 0;">{hoteles}</td>
           </tr>
@@ -2068,6 +2075,7 @@ def solicitar_usuario_fase1():
         f"{'='*44}\n"
         f"Nombre        : {nombre_completo}\n"
         f"Email         : {email_sol}\n"
+        f"Móvil empresa : {movil_sol}\n"
         f"Hotel(es)     : {hoteles}\n"
         f"ID solicitud  : #{sol_id}\n"
         f"{'='*44}\n"

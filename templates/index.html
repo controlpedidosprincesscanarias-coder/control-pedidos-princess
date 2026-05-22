@@ -703,6 +703,54 @@ tbody tr:last-child{border-bottom:none}
              style="margin:5px 0 14px;" placeholder="correo@ejemplo.com">
 
       <label style="font-size:11px;font-weight:600;letter-spacing:.06em;
+                    color:rgba(255,255,255,.45);text-transform:uppercase;">Teléfono móvil de empresa *</label>
+      <input id="sol-movil" class="login-input" type="tel"
+             style="margin:5px 0 14px;" placeholder="+34 600 000 000">
+
+      <!-- ── Bloque Telegram ──────────────────────────────────────── -->
+      <div style="background:rgba(201,168,76,.06);border:1px solid rgba(201,168,76,.2);
+                  border-radius:10px;padding:14px 16px;margin-bottom:18px;">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+          <span style="font-size:22px;">✈️</span>
+          <div>
+            <div style="font-size:13px;font-weight:700;color:#c9a84c;letter-spacing:.02em;">Telegram</div>
+            <div style="font-size:11px;color:rgba(255,255,255,.4);margin-top:1px;">
+              Canal de notificaciones del equipo
+            </div>
+          </div>
+        </div>
+        <p style="margin:0 0 12px;font-size:12px;color:rgba(255,255,255,.55);line-height:1.6;">
+          Utilizamos Telegram como canal de comunicación interna del equipo de compras:
+          avisos de pedidos urgentes, seguimiento de proveedores y alertas del sistema.
+          Una vez creada tu cuenta, el manual de usuario explica paso a paso cómo
+          acceder al bot de mensajes y configurar las notificaciones.
+        </p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <a href="https://desktop.telegram.org/" target="_blank" rel="noopener"
+             style="flex:1;min-width:130px;display:flex;align-items:center;justify-content:center;
+                    gap:7px;padding:9px 12px;background:rgba(42,171,238,.15);
+                    border:1px solid rgba(42,171,238,.35);border-radius:8px;
+                    color:#63c8f2;font-size:12px;font-weight:600;text-decoration:none;
+                    cursor:pointer;transition:background .2s;"
+             onmouseover="this.style.background='rgba(42,171,238,.25)'"
+             onmouseout="this.style.background='rgba(42,171,238,.15)'">
+            <span style="font-size:16px;">🖥️</span> Descargar para PC
+          </a>
+          <a href="https://telegram.org/dl/android" target="_blank" rel="noopener"
+             style="flex:1;min-width:130px;display:flex;align-items:center;justify-content:center;
+                    gap:7px;padding:9px 12px;background:rgba(42,171,238,.15);
+                    border:1px solid rgba(42,171,238,.35);border-radius:8px;
+                    color:#63c8f2;font-size:12px;font-weight:600;text-decoration:none;
+                    cursor:pointer;transition:background .2s;"
+             onmouseover="this.style.background='rgba(42,171,238,.25)'"
+             onmouseout="this.style.background='rgba(42,171,238,.15)'">
+            <span style="font-size:16px;">📱</span> Descargar para móvil
+          </a>
+        </div>
+      </div>
+      <!-- /Bloque Telegram -->
+
+      <label style="font-size:11px;font-weight:600;letter-spacing:.06em;
                     color:rgba(255,255,255,.45);text-transform:uppercase;">Hotel(es) * — puedes marcar varios</label>
       <div style="margin:5px 0 20px;background:rgba(255,255,255,.05);
                   border:1px solid rgba(255,255,255,.15);border-radius:8px;
@@ -961,7 +1009,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.6.2
+          V 10.6.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2024,7 +2072,7 @@ const _SOL = { token: null, wu: null, manual: false };
 
 function mostrarSolicitudUsuario() {
   _sol_resetPaneles();
-  ['sol-nombre','sol-apellidos','sol-email'].forEach(id => {
+  ['sol-nombre','sol-apellidos','sol-email','sol-movil'].forEach(id => {
     const el = document.getElementById(id); if (el) el.value = '';
   });
   document.querySelectorAll('.sol-hotel-chk').forEach(c => c.checked = false);
@@ -2068,6 +2116,7 @@ async function sol_enviarFase1(btn) {
   const nombre    = (document.getElementById('sol-nombre').value    || '').trim();
   const apellidos = (document.getElementById('sol-apellidos').value || '').trim();
   const email     = (document.getElementById('sol-email').value     || '').trim();
+  const movil     = (document.getElementById('sol-movil').value     || '').trim();
   const hoteles   = Array.from(document.querySelectorAll('.sol-hotel-chk:checked')).map(c => c.value).join(', ');
   const errEl     = document.getElementById('sol-error-f1');
   const mostrarErr = msg => { errEl.textContent = msg; errEl.style.display = ''; };
@@ -2075,10 +2124,11 @@ async function sol_enviarFase1(btn) {
   if (!nombre)    return mostrarErr('El nombre es obligatorio.');
   if (!apellidos) return mostrarErr('Los apellidos son obligatorios.');
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return mostrarErr('Introduce un correo electrónico válido.');
+  if (!movil)     return mostrarErr('El teléfono móvil de empresa es obligatorio.');
   if (!hoteles)   return mostrarErr('Selecciona al menos un hotel.');
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
   try {
-    const r = await api('/api/solicitar-usuario', 'POST', { nombre, apellidos, email, hoteles });
+    const r = await api('/api/solicitar-usuario', 'POST', { nombre, apellidos, email, movil, hoteles });
     if (r.sin_email) {
       try {
         await emailjs.send(
