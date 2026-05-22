@@ -4495,9 +4495,9 @@ async function loadConfigAlertas() {
     let html = '';
     for (const [grupo, items] of Object.entries(grupos)) {
       const label = GRUPOS_LABEL[grupo] || grupo;
-      html += `<div style="margin:16px 0 8px;padding:0 16px">
-        <div style="font-weight:700;font-size:13px;color:#1a73e8;border-bottom:2px solid #e8f0fe;padding-bottom:6px;margin-bottom:12px">${label}</div>
-        <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:10px">`;
+      html += `<div style="margin:10px 0 6px;padding:0 16px">
+        <div style="font-weight:700;font-size:13px;color:#1a73e8;border-bottom:2px solid #e8f0fe;padding-bottom:5px;margin-bottom:8px">${label}</div>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px">`;
       for (const item of items) {
         const esUrgente = item.clave.includes('urgente');
         const esPrimera = item.clave.includes('primera');
@@ -4506,14 +4506,13 @@ async function loadConfigAlertas() {
         const unidad = (item.clave.includes('techo_max_pedido') || item.clave.includes('techo_max_mes'))
           ? '€' : item.clave.includes('pct') ? '%' : 'días';
         const nota = item.clave.includes('urgente')
-          ? '<span style="font-size:10px;color:#888">(0 = nunca)</span>' : '';
-        html += `<div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:10px 14px">
-          <div style="font-size:11px;color:#555;margin-bottom:6px">${dot} ${item.label}</div>
-          <div style="display:flex;align-items:center;gap:8px">
+          ? '<span style="font-size:10px;color:#888">(0=nunca)</span>' : '';
+        html += `<div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div style="font-size:11px;color:#555;line-height:1.3;flex:1;min-width:0">${dot} ${item.label}${nota ? ' '+nota : ''}</div>
+          <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
             <input type="number" min="0" step="1" id="cfg_${item.clave}" value="${item.valor}"
-                   style="width:90px;padding:5px 8px;border:2px solid ${color};border-radius:6px;font-size:15px;font-weight:700;text-align:center">
-            <span style="font-size:12px;color:#666;font-weight:600">${unidad}</span>
-            ${nota}
+                   style="width:72px;height:32px;padding:3px 6px;border:2px solid ${color};border-radius:6px;font-size:14px;font-weight:700;text-align:center">
+            <span style="font-size:11px;color:#666;font-weight:600;min-width:18px">${unidad}</span>
           </div>
         </div>`;
       }
