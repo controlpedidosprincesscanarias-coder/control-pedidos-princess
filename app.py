@@ -195,6 +195,66 @@ def _auto_migrate():
                     END IF;
                 END $$;
             """)
+            # ── Tabla config_alertas (v10.5) ─────────────────────────────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS config_alertas (
+                    clave  TEXT PRIMARY KEY,
+                    valor  TEXT NOT NULL,
+                    tipo   TEXT NOT NULL DEFAULT 'numero',
+                    label  TEXT NOT NULL,
+                    grupo  TEXT NOT NULL DEFAULT 'general',
+                    orden  INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cur.execute("SELECT COUNT(*) as n FROM config_alertas")
+            row = cur.fetchone()
+            n = row[0] if isinstance(row, tuple) else row['n']
+            if n == 0:
+                defaults = [
+                    ("enviado_primera",        "15", "numero", "Enviado al proveedor — 1ª alerta (días)",           "estado_enviado",    1),
+                    ("enviado_urgente",         "25", "numero", "Enviado al proveedor — Urgente (días)",             "estado_enviado",    2),
+                    ("enviado_ciclo",           "10", "numero", "Enviado al proveedor — Ciclo repetición (días)",    "estado_enviado",    3),
+                    ("firma_compras_primera",    "8", "numero", "Firma Dir. Compras — 1ª alerta (días)",             "estado_firma",      1),
+                    ("firma_compras_urgente",    "0", "numero", "Firma Dir. Compras — Urgente (días, 0=nunca)",      "estado_firma",      2),
+                    ("firma_compras_ciclo",      "8", "numero", "Firma Dir. Compras — Ciclo repetición (días)",      "estado_firma",      3),
+                    ("firma_hotel_primera",      "5", "numero", "Firma Dir. Hotel — 1ª alerta (días)",               "estado_firma",      4),
+                    ("firma_hotel_urgente",      "0", "numero", "Firma Dir. Hotel — Urgente (días, 0=nunca)",        "estado_firma",      5),
+                    ("firma_hotel_ciclo",        "5", "numero", "Firma Dir. Hotel — Ciclo repetición (días)",        "estado_firma",      6),
+                    ("entrega_parcial_primera", "10", "numero", "Entrega Parcial — 1ª alerta (días)",                "estado_entrega",    1),
+                    ("entrega_parcial_urgente",  "0", "numero", "Entrega Parcial — Urgente (días, 0=nunca)",         "estado_entrega",    2),
+                    ("entrega_parcial_ciclo",   "10", "numero", "Entrega Parcial — Ciclo repetición (días)",         "estado_entrega",    3),
+                    ("cotizacion_primera",       "2", "numero", "Pendiente Cotización — 1ª alerta (días)",           "estado_cotizacion", 1),
+                    ("cotizacion_urgente",       "3", "numero", "Pendiente Cotización — Urgente (días)",             "estado_cotizacion", 2),
+                    ("dias_critico",            "60", "numero", "Días crítico global (fuerza reenvío urgente)",      "global",            1),
+                    ("techo_max_pedido",      "3000", "numero", "Techo — Importe máximo por pedido (€)",             "techo",             1),
+                    ("techo_max_mes",         "6000", "numero", "Techo — Importe máximo mensual por hotel (€)",      "techo",             2),
+                    ("techo_max_pedidos",        "2", "numero", "Techo — Nº máximo de pedidos por hotel/mes",        "techo",             3),
+                    ("techo_pct_amarillo",      "75", "numero", "Techo — % consumido para alerta amarilla",          "techo",             4),
+                ]
+                cur.executemany(
+                    "INSERT INTO config_alertas (clave,valor,tipo,label,grupo,orden) VALUES (%s,%s,%s,%s,%s,%s)",
+                    defaults
+                )
+            # ── Solicitudes de acceso en 2 fases (v10.5) ────────────────────
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS solicitudes_acceso (
+                    id              SERIAL PRIMARY KEY,
+                    nombre          TEXT NOT NULL,
+                    apellidos       TEXT NOT NULL,
+                    email           TEXT NOT NULL,
+                    hoteles         TEXT NOT NULL,
+                    usuario_windows TEXT,
+                    token           TEXT UNIQUE,
+                    estado          TEXT NOT NULL DEFAULT 'fase1_pendiente',
+                    ip_solicitante  TEXT,
+                    creado_en       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    token_expira    TIMESTAMPTZ,
+                    completado_en   TIMESTAMPTZ
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_solicitudes_token ON solicitudes_acceso(token)"
+            )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -607,7 +667,7 @@ def _calcular_info_alerta(pedido: dict, estado_nuevo: str,
     if ignorar_si_modificacion_manual:
         return None
 
-    cfg = UMBRALES_ALERTAS.get(estado_nuevo)
+    cfg = _build_umbrales().get(estado_nuevo)
     if not cfg:
         return None  # estado no vigilado (SERVIDO TOTAL, CANCELADO, etc.)
 
@@ -759,6 +819,83 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
 
 # ── Job diario: alertas por fecha (independiente del usuario) ──────────────────
 
+def get_config() -> dict:
+    """Carga la configuración de alertas desde BD. Cachea en g Flask."""
+    try:
+        from flask import g as _g
+        if hasattr(_g, '_config_alertas'):
+            return _g._config_alertas
+    except RuntimeError:
+        pass
+
+    try:
+        rows = query("SELECT clave, valor, tipo FROM config_alertas")
+        cfg = {}
+        for r in (rows or []):
+            v = r["valor"]
+            if r["tipo"] == "numero":
+                try:
+                    v = float(v) if "." in str(v) else int(v)
+                except (ValueError, TypeError):
+                    pass
+            cfg[r["clave"]] = v
+    except Exception:
+        cfg = {}
+
+    defaults = {
+        "enviado_primera": 15, "enviado_urgente": 25, "enviado_ciclo": 10,
+        "firma_compras_primera": 8, "firma_compras_urgente": 0, "firma_compras_ciclo": 8,
+        "firma_hotel_primera": 5, "firma_hotel_urgente": 0, "firma_hotel_ciclo": 5,
+        "entrega_parcial_primera": 10, "entrega_parcial_urgente": 0, "entrega_parcial_ciclo": 10,
+        "cotizacion_primera": 2, "cotizacion_urgente": 3,
+        "dias_critico": 60,
+        "techo_max_pedido": 3000, "techo_max_mes": 6000,
+        "techo_max_pedidos": 2, "techo_pct_amarillo": 75,
+    }
+    for k, v in defaults.items():
+        cfg.setdefault(k, v)
+
+    try:
+        from flask import g as _g
+        _g._config_alertas = cfg
+    except RuntimeError:
+        pass
+    return cfg
+
+
+def _build_umbrales() -> dict:
+    """UMBRALES_ALERTAS construido dinámicamente desde BD."""
+    c = get_config()
+    return {
+        "ENVIADO AL PROVEEDOR": {
+            "primera": c["enviado_primera"],
+            "urgente": c["enviado_urgente"] or None,
+            "ciclo":   c["enviado_ciclo"],
+        },
+        "PENDIENTE FIRMA DIRECCION COMPRAS": {
+            "primera": c["firma_compras_primera"],
+            "urgente": c["firma_compras_urgente"] or None,
+            "ciclo":   c["firma_compras_ciclo"],
+        },
+        "PENDIENTE DE FIRMA DIRECCION HOTEL": {
+            "primera": c["firma_hotel_primera"],
+            "urgente": c["firma_hotel_urgente"] or None,
+            "ciclo":   c["firma_hotel_ciclo"],
+        },
+        "ENTREGA PARCIAL": {
+            "primera": c["entrega_parcial_primera"],
+            "urgente": c["entrega_parcial_urgente"] or None,
+            "ciclo":   c["entrega_parcial_ciclo"],
+        },
+        "PENDIENTE COTIZACIÓN": {
+            "primera": c["cotizacion_primera"],
+            "urgente": c["cotizacion_urgente"] or None,
+            "ciclo":   None,
+            "fecha_ref": "fecha_solicitud",
+        },
+    }
+
+
 UMBRALES_ALERTAS = {
     "ENVIADO AL PROVEEDOR": {
         "primera": 15, "urgente": 25, "ciclo": 10,
@@ -902,7 +1039,7 @@ def _job_alertas_diarias_inner():
     omitidos = 0
 
     for p in alertas_raw:
-        cfg = UMBRALES_ALERTAS.get(p["estado"])
+        cfg = _build_umbrales().get(p["estado"])
         if not cfg:
             continue
 
@@ -928,9 +1065,9 @@ def _job_alertas_diarias_inner():
         if _nunca_notificado(p["id"]):
             debe_enviar = True
             log.info("[SCHEDULER] Pedido %s — primer aviso (%dd)", p["id"], dias)
-        elif dias >= DIAS_CRITICO:
+        elif dias >= get_config()["dias_critico"]:
             debe_enviar = True
-            log.info("[SCHEDULER] Pedido %s — umbral crítico (%dd >= %dd)", p["id"], dias, DIAS_CRITICO)
+            log.info("[SCHEDULER] Pedido %s — umbral crítico (%dd >= %dd)", p["id"], dias, get_config()["dias_critico"])
         else:
             ciclo = cfg.get("ciclo")
             if ciclo:
@@ -1071,9 +1208,9 @@ def _job_alertas_techo_mensual_inner() -> None:
         acumulado   = sum(float(p["importe"] or 0) for p in pedidos)
         num_pedidos = len(pedidos)
 
-        if num_pedidos >= TECHO_MAX_PEDIDOS or acumulado >= TECHO_MAX_MES:
+        if num_pedidos >= get_config()["techo_max_pedido"]S or acumulado >= get_config()["techo_max_mes"]:
             semaforo = "rojo"
-        elif num_pedidos == TECHO_MAX_PEDIDOS - 1 or acumulado >= TECHO_MAX_MES * 0.75:
+        elif num_pedidos == get_config()["techo_max_pedidos"] - 1 or acumulado >= get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100:
             semaforo = "amarillo"
         else:
             omitidos += 1
@@ -1095,7 +1232,7 @@ def _job_alertas_techo_mensual_inner() -> None:
 
         # ── Construir mensaje ─────────────────────────────────────────────────
         mes_txt      = hoy.strftime("%B %Y")
-        pct          = int(acumulado / TECHO_MAX_MES * 100) if TECHO_MAX_MES else 0
+        pct          = int(acumulado / get_config()["techo_max_mes"] * 100) if get_config()["techo_max_mes"] else 0
         familias_txt = ", ".join({
             p["familia_nombre"] for p in pedidos if p.get("familia_nombre")
         }) or "—"
@@ -1110,8 +1247,8 @@ def _job_alertas_techo_mensual_inner() -> None:
         texto = (
             f"{emoji} *{nivel_txt}*\n"
             f"Hotel: *{hotel_codigo}* — {hotel_nombre}\n"
-            f"Acumulado mes: *{acumulado:,.2f} €* de {TECHO_MAX_MES:,.0f} €\n"
-            f"Pedidos sujetos a techo: {num_pedidos} / {TECHO_MAX_PEDIDOS}\n"
+            f"Acumulado mes: *{acumulado:,.2f} €* de {get_config()["techo_max_mes"]:,.0f} €\n"
+            f"Pedidos sujetos a techo: {num_pedidos} / {get_config()["techo_max_pedido"]S}\n"
             f"Familias: {familias_txt}\n"
             f"Mes: {mes_txt}\n"
             "— Control Pedidos Princess Canarias"
@@ -1763,173 +1900,525 @@ def cambiar_password_con_token():
     db.commit()
     return jsonify({"ok": True, "msg": "Contraseña actualizada correctamente"})
 
-# ── Solicitar acceso de usuario ───────────────────────────────────────────────
+# ══════════════════════════════════════════════════════════════════════════════
+#  SOLICITUD DE ACCESO EN 2 FASES (v10.5)
+# ══════════════════════════════════════════════════════════════════════════════
 
 @app.route("/api/solicitar-usuario/detectar-windows", methods=["GET"])
 def detectar_usuario_windows():
     """
     Intenta detectar el usuario Windows del cliente.
-    En entornos web no es posible acceder directamente al usuario del sistema operativo
-    del cliente, por lo que devuelve None para que el frontend lo gestione.
+    En entornos web públicos siempre devuelve None;
+    útil solo en intranet con autenticación Windows integrada (NTLM/Kerberos).
     """
     import os as _os
-    # Intentar obtener el usuario del servidor (útil en despliegue local/intranet)
     usuario = _os.environ.get("USERNAME") or _os.environ.get("USER") or ""
     if usuario and usuario not in ("root", "www-data", "nobody", "daemon"):
         return jsonify({"usuario_windows": usuario})
     return jsonify({"usuario_windows": None})
 
-@app.route("/api/solicitar-usuario", methods=["POST"])
-def solicitar_usuario():
-    """
-    Recibe la solicitud de alta de usuario y envía un email a los administradores.
-    """
-    body            = request.get_json(silent=True) or {}
-    usuario_windows = (body.get("usuario_windows") or "").strip()
-    nombre          = (body.get("nombre") or "").strip()
-    apellidos       = (body.get("apellidos") or "").strip()
-    email_solicitante = (body.get("email") or "").strip()
-    hotel           = (body.get("hotel") or "").strip()
 
-    # Validaciones
-    if not usuario_windows:
-        return jsonify({"error": "El usuario Windows es obligatorio"}), 400
+# ─── FASE 1: recibir datos básicos, guardar en BD, notificar admin ────────────
+
+@app.route("/api/solicitar-usuario", methods=["POST"])
+def solicitar_usuario_fase1():
+    """
+    FASE 1 — El usuario rellena nombre, apellidos, email y hotel(es).
+    Se guarda la solicitud con estado 'fase1_pendiente' y se notifica
+    a los admins. No se requiere usuario Windows todavía.
+    """
+    import re as _re
+
+    body      = request.get_json(silent=True) or {}
+    nombre    = (body.get("nombre") or "").strip()
+    apellidos = (body.get("apellidos") or "").strip()
+    email_sol = (body.get("email") or "").strip()
+    hoteles   = (body.get("hoteles") or body.get("hotel") or "").strip()
+
     if not nombre:
         return jsonify({"error": "El nombre es obligatorio"}), 400
     if not apellidos:
         return jsonify({"error": "Los apellidos son obligatorios"}), 400
-    if not email_solicitante:
+    if not email_sol:
         return jsonify({"error": "El correo electrónico es obligatorio"}), 400
-    import re as _re
-    if not _re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email_solicitante):
+    if not _re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email_sol):
         return jsonify({"error": "El formato del correo electrónico no es válido"}), 400
-    if not hotel:
-        return jsonify({"error": "Debes seleccionar un hotel"}), 400
+    if not hoteles:
+        return jsonify({"error": "Debes seleccionar al menos un hotel"}), 400
 
-    # Validación: comprobar si el usuario Windows ya existe en el sistema
+    nombre_completo = f"{nombre} {apellidos}"
+    ip_cliente = request.remote_addr or ""
+
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute("""
+            INSERT INTO solicitudes_acceso
+                (nombre, apellidos, email, hoteles, estado, ip_solicitante)
+            VALUES (%s, %s, %s, %s, 'fase1_pendiente', %s)
+            RETURNING id
+        """, (nombre, apellidos, email_sol, hoteles, ip_cliente))
+        sol_id = cur.fetchone()["id"]
+    db.commit()
+
+    app_url   = os.environ.get("APP_URL", "").rstrip("/")
+    url_admin = f"{app_url}/admin/solicitudes#{sol_id}" if app_url else ""
+    asunto    = f"[FASE 1] Nueva solicitud de acceso — {nombre_completo}"
+
+    body_html = f"""
+    <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
+                background:#f9f9f9;border-radius:10px;overflow:hidden;
+                border:1px solid #e0e0e0;">
+      <div style="background:#0f2044;padding:24px 28px;">
+        <h2 style="margin:0;color:#c9a84c;font-size:18px;">
+          📋 Nueva solicitud de acceso — Fase 1
+        </h2>
+        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
+          Control de Pedidos · Princess Canarias
+        </p>
+      </div>
+      <div style="padding:24px 28px;">
+        <p style="margin:0 0 16px;font-size:14px;color:#333;">
+          Se ha recibido una nueva solicitud. El usuario
+          <strong>aún no ha verificado su usuario Windows</strong>.
+          Revisad los datos y, si son correctos, usad el panel de administración
+          para enviarle el archivo de verificación (Fase 2).
+        </p>
+        <table border="0" cellpadding="0" cellspacing="0"
+               style="width:100%;font-size:14px;border-collapse:collapse;">
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 0;color:#888;width:160px;">Nombre completo</td>
+            <td style="padding:10px 0;font-weight:600;">{nombre_completo}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 0;color:#888;">Correo electrónico</td>
+            <td style="padding:10px 0;">
+              <a href="mailto:{email_sol}" style="color:#0f2044;">{email_sol}</a>
+            </td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 0;color:#888;">Hotel(es)</td>
+            <td style="padding:10px 0;">{hoteles}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 0;color:#888;">ID solicitud</td>
+            <td style="padding:10px 0;font-family:monospace;">#{sol_id}</td>
+          </tr>
+        </table>
+        {f'<div style="margin-top:24px;text-align:center;"><a href="{url_admin}" style="display:inline-block;padding:12px 28px;background:#c9a84c;color:#0f2044;border-radius:7px;text-decoration:none;font-weight:700;font-size:14px;">➜ Ver solicitud y enviar Fase 2</a></div>' if url_admin else ''}
+      </div>
+      <div style="padding:14px 28px;background:#f0f0f0;font-size:11px;color:#aaa;">
+        Mensaje automático · Control Pedidos Princess Canarias
+      </div>
+    </div>
+    """
+
+    body_text = (
+        f"NUEVA SOLICITUD DE ACCESO (FASE 1)\n"
+        f"{'='*44}\n"
+        f"Nombre        : {nombre_completo}\n"
+        f"Email         : {email_sol}\n"
+        f"Hotel(es)     : {hoteles}\n"
+        f"ID solicitud  : #{sol_id}\n"
+        f"{'='*44}\n"
+        f"Accede al panel de administración para revisar y enviar el archivo de verificación (Fase 2)."
+    )
+
+    admin_email   = os.environ.get("ADMIN_EMAIL", "")
+    destinatarios = EMAILS_INTERNOS or ([admin_email] if admin_email else [])
+
+    if not destinatarios:
+        log.warning("[SOL_FASE1] Sin emails admin. Sol #%s", sol_id)
+        return jsonify({"ok": True, "sol_id": sol_id,
+                        "msg": "Solicitud registrada (sin email de admin configurado)"})
+
+    if not RESEND_API_KEY:
+        return jsonify({
+            "ok": True, "sol_id": sol_id, "sin_email": True,
+            "destinatarios": destinatarios,
+            "asunto": asunto, "body_text": body_text,
+            "reply_to": email_sol,
+        })
+
+    enviado = False
+    for dest in destinatarios:
+        res = _send_email(dest, asunto, body_html, body_text=body_text)
+        if res.get("ok"):
+            enviado = True
+        else:
+            log.warning("[SOL_FASE1] Error enviando a %s: %s", dest, res.get("error"))
+
+    if not enviado:
+        return jsonify({
+            "ok": True, "sol_id": sol_id, "sin_email": True,
+            "destinatarios": destinatarios,
+            "asunto": asunto, "body_text": body_text,
+            "reply_to": email_sol,
+        })
+
+    return jsonify({"ok": True, "sol_id": sol_id,
+                    "msg": "Solicitud registrada. Los administradores han sido notificados."})
+
+
+# ─── ADMIN: listar solicitudes de acceso ──────────────────────────────────────
+
+@app.route("/api/admin/solicitudes-acceso", methods=["GET"])
+def admin_listar_solicitudes():
+    """Devuelve todas las solicitudes de acceso (solo admins)."""
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Sin permisos"}), 403
+    rows = query("""
+        SELECT id, nombre, apellidos, email, hoteles, usuario_windows,
+               estado, creado_en, completado_en
+        FROM solicitudes_acceso
+        ORDER BY creado_en DESC
+        LIMIT 200
+    """)
+    return jsonify(rows)
+
+
+# ─── ADMIN: generar y descargar el .bat para Fase 2 ──────────────────────────
+
+@app.route("/api/admin/solicitudes-acceso/<int:sol_id>/generar-bat", methods=["POST", "GET"])
+def admin_generar_bat(sol_id):
+    """
+    Genera un token único, actualiza estado a 'fase2_pendiente' y devuelve
+    un archivo .bat. Al ejecutarlo, Windows resuelve %USERNAME% y abre el
+    navegador con token + usuario ya detectado automáticamente.
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Sin permisos"}), 403
+
+    sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
+    if not sol:
+        return jsonify({"error": "Solicitud no encontrada"}), 404
+    if sol["estado"] not in ("fase1_pendiente",):
+        return jsonify({"error": f"La solicitud ya está en estado '{sol['estado']}'"}), 409
+
+    import secrets as _sec
+    token     = _sec.token_urlsafe(32)
+    expira_en = datetime.utcnow() + timedelta(hours=72)
+
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute("""
+            UPDATE solicitudes_acceso
+            SET token=%(token)s, token_expira=%(expira)s, estado='fase2_pendiente'
+            WHERE id=%(id)s
+        """, {"token": token, "expira": expira_en, "id": sol_id})
+    db.commit()
+
+    app_url  = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
+    nombre_c = f"{sol['nombre']} {sol['apellidos']}"
+
+    # %USERNAME% la resuelve Windows al ejecutar el .bat — clave del truco
+    bat_content = (
+        f"@echo off\r\n"
+        f":: Control de Pedidos Princess - Verificacion de acceso\r\n"
+        f":: Solicitud de: {nombre_c}\r\n"
+        f":: Archivo de un solo uso - expira en 72 horas\r\n"
+        f"::\r\n"
+        f":: Instrucciones: haz doble clic en este archivo.\r\n"
+        f":: Se abrira el navegador con tu usuario Windows detectado automaticamente.\r\n"
+        f"@echo Abriendo verificacion de acceso, por favor espera...\r\n"
+        f"set TOKEN={token}\r\n"
+        f"set URL={app_url}/?token=%TOKEN%^&wu=%USERNAME%\r\n"
+        f"start \"\" \"%URL%\"\r\n"
+        f"exit\r\n"
+    )
+
+    from flask import Response
+    nombre_archivo = (
+        f"verificar_acceso_"
+        f"{sol['nombre'].lower().replace(' ','_')}_"
+        f"{sol['apellidos'].split()[0].lower()}.bat"
+    )
+    return Response(
+        bat_content,
+        mimetype="application/octet-stream",
+        headers={"Content-Disposition": f'attachment; filename="{nombre_archivo}"'}
+    )
+
+
+# ─── ADMIN: enviar Fase 2 por email al usuario ────────────────────────────────
+
+@app.route("/api/admin/solicitudes-acceso/<int:sol_id>/enviar-fase2", methods=["POST"])
+def admin_enviar_fase2(sol_id):
+    """
+    Genera el token si no existe, y envía al usuario un email con
+    instrucciones + enlace para completar la Fase 2.
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Sin permisos"}), 403
+
+    sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
+    if not sol:
+        return jsonify({"error": "Solicitud no encontrada"}), 404
+
+    # Generar token si no tiene aún
+    if not sol["token"]:
+        import secrets as _sec
+        token     = _sec.token_urlsafe(32)
+        expira_en = datetime.utcnow() + timedelta(hours=72)
+        db = get_db()
+        with db.cursor() as cur:
+            cur.execute("""
+                UPDATE solicitudes_acceso
+                SET token=%(t)s, token_expira=%(e)s, estado='fase2_pendiente'
+                WHERE id=%(id)s
+            """, {"t": token, "e": expira_en, "id": sol_id})
+        db.commit()
+        sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
+
+    app_url   = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
+    url_token = f"{app_url}/?token={sol['token']}"
+    nombre_c  = f"{sol['nombre']} {sol['apellidos']}"
+    asunto    = "Verificación de acceso — Control de Pedidos Princess (Fase 2)"
+
+    body_html = f"""
+    <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
+                background:#f9f9f9;border-radius:10px;overflow:hidden;
+                border:1px solid #e0e0e0;">
+      <div style="background:#0f2044;padding:24px 28px;">
+        <h2 style="margin:0;color:#c9a84c;font-size:18px;">🔐 Verifica tu acceso al sistema</h2>
+        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
+          Control de Pedidos · Princess Canarias
+        </p>
+      </div>
+      <div style="padding:28px;">
+        <p style="margin:0 0 12px;font-size:15px;color:#333;">
+          Hola, <strong>{nombre_c}</strong>
+        </p>
+        <p style="margin:0 0 20px;font-size:14px;color:#555;line-height:1.6;">
+          Tu solicitud de acceso ha sido revisada. Para completar el proceso
+          necesitamos verificar tu usuario de Windows. Tienes <strong>dos opciones</strong>:
+        </p>
+        <div style="background:#fff;border:2px solid #c9a84c;border-radius:8px;
+                    padding:18px 20px;margin-bottom:16px;">
+          <p style="margin:0 0 8px;font-weight:700;color:#0f2044;font-size:14px;">
+            ✅ Opción recomendada — Archivo de verificación
+          </p>
+          <p style="margin:0 0 10px;font-size:13px;color:#555;line-height:1.5;">
+            Adjunto a este email encontrarás el archivo <strong>verificar_acceso.bat</strong>:
+          </p>
+          <ol style="margin:0 0 0 18px;font-size:13px;color:#555;line-height:1.9;">
+            <li>Guarda el archivo adjunto en tu escritorio.</li>
+            <li>Haz <strong>doble clic</strong> sobre él.</li>
+            <li>Se abrirá el navegador con tu usuario Windows ya detectado.</li>
+            <li>Pulsa <em>Completar verificación</em>.</li>
+          </ol>
+        </div>
+        <div style="background:#fff;border:1px solid #ddd;border-radius:8px;
+                    padding:18px 20px;margin-bottom:24px;">
+          <p style="margin:0 0 8px;font-weight:700;color:#0f2044;font-size:14px;">
+            🔗 Opción alternativa — Enlace directo
+          </p>
+          <p style="margin:0 0 12px;font-size:13px;color:#555;">
+            Si no puedes ejecutar el archivo, usa este enlace e introduce
+            tu usuario Windows manualmente.
+          </p>
+          <div style="text-align:center;">
+            <a href="{url_token}"
+               style="display:inline-block;padding:11px 24px;background:#1a3a6b;
+                      color:#fff;border-radius:7px;text-decoration:none;
+                      font-weight:600;font-size:13px;">Continuar verificación →</a>
+          </div>
+        </div>
+        <p style="margin:0;font-size:12px;color:#aaa;line-height:1.5;">
+          Enlace personal e intransferible. Caduca en <strong>72 horas</strong>.
+          Si tienes problemas contacta con el departamento de informática.
+        </p>
+      </div>
+      <div style="padding:14px 28px;background:#f0f0f0;font-size:11px;color:#aaa;">
+        Mensaje automático · Control Pedidos Princess Canarias
+      </div>
+    </div>
+    """
+
+    body_text = (
+        f"Hola {nombre_c},\n\n"
+        f"Tu solicitud de acceso ha sido revisada. Para completarla, ejecuta\n"
+        f"el archivo .bat adjunto (haz doble clic) o abre este enlace:\n\n"
+        f"{url_token}\n\n"
+        f"El enlace caduca en 72 horas.\n\nControl Pedidos Princess Canarias"
+    )
+
+    if not RESEND_API_KEY:
+        return jsonify({
+            "ok": True, "sin_email": True,
+            "destinatarios": [sol["email"]],
+            "asunto": asunto, "body_text": body_text,
+            "url_token": url_token,
+        })
+
+    res = _send_email(sol["email"], asunto, body_html, body_text=body_text)
+    if not res.get("ok"):
+        log.warning("[SOL_FASE2] Error email a %s: %s", sol["email"], res.get("error"))
+        return jsonify({
+            "ok": True, "sin_email": True,
+            "destinatarios": [sol["email"]],
+            "asunto": asunto, "body_text": body_text,
+            "url_token": url_token,
+        })
+
+    return jsonify({"ok": True,
+                    "msg": f"Email de verificación (Fase 2) enviado a {sol['email']}"})
+
+
+# ─── FASE 2: el usuario llega con token + wu, completa la solicitud ───────────
+
+@app.route("/api/solicitar-usuario/completar-fase2", methods=["POST"])
+def solicitar_usuario_fase2():
+    """
+    FASE 2 — El usuario ejecutó el .bat o abrió el enlace.
+    Valida token + usuario_windows, marca como completada y notifica admins.
+    """
+    import re as _re
+
+    body            = request.get_json(silent=True) or {}
+    token           = (body.get("token") or "").strip()
+    usuario_windows = (body.get("usuario_windows") or "").strip().upper()
+
+    if not token:
+        return jsonify({"error": "Token no proporcionado"}), 400
+    if not usuario_windows:
+        return jsonify({"error": "El usuario Windows es obligatorio"}), 400
+
+    sol = query("SELECT * FROM solicitudes_acceso WHERE token=%s", (token,), one=True)
+    if not sol:
+        return jsonify({"error": "Enlace no válido o ya utilizado"}), 404
+
+    if sol["token_expira"]:
+        expira = sol["token_expira"]
+        if hasattr(expira, "tzinfo") and expira.tzinfo:
+            from datetime import timezone
+            now = datetime.now(timezone.utc)
+        else:
+            now = datetime.utcnow()
+        if now > expira:
+            return jsonify({
+                "error": "Este enlace ha caducado (72 horas). "
+                         "Contacta con el administrador para generar uno nuevo."
+            }), 410
+
+    if sol["estado"] == "completada":
+        return jsonify({"error": "Esta solicitud ya fue completada anteriormente."}), 409
+
     usuario_existente = query(
         "SELECT id, activo FROM usuarios WHERE LOWER(username)=LOWER(%s)",
         (usuario_windows,), one=True
     )
     if usuario_existente:
-        if usuario_existente["activo"]:
-            return jsonify({
-                "error": (
-                    f"El usuario Windows '{usuario_windows}' ya tiene una cuenta activa "
-                    f"en el sistema. Si tienes problemas de acceso, usa la opción "
-                    f"'¿Olvidaste tu contraseña?' en la pantalla de inicio de sesión."
-                )
-            }), 409
-        else:
-            return jsonify({
-                "error": (
-                    f"El usuario Windows '{usuario_windows}' ya existe en el sistema "
-                    f"pero está desactivado. Contacta con el administrador para reactivar tu cuenta."
-                )
-            }), 409
+        msg = (
+            f"El usuario Windows '{usuario_windows}' ya tiene una cuenta activa."
+            if usuario_existente["activo"]
+            else f"El usuario Windows '{usuario_windows}' existe pero está desactivado. "
+                 f"Contacta con el administrador."
+        )
+        return jsonify({"error": msg}), 409
 
-    nombre_completo = f"{nombre} {apellidos}"
-    asunto = f"Solicitud de creación de usuario – {nombre_completo}"
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute("""
+            UPDATE solicitudes_acceso
+            SET usuario_windows=%(uw)s, estado='completada',
+                completado_en=NOW(), token=NULL
+            WHERE id=%(id)s
+        """, {"uw": usuario_windows, "id": sol["id"]})
+    db.commit()
+
+    nombre_c = f"{sol['nombre']} {sol['apellidos']}"
+    asunto   = f"[FASE 2 COMPLETADA] Alta usuario — {nombre_c} / {usuario_windows}"
 
     body_html = f"""
-    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-      <h2 style="color:#c9a84c;border-bottom:2px solid #c9a84c;padding-bottom:8px;">
-        Solicitud de creación de usuario
-      </h2>
-      <p>Se ha recibido una nueva solicitud de acceso al sistema <strong>Control de Pedidos</strong>.</p>
-      <table border="1" cellpadding="8" cellspacing="0"
-             style="border-collapse:collapse;width:100%;font-size:14px;">
-        <tr style="background:#f5f5f5;">
-          <td style="width:200px;font-weight:bold;">Usuario Windows del PC</td>
-          <td>{usuario_windows}</td>
-        </tr>
-        <tr>
-          <td style="font-weight:bold;">Nombre</td>
-          <td>{nombre}</td>
-        </tr>
-        <tr style="background:#f5f5f5;">
-          <td style="font-weight:bold;">Apellidos</td>
-          <td>{apellidos}</td>
-        </tr>
-        <tr>
-          <td style="font-weight:bold;">Correo electrónico</td>
-          <td><a href="mailto:{email_solicitante}">{email_solicitante}</a></td>
-        </tr>
-        <tr style="background:#f5f5f5;">
-          <td style="font-weight:bold;">Hotel</td>
-          <td>{hotel}</td>
-        </tr>
-      </table>
-      <p style="margin-top:20px;color:#666;font-size:13px;">
-        Por favor, crea el usuario en el sistema y notifica al solicitante.<br>
-        <strong>Dpto. Central de Compras Princess en Canarias</strong> — Sistema automático
-      </p>
+    <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
+                background:#f9f9f9;border-radius:10px;overflow:hidden;
+                border:1px solid #e0e0e0;">
+      <div style="background:#065f46;padding:24px 28px;">
+        <h2 style="margin:0;color:#6ee7b7;font-size:18px;">
+          ✅ Solicitud completa — Crear cuenta de usuario
+        </h2>
+        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
+          Control de Pedidos · Princess Canarias
+        </p>
+      </div>
+      <div style="padding:24px 28px;">
+        <p style="margin:0 0 16px;font-size:14px;color:#333;">
+          El usuario ha completado la verificación.
+          <strong>Ya podéis crear la cuenta</strong> con los siguientes datos:
+        </p>
+        <table border="0" cellpadding="0" cellspacing="0"
+               style="width:100%;font-size:14px;border-collapse:collapse;">
+          <tr style="background:#f0fdf4;border-bottom:1px solid #d1fae5;">
+            <td style="padding:12px 14px;color:#065f46;font-weight:700;width:170px;">Usuario Windows</td>
+            <td style="padding:12px 14px;font-family:monospace;font-size:16px;font-weight:700;color:#0f2044;">
+              {usuario_windows}
+            </td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 14px;color:#888;">Nombre completo</td>
+            <td style="padding:10px 14px;font-weight:600;">{nombre_c}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 14px;color:#888;">Correo electrónico</td>
+            <td style="padding:10px 14px;">
+              <a href="mailto:{sol['email']}" style="color:#0f2044;">{sol['email']}</a>
+            </td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 14px;color:#888;">Hotel(es)</td>
+            <td style="padding:10px 14px;">{sol['hoteles']}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 14px;color:#888;">ID solicitud</td>
+            <td style="padding:10px 14px;font-family:monospace;">#{sol['id']}</td>
+          </tr>
+        </table>
+      </div>
+      <div style="padding:14px 28px;background:#f0f0f0;font-size:11px;color:#aaa;">
+        Mensaje automático · Control Pedidos Princess Canarias
+      </div>
     </div>
     """
 
     body_text = (
-        f"SOLICITUD DE CREACIÓN DE USUARIO\n"
-        f"{'='*40}\n"
-        f"Usuario Windows del PC : {usuario_windows}\n"
-        f"Nombre                 : {nombre}\n"
-        f"Apellidos              : {apellidos}\n"
-        f"Correo electrónico     : {email_solicitante}\n"
-        f"Hotel                  : {hotel}\n"
-        f"{'='*40}\n"
-        f"Por favor, crea el usuario en el sistema y notifica al solicitante."
+        f"SOLICITUD COMPLETADA — CREAR CUENTA\n"
+        f"{'='*44}\n"
+        f"Usuario Windows : {usuario_windows}\n"
+        f"Nombre          : {nombre_c}\n"
+        f"Email           : {sol['email']}\n"
+        f"Hotel(es)       : {sol['hoteles']}\n"
+        f"ID solicitud    : #{sol['id']}\n"
+        f"{'='*44}\n"
+        f"Crea la cuenta en el sistema con los datos anteriores."
     )
 
-    # Obtener destinatarios: EMAILS_INTERNOS o ADMIN_EMAIL como fallback
-    admin_email = os.environ.get("ADMIN_EMAIL", "")
-    destinatarios = []
-    if EMAILS_INTERNOS:
-        destinatarios = EMAILS_INTERNOS
-    elif admin_email:
-        destinatarios = [admin_email]
-
-    if not destinatarios:
-        log.warning("[SOLICITAR_USUARIO] No hay emails de administradores configurados. Solicitud de: %s", nombre_completo)
-        # Aún así devolvemos OK para no bloquear al usuario
-        return jsonify({"ok": True, "msg": "Solicitud registrada (sin email de administradores configurado)"})
-
-    # ── Si Resend no está configurado → fallback a EmailJS desde el navegador ──
-    if not RESEND_API_KEY:
-        log.warning("[SOLICITAR_USUARIO] RESEND_API_KEY no configurada — devolviendo datos para EmailJS. Solicitante: %s", nombre_completo)
-        return jsonify({
-            "ok":           True,
-            "sin_email":    True,
-            "destinatarios": destinatarios,
-            "asunto":       asunto,
-            "body_text":    body_text,
-            "reply_to":     email_solicitante,
-        })
-
-    enviado_alguno = False
-    errores = []
+    admin_email   = os.environ.get("ADMIN_EMAIL", "")
+    destinatarios = EMAILS_INTERNOS or ([admin_email] if admin_email else [])
     for dest in destinatarios:
-        res = _send_email(dest, asunto, body_html, body_text=body_text)
-        if res.get("ok"):
-            enviado_alguno = True
-        else:
-            err_detail = res.get("error", "desconocido")
-            log.warning("[SOLICITAR_USUARIO] No se pudo enviar a %s: %s", dest, err_detail)
-            errores.append(f"{dest}: {err_detail}")
+        try:
+            _send_email(dest, asunto, body_html, body_text=body_text)
+        except Exception as exc:
+            log.warning("[SOL_FASE2] Error email a %s: %s", dest, exc)
 
-    if not enviado_alguno:
-        # Resend está configurado pero falló (dominio no verificado, key inválida, etc.)
-        # Devolver datos para que el frontend intente con EmailJS como último recurso
-        log.error("[SOLICITAR_USUARIO] Resend falló para todos los destinatarios: %s", errores)
-        return jsonify({
-            "ok":           True,
-            "sin_email":    True,
-            "destinatarios": destinatarios,
-            "asunto":       asunto,
-            "body_text":    body_text,
-            "reply_to":     email_solicitante,
-            "resend_error": errores,
-        })
+    return jsonify({
+        "ok":  True,
+        "msg": "¡Verificación completada! Los administradores han recibido todos los datos para crear tu cuenta."
+    })
 
-    return jsonify({"ok": True, "msg": "Solicitud enviada correctamente a los administradores"})
+
+# ─── ADMIN: rechazar solicitud ────────────────────────────────────────────────
+
+@app.route("/api/admin/solicitudes-acceso/<int:sol_id>/rechazar", methods=["POST"])
+def admin_rechazar_solicitud(sol_id):
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Sin permisos"}), 403
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute(
+            "UPDATE solicitudes_acceso SET estado='rechazada' WHERE id=%s", (sol_id,)
+        )
+    db.commit()
+    return jsonify({"ok": True})
 
 @app.route("/api/me")
 def me():
@@ -2885,9 +3374,9 @@ def importar_proveedores_reset():
 
 # ── Validación techo de gastos ─────────────────────────────────────────────────
 
-TECHO_MAX_PEDIDO   = 3000.00   # €  por pedido individual
-TECHO_MAX_MES      = 6000.00   # €  acumulado mensual por hotel
-TECHO_MAX_PEDIDOS  = 2         # nº máximo de pedidos sujetos al techo por hotel/mes
+get_config()["techo_max_pedido"]   = 3000.00   # €  por pedido individual
+get_config()["techo_max_mes"]      = 6000.00   # €  acumulado mensual por hotel
+get_config()["techo_max_pedido"]S  = 2         # nº máximo de pedidos sujetos al techo por hotel/mes
 
 def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None):
     """
@@ -2898,9 +3387,9 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
     Devuelve lista de strings con los errores detectados (vacía = OK).
     """
     errores = []
-    if importe and float(importe) > TECHO_MAX_PEDIDO:
+    if importe and float(importe) > get_config()["techo_max_pedido"]:
         errores.append(
-            f"⚠️ El importe {float(importe):,.2f} € supera el límite individual de {TECHO_MAX_PEDIDO:,.0f} € por pedido."
+            f"⚠️ El importe {float(importe):,.2f} € supera el límite individual de {get_config()["techo_max_pedido"]:,.0f} € por pedido."
         )
 
     if not familia_id:
@@ -2927,10 +3416,10 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
     """, base_args))
 
     # Regla 1: máximo 2 pedidos sujetos al techo por hotel/mes
-    if len(pedidos_mes) >= TECHO_MAX_PEDIDOS:
+    if len(pedidos_mes) >= get_config()["techo_max_pedido"]S:
         errores.append(
             f"🚫 Ya hay {len(pedidos_mes)} pedido(s) sujeto(s) al techo este mes para este hotel "
-            f"(máximo {TECHO_MAX_PEDIDOS})."
+            f"(máximo {get_config()["techo_max_pedido"]S})."
         )
 
     # Regla 2: no puede repetirse la familia en el mismo hotel/mes
@@ -2946,11 +3435,11 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
     # Regla 3: acumulado mensual no puede superar 6.000 €
     acumulado = sum(float(p["importe"]) for p in pedidos_mes)
     nuevo_importe = float(importe) if importe else 0.0
-    if acumulado + nuevo_importe > TECHO_MAX_MES:
+    if acumulado + nuevo_importe > get_config()["techo_max_mes"]:
         errores.append(
             f"⚠️ El acumulado del mes sería {acumulado + nuevo_importe:,.2f} € "
             f"(actual {acumulado:,.2f} € + nuevo {nuevo_importe:,.2f} €), "
-            f"superando el techo mensual de {TECHO_MAX_MES:,.0f} €."
+            f"superando el techo mensual de {get_config()["techo_max_mes"]:,.0f} €."
         )
 
     return errores
@@ -2986,9 +3475,9 @@ def techo_resumen():
         familias_usadas = [p["familia_nombre"] for p in pedidos if p["familia_nombre"]]
 
         # Semáforo
-        if num_pedidos >= TECHO_MAX_PEDIDOS or acumulado >= TECHO_MAX_MES:
+        if num_pedidos >= get_config()["techo_max_pedido"]S or acumulado >= get_config()["techo_max_mes"]:
             semaforo = "rojo"
-        elif num_pedidos == TECHO_MAX_PEDIDOS - 1 or acumulado >= TECHO_MAX_MES * 0.75:
+        elif num_pedidos == get_config()["techo_max_pedidos"] - 1 or acumulado >= get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100:
             semaforo = "amarillo"
         else:
             semaforo = "verde"
@@ -2998,10 +3487,10 @@ def techo_resumen():
             "hotel_codigo":   hotel["codigo"],
             "hotel_nombre":   hotel["nombre"],
             "num_pedidos":    num_pedidos,
-            "max_pedidos":    TECHO_MAX_PEDIDOS,
+            "max_pedidos":    get_config()["techo_max_pedido"]S,
             "acumulado":      acumulado,
-            "techo_mes":      TECHO_MAX_MES,
-            "techo_pedido":   TECHO_MAX_PEDIDO,
+            "techo_mes":      get_config()["techo_max_mes"],
+            "techo_pedido":   get_config()["techo_max_pedido"],
             "familias_usadas": familias_usadas,
             "semaforo":       semaforo,
             "pedidos":        pedidos,
@@ -4619,6 +5108,42 @@ def test_techo_mensual():
         "iniciado": True,
         "mensaje": "Job techo mensual ejecutándose en segundo plano — revisa los móviles en unos segundos."
     })
+
+
+@app.route("/api/admin/config-alertas", methods=["GET"])
+@admin_required
+def api_get_config_alertas():
+    """Devuelve toda la configuración de alertas agrupada."""
+    try:
+        rows = rows_to_list(query(
+            "SELECT clave, valor, tipo, label, grupo, orden FROM config_alertas ORDER BY grupo, orden"
+        ))
+        grupos = {}
+        for r in rows:
+            grupos.setdefault(r["grupo"], []).append(r)
+        return jsonify({"ok": True, "config": rows, "grupos": grupos})
+    except Exception as exc:
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/config-alertas", methods=["PUT"])
+@admin_required
+def api_save_config_alertas():
+    """Guarda uno o varios valores. Body: {clave: valor, ...}"""
+    data = request.get_json() or {}
+    if not data:
+        return jsonify({"ok": False, "error": "Sin datos"}), 400
+    try:
+        db  = get_db()
+        cur = db.cursor()
+        for clave, valor in data.items():
+            cur.execute("UPDATE config_alertas SET valor=%s WHERE clave=%s", (str(valor), clave))
+        db.commit()
+        log.info("[CONFIG] Configuración actualizada — claves: %s", list(data.keys()))
+        return jsonify({"ok": True, "actualizadas": len(data)})
+    except Exception as exc:
+        log.error("[CONFIG] Error guardando config: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 @app.route("/api/admin/techo-dedup-reset", methods=["POST"])
