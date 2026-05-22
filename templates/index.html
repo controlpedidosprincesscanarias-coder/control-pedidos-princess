@@ -907,6 +907,10 @@ tbody tr:last-child{border-bottom:none}
       <span class="sb-badge" id="sb-integridad-badge" style="display:none;background:#dc3545">!</span>
     </div>
 
+    <div class="sb-item admin-only" data-view="config-alertas" onclick="showView('config-alertas',this)" style="display:none">
+      <span class="icon">⚙️</span> Config alertas
+    </div>
+
     <div class="sb-bottom">
       <div class="sb-version">
         <span class="sb-version-badge">
@@ -914,7 +918,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.5.6
+          V 10.5.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1163,6 +1167,21 @@ tbody tr:last-child{border-bottom:none}
             <div id="integridad-resumen" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px"></div>
             <!-- Bloques de problemas -->
             <div id="integridad-bloques"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Vista: Config Alertas (solo admin) ───────────────────────── -->
+      <div id="view-config-alertas" class="section-hidden">
+        <div class="card">
+          <div class="card-header" style="display:flex;align-items:center;gap:12px">
+            <span class="card-title">⚙️ Configuración de Alertas</span>
+            <button onclick="loadConfigAlertas()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Recargar</button>
+            <button onclick="saveConfigAlertas()" style="padding:5px 18px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">💾 Guardar cambios</button>
+          </div>
+          <div id="config-alertas-msg" style="display:none;margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600"></div>
+          <div id="config-alertas-body" style="padding-bottom:24px">
+            <div style="text-align:center;padding:32px;color:var(--text-secondary)">Cargando configuración…</div>
           </div>
         </div>
       </div>
@@ -2321,7 +2340,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Config Alertas'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -2338,8 +2357,8 @@ function showView(view, el) {
   if (view==='techo')       loadTecho();
   if (view==='familias')    loadFamilias();
   if (view==='usuarios')    { loadUsuarios(); adminCargarSolicitudes(); }
-  if (view==='integridad')  loadIntegridad();
-  if (view==='config')       loadConfigAlertas();
+  if (view==='integridad')     loadIntegridad();
+  if (view==='config-alertas') loadConfigAlertas();
 }
 
 function refreshCurrentView() {
