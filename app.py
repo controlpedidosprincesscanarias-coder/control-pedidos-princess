@@ -511,6 +511,25 @@ def _get_admins_telegram() -> list:
     return admins
 
 
+def _notify_solicitud_telegram(texto: str) -> None:
+    """
+    Envia un mensaje Telegram a todos los admins con chat_id configurado.
+    Usado para notificaciones del flujo de solicitudes de acceso (Fase 1 / Fase 2).
+    """
+    admins = _get_admins_telegram()
+    if not admins:
+        log.debug("[SOL_TELEGRAM] Sin admins con Telegram configurado.")
+        return
+    for adm in admins:
+        chat_id = adm.get("telegram_chat_id")
+        if not chat_id:
+            continue
+        res = _send_telegram(chat_id, texto)
+        log.info("[SOL_TELEGRAM] -> %s (%s): %s",
+                 adm.get("username"), chat_id,
+                 "OK" if res.get("ok") else res.get("error"))
+
+
 def _enviar_supervision_admins(texto: str, tipo_supervision: str) -> None:
     """
     Envía copia de supervisión a todos los admins con Telegram configurado,
@@ -2106,6 +2125,17 @@ def solicitar_usuario_fase1():
         else:
             log.warning("[SOL_FASE1] Error enviando a %s: %s", dest, res.get("error"))
 
+    # Notificacion Telegram independiente del resultado del email
+    _notify_solicitud_telegram(
+        f"\U0001F514 *[FASE 1] Nueva solicitud de acceso*\n\n"
+        f"\U0001F464 *{nombre} {apellidos}*\n"
+        f"\U0001F4E7 {email_sol}\n"
+        f"\U0001F3E8 {hoteles}\n"
+        f"\U0001F4CB Solicitud `#{sol_id}`\n\n"
+        f"Accede al panel para enviarle el archivo de verificaci\u00f3n (Fase 2)."
+        + (f"\n\U0001F517 {url_admin}" if url_admin else "")
+    )
+
     if not enviado:
         return jsonify({
             "ok": True, "sol_id": sol_id, "sin_email": True,
@@ -2453,11 +2483,56 @@ def solicitar_usuario_fase2():
 
     admin_email   = os.environ.get("ADMIN_EMAIL", "")
     destinatarios = EMAILS_INTERNOS or ([admin_email] if admin_email else [])
+    app_url       = os.environ.get("APP_URL", "").rstrip("/")
+    url_admin     = f"{app_url}/admin/solicitudes#{sol['id']}" if app_url else ""
+
+    if not destinatarios:
+        log.warning("[SOL_FASE2] Sin emails admin. Sol #%s", sol["id"])
+        return jsonify({"ok": True,
+                        "msg": "¡Verificación completada! Los administradores podrán verla en el panel."})
+
+    if not RESEND_API_KEY:
+        return jsonify({
+            "ok":            True,
+            "sin_email":     True,
+            "destinatarios": destinatarios,
+            "asunto":        asunto,
+            "body_text":     body_text,
+            "url_admin":     url_admin,
+            "reply_to":      sol["email"],
+            "msg": "¡Verificación completada! Los administradores han recibido todos los datos para crear tu cuenta."
+        })
+
+    enviado = False
     for dest in destinatarios:
-        try:
-            _send_email(dest, asunto, body_html, body_text=body_text)
-        except Exception as exc:
-            log.warning("[SOL_FASE2] Error email a %s: %s", dest, exc)
+        res = _send_email(dest, asunto, body_html, body_text=body_text)
+        if res.get("ok"):
+            enviado = True
+        else:
+            log.warning("[SOL_FASE2] Error enviando a %s: %s", dest, res.get("error"))
+
+    # Notificacion Telegram independiente del resultado del email
+    _notify_solicitud_telegram(
+        f"\u2705 *[FASE 2 COMPLETADA] Alta pendiente de aprobar*\n\n"
+        f"\U0001F464 *{nombre_c}*\n"
+        f"\U0001F5A5 Usuario Windows: `{usuario_windows}`\n"
+        f"\U0001F4E7 {sol['email']}\n"
+        f"\U0001F3E8 {sol['hoteles']}\n"
+        f"\U0001F4CB Solicitud `#{sol['id']}` — lista para aprobar."
+        + (f"\n\U0001F517 {url_admin}" if url_admin else "")
+    )
+
+    if not enviado:
+        return jsonify({
+            "ok":            True,
+            "sin_email":     True,
+            "destinatarios": destinatarios,
+            "asunto":        asunto,
+            "body_text":     body_text,
+            "url_admin":     url_admin,
+            "reply_to":      sol["email"],
+            "msg": "¡Verificación completada! Los administradores han recibido todos los datos para crear tu cuenta."
+        })
 
     return jsonify({
         "ok":  True,

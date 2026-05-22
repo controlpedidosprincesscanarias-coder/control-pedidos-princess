@@ -1009,7 +1009,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.6.4
+          V 10.6.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2184,7 +2184,22 @@ async function sol_enviarFase2() {
   const btn = document.getElementById('sol-btn-fase2');
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando verificación…'; }
   try {
-    await api('/api/solicitar-usuario/completar-fase2', 'POST', { token: _SOL.token, usuario_windows: wu });
+    const r = await api('/api/solicitar-usuario/completar-fase2', 'POST', { token: _SOL.token, usuario_windows: wu });
+    // Fallback EmailJS si el servidor no pudo enviar el email SMTP
+    if (r.sin_email && r.destinatarios && r.destinatarios.length) {
+      try {
+        for (const dest of r.destinatarios) {
+          await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+            to_email: dest,
+            subject:  r.asunto  || '[FASE 2 COMPLETADA] Alta usuario',
+            message:  r.body_text || 'El usuario ha completado la verificación. Accede al panel para aprobar la cuenta.',
+            reply_to: r.reply_to || ''
+          });
+        }
+      } catch(ejErr) {
+        console.warn('[SOL_FASE2] EmailJS fallback falló', ejErr);
+      }
+    }
     _sol_resetPaneles();
     document.getElementById('sol-panel-fase2-ok').style.display = '';
   } catch(e) {
