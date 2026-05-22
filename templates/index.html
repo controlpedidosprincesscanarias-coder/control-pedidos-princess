@@ -804,6 +804,25 @@ tbody tr:last-child{border-bottom:none}
           </span>
         </label>
       </div>
+      <!-- Descarga del .bat generado en cliente (mismo contenido que el backend) -->
+      <div style="background:rgba(201,168,76,.07);border:1px solid rgba(201,168,76,.25);
+                  border-radius:8px;padding:14px 16px;margin-bottom:14px;">
+        <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:rgba(255,255,255,.65);
+                   text-transform:uppercase;letter-spacing:.05em;">
+          💾 Opción recomendada — archivo de verificación
+        </p>
+        <p style="margin:0 0 10px;font-size:12px;color:rgba(255,255,255,.5);line-height:1.5;">
+          Descarga este archivo, haz doble clic y se detectará tu usuario Windows automáticamente.
+        </p>
+        <button onclick="sol_descargarBat()"
+                style="width:100%;padding:9px 0;background:rgba(201,168,76,.15);
+                       border:1px solid rgba(201,168,76,.4);border-radius:7px;
+                       color:#c9a84c;font-size:13px;font-weight:700;cursor:pointer;
+                       letter-spacing:.02em;">
+          ⬇️ Descargar verificar_acceso.bat
+        </button>
+      </div>
+
       <div id="sol-error-f2"
            style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:12px;
                   background:rgba(255,107,107,.1);border-radius:6px;padding:9px 12px;"></div>
@@ -895,7 +914,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.5.4
+          V 10.5.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2070,6 +2089,38 @@ function _detectarUsuarioWindows()   { /* no-op: ya no se usa en el nuevo flujo 
 function _actualizarUsuarioManual(v) { sol_actualizarWuManual(v); }
 function enviarSolicitudUsuario()    { sol_enviarFase1(document.getElementById('sol-btn-fase1')); }
 
+// Genera y descarga el .bat de verificación desde el navegador del usuario.
+// Mismo contenido que genera el backend en /generar-bat, sin necesidad de adjunto por email.
+function sol_descargarBat() {
+  if (!_SOL.token) {
+    alert('No hay un token de verificación disponible. Usa el enlace que te enviaron por email.');
+    return;
+  }
+  const appUrl = window.location.origin;
+  const bat = [
+    '@echo off',
+    ':: Control de Pedidos Princess - Verificacion de acceso',
+    ':: Archivo de un solo uso - expira en 72 horas',
+    '::',
+    ':: Instrucciones: haz doble clic en este archivo.',
+    ':: Se abrira el navegador con tu usuario Windows detectado automaticamente.',
+    '@echo Abriendo verificacion de acceso, por favor espera...',
+    `set TOKEN=${_SOL.token}`,
+    `set URL=${appUrl}/?token=%TOKEN%^&wu=%USERNAME%`,
+    'start "" "%URL%"',
+    'exit',
+  ].join('\r\n');
+
+  const blob = new Blob([bat], { type: 'application/octet-stream' });
+  const a    = document.createElement('a');
+  a.href     = URL.createObjectURL(blob);
+  a.download = 'verificar_acceso.bat';
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(a.href);
+}
+
 // ── Panel admin: gestión de solicitudes de acceso ──────────────────────
 async function adminCargarSolicitudes() {
   const loading = document.getElementById('admin-sol-loading');
@@ -2086,7 +2137,8 @@ async function adminCargarSolicitudes() {
     const ESTADO_BADGE = {
       fase1_pendiente: { bg:'#fef3c7', color:'#92400e', label:'Fase 1 — Pendiente revisión' },
       fase2_pendiente: { bg:'#dbeafe', color:'#1e40af', label:'Fase 2 — Esperando verificación' },
-      completada:      { bg:'#d1fae5', color:'#065f46', label:'Completada' },
+      completada:      { bg:'#d1fae5', color:'#065f46', label:'✅ Verificado — Pendiente aprobación' },
+      aprobada:        { bg:'#f0fdf4', color:'#14532d', label:'🎉 Aprobada — Cuenta creada' },
       rechazada:       { bg:'#fee2e2', color:'#991b1b', label:'Rechazada' },
     };
     rows.forEach(r => {
@@ -2111,10 +2163,21 @@ async function adminCargarSolicitudes() {
 }
 
 function _adminSolBotones(r) {
-  if (r.estado === 'completada' || r.estado === 'rechazada')
+  if (r.estado === 'aprobada')
+    return '<span style="font-size:12px;color:var(--muted);">Cuenta creada ✓</span>';
+  if (r.estado === 'rechazada')
     return '<span style="font-size:12px;color:var(--muted);">—</span>';
+  if (r.estado === 'completada')
+    return `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+    <button class="btn btn-gold btn-sm" onclick="adminAprobarSolicitud(${r.id})"
+            style="background:#065f46;border-color:#065f46;color:#fff;"
+            title="Crear cuenta automáticamente y enviar credenciales al usuario">
+      ✅ Aprobar y crear cuenta
+    </button>
+    <button class="btn btn-danger btn-sm" onclick="adminRechazarSolicitud(${r.id})" title="Rechazar solicitud">✕</button>
+  </div>`;
   return `<div style="display:flex;gap:6px;flex-wrap:wrap;">
-    <button class="btn btn-gold btn-sm" onclick="adminEnviarFase2(${r.id})" title="Envía email con .bat al usuario">📧 Enviar Fase 2</button>
+    <button class="btn btn-gold btn-sm" onclick="adminEnviarFase2(${r.id})" title="Envía email con enlace al usuario">📧 Enviar Fase 2</button>
     <button class="btn btn-ghost btn-sm" onclick="adminDescargarBat(${r.id})" title="Descargar el .bat manualmente">💾 Descargar .bat</button>
     <button class="btn btn-danger btn-sm" onclick="adminRechazarSolicitud(${r.id})" title="Rechazar solicitud">✕</button>
   </div>`;
@@ -2165,6 +2228,33 @@ async function adminRechazarSolicitud(solId) {
     toast('Solicitud rechazada', 'success');
     adminCargarSolicitudes();
   } catch(e) { toast('❌ ' + (e.message || 'Error'), 'error'); }
+}
+
+async function adminAprobarSolicitud(solId) {
+  if (!confirm('¿Aprobar esta solicitud?\n\nSe creará la cuenta automáticamente y se enviará un email al usuario con sus credenciales de acceso.')) return;
+  try {
+    const r = await api(`/api/admin/solicitudes-acceso/${solId}/aprobar`, 'POST');
+
+    // Construir mensaje de resultado
+    let msg = `✅ Cuenta creada: ${r.username}`;
+    if (r.hoteles_no_encontrados && r.hoteles_no_encontrados.length > 0) {
+      msg += `\n⚠️ Hoteles sin asignar automáticamente: ${r.hoteles_no_encontrados.join(', ')}. Asígnalos manualmente desde Gestión de Usuarios.`;
+    }
+    if (!r.email_enviado) {
+      msg += `\n📋 El email no pudo enviarse. Comunica las credenciales manualmente:\nUsuario: ${r.username}`;
+    }
+
+    // Si hay hoteles no asignados, mostrar alerta más prominente
+    if (r.hoteles_no_encontrados && r.hoteles_no_encontrados.length > 0) {
+      alert(msg);
+    } else {
+      toast(r.msg || msg, 'success');
+    }
+
+    adminCargarSolicitudes();
+    // Recargar también la tabla de usuarios para ver el nuevo usuario
+    loadUsuarios();
+  } catch(e) { toast('❌ ' + (e.message || 'Error al aprobar'), 'error'); }
 }
 
 

@@ -2406,6 +2406,205 @@ def solicitar_usuario_fase2():
     })
 
 
+# ─── ADMIN: aprobar solicitud → crear cuenta automáticamente ─────────────────
+
+@app.route("/api/admin/solicitudes-acceso/<int:sol_id>/aprobar", methods=["POST"])
+def admin_aprobar_solicitud(sol_id):
+    """
+    Aprueba una solicitud en estado 'completada':
+      1. Crea el usuario con usuario_windows como username.
+      2. Asigna los hoteles por nombre (mapeo nombre → id).
+      3. Genera contraseña temporal.
+      4. Envía email de bienvenida al solicitante con sus credenciales.
+      5. Marca la solicitud como 'aprobada'.
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Sin permisos"}), 403
+
+    sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
+    if not sol:
+        return jsonify({"error": "Solicitud no encontrada"}), 404
+    if sol["estado"] != "completada":
+        return jsonify({"error": f"La solicitud está en estado '{sol['estado']}', debe estar 'completada' para aprobarla"}), 409
+
+    username = (sol["usuario_windows"] or "").strip().lower()
+    if not username:
+        return jsonify({"error": "No hay usuario Windows registrado en esta solicitud"}), 400
+
+    # Comprobar que el username no existe ya
+    existing = query("SELECT id FROM usuarios WHERE username=%s", (username,), one=True)
+    if existing:
+        return jsonify({"error": f"Ya existe un usuario con el username '{username}'"}), 409
+
+    # Generar contraseña temporal legible: Princess + 4 dígitos
+    import random as _rnd
+    password_temp = "Princess" + str(_rnd.randint(1000, 9999))
+
+    nombre_c = f"{sol['nombre']} {sol['apellidos']}"
+    db = get_db()
+
+    # Crear usuario
+    cur = execute(
+        "INSERT INTO usuarios (username, nombre, email, password, rol, activo) VALUES (%s,%s,%s,%s,'user',1) RETURNING id",
+        (username, nombre_c, sol["email"], password_temp)
+    )
+    new_uid = cur.fetchone()["id"]
+
+    # Mapear hoteles texto → IDs (comparación flexible, ignorando mayúsculas y & vs and)
+    def _normalizar(s):
+        return s.lower().replace("&", "and").replace("  ", " ").strip()
+
+    todos_hoteles = rows_to_list(query("SELECT id, nombre FROM hoteles WHERE activo=1"))
+    hoteles_texto = [h.strip() for h in (sol["hoteles"] or "").split(",")]
+    hotel_ids_asignados = []
+    hoteles_no_encontrados = []
+    for ht in hoteles_texto:
+        if not ht:
+            continue
+        hn = _normalizar(ht)
+        match = next((h for h in todos_hoteles if _normalizar(h["nombre"]) == hn), None)
+        # Búsqueda parcial como fallback
+        if not match:
+            match = next((h for h in todos_hoteles if hn in _normalizar(h["nombre"]) or _normalizar(h["nombre"]) in hn), None)
+        if match:
+            hotel_ids_asignados.append(match["id"])
+        else:
+            hoteles_no_encontrados.append(ht)
+
+    for hid in hotel_ids_asignados:
+        execute(
+            "INSERT INTO usuario_hoteles (usuario_id, hotel_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+            (new_uid, hid)
+        )
+
+    # Marcar solicitud como aprobada
+    execute(
+        "UPDATE solicitudes_acceso SET estado='aprobada' WHERE id=%s",
+        (sol_id,)
+    )
+    db.commit()
+
+    # Email de bienvenida al nuevo usuario
+    app_url   = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
+    asunto_u  = "✅ Tu acceso ha sido aprobado — Control de Pedidos Princess"
+    hoteles_lista = sol["hoteles"] or "—"
+    aviso_hoteles = (
+        f"<p style='margin:0 0 10px;font-size:12px;color:#b45309;'>"
+        f"⚠️ Los siguientes hoteles no se pudieron asignar automáticamente y requerirán ajuste manual: "
+        f"<strong>{', '.join(hoteles_no_encontrados)}</strong></p>"
+    ) if hoteles_no_encontrados else ""
+
+    body_html_u = f"""
+    <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
+                background:#f9f9f9;border-radius:10px;overflow:hidden;
+                border:1px solid #e0e0e0;">
+      <div style="background:#0f2044;padding:24px 28px;">
+        <h2 style="margin:0;color:#c9a84c;font-size:18px;">🎉 ¡Tu cuenta ha sido creada!</h2>
+        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
+          Control de Pedidos · Princess Canarias
+        </p>
+      </div>
+      <div style="padding:28px;">
+        <p style="margin:0 0 16px;font-size:15px;color:#333;">
+          Hola, <strong>{nombre_c}</strong>
+        </p>
+        <p style="margin:0 0 20px;font-size:14px;color:#555;line-height:1.6;">
+          Tu solicitud de acceso ha sido aprobada. Ya puedes acceder al sistema
+          con las siguientes credenciales:
+        </p>
+        <div style="background:#fff;border:2px solid #c9a84c;border-radius:8px;
+                    padding:20px 24px;margin-bottom:20px;">
+          <table border="0" cellpadding="0" cellspacing="0" style="width:100%;font-size:14px;">
+            <tr>
+              <td style="padding:8px 0;color:#888;width:140px;">Usuario</td>
+              <td style="padding:8px 0;font-family:monospace;font-size:16px;
+                         font-weight:700;color:#0f2044;">{username}</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 0;color:#888;">Contraseña temporal</td>
+              <td style="padding:8px 0;font-family:monospace;font-size:16px;
+                         font-weight:700;color:#c9a84c;">{password_temp}</td>
+            </tr>
+            <tr>
+              <td style="padding:8px 0;color:#888;">Hoteles asignados</td>
+              <td style="padding:8px 0;font-size:13px;color:#333;">{hoteles_lista}</td>
+            </tr>
+          </table>
+        </div>
+        {aviso_hoteles}
+        <div style="text-align:center;margin-bottom:20px;">
+          <a href="{app_url}"
+             style="display:inline-block;padding:12px 28px;background:#0f2044;
+                    color:#c9a84c;border-radius:7px;text-decoration:none;
+                    font-weight:700;font-size:14px;">Acceder al sistema →</a>
+        </div>
+        <p style="margin:0;font-size:12px;color:#aaa;line-height:1.5;">
+          Por seguridad, te recomendamos cambiar la contraseña en tu primer acceso.<br>
+          Si tienes cualquier problema contacta con el departamento de compras.
+        </p>
+      </div>
+      <div style="padding:14px 28px;background:#f0f0f0;font-size:11px;color:#aaa;">
+        Mensaje automático · Control Pedidos Princess Canarias
+      </div>
+    </div>
+    """
+
+    body_text_u = (
+        f"Hola {nombre_c},\n\n"
+        f"Tu solicitud de acceso ha sido aprobada.\n\n"
+        f"Usuario         : {username}\n"
+        f"Contraseña temp.: {password_temp}\n"
+        f"Hoteles         : {hoteles_lista}\n\n"
+        f"Accede en: {app_url}\n\n"
+        f"Te recomendamos cambiar la contraseña en tu primer acceso.\n\n"
+        f"Control Pedidos Princess Canarias"
+    )
+
+    res_u = _send_email(sol["email"], asunto_u, body_html_u, body_text=body_text_u)
+
+    # Email de confirmación a los admins
+    asunto_a = f"[APROBADA] Alta usuario {username} — {nombre_c}"
+    body_html_a = f"""
+    <div style="font-family:sans-serif;max-width:580px;margin:0 auto;
+                background:#f9f9f9;border-radius:10px;overflow:hidden;
+                border:1px solid #e0e0e0;">
+      <div style="background:#065f46;padding:20px 24px;">
+        <h2 style="margin:0;color:#6ee7b7;font-size:16px;">✅ Cuenta creada automáticamente</h2>
+      </div>
+      <div style="padding:20px 24px;font-size:14px;color:#333;">
+        <p>La solicitud #{sol_id} de <strong>{nombre_c}</strong> ha sido aprobada.</p>
+        <table border="0" cellpadding="0" cellspacing="0" style="font-size:13px;width:100%;">
+          <tr><td style="color:#888;padding:5px 0;width:130px;">Username</td><td style="font-family:monospace;font-weight:700;">{username}</td></tr>
+          <tr><td style="color:#888;padding:5px 0;">Email</td><td>{sol['email']}</td></tr>
+          <tr><td style="color:#888;padding:5px 0;">Hoteles</td><td>{hoteles_lista}</td></tr>
+          {'<tr><td style="color:#b45309;padding:5px 0;">⚠️ Sin asignar</td><td style="color:#b45309;">' + ", ".join(hoteles_no_encontrados) + "</td></tr>" if hoteles_no_encontrados else ""}
+        </table>
+        <p style="margin:14px 0 0;font-size:12px;color:#aaa;">
+          El usuario ha recibido su email de bienvenida con credenciales.
+        </p>
+      </div>
+    </div>
+    """
+    admin_email = os.environ.get("ADMIN_EMAIL", "")
+    destinatarios = EMAILS_INTERNOS or ([admin_email] if admin_email else [])
+    for dest in destinatarios:
+        try:
+            _send_email(dest, asunto_a, body_html_a)
+        except Exception as exc:
+            log.warning("[SOL_APROBAR] Error email admin a %s: %s", dest, exc)
+
+    return jsonify({
+        "ok":       True,
+        "uid":      new_uid,
+        "username": username,
+        "password": password_temp,
+        "hoteles_asignados":      hotel_ids_asignados,
+        "hoteles_no_encontrados": hoteles_no_encontrados,
+        "email_enviado":          res_u.get("ok", False),
+        "msg": f"Cuenta creada para {nombre_c} ({username}). Email de bienvenida enviado a {sol['email']}."
+    })
+
+
 # ─── ADMIN: rechazar solicitud ────────────────────────────────────────────────
 
 @app.route("/api/admin/solicitudes-acceso/<int:sol_id>/rechazar", methods=["POST"])
