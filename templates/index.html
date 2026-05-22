@@ -635,210 +635,129 @@ tbody tr:last-child{border-bottom:none}
 </div>
 
 <!-- ── MODAL SOLICITAR USUARIO ──────────────────────────────────────────────── -->
-<div id="modal-solicitar-usuario"
-     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.72);
-            z-index:10000;align-items:center;justify-content:center;">
-  <div style="background:#12172a;border:1px solid rgba(201,168,76,0.35);
-              border-radius:14px;width:460px;max-width:96vw;color:#fff;
-              position:relative;max-height:92vh;overflow-y:auto;
-              box-shadow:0 24px 80px rgba(0,0,0,.7);">
+<div id="modal-solicitar-usuario" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.65);
+     z-index:10000;align-items:center;justify-content:center;">
+  <div style="background:#1a1a2e;border:1px solid rgba(201,168,76,0.4);border-radius:12px;
+       padding:36px 32px;width:420px;max-width:95vw;color:#fff;position:relative;max-height:90vh;overflow-y:auto;">
+    <button onclick="cerrarSolicitudUsuario()" style="position:absolute;top:12px;right:16px;
+            background:none;border:none;color:rgba(255,255,255,.5);font-size:22px;
+            cursor:pointer;line-height:1;">&times;</button>
 
-    <!-- Cabecera con indicador de fases -->
-    <div style="padding:24px 28px 0;border-bottom:1px solid rgba(255,255,255,.07);">
-      <button onclick="cerrarSolicitudUsuario()"
-              style="position:absolute;top:14px;right:18px;background:none;
-                     border:none;color:rgba(255,255,255,.4);font-size:22px;
-                     cursor:pointer;line-height:1;">&times;</button>
-      <h3 style="margin:0 0 6px;font-size:17px;color:#c9a84c;">
-        Solicitar acceso al sistema
-      </h3>
-      <!-- Barra de progreso -->
-      <div id="sol-progreso" style="display:flex;align-items:center;gap:0;margin:16px 0;">
-        <div class="_sol-fase" data-fase="1"
-             style="display:flex;align-items:center;gap:6px;font-size:12px;
-                    color:#c9a84c;font-weight:600;">
-          <span style="width:22px;height:22px;border-radius:50%;
-                       background:#c9a84c;color:#12172a;display:flex;
-                       align-items:center;justify-content:center;
-                       font-size:11px;font-weight:700;flex-shrink:0;">1</span>
-          Tus datos
-        </div>
-        <div style="flex:1;height:2px;background:rgba(255,255,255,.12);
-                    margin:0 8px;border-radius:2px;overflow:hidden;">
-          <div id="sol-barra-progreso"
-               style="height:100%;width:0%;background:#c9a84c;
-                      border-radius:2px;transition:width .4s ease;"></div>
-        </div>
-        <div class="_sol-fase" data-fase="2"
-             style="display:flex;align-items:center;gap:6px;font-size:12px;
-                    color:rgba(255,255,255,.3);font-weight:600;">
-          <span id="_sol-dot-2"
-                style="width:22px;height:22px;border-radius:50%;
-                       background:rgba(255,255,255,.12);color:rgba(255,255,255,.4);
-                       display:flex;align-items:center;justify-content:center;
-                       font-size:11px;font-weight:700;flex-shrink:0;">2</span>
-          Verificación PC
-        </div>
-      </div>
-    </div>
-
-    <!-- ── FASE 1: datos personales ──────────────────────────────── -->
-    <div id="sol-panel-fase1" style="padding:24px 28px;">
-      <p style="margin:0 0 20px;color:rgba(255,255,255,.55);font-size:13px;line-height:1.5;">
-        Rellena tus datos. Los administradores los revisarán y recibirás un
-        correo con el siguiente paso para verificar tu PC.
+    <!-- Formulario -->
+    <div id="solicitar-form">
+      <h3 style="margin:0 0 4px;font-size:18px;color:#c9a84c;">Solicitar acceso al sistema</h3>
+      <p style="margin:0 0 20px;color:rgba(255,255,255,.6);font-size:13px;">
+        Rellena el formulario y los administradores recibirán tu solicitud de usuario.
       </p>
 
-      <label style="font-size:11px;font-weight:600;letter-spacing:.06em;
-                    color:rgba(255,255,255,.45);text-transform:uppercase;">Nombre *</label>
-      <input id="sol-nombre" class="login-input" style="margin:5px 0 14px;" placeholder="Tu nombre">
+      <!-- Usuario Windows (auto-detectado / manual) -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Usuario Windows del PC *</label>
+      <div style="position:relative;margin-top:4px;margin-bottom:4px;display:flex;gap:8px;align-items:center;">
+        <input id="sol-usuario-windows" class="login-input" readonly
+               style="flex:1;background:rgba(255,255,255,0.05);color:rgba(255,255,255,0.4);cursor:not-allowed;"
+               placeholder="Detectando…">
+        <button id="btn-detectar-windows" onclick="_detectarUsuarioWindows()"
+                style="white-space:nowrap;padding:10px 14px;background:rgba(201,168,76,0.15);
+                       border:1px solid rgba(201,168,76,0.5);border-radius:8px;color:#c9a84c;
+                       font-size:12px;cursor:pointer;font-family:inherit;transition:background .2s;"
+                onmouseover="this.style.background='rgba(201,168,76,0.28)'"
+                onmouseout="this.style.background='rgba(201,168,76,0.15)'">&#128269; Detectar</button>
+      </div>
+      <!-- Panel instrucciones cuando no se detecta automaticamente -->
+      <div id="sol-windows-instrucciones" style="display:none;margin-bottom:12px;">
+        <div style="background:rgba(201,168,76,0.08);border:1px solid rgba(201,168,76,0.3);
+                    border-radius:8px;padding:12px 14px;font-size:12px;color:rgba(255,255,255,0.75);">
+          <p style="margin:0 0 8px;font-weight:600;color:#c9a84c;">&#9888; No se pudo detectar automaticamente</p>
+          <p style="margin:0 0 8px;">Para detectarlo sin escribirlo, copia este enlace y <strong>pegalo en la barra de direcciones del Explorador de Windows</strong> (no en el navegador):</p>
+          <div style="display:flex;gap:6px;align-items:center;margin-bottom:10px;">
+            <code id="sol-enlace-windows" style="flex:1;background:rgba(0,0,0,0.3);padding:6px 10px;
+                  border-radius:6px;font-size:11px;color:#c9a84c;word-break:break-all;"></code>
+            <button onclick="_copiarEnlaceWindows()" id="btn-copiar-enlace"
+                    style="padding:6px 10px;background:rgba(201,168,76,0.2);border:1px solid rgba(201,168,76,0.4);
+                           border-radius:6px;color:#c9a84c;font-size:11px;cursor:pointer;font-family:inherit;"
+                    title="Copiar enlace">&#128203; Copiar</button>
+          </div>
+          <p style="margin:0 0 6px;color:rgba(255,255,255,0.5);">--- o bien escribelo manualmente ---</p>
+          <input id="sol-usuario-windows-manual" class="login-input"
+                 style="margin-bottom:8px;"
+                 placeholder="Tu usuario de Windows (ej: JCURBELO)"
+                 oninput="_actualizarUsuarioManual(this.value)">
+          <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;font-size:12px;">
+            <input type="checkbox" id="sol-confirmar-usuario"
+                   style="margin-top:2px;accent-color:#c9a84c;"
+                   onchange="_toggleConfirmacion(this.checked)">
+            <span>Confirmo que <strong id="sol-preview-usuario" style="color:#c9a84c;">___</strong> es mi usuario de Windows correcto</span>
+          </label>
+        </div>
+      </div>
+      <div id="sol-windows-ok" style="display:none;margin-bottom:12px;font-size:12px;color:#4ade80;">&#10003; Usuario detectado correctamente</div>
+      <div id="sol-windows-error" style="display:none;color:#ff6b6b;font-size:12px;margin-bottom:12px;"></div>
 
-      <label style="font-size:11px;font-weight:600;letter-spacing:.06em;
-                    color:rgba(255,255,255,.45);text-transform:uppercase;">Apellidos *</label>
-      <input id="sol-apellidos" class="login-input" style="margin:5px 0 14px;" placeholder="Tus apellidos">
+      <!-- Nombre -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Nombre *</label>
+      <input id="sol-nombre" class="login-input"
+             style="margin-top:4px;margin-bottom:12px;" placeholder="Tu nombre">
 
-      <label style="font-size:11px;font-weight:600;letter-spacing:.06em;
-                    color:rgba(255,255,255,.45);text-transform:uppercase;">Correo electrónico *</label>
+      <!-- Apellidos -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Apellidos *</label>
+      <input id="sol-apellidos" class="login-input"
+             style="margin-top:4px;margin-bottom:12px;" placeholder="Tus apellidos">
+
+      <!-- Email -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Correo electrónico *</label>
       <input id="sol-email" class="login-input" type="email"
-             style="margin:5px 0 14px;" placeholder="correo@ejemplo.com">
+             style="margin-top:4px;margin-bottom:12px;" placeholder="correo@ejemplo.com">
 
-      <label style="font-size:11px;font-weight:600;letter-spacing:.06em;
-                    color:rgba(255,255,255,.45);text-transform:uppercase;">Hotel(es) * — puedes marcar varios</label>
-      <div style="margin:5px 0 20px;background:rgba(255,255,255,.05);
-                  border:1px solid rgba(255,255,255,.15);border-radius:8px;
-                  padding:10px 14px;display:flex;flex-direction:column;gap:7px;">
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="Guayarmina Princess" style="accent-color:#c9a84c;">Guayarmina Princess</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="Princess Inspire Tenerife" style="accent-color:#c9a84c;">Princess Inspire Tenerife</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="La Palma Princess" style="accent-color:#c9a84c;">La Palma Princess</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="Taurito Princess" style="accent-color:#c9a84c;">Taurito Princess</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="TUI Blue Suite Princess" style="accent-color:#c9a84c;">TUI Blue Suite Princess</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="Mogan Princess" style="accent-color:#c9a84c;">Mogan Princess</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="Gran Canaria Princess" style="accent-color:#c9a84c;">Gran Canaria Princess</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="Maspalomas &amp; Tabaiba Princess" style="accent-color:#c9a84c;">Maspalomas &amp; Tabaiba Princess</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="Club Jandia Princess" style="accent-color:#c9a84c;">Club Jandia Princess</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="Fuerteventura Princess" style="accent-color:#c9a84c;">Fuerteventura Princess</label>
-        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:13px;">
-          <input type="checkbox" class="sol-hotel-chk" value="Central Compras (Oficina)" style="accent-color:#c9a84c;">Central Compras (Oficina)</label>
-      </div>
+      <!-- Hotel -->
+      <label style="font-size:12px;color:rgba(255,255,255,.6);">Hotel *</label>
+      <select id="sol-hotel" style="width:100%;background:rgba(255,255,255,0.07);border:1px solid rgba(255,255,255,0.15);
+              border-radius:8px;padding:10px 14px;color:#fff;font-size:14px;margin-top:4px;margin-bottom:12px;
+              font-family:inherit;cursor:pointer;outline:none;">
+        <option value="" style="background:#1a1a2e;">— Selecciona tu hotel —</option>
+        <option value="Guayarmina Princess" style="background:#1a1a2e;">Guayarmina Princess</option>
+        <option value="Princess Inspire Tenerife" style="background:#1a1a2e;">Princess Inspire Tenerife</option>
+        <option value="La Palma Princess" style="background:#1a1a2e;">La Palma Princess</option>
+        <option value="Taurito Princess" style="background:#1a1a2e;">Taurito Princess</option>
+        <option value="TUI Blue Suite Princess" style="background:#1a1a2e;">TUI Blue Suite Princess</option>
+        <option value="Mogan Princess" style="background:#1a1a2e;">Mogan Princess</option>
+        <option value="Gran Canaria Princess" style="background:#1a1a2e;">Gran Canaria Princess</option>
+        <option value="Maspalomas &amp; Tabaiba Princess" style="background:#1a1a2e;">Maspalomas &amp; Tabaiba Princess</option>
+        <option value="Club Jandia Princess" style="background:#1a1a2e;">Club Jandia Princess</option>
+        <option value="Fuerteventura Princess" style="background:#1a1a2e;">Fuerteventura Princess</option>
+        <option value="Central Compras (Oficina)" style="background:#1a1a2e;">Central Compras (Oficina)</option>
+      </select>
 
-      <div id="sol-error-f1"
-           style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:12px;
-                  background:rgba(255,107,107,.1);border-radius:6px;padding:9px 12px;"></div>
+      <div id="sol-error" style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:10px;
+           background:rgba(255,107,107,0.1);border-radius:6px;padding:8px 12px;"></div>
 
-      <button id="sol-btn-fase1" class="login-btn" onclick="sol_enviarFase1(this)" style="width:100%;">
-        Enviar solicitud →
+      <button class="login-btn" onclick="enviarSolicitudUsuario()" style="width:100%;">
+        Enviar solicitud
       </button>
     </div>
 
-    <!-- ── Confirmación Fase 1 enviada ─────────────────────────── -->
-    <div id="sol-panel-fase1-ok" style="display:none;padding:28px;text-align:center;">
-      <div style="font-size:52px;margin-bottom:16px;">📬</div>
-      <h3 style="margin:0 0 10px;color:#c9a84c;font-size:17px;">¡Solicitud recibida!</h3>
-      <p style="color:rgba(255,255,255,.6);font-size:14px;line-height:1.6;margin:0 0 20px;">
-        Los administradores han recibido tu solicitud y la están revisando.<br>
-        <strong style="color:rgba(255,255,255,.85);">Recibirás un correo electrónico</strong>
-        con un archivo que deberás ejecutar para completar el proceso.
-      </p>
-      <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.25);
-                  border-radius:8px;padding:14px 16px;font-size:13px;
-                  color:rgba(255,255,255,.7);text-align:left;margin-bottom:20px;line-height:1.9;">
-        <strong style="color:#c9a84c;">¿Qué pasará a continuación?</strong><br>
-        1️⃣ &nbsp;El admin revisará tu solicitud.<br>
-        2️⃣ &nbsp;Recibirás un email con un archivo <code style="color:#c9a84c;">.bat</code> adjunto.<br>
-        3️⃣ &nbsp;Ejecuta el archivo con doble clic (tarda 2 segundos).<br>
-        4️⃣ &nbsp;Tu usuario Windows se detecta automáticamente.<br>
-        5️⃣ &nbsp;El admin crea tu cuenta y podrás entrar al sistema.
-      </div>
-      <button class="login-btn" onclick="cerrarSolicitudUsuario()" style="width:100%;">
-        Entendido, cerrar
-      </button>
-    </div>
-
-    <!-- ── FASE 2: llega desde el .bat con token + wu en URL ─────── -->
-    <div id="sol-panel-fase2" style="display:none;padding:24px 28px;">
-      <p style="margin:0 0 16px;color:rgba(255,255,255,.55);font-size:13px;line-height:1.5;">
-        Hemos detectado tu usuario de Windows. Confirma los datos y envía la
-        verificación para que el administrador active tu cuenta.
-      </p>
-      <div id="sol-wu-detectado-wrap">
-        <label style="font-size:11px;font-weight:600;letter-spacing:.06em;
-                      color:rgba(255,255,255,.45);text-transform:uppercase;">
-          Usuario Windows detectado
-        </label>
-        <div style="margin:5px 0 16px;display:flex;align-items:center;gap:10px;">
-          <div id="sol-wu-display"
-               style="flex:1;padding:10px 14px;background:rgba(74,222,128,.07);
-                      border:1px solid rgba(74,222,128,.3);border-radius:8px;
-                      font-family:monospace;font-size:15px;font-weight:700;
-                      color:#4ade80;letter-spacing:.05em;"></div>
-          <span style="font-size:20px;">✅</span>
-        </div>
-      </div>
-      <div id="sol-wu-manual-wrap" style="display:none;margin-bottom:16px;">
-        <div style="background:rgba(251,191,36,.08);border:1px solid rgba(251,191,36,.3);
-                    border-radius:8px;padding:12px 14px;font-size:12px;
-                    color:rgba(255,255,255,.7);margin-bottom:10px;">
-          ⚠️ No pudimos detectar el usuario automáticamente.
-          Introdúcelo manualmente (es el nombre con el que entras a Windows).
-        </div>
-        <input id="sol-wu-manual" class="login-input"
-               placeholder="Tu usuario Windows (ej: JCURBELO)"
-               oninput="sol_actualizarWuManual(this.value)">
-        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;
-                      font-size:12px;margin-top:8px;">
-          <input type="checkbox" id="sol-wu-confirmar"
-                 style="margin-top:2px;accent-color:#c9a84c;">
-          <span>Confirmo que
-            <strong id="sol-wu-preview" style="color:#c9a84c;">___</strong>
-            es mi usuario Windows correcto
-          </span>
-        </label>
-      </div>
-      <div id="sol-error-f2"
-           style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:12px;
-                  background:rgba(255,107,107,.1);border-radius:6px;padding:9px 12px;"></div>
-      <button class="login-btn" id="sol-btn-fase2"
-              onclick="sol_enviarFase2()" style="width:100%;">
-        ✅ Completar verificación
-      </button>
-    </div>
-
-    <!-- ── Éxito Fase 2 ─────────────────────────────────────────── -->
-    <div id="sol-panel-fase2-ok" style="display:none;padding:28px;text-align:center;">
-      <div style="font-size:52px;margin-bottom:16px;">🎉</div>
-      <h3 style="margin:0 0 10px;color:#4ade80;font-size:17px;">¡Verificación completada!</h3>
-      <p style="color:rgba(255,255,255,.6);font-size:14px;line-height:1.6;margin:0 0 20px;">
-        Los administradores han recibido todos los datos y crearán tu cuenta
-        en breve. Te avisarán por email cuando esté lista.
+    <!-- Confirmación enviado -->
+    <div id="solicitar-ok" style="display:none;text-align:center;">
+      <div style="font-size:48px;margin-bottom:16px;">✅</div>
+      <h3 style="margin:0 0 10px;color:#c9a84c;">¡Solicitud enviada!</h3>
+      <p style="color:rgba(255,255,255,.65);font-size:14px;margin:0 0 20px;">
+        Los administradores han recibido tu solicitud y se pondrán en contacto contigo en breve.
       </p>
       <button class="login-btn" onclick="cerrarSolicitudUsuario()" style="width:100%;">
         Cerrar
       </button>
     </div>
 
-    <!-- ── Error grave ──────────────────────────────────────────── -->
-    <div id="sol-panel-error" style="display:none;padding:28px;text-align:center;">
+    <!-- Error grave -->
+    <div id="solicitar-error-grave" style="display:none;text-align:center;">
       <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
-      <h3 style="margin:0 0 10px;color:#ff6b6b;">Error</h3>
-      <p id="sol-msg-error"
-         style="color:rgba(255,255,255,.65);font-size:14px;margin:0 0 20px;"></p>
+      <h3 style="margin:0 0 10px;color:#ff6b6b;">Error al enviar</h3>
+      <p id="solicitar-error-grave-msg" style="color:rgba(255,255,255,.65);font-size:14px;margin:0 0 20px;"></p>
       <button class="login-btn" onclick="cerrarSolicitudUsuario()" style="width:100%;">
         Cerrar
       </button>
     </div>
-
-  </div><!-- /box -->
-</div><!-- /modal-solicitar-usuario -->
+  </div>
+</div>
 
 <!-- ── APP ────────────────────────────────────────────────────────────────── -->
 <div id="app" style="display:none">
@@ -895,7 +814,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.4.8
+          V 10.4.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1893,230 +1812,231 @@ function copiarEnlaceReset() {
 
 // ── Solicitar Usuario ─────────────────────────────────────────────────────────
 
-// ══════════════════════════════════════════════════════════════════════
-//  SOLICITUD DE ACCESO EN 2 FASES (v10.5)
-// ══════════════════════════════════════════════════════════════════════
-
-const _SOL = { token: null, wu: null, manual: false };
-
-// Al cargar: detectar token en la URL (viene del .bat)
-(function _sol_init() {
-  const p   = new URLSearchParams(window.location.search);
-  const tok = (p.get('token') || '').trim();
-  const wu  = (p.get('wu')    || '').trim();
-  if (tok) {
-    _SOL.token = tok;
-    _SOL.wu    = (wu && wu !== '%USERNAME%') ? wu.toUpperCase() : null;
-    window.history.replaceState({}, '', window.location.pathname);
-    _sol_mostrarFase2();
-  }
-})();
-
 function mostrarSolicitudUsuario() {
-  _sol_resetPaneles();
-  ['sol-nombre','sol-apellidos','sol-email'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.value = '';
-  });
-  document.querySelectorAll('.sol-hotel-chk').forEach(c => c.checked = false);
-  const ef = document.getElementById('sol-error-f1');
-  if (ef) ef.style.display = 'none';
-  const bp = document.getElementById('sol-barra-progreso');
-  if (bp) bp.style.width = '0%';
-  _sol_setFaseIndicador(1);
-  document.getElementById('sol-panel-fase1').style.display = '';
+  // Resetear estado del modal
+  document.getElementById('solicitar-form').style.display = '';
+  document.getElementById('solicitar-ok').style.display = 'none';
+  document.getElementById('solicitar-error-grave').style.display = 'none';
+  document.getElementById('sol-error').style.display = 'none';
+  document.getElementById('sol-nombre').value = '';
+  document.getElementById('sol-apellidos').value = '';
+  document.getElementById('sol-email').value = '';
+  document.getElementById('sol-hotel').value = '';
+  const _wInput = document.getElementById('sol-usuario-windows');
+  _wInput.value = ''; _wInput.placeholder = 'Detectando…';
+  _wInput.setAttribute('readonly',''); _wInput.style.color = 'rgba(255,255,255,0.4)'; _wInput.style.cursor = 'not-allowed';
+  document.getElementById('sol-windows-error').style.display = 'none';
+  document.getElementById('sol-windows-ok').style.display = 'none';
+  document.getElementById('sol-windows-instrucciones').style.display = 'none';
+  const _manualEl = document.getElementById('sol-usuario-windows-manual'); if (_manualEl) _manualEl.value = '';
+  const _chkEl = document.getElementById('sol-confirmar-usuario'); if (_chkEl) _chkEl.checked = false;
+  const _prevEl = document.getElementById('sol-preview-usuario'); if (_prevEl) _prevEl.textContent = '___';
+
+  // Mostrar modal
   document.getElementById('modal-solicitar-usuario').style.display = 'flex';
+
+  // Intentar detectar usuario Windows
+  _detectarUsuarioWindows();
 }
 
 function cerrarSolicitudUsuario() {
   document.getElementById('modal-solicitar-usuario').style.display = 'none';
 }
 
-function _sol_resetPaneles() {
-  ['sol-panel-fase1','sol-panel-fase1-ok',
-   'sol-panel-fase2','sol-panel-fase2-ok','sol-panel-error'].forEach(id => {
-    const el = document.getElementById(id); if (el) el.style.display = 'none';
-  });
-}
+async function _detectarUsuarioWindows() {
+  const input  = document.getElementById('sol-usuario-windows');
+  const okEl   = document.getElementById('sol-windows-ok');
+  const instEl = document.getElementById('sol-windows-instrucciones');
+  const btnDet = document.getElementById('btn-detectar-windows');
 
-function _sol_setFaseIndicador(fase) {
-  document.querySelectorAll('._sol-fase').forEach(el => {
-    const n = parseInt(el.dataset.fase);
-    const dot = el.querySelector('span');
-    if (n === fase) {
-      el.style.color = '#c9a84c'; dot.style.background = '#c9a84c'; dot.style.color = '#12172a';
-    } else if (n < fase) {
-      el.style.color = '#4ade80'; dot.style.background = '#4ade80'; dot.style.color = '#12172a';
-    } else {
-      el.style.color = 'rgba(255,255,255,.3)'; dot.style.background = 'rgba(255,255,255,.12)'; dot.style.color = 'rgba(255,255,255,.4)';
-    }
-  });
-  const bp = document.getElementById('sol-barra-progreso');
-  if (bp) bp.style.width = fase >= 2 ? '100%' : '0%';
-}
+  // Reset visual
+  document.getElementById('sol-windows-error').style.display = 'none';
+  okEl.style.display   = 'none';
+  instEl.style.display = 'none';
+  input.value = ''; input.placeholder = 'Detectando…';
+  if (btnDet) { btnDet.disabled = true; btnDet.textContent = '&#9203; Detectando…'; }
 
-async function sol_enviarFase1(btn) {
-  const nombre    = (document.getElementById('sol-nombre').value    || '').trim();
-  const apellidos = (document.getElementById('sol-apellidos').value || '').trim();
-  const email     = (document.getElementById('sol-email').value     || '').trim();
-  const hoteles   = Array.from(document.querySelectorAll('.sol-hotel-chk:checked')).map(c => c.value).join(', ');
-  const errEl     = document.getElementById('sol-error-f1');
-  const mostrarErr = msg => { errEl.textContent = msg; errEl.style.display = ''; };
-  errEl.style.display = 'none';
-  if (!nombre)    return mostrarErr('El nombre es obligatorio.');
-  if (!apellidos) return mostrarErr('Los apellidos son obligatorios.');
-  if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return mostrarErr('Introduce un correo electrónico válido.');
-  if (!hoteles)   return mostrarErr('Selecciona al menos un hotel.');
-  if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
-  try {
-    const r = await api('/api/solicitar-usuario', 'POST', { nombre, apellidos, email, hoteles });
-    if (r.sin_email) {
-      try {
-        await emailjs.send(
-          typeof EMAILJS_SERVICE_ID !== 'undefined' ? EMAILJS_SERVICE_ID : '',
-          typeof EMAILJS_TEMPLATE_ID !== 'undefined' ? EMAILJS_TEMPLATE_ID : '',
-          { to_email: r.destinatarios[0], subject: r.asunto, message: r.body_text }
-        );
-      } catch(e) { console.warn('[SOL_F1] EmailJS fallback falló', e); }
-    }
-    _sol_resetPaneles();
-    document.getElementById('sol-panel-fase1-ok').style.display = '';
-    _sol_setFaseIndicador(2);
-  } catch(e) {
-    mostrarErr(e.message || 'Error de red. Inténtalo de nuevo.');
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = 'Enviar solicitud →'; }
+  // 1) Leer ?wu= de la URL (enlace especial pegado en Explorador de Windows)
+  const params  = new URLSearchParams(window.location.search);
+  const wuParam = (params.get('wu') || '').trim();
+  if (wuParam && wuParam !== '%USERNAME%') {
+    _marcarUsuarioDetectado(wuParam);
+    if (btnDet) { btnDet.disabled = false; btnDet.textContent = '&#128269; Detectar'; }
+    return;
   }
+
+  // 2) Intentar backend (util en intranet local)
+  try {
+    const r = await fetch('/api/solicitar-usuario/detectar-windows', { method: 'GET' });
+    if (r.ok) {
+      const data = await r.json();
+      if (data.usuario_windows) {
+        _marcarUsuarioDetectado(data.usuario_windows);
+        if (btnDet) { btnDet.disabled = false; btnDet.textContent = '&#128269; Detectar'; }
+        return;
+      }
+    }
+  } catch(e) {}
+
+  // 3) No detectado: mostrar panel de instrucciones
+  input.placeholder = 'Pendiente de confirmar';
+  const urlBase = window.location.origin + window.location.pathname;
+  const enlaceEl = document.getElementById('sol-enlace-windows');
+  if (enlaceEl) enlaceEl.textContent = urlBase + '?wu=%USERNAME%';
+  instEl.style.display = 'block';
+  if (btnDet) { btnDet.disabled = false; btnDet.textContent = '&#128269; Detectar'; }
 }
 
-function _sol_mostrarFase2() {
-  _sol_resetPaneles();
-  document.getElementById('sol-panel-fase2').style.display = '';
-  _sol_setFaseIndicador(2);
-  document.getElementById('modal-solicitar-usuario').style.display = 'flex';
-  const wuDisplay    = document.getElementById('sol-wu-display');
-  const wuManualWrap = document.getElementById('sol-wu-manual-wrap');
-  const wuDetWrap    = document.getElementById('sol-wu-detectado-wrap');
-  if (_SOL.wu) {
-    wuDisplay.textContent = _SOL.wu;
-    if (wuManualWrap) wuManualWrap.style.display = 'none';
+function _marcarUsuarioDetectado(usuario) {
+  const input = document.getElementById('sol-usuario-windows');
+  const okEl  = document.getElementById('sol-windows-ok');
+  input.value = usuario.toUpperCase();
+  input.style.color = '#fff';
+  okEl.textContent = '✓ Usuario detectado: ' + usuario.toUpperCase();
+  okEl.style.display = 'block';
+  document.getElementById('sol-windows-instrucciones').style.display = 'none';
+}
+
+function _actualizarUsuarioManual(valor) {
+  const preview = document.getElementById('sol-preview-usuario');
+  const chk     = document.getElementById('sol-confirmar-usuario');
+  if (preview) preview.textContent = valor.trim().toUpperCase() || '___';
+  if (chk) { chk.checked = false; _toggleConfirmacion(false); }
+}
+
+function _toggleConfirmacion(marcado) {
+  const manual = document.getElementById('sol-usuario-windows-manual');
+  const input  = document.getElementById('sol-usuario-windows');
+  const okEl   = document.getElementById('sol-windows-ok');
+  if (marcado && manual && manual.value.trim()) {
+    const usuario = manual.value.trim().toUpperCase();
+    input.value = usuario;
+    input.style.color = '#fff';
+    okEl.textContent = '✓ Usuario confirmado manualmente: ' + usuario;
+    okEl.style.display = 'block';
   } else {
-    if (wuDetWrap)    wuDetWrap.style.display    = 'none';
-    if (wuManualWrap) wuManualWrap.style.display = '';
-    _SOL.manual = true;
+    if (!input.value) okEl.style.display = 'none';
   }
 }
 
-function sol_actualizarWuManual(valor) {
-  const v = valor.trim().toUpperCase();
-  const el = document.getElementById('sol-wu-preview');
-  if (el) el.textContent = v || '___';
-}
-
-async function sol_enviarFase2() {
-  const errEl = document.getElementById('sol-error-f2');
-  const mostrarErr = msg => { errEl.textContent = msg; errEl.style.display = ''; };
-  errEl.style.display = 'none';
-  let wu = _SOL.wu;
-  if (!wu) {
-    wu = (document.getElementById('sol-wu-manual').value || '').trim().toUpperCase();
-    if (!wu) return mostrarErr('Introduce tu usuario de Windows.');
-    const chk = document.getElementById('sol-wu-confirmar');
-    if (!chk || !chk.checked) return mostrarErr('Confirma que el usuario Windows introducido es correcto.');
-  }
-  if (!_SOL.token) return mostrarErr('Token no encontrado. Cierra y ejecuta el archivo de nuevo.');
-  const btn = document.getElementById('sol-btn-fase2');
-  if (btn) { btn.disabled = true; btn.textContent = 'Enviando verificación…'; }
+async function _copiarEnlaceWindows() {
+  const enlaceEl = document.getElementById('sol-enlace-windows');
+  const btn      = document.getElementById('btn-copiar-enlace');
+  if (!enlaceEl) return;
   try {
-    await api('/api/solicitar-usuario/completar-fase2', 'POST', { token: _SOL.token, usuario_windows: wu });
-    _sol_resetPaneles();
-    document.getElementById('sol-panel-fase2-ok').style.display = '';
+    await navigator.clipboard.writeText(enlaceEl.textContent);
+    if (btn) { btn.textContent = '✓ Copiado!'; setTimeout(() => { btn.textContent = '&#128203; Copiar'; }, 2000); }
   } catch(e) {
-    mostrarErr(e.message || 'Error al completar la verificación.');
-    if (btn) { btn.disabled = false; btn.textContent = '✅ Completar verificación'; }
+    const range = document.createRange();
+    range.selectNode(enlaceEl);
+    window.getSelection().removeAllRanges();
+    window.getSelection().addRange(range);
   }
 }
 
-// Compatibilidad con código antiguo que pudiera llamar a estas funciones
-function _detectarUsuarioWindows()   { /* no-op: ya no se usa en el nuevo flujo */ }
-function _actualizarUsuarioManual(v) { sol_actualizarWuManual(v); }
-function enviarSolicitudUsuario()    { sol_enviarFase1(document.getElementById('sol-btn-fase1')); }
+async function enviarSolicitudUsuario() {
+  const errEl = document.getElementById('sol-error');
+  errEl.style.display = 'none';
 
-// ── Panel admin: gestión de solicitudes de acceso ──────────────────────
-async function adminCargarSolicitudes() {
-  const loading = document.getElementById('admin-sol-loading');
-  const tabla   = document.getElementById('admin-sol-tabla');
-  const empty   = document.getElementById('admin-sol-empty');
-  if (!loading) return;
-  loading.style.display = ''; if (tabla) tabla.style.display = 'none'; if (empty) empty.style.display = 'none';
+  const usuarioWindows = document.getElementById('sol-usuario-windows').value.trim();
+  const nombre         = document.getElementById('sol-nombre').value.trim();
+  const apellidos      = document.getElementById('sol-apellidos').value.trim();
+  const email          = document.getElementById('sol-email').value.trim();
+  const hotel          = document.getElementById('sol-hotel').value.trim();
+
+  // Validaciones
+  if (!usuarioWindows) {
+    errEl.textContent = '⚠ El usuario Windows es obligatorio. No se puede enviar la solicitud.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (!nombre) {
+    errEl.textContent = '⚠ El nombre es obligatorio.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (!apellidos) {
+    errEl.textContent = '⚠ Los apellidos son obligatorios.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (!email) {
+    errEl.textContent = '⚠ El correo electrónico es obligatorio.';
+    errEl.style.display = 'block';
+    return;
+  }
+  // Validar formato email
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    errEl.textContent = '⚠ El formato del correo electrónico no es válido.';
+    errEl.style.display = 'block';
+    return;
+  }
+  if (!hotel) {
+    errEl.textContent = '⚠ Debes seleccionar un hotel.';
+    errEl.style.display = 'block';
+    return;
+  }
+
+  // Enviar solicitud
+  const btn = document.querySelector('#solicitar-form .login-btn');
+  if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
+
   try {
-    const rows = await api('/api/admin/solicitudes-acceso', 'GET');
-    const tbody = document.getElementById('admin-sol-tbody');
-    if (!tbody) return;
-    tbody.innerHTML = '';
-    if (!rows || !rows.length) { loading.style.display = 'none'; if (empty) empty.style.display = ''; return; }
-    const ESTADO_BADGE = {
-      fase1_pendiente: { bg:'#fef3c7', color:'#92400e', label:'Fase 1 — Pendiente revisión' },
-      fase2_pendiente: { bg:'#dbeafe', color:'#1e40af', label:'Fase 2 — Esperando verificación' },
-      completada:      { bg:'#d1fae5', color:'#065f46', label:'Completada' },
-      rechazada:       { bg:'#fee2e2', color:'#991b1b', label:'Rechazada' },
-    };
-    rows.forEach(r => {
-      const est   = ESTADO_BADGE[r.estado] || { bg:'#eee', color:'#666', label: r.estado };
-      const fecha = r.creado_en ? new Date(r.creado_en).toLocaleDateString('es-ES') : '—';
-      const tr    = document.createElement('tr');
-      tr.style.borderBottom = '1px solid var(--border)';
-      tr.innerHTML = `
-        <td style="padding:10px 14px;font-family:monospace;font-size:12px;color:var(--muted);">#${r.id}</td>
-        <td style="padding:10px 14px;font-size:13px;font-weight:600;">${r.nombre} ${r.apellidos}
-          <div style="font-size:11px;color:var(--muted);font-weight:400;">${fecha}</div></td>
-        <td style="padding:10px 14px;font-size:13px;"><a href="mailto:${r.email}" style="color:var(--navy2);">${r.email}</a></td>
-        <td style="padding:10px 14px;font-size:12px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${r.hoteles}">${r.hoteles}</td>
-        <td style="padding:10px 14px;font-family:monospace;font-size:13px;font-weight:700;color:var(--navy);">
-          ${r.usuario_windows || '<span style="color:var(--muted);font-style:italic;font-weight:400;font-family:inherit;">Pendiente</span>'}</td>
-        <td style="padding:10px 14px;"><span style="background:${est.bg};color:${est.color};padding:3px 9px;border-radius:5px;font-size:11px;font-weight:700;white-space:nowrap;">${est.label}</span></td>
-        <td style="padding:10px 14px;">${_adminSolBotones(r)}</td>`;
-      tbody.appendChild(tr);
+    const r = await api('/api/solicitar-usuario', 'POST', {
+      usuario_windows: usuarioWindows,
+      nombre,
+      apellidos,
+      email,
+      hotel
     });
-    loading.style.display = 'none'; if (tabla) tabla.style.display = '';
-  } catch(e) { loading.textContent = '⚠️ Error al cargar solicitudes.'; }
-}
+    if (r.error) {
+      errEl.textContent = '⚠ ' + r.error;
+      errEl.style.display = 'block';
+      if (btn) { btn.disabled = false; btn.textContent = 'Enviar solicitud'; }
+      return;
+    }
 
-function _adminSolBotones(r) {
-  if (r.estado === 'completada' || r.estado === 'rechazada')
-    return '<span style="font-size:12px;color:var(--muted);">—</span>';
-  return `<div style="display:flex;gap:6px;flex-wrap:wrap;">
-    <button class="btn btn-gold btn-sm" onclick="adminEnviarFase2(${r.id})" title="Envía email con .bat al usuario">📧 Enviar Fase 2</button>
-    <button class="btn btn-ghost btn-sm" onclick="adminDescargarBat(${r.id})" title="Descargar el .bat manualmente">💾 Descargar .bat</button>
-    <button class="btn btn-danger btn-sm" onclick="adminRechazarSolicitud(${r.id})" title="Rechazar solicitud">✕</button>
-  </div>`;
-}
+    // ── Fallback EmailJS (igual que reset de contraseña) ──────────────────────
+    // El backend devuelve sin_email:true cuando Resend no está configurado
+    // o cuando falló (dominio no verificado, API key inválida, etc.)
+    if (r.sin_email && r.destinatarios && r.destinatarios.length > 0) {
+      try {
+        // Enviamos al primer admin como destinatario principal (TO).
+        // Si hay más de uno, los añadimos en BCC — igual que meaEnviarEmail.
+        const restoCopias = r.destinatarios.slice(1).join(',');
+        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+          to_email: r.destinatarios[0],
+          subject:  r.asunto,
+          message:  r.body_text,
+          reply_to: r.reply_to,
+          bcc:      restoCopias,   // admins adicionales en copia oculta
+        });
+        // EmailJS envió OK → mostrar confirmación normal
+        console.info('[EmailJS solicitud] Enviado a', r.destinatarios[0],
+                     restoCopias ? '(BCC: ' + restoCopias + ')' : '');
+      } catch(ejsErr) {
+        // EmailJS también falló → informar al usuario
+        console.warn('[EmailJS solicitud]', ejsErr);
+        document.getElementById('solicitar-form').style.display = 'none';
+        document.getElementById('solicitar-error-grave-msg').textContent =
+          'No se pudo enviar la solicitud automáticamente. Por favor, contacta directamente con el departamento de compras: centralcomprascanarias.princess@gmail.com';
+        document.getElementById('solicitar-error-grave').style.display = '';
+        if (btn) { btn.disabled = false; btn.textContent = 'Enviar solicitud'; }
+        return;
+      }
+    }
 
-async function adminEnviarFase2(solId) {
-  if (!confirm('¿Enviar el email de Fase 2 al usuario? Se generará un enlace seguro con caducidad de 72 horas.')) return;
-  try {
-    const r = await api(`/api/admin/solicitudes-acceso/${solId}/enviar-fase2`, 'POST');
-    toast(r.msg || '✅ Email de Fase 2 enviado', 'success');
-    adminCargarSolicitudes();
-  } catch(e) { toast('❌ ' + (e.message || 'Error al enviar'), 'error'); }
+    // Éxito (Resend envió OK, o EmailJS envió OK)
+    document.getElementById('solicitar-form').style.display = 'none';
+    document.getElementById('solicitar-ok').style.display = '';
+  } catch(err) {
+    document.getElementById('solicitar-form').style.display = 'none';
+    document.getElementById('solicitar-error-grave-msg').textContent =
+      'No se pudo conectar con el servidor. Comprueba tu conexión e inténtalo de nuevo.';
+    document.getElementById('solicitar-error-grave').style.display = '';
+  }
 }
-
-function adminDescargarBat(solId) {
-  const a = document.createElement('a');
-  a.href = `/api/admin/solicitudes-acceso/${solId}/generar-bat`;
-  a.download = '';
-  document.body.appendChild(a); a.click(); document.body.removeChild(a);
-  setTimeout(() => adminCargarSolicitudes(), 1200);
-}
-
-async function adminRechazarSolicitud(solId) {
-  if (!confirm('¿Rechazar esta solicitud de acceso?')) return;
-  try {
-    await api(`/api/admin/solicitudes-acceso/${solId}/rechazar`, 'POST');
-    toast('Solicitud rechazada', 'success');
-    adminCargarSolicitudes();
-  } catch(e) { toast('❌ ' + (e.message || 'Error'), 'error'); }
-}
-
 
 async function guardarNuevaPassword() {
   const nueva    = document.getElementById('reset-nueva').value;
