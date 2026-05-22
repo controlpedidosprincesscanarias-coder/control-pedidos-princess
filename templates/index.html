@@ -895,7 +895,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.5.0
+          V 10.5.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1174,6 +1174,35 @@ tbody tr:last-child{border-bottom:none}
             </table>
           </div>
         </div>
+
+        <!-- ── Tarjeta: Solicitudes de acceso pendientes ──────────────── -->
+        <div class="card" style="margin-top:20px">
+          <div class="card-header">
+            <span class="card-title">🔔 Solicitudes de acceso</span>
+            <button class="btn btn-ghost btn-sm" onclick="adminCargarSolicitudes()" title="Actualizar">↻ Actualizar</button>
+          </div>
+          <div id="admin-sol-loading" style="padding:20px;color:var(--muted);font-size:13px;">Cargando solicitudes…</div>
+          <div id="admin-sol-empty"   style="display:none;padding:20px;color:var(--muted);font-size:13px;">✅ No hay solicitudes pendientes.</div>
+          <div id="admin-sol-tabla"   style="display:none">
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width:50px">#</th>
+                    <th>Nombre</th>
+                    <th>Email</th>
+                    <th>Hoteles</th>
+                    <th>Usuario Windows</th>
+                    <th>Estado</th>
+                    <th style="width:220px">Acciones</th>
+                  </tr>
+                </thead>
+                <tbody id="admin-sol-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
       </div>
 
     </div><!-- /content -->
@@ -2197,7 +2226,7 @@ function showView(view, el) {
   if (view==='eliminados')  loadEliminados();
   if (view==='techo')       loadTecho();
   if (view==='familias')    loadFamilias();
-  if (view==='usuarios')    loadUsuarios();
+  if (view==='usuarios')    { loadUsuarios(); adminCargarSolicitudes(); }
   if (view==='integridad')  loadIntegridad();
   if (view==='config')       loadConfigAlertas();
 }
@@ -2209,6 +2238,7 @@ function refreshCurrentView() {
   if (view==='alertas')     loadAlertas(); loadTechoAlertas();
   if (view==='proveedores') loadProveedores();
   if (view==='eliminados')  loadEliminados();
+  if (view==='usuarios')    { loadUsuarios(); adminCargarSolicitudes(); }
 }
 
 
