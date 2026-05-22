@@ -895,7 +895,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.5.2
+          V 10.5.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2124,7 +2124,28 @@ async function adminEnviarFase2(solId) {
   if (!confirm('¿Enviar el email de Fase 2 al usuario? Se generará un enlace seguro con caducidad de 72 horas.')) return;
   try {
     const r = await api(`/api/admin/solicitudes-acceso/${solId}/enviar-fase2`, 'POST');
-    toast(r.msg || '✅ Email de Fase 2 enviado', 'success');
+
+    // Si el backend no tiene RESEND configurado, usa EmailJS como fallback (igual que reset de contraseña)
+    if (r.sin_email && r.url_token && r.destinatarios && r.destinatarios[0]) {
+      const toEmail = r.destinatarios[0];
+      try {
+        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+          to_email: toEmail,
+          subject:  r.asunto || 'Verificación de acceso — Control de Pedidos Princess (Fase 2)',
+          message:  r.body_text || `Hola,\n\nTu solicitud de acceso ha sido revisada.\n\nCompleta la verificación aquí:\n${r.url_token}\n\nEl enlace caduca en 72 horas.\n\nControl Pedidos Princess Canarias`,
+          reply_to: toEmail,
+        });
+        toast(`✅ Email de Fase 2 enviado a ${toEmail}`, 'success');
+      } catch(ejsErr) {
+        console.warn('[EmailJS Fase2]', ejsErr);
+        // Fallback final: mostrar el enlace al admin para que lo reenvíe manualmente
+        toast(`⚠️ No se pudo enviar el email automáticamente. Enlace para reenviar manualmente:\n${r.url_token}`, 'warning');
+        prompt(`Copia este enlace y envíaselo a ${toEmail}:`, r.url_token);
+      }
+    } else {
+      toast(r.msg || '✅ Email de Fase 2 enviado', 'success');
+    }
+
     adminCargarSolicitudes();
   } catch(e) { toast('❌ ' + (e.message || 'Error al enviar'), 'error'); }
 }
