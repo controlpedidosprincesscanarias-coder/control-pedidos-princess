@@ -600,18 +600,50 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
         log.warning("Telegram: sin compradores para hotel %s", hotel_codigo)
         return []
 
-    emoji     = "🔴" if nivel == "urgente" else "⚠️"
-    nivel_txt = "URGENTE" if nivel == "urgente" else "Recordatorio"
-    partes = [
-        emoji + " *Alerta " + nivel_txt + "*",
-        "Hotel: *" + str(pedido.get("hotel_codigo","?")) + "* - " + str(pedido.get("hotel_nombre","")),
-        "Pedido: *" + str(pedido.get("pedido_num","?")) + "*",
-        "Proveedor: " + str(pedido.get("proveedor_nombre","?")),
-        "Estado: " + str(pedido.get("estado","?")),
-        "Dias sin respuesta: *" + str(dias) + "*",
-        "- Control Pedidos Princess Canarias",
-    ]
-    texto = "\n".join(partes)
+    # ── Construir mensaje compacto y limpio ──────────────────────────────────
+    emoji     = "🔴" if nivel == "urgente" else "🟡"
+    nivel_txt = "ALERTA URGENTE" if nivel == "urgente" else "AVISO"
+    estado    = pedido.get("estado", "")
+
+    estado_titulo = {
+        "ENVIADO AL PROVEEDOR":               "Enviado al proveedor",
+        "PENDIENTE FIRMA DIRECCION COMPRAS":  "Pendiente firma compras",
+        "PENDIENTE DE FIRMA DIRECCION HOTEL": "Pendiente firma hotel",
+        "ENTREGA PARCIAL":                    "Entrega parcial",
+        "PENDIENTE COTIZACIÓN":               "Pendiente cotización",
+    }.get(estado, estado.capitalize())
+
+    hotel_cod  = pedido.get("hotel_codigo", "?")
+    hotel_nom  = pedido.get("hotel_nombre", "")
+    proveedor  = pedido.get("proveedor_nombre") or ""
+    pedido_sap = pedido.get("pedido_num") or ""
+    norden     = pedido.get("norden") or ""
+    fecha_ref  = pedido.get("fecha_tramitacion") or pedido.get("fecha_solicitud") or ""
+
+    def _fmt_fecha(f):
+        if not f:
+            return ""
+        try:
+            if hasattr(f, "strftime"):
+                return f.strftime("%d/%m/%Y")
+            parts = str(f)[:10].split("-")
+            return "/".join(reversed(parts)) if len(parts) == 3 else str(f)[:10]
+        except Exception:
+            return str(f)[:10]
+
+    lineas = [f"{emoji} *{nivel_txt} — {estado_titulo}*", ""]
+    lineas.append(f"🏨 Hotel: *{hotel_cod}* — {hotel_nom}")
+    if pedido_sap:
+        lineas.append(f"📄 Pedido SAP: *{pedido_sap}*")
+    elif norden:
+        lineas.append(f"📄 Línea #: *{norden}*")
+    if proveedor:
+        lineas.append(f"🏢 Proveedor: {proveedor}")
+    if fecha_ref:
+        lineas.append(f"📅 Fecha origen: {_fmt_fecha(fecha_ref)}")
+    lineas.append(f"⏳ Sin respuesta: *{dias} días*")
+    lineas += ["", "— Control Pedidos Princess Canarias"]
+    texto = "\n".join(lineas)
     resultados = []
     for comp in compradores:
         username = comp.get("username", "?")
@@ -1234,19 +1266,28 @@ def _job_alertas_techo_mensual_inner() -> None:
         }) or "—"
 
         if semaforo == "rojo":
-            emoji    = "🔴"
-            nivel_txt = "URGENTE — Techo Mensual SUPERADO"
+            emoji     = "🔴"
+            nivel_txt = "URGENTE — Techo mensual superado"
         else:
-            emoji    = "⚠️"
-            nivel_txt = "Aviso — Techo Mensual al " + str(pct) + " %"
+            emoji     = "🟡"
+            nivel_txt = f"AVISO — Techo mensual al {pct} %"
+
+        familias_lista = "\n".join(
+            f"• {f}" for f in sorted({p["familia_nombre"] for p in pedidos if p.get("familia_nombre")})
+        ) or "—"
 
         texto = (
             f"{emoji} *{nivel_txt}*\n"
-            f"Hotel: *{hotel_codigo}* — {hotel_nombre}\n"
-            f"Acumulado mes: *{acumulado:,.2f} €* de {get_config()["techo_max_mes"]:,.0f} €\n"
-            f"Pedidos sujetos a techo: {num_pedidos} / {get_config()["techo_max_pedidos"]}\n"
-            f"Familias: {familias_txt}\n"
-            f"Mes: {mes_txt}\n"
+            f"\n"
+            f"🏨 Hotel: *{hotel_codigo}* — {hotel_nombre}\n"
+            f"\n"
+            f"💰 Acumulado actual: *{acumulado:,.2f} €*\n"
+            f"📊 Límite configurado: {get_config()["techo_max_mes"]:,.0f} €\n"
+            f"📦 Pedidos sujetos: {num_pedidos} / {get_config()["techo_max_pedidos"]}\n"
+            f"\n"
+            f"📂 Familias:\n{familias_lista}\n"
+            f"\n"
+            f"📅 Mes: {mes_txt}\n"
             "— Control Pedidos Princess Canarias"
         )
 
@@ -1298,14 +1339,20 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
             return
 
         mes_txt = _date.today().strftime("%B %Y")
+        pedido_sap = pedido.get("pedido_num") or ""
+        norden_val = pedido.get("norden") or ""
+        ref_line   = f"📄 Pedido SAP: *{pedido_sap}*" if pedido_sap else f"📄 Línea #: *{norden_val}*"
+
         texto = (
-            "🏦 *Alerta Techo de Gastos*\n"
-            f"Hotel: *{pedido.get('hotel_codigo','?')}* — {pedido.get('hotel_nombre','')}\n"
-            f"Pedido: *{pedido.get('pedido_num') or ('Nº Orden ' + str(pedido.get('norden','?')))}*\n"
-            f"Familia: {familia_nombre or '—'}\n"
-            f"Importe: *{importe:,.2f} €*\n"
-            f"Mes: {mes_txt}\n"
-            "⚠️ Este pedido está sujeto al techo de gastos mensual.\n"
+            "🏦 *Nuevo pedido sujeto a techo de gastos*\n"
+            f"\n"
+            f"🏨 Hotel: *{pedido.get('hotel_codigo','?')}* — {pedido.get('hotel_nombre','')}\n"
+            f"{ref_line}\n"
+            f"📂 Familia: {familia_nombre or '—'}\n"
+            f"💰 Importe: *{importe:,.2f} €*\n"
+            f"📅 Mes: {mes_txt}\n"
+            f"\n"
+            "⚠️ Este pedido computa en el techo de gastos mensual.\n"
             "— Control Pedidos Princess Canarias"
         )
 
@@ -1509,20 +1556,28 @@ def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
     return None, None, False
 
 def _whatsapp_text(pedido: dict, dias: int, nivel: str) -> str:
-    """Genera el texto de WhatsApp (plano, sin HTML) para notificación al comprador."""
-    emoji = "🔴" if nivel == "urgente" else "⚠️"
-    hotel = pedido.get("hotel_codigo", "—")
-    num   = pedido.get("pedido_num", "—")
-    estado = pedido.get("estado", "—")
-    prov   = pedido.get("proveedor_nombre", "—")
-    return (
-        f"{emoji} *Alerta {'URGENTE' if nivel == 'urgente' else 'de pedido'}*\n"
-        f"Hotel: *{hotel}* | Pedido: *{num}*\n"
-        f"Proveedor: {prov}\n"
-        f"Estado: {estado}\n"
-        f"Días transcurridos: *{dias}*\n"
-        f"— Control Pedidos Princess Canarias"
-    )
+    """Genera el texto de WhatsApp/Telegram (plano, sin HTML) para notificación al comprador."""
+    emoji      = "🔴" if nivel == "urgente" else "🟡"
+    nivel_txt  = "ALERTA URGENTE" if nivel == "urgente" else "AVISO"
+    hotel_cod  = pedido.get("hotel_codigo", "—")
+    hotel_nom  = pedido.get("hotel_nombre", "")
+    pedido_sap = pedido.get("pedido_num") or ""
+    norden     = pedido.get("norden") or ""
+    proveedor  = pedido.get("proveedor_nombre") or ""
+    estado     = pedido.get("estado", "—")
+
+    lineas = [f"{emoji} *{nivel_txt}*", ""]
+    lineas.append(f"🏨 Hotel: *{hotel_cod}* — {hotel_nom}")
+    if pedido_sap:
+        lineas.append(f"📄 Pedido SAP: *{pedido_sap}*")
+    elif norden:
+        lineas.append(f"📄 Línea #: *{norden}*")
+    if proveedor:
+        lineas.append(f"🏢 Proveedor: {proveedor}")
+    lineas.append(f"📋 Estado: {estado}")
+    lineas.append(f"⏳ Días transcurridos: *{dias}*")
+    lineas += ["", "— Control Pedidos Princess Canarias"]
+    return "\n".join(lineas)
 
 def _log_whatsapp(db, pedido_id, tipo, destinatario, mensaje, enviado, error=None):
     with db.cursor() as cur:
