@@ -1009,7 +1009,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.6.8
+          V 10.7.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2134,7 +2134,7 @@ async function sol_enviarFase1(btn) {
         await emailjs.send(
           typeof EMAILJS_SERVICE_ID !== 'undefined' ? EMAILJS_SERVICE_ID : '',
           typeof EMAILJS_TEMPLATE_ID !== 'undefined' ? EMAILJS_TEMPLATE_ID : '',
-          { to_email: r.destinatarios[0], email: r.destinatarios[0], subject: r.asunto, message: r.body_text, reply_to: email, bcc: '' }
+          { to_email: r.destinatarios[0], subject: r.asunto, message: r.body_text }
         );
       } catch(e) { console.warn('[SOL_F1] EmailJS fallback falló', e); }
     }
@@ -2191,11 +2191,9 @@ async function sol_enviarFase2() {
         for (const dest of r.destinatarios) {
           await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
             to_email: dest,
-            email:    dest,
             subject:  r.asunto  || '[FASE 2 COMPLETADA] Alta usuario',
             message:  r.body_text || 'El usuario ha completado la verificación. Accede al panel para aprobar la cuenta.',
-            reply_to: r.reply_to || '',
-            bcc:      ''
+            reply_to: r.reply_to || ''
           });
         }
       } catch(ejErr) {
@@ -2349,11 +2347,9 @@ async function adminEnviarFase2(solId) {
       try {
         await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
           to_email: toEmail,
-          email:    toEmail,
           subject:  r.asunto || 'Verificación de acceso — Control de Pedidos Princess (Fase 2)',
           message:  r.body_text || `Hola,\n\nTu solicitud de acceso ha sido revisada.\n\nCompleta la verificación aquí:\n${r.url_token}\n\nEl enlace caduca en 72 horas.\n\nControl Pedidos Princess Canarias`,
           reply_to: toEmail,
-          bcc:      ''
         });
         toast(`✅ Email de Fase 2 enviado a ${toEmail}`, 'success');
       } catch(ejsErr) {

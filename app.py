@@ -488,6 +488,28 @@ ADMIN_TELEGRAM_CHAT_ID  = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "")
 TIPOS_SUPERVISION_ADMIN = {"urgente"}
 
 
+def _get_admin_emails() -> list:
+    """
+    Devuelve lista de emails de admins activos.
+    Prioridad: 1) EMAILS_INTERNOS (env var)  2) ADMIN_EMAIL (env var)
+               3) emails de admins activos en BD.
+    Garantiza que siempre haya destinatarios si los admins tienen email en BD.
+    """
+    if EMAILS_INTERNOS:
+        return EMAILS_INTERNOS
+    admin_email = os.environ.get("ADMIN_EMAIL", "").strip()
+    if admin_email:
+        return [admin_email]
+    try:
+        admins = rows_to_list(query(
+            "SELECT email FROM usuarios WHERE rol='admin' AND activo=1 "
+            "AND email IS NOT NULL AND TRIM(email) != ''"
+        )) or []
+        return [a["email"] for a in admins if a.get("email")]
+    except Exception:
+        return []
+
+
 def _get_admins_telegram() -> list:
     """
     Devuelve lista de dicts {username, nombre, telegram_chat_id} de todos los
@@ -2101,8 +2123,7 @@ def solicitar_usuario_fase1():
         f"Accede al panel de administración para revisar y enviar el archivo de verificación (Fase 2)."
     )
 
-    admin_email   = os.environ.get("ADMIN_EMAIL", "")
-    destinatarios = EMAILS_INTERNOS or ([admin_email] if admin_email else [])
+    destinatarios = _get_admin_emails()
 
     if not destinatarios:
         log.warning("[SOL_FASE1] Sin emails admin. Sol #%s", sol_id)
@@ -2481,8 +2502,7 @@ def solicitar_usuario_fase2():
         f"Crea la cuenta en el sistema con los datos anteriores."
     )
 
-    admin_email   = os.environ.get("ADMIN_EMAIL", "")
-    destinatarios = EMAILS_INTERNOS or ([admin_email] if admin_email else [])
+    destinatarios = _get_admin_emails()
     app_url       = os.environ.get("APP_URL", "").rstrip("/")
     url_admin     = f"{app_url}/admin/solicitudes#{sol['id']}" if app_url else ""
 
@@ -2720,7 +2740,7 @@ def admin_aprobar_solicitud(sol_id):
     </div>
     """
     admin_email = os.environ.get("ADMIN_EMAIL", "")
-    destinatarios = EMAILS_INTERNOS or ([admin_email] if admin_email else [])
+    destinatarios = _get_admin_emails()
     for dest in destinatarios:
         try:
             _send_email(dest, asunto_a, body_html_a)
