@@ -1177,6 +1177,245 @@ def _job_alertas_diarias_inner():
     log.info("✅ [SCHEDULER] Job finalizado — %d alertas enviadas, %d omitidas", enviados, omitidos)
 
 
+# ── Job de techo URGENTE — cada 60 s, laborables 07:00-17:00, reenvío c/2 días ─
+
+def _techo_urgente_es_horario_valido() -> bool:
+    """
+    Devuelve True si ahora mismo cumple las tres condiciones de envío:
+      1. Día laborable (lunes=0 … viernes=4)
+      2. Hora local (Atlantic/Canary) entre 07:00 y 16:59 inclusive
+      3. El mes actual no ha cambiado respecto al mes del techo (siempre True aquí;
+         la comprobación de mes se hace al calcular el semáforo, que usa CURRENT MONTH)
+    """
+    import pytz
+    tz_canarias = pytz.timezone("Atlantic/Canary")
+    ahora = datetime.now(tz_canarias)
+    if ahora.weekday() >= 5:          # sábado=5, domingo=6
+        return False
+    if not (7 <= ahora.hour <= 16):   # 07:00–16:59; a las 17:00 ya no entra
+        return False
+    return True
+
+
+def _ya_notificado_techo_urgente_hoy(hotel_codigo: str) -> bool:
+    """
+    Devuelve True si ya se envió hoy una alerta de techo URGENTE a admins
+    para este hotel (tipo 'telegram_techo_urgente_admin').
+    """
+    try:
+        row = query(
+            """SELECT COUNT(*) as n FROM whatsapp_log
+               WHERE pedido_id IS NULL
+                 AND tipo = 'telegram_techo_urgente_admin'
+                 AND destinatario LIKE %s
+                 AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
+                     CURRENT_DATE AT TIME ZONE 'Atlantic/Canary'""",
+            (f"%{hotel_codigo}%",), one=True
+        )
+        return (row["n"] if row else 0) > 0
+    except Exception:
+        return False
+
+
+def _dias_desde_ultimo_techo_urgente_admin(hotel_codigo: str) -> int | None:
+    """
+    Devuelve los días naturales transcurridos desde la última notificación
+    de techo URGENTE a admins para este hotel, o None si nunca se envió.
+    """
+    try:
+        row = query(
+            """SELECT DATE(MAX(creado_en) AT TIME ZONE 'Atlantic/Canary') as ultima
+               FROM whatsapp_log
+               WHERE pedido_id IS NULL
+                 AND tipo = 'telegram_techo_urgente_admin'
+                 AND destinatario LIKE %s""",
+            (f"%{hotel_codigo}%",), one=True
+        )
+        if not row or row["ultima"] is None:
+            return None
+        import pytz
+        from datetime import date as _d
+        hoy = datetime.now(pytz.timezone("Atlantic/Canary")).date()
+        return (hoy - row["ultima"]).days
+    except Exception:
+        return None
+
+
+def _log_techo_urgente_admin(hotel_codigo: str, destinatario: str,
+                              mensaje: str, enviado: bool, error=None) -> None:
+    """Registra en whatsapp_log el envío de alerta de techo URGENTE a admins."""
+    try:
+        db = get_db()
+        db.cursor().execute(
+            "INSERT INTO whatsapp_log (pedido_id,tipo,destinatario,mensaje,enviado,error) "
+            "VALUES (NULL,'telegram_techo_urgente_admin',%s,%s,%s,%s)",
+            (destinatario, mensaje, 1 if enviado else 0, error)
+        )
+        db.commit()
+    except Exception as exc:
+        log.error("[TECHO-URG] Error guardando log %s %s: %s", hotel_codigo, destinatario, exc)
+
+
+def _job_techo_urgente_admins() -> None:
+    """
+    Job que se ejecuta cada 60 segundos.
+
+    Notifica a los administradores por Telegram cuando un hotel tiene su techo
+    mensual en estado URGENTE (semáforo rojo), con las siguientes reglas:
+
+    • Solo en días laborables (lun–vie).
+    • Solo entre las 07:00 y las 16:59 (hora Canarias).
+    • Primer envío: el mismo día en que el hotel entra en URGENTE.
+    • Reenvíos: cada 2 días naturales desde el último aviso a admins,
+      siempre que el hotel siga en rojo Y no haya cambiado de mes.
+    • Deduplicación diaria: como máximo 1 notificación por hotel y día.
+    """
+    with app.app_context():
+        _job_techo_urgente_admins_inner()
+
+
+def _job_techo_urgente_admins_inner() -> None:
+    """Lógica interna del job de techo urgente a admins."""
+
+    if not _techo_urgente_es_horario_valido():
+        log.debug("[TECHO-URG] Fuera de horario o día no laborable — saltando")
+        return
+
+    import pytz
+    tz_canarias = pytz.timezone("Atlantic/Canary")
+    ahora = datetime.now(tz_canarias)
+    year, month = ahora.year, ahora.month
+
+    log.info("▶ [TECHO-URG] Revisando techos URGENTES — %s", ahora.strftime("%Y-%m-%d %H:%M"))
+
+    try:
+        hoteles = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+        ))
+    except Exception as exc:
+        log.error("[TECHO-URG] Error consultando hoteles: %s", exc)
+        return
+
+    cfg = get_config()
+    enviados = 0
+
+    for hotel in hoteles:
+        hotel_id     = hotel["id"]
+        hotel_codigo = (hotel["codigo"] or "").upper()
+        hotel_nombre = hotel["nombre"] or ""
+
+        # ── 1. Calcular semáforo del mes actual ───────────────────────────
+        try:
+            pedidos = rows_to_list(query("""
+                SELECT p.importe, p.familia_id, f.nombre as familia_nombre
+                FROM pedidos p
+                LEFT JOIN familias f ON p.familia_id = f.id
+                WHERE p.hotel_id = %s
+                  AND p.sujeto_techo = 1
+                  AND p.estado NOT IN ('CANCELADO')
+                  AND EXTRACT(YEAR  FROM p.creado_en) = %s
+                  AND EXTRACT(MONTH FROM p.creado_en) = %s
+            """, (hotel_id, year, month)))
+        except Exception as exc:
+            log.error("[TECHO-URG] Error consultando pedidos hotel %s: %s", hotel_codigo, exc)
+            continue
+
+        acumulado   = sum(float(p["importe"] or 0) for p in pedidos)
+        num_pedidos = len(pedidos)
+
+        # Solo nos interesan los ROJOS (URGENTE)
+        es_rojo = (
+            num_pedidos >= cfg["techo_max_pedidos"]
+            or acumulado >= cfg["techo_max_mes"]
+        )
+        if not es_rojo:
+            log.debug("[TECHO-URG] Hotel %s — no urgente, omitiendo", hotel_codigo)
+            continue
+
+        # ── 2. Deduplicación diaria (máx. 1 aviso/hotel/día) ─────────────
+        if _ya_notificado_techo_urgente_hoy(hotel_codigo):
+            log.debug("[TECHO-URG] Hotel %s — ya notificado hoy, omitiendo", hotel_codigo)
+            continue
+
+        # ── 3. Regla de reenvío cada 2 días ──────────────────────────────
+        dias_desde_ultimo = _dias_desde_ultimo_techo_urgente_admin(hotel_codigo)
+        if dias_desde_ultimo is not None and dias_desde_ultimo < 2:
+            log.debug(
+                "[TECHO-URG] Hotel %s — último aviso hace %d día(s), esperando 2d",
+                hotel_codigo, dias_desde_ultimo
+            )
+            continue
+
+        # ── 4. Construir y enviar mensaje ─────────────────────────────────
+        mes_txt = ahora.strftime("%B %Y")
+        pct     = int(acumulado / cfg["techo_max_mes"] * 100) if cfg["techo_max_mes"] else 0
+
+        familias_lista = "\n".join(
+            f"• {f}" for f in sorted({
+                p["familia_nombre"] for p in pedidos if p.get("familia_nombre")
+            })
+        ) or "—"
+
+        motivo = []
+        if acumulado >= cfg["techo_max_mes"]:
+            motivo.append(f"gasto {acumulado:,.2f} € ≥ límite {cfg['techo_max_mes']:,.0f} €")
+        if num_pedidos >= cfg["techo_max_pedidos"]:
+            motivo.append(f"{num_pedidos} pedidos ≥ máximo {cfg['techo_max_pedidos']}")
+
+        reenvio_txt = (
+            f"⏱ Reenvío automático — {dias_desde_ultimo}d sin resolver\n"
+            if dias_desde_ultimo is not None else
+            "🔔 Primera alerta de techo URGENTE\n"
+        )
+
+        texto = (
+            "🔴 *URGENTE — Techo mensual SUPERADO*\n"
+            "\n"
+            f"🏨 Hotel: *{hotel_codigo}* — {hotel_nombre}\n"
+            "\n"
+            f"💰 Acumulado: *{acumulado:,.2f} €* ({pct} % del límite)\n"
+            f"📦 Pedidos sujetos: {num_pedidos} / {cfg['techo_max_pedidos']}\n"
+            f"⚠️ Motivo: {' | '.join(motivo)}\n"
+            "\n"
+            f"📂 Familias:\n{familias_lista}\n"
+            "\n"
+            f"📅 Mes: {mes_txt}\n"
+            f"{reenvio_txt}"
+            "— Control Pedidos Princess Canarias"
+        )
+
+        admins = _get_admins_telegram()
+        if not admins:
+            log.warning("[TECHO-URG] Sin admins con Telegram configurado")
+            continue
+
+        for adm in admins:
+            username = adm.get("username", "?")
+            chat_id  = adm.get("telegram_chat_id")
+            if not chat_id:
+                continue
+            res = _send_telegram(chat_id, texto)
+            ok  = res.get("ok", False)
+            log.info(
+                "[TECHO-URG] → admin %s hotel %s: %s",
+                username, hotel_codigo, "OK" if ok else res.get("error")
+            )
+            _log_techo_urgente_admin(
+                hotel_codigo,
+                f"{username}|{hotel_codigo}",
+                f"Techo URGENTE admin — {acumulado:,.2f} € — {mes_txt}",
+                ok, res.get("error")
+            )
+
+        enviados += 1
+        log.info(
+            "[TECHO-URG] ✅ Hotel %s notificado a admins — %.2f € / %d pedidos",
+            hotel_codigo, acumulado, num_pedidos
+        )
+
+    log.info("✅ [TECHO-URG] Fin revisión — %d hoteles urgentes notificados", enviados)
+
+
 # ── Job de alertas de techo mensual ───────────────────────────────────────────
 
 def _ya_notificado_techo_mes_hoy(hotel_codigo: str, semaforo: str) -> bool:
@@ -5403,6 +5642,19 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=60,
     )
+    # Job de techo URGENTE a admins: cada 60 segundos, lun-vie, 07:00-16:59.
+    # La lógica interna aplica deduplicación diaria y el ciclo de 2 días.
+    scheduler.add_job(
+        _job_techo_urgente_admins,
+        trigger="cron",
+        day_of_week="mon-fri",  # solo días laborables
+        hour="7-16",            # 07:00 → 16:59 (función interna bloquea ≥ 17:00)
+        minute="*",
+        second="0",
+        id="techo_urgente_admins",
+        replace_existing=True,
+        misfire_grace_time=60,
+    )
     # Job de techo mensual: una vez al día a las 08:00 hora Canarias
     scheduler.add_job(
         _job_alertas_techo_mensual,
@@ -5427,6 +5679,7 @@ def _iniciar_scheduler():
     )
     scheduler.start()
     log.info("✅ Scheduler iniciado — alertas cada 60s en horario 07:00-16:00 (Atlantic/Canary)")
+    log.info("✅ Scheduler — techo URGENTE admins cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — alertas techo mensual diarias a las 08:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
@@ -5466,6 +5719,25 @@ def test_techo_mensual():
         "ok": True,
         "iniciado": True,
         "mensaje": "Job techo mensual ejecutándose en segundo plano — revisa los móviles en unos segundos."
+    })
+
+
+@app.route("/api/admin/test-techo-urgente", methods=["POST"])
+@admin_required
+def test_techo_urgente_admins():
+    """
+    Ejecuta el job de techo URGENTE a admins inmediatamente, ignorando
+    la restricción de horario — útil para pruebas desde el panel de admin.
+    POST /api/admin/test-techo-urgente
+    """
+    import threading
+    t = threading.Thread(target=_job_techo_urgente_admins, daemon=True)
+    t.start()
+    log.info("\u25b6 [MANUAL] Job techo URGENTE admins lanzado manualmente por admin")
+    return jsonify({
+        "ok": True,
+        "iniciado": True,
+        "mensaje": "Job techo URGENTE admins ejecutándose en segundo plano."
     })
 
 
