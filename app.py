@@ -255,6 +255,26 @@ def _auto_migrate():
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_solicitudes_token ON solicitudes_acceso(token)"
             )
+            # ── Tabla cola de notificaciones para el bridge agenda (v10.7.7) ──────
+            # Cada fila es un aviso pendiente de entregar a un usuario concreto.
+            # El bridge lo consume con GET /api/bridge/notificaciones y marca leído.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS bridge_notificaciones (
+                    id           SERIAL PRIMARY KEY,
+                    usuario      TEXT NOT NULL,         -- username del destinatario
+                    tipo         TEXT NOT NULL,         -- 'cambio_estado' | 'alerta_auto' | 'techo'
+                    pedido_id    INTEGER,               -- puede ser NULL (p.ej. alertas de techo)
+                    titulo       TEXT NOT NULL,
+                    mensaje      TEXT NOT NULL,
+                    nivel        TEXT NOT NULL DEFAULT 'aviso',  -- 'aviso' | 'urgente'
+                    leido        BOOLEAN NOT NULL DEFAULT FALSE,
+                    creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_bridge_notif_usuario_leido "
+                "ON bridge_notificaciones(usuario, leido)"
+            )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -543,13 +563,22 @@ def _notify_solicitud_telegram(texto: str) -> None:
         log.debug("[SOL_TELEGRAM] Sin admins con Telegram configurado.")
         return
     for adm in admins:
-        chat_id = adm.get("telegram_chat_id")
-        if not chat_id:
-            continue
-        res = _send_telegram(chat_id, texto)
-        log.info("[SOL_TELEGRAM] -> %s (%s): %s",
-                 adm.get("username"), chat_id,
-                 "OK" if res.get("ok") else res.get("error"))
+        username = adm.get("username", "admin")
+        chat_id  = adm.get("telegram_chat_id")
+        if chat_id:
+            res = _send_telegram(chat_id, texto)
+            log.info("[SOL_TELEGRAM] -> %s (%s): %s",
+                     username, chat_id,
+                     "OK" if res.get("ok") else res.get("error"))
+        # Encolar en bridge para que el admin lo vea también en main_agenda
+        _encolar_bridge_notificacion(
+            usuario=username,
+            tipo="solicitud_acceso",
+            titulo="📋 Nueva solicitud de acceso",
+            mensaje=texto.replace("*", ""),
+            nivel="aviso",
+            pedido_id=None,
+        )
 
 
 def _enviar_supervision_admins(texto: str, tipo_supervision: str) -> None:
@@ -573,13 +602,22 @@ def _enviar_supervision_admins(texto: str, tipo_supervision: str) -> None:
     texto_admin = prefijo + texto
 
     for adm in admins:
-        chat_id = adm.get("telegram_chat_id")
-        if not chat_id:
-            continue
-        res = _send_telegram(chat_id, texto_admin)
-        log.info("[SUPERVISION] Telegram admin → %s (%s) tipo=%s: %s",
-                 adm.get("username"), chat_id, tipo_supervision,
-                 "OK" if res.get("ok") else res.get("error"))
+        chat_id  = adm.get("telegram_chat_id")
+        username = adm.get("username", "admin")
+        if chat_id:
+            res = _send_telegram(chat_id, texto_admin)
+            log.info("[SUPERVISION] Telegram admin → %s (%s) tipo=%s: %s",
+                     username, chat_id, tipo_supervision,
+                     "OK" if res.get("ok") else res.get("error"))
+        # ── Encolar en bridge agenda para este admin ────────────────────────
+        _encolar_bridge_notificacion(
+            usuario=username,
+            tipo="supervision",
+            titulo="📋 [Supervisión Admin] — copia automática",
+            mensaje=texto.replace("*", ""),
+            nivel="urgente",
+            pedido_id=None,
+        )
 
 
 def _get_compradores_hotel(hotel_codigo: str) -> list:
@@ -628,6 +666,37 @@ def _send_telegram(chat_id: str, text: str) -> dict:
     except Exception as e:
         log.error("Telegram error para chat_id %s: %s", chat_id, e)
         return {"ok": False, "error": str(e)}
+
+
+def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: str,
+                                  nivel: str = "aviso", pedido_id: int = None) -> None:
+    """
+    Inserta una fila en bridge_notificaciones para que el bridge de main_agenda
+    la recoja en la próxima consulta a /api/bridge/notificaciones.
+
+    Esta función se llama SIEMPRE que se envía un Telegram a un comprador o admin,
+    garantizando paridad total entre los avisos de Telegram y los de main_agenda.
+
+    Parámetros:
+        usuario   – username del destinatario (igual que en la tabla usuarios)
+        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'supervision'
+        titulo    – línea resumen (se mostrará como título del popup)
+        mensaje   – cuerpo completo del aviso
+        nivel     – 'aviso' | 'urgente'
+        pedido_id – id del pedido (None para alertas de techo sin pedido concreto)
+    """
+    try:
+        db = get_db()
+        db.cursor().execute(
+            """INSERT INTO bridge_notificaciones
+               (usuario, tipo, pedido_id, titulo, mensaje, nivel)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (usuario.lower(), tipo, pedido_id, titulo, mensaje, nivel)
+        )
+        db.commit()
+    except Exception as exc:
+        log.warning("bridge_notif: no se pudo encolar para %s — %s", usuario, exc)
+
 
 def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
     """
@@ -685,6 +754,11 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
     lineas.append(f"⏳ Sin respuesta: *{dias} días*")
     lineas += ["", "— Control Pedidos Princess Canarias"]
     texto = "\n".join(lineas)
+
+    # ── Construir título corto para el popup de agenda ────────────────────────
+    pid_pedido = pedido.get("id")
+    titulo_bridge = f"{emoji} [{nivel_txt}] Pedido #{pid_pedido} · {hotel_cod}"
+
     resultados = []
     for comp in compradores:
         username = comp.get("username", "?")
@@ -692,10 +766,19 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
         if not chat_id:
             log.warning("Telegram: sin telegram_chat_id para %s", username)
             resultados.append({"username": username, "chat_id": None, "ok": False, "error": "Sin telegram_chat_id"})
-            continue
-        res = _send_telegram(chat_id, texto)
-        log.info("Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
-        resultados.append({"username": username, "chat_id": chat_id, **res})
+        else:
+            res = _send_telegram(chat_id, texto)
+            log.info("Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
+            resultados.append({"username": username, "chat_id": chat_id, **res})
+        # ── Encolar en bridge agenda (independiente de si tiene Telegram) ─────
+        _encolar_bridge_notificacion(
+            usuario=username,
+            tipo="alerta_auto",
+            titulo=titulo_bridge,
+            mensaje=texto.replace("*", ""),  # quitar markdown de Telegram
+            nivel=nivel,
+            pedido_id=pid_pedido,
+        )
 
     # ── Copia de supervisión a admins (solo alertas urgentes) ─────────────────
     # Las alertas de tipo "aviso" (recordatorio) no se copian para evitar saturación.
@@ -821,6 +904,10 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
         lineas.append("— Control Pedidos Princess Canarias")
         texto = "\n".join(lineas)
 
+        # ── Título corto para popup bridge ────────────────────────────────────
+        nivel_estado = info_alerta["nivel"] if info_alerta else "aviso"
+        titulo_bridge = f"🔔 Cambio estado pedido #{pedido_id} · {pedido.get('hotel_codigo', '?')}"
+
         # ── Envío ──────────────────────────────────────────────────────────────
         resultados = []
         for comp in compradores:
@@ -830,11 +917,20 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
                 log.warning("[ESTADO] Sin telegram_chat_id para %s", username)
                 resultados.append({"username": username, "chat_id": None,
                                    "ok": False, "error": "Sin telegram_chat_id"})
-                continue
-            res = _send_telegram(chat_id, texto)
-            log.info("[ESTADO] Telegram → %s (%s): %s",
-                     username, chat_id, "OK" if res["ok"] else res["error"])
-            resultados.append({"username": username, "chat_id": chat_id, **res})
+            else:
+                res = _send_telegram(chat_id, texto)
+                log.info("[ESTADO] Telegram → %s (%s): %s",
+                         username, chat_id, "OK" if res["ok"] else res["error"])
+                resultados.append({"username": username, "chat_id": chat_id, **res})
+            # ── Encolar en bridge agenda (siempre, con o sin Telegram) ─────────
+            _encolar_bridge_notificacion(
+                usuario=username,
+                tipo="cambio_estado",
+                titulo=titulo_bridge,
+                mensaje=texto.replace("*", ""),
+                nivel=nivel_estado,
+                pedido_id=pedido_id,
+            )
 
         # ── Copia de supervisión a admins: solo si la alerta es urgente ────────
         # Cambio de estado normal o con alerta no urgente → solo al comprador.
@@ -1411,19 +1507,27 @@ def _job_techo_urgente_admins_inner() -> None:
         for adm in admins:
             username = adm.get("username", "?")
             chat_id  = adm.get("telegram_chat_id")
-            if not chat_id:
-                continue
-            res = _send_telegram(chat_id, texto)
-            ok  = res.get("ok", False)
-            log.info(
-                "[TECHO-URG] → admin %s hotel %s: %s",
-                username, hotel_codigo, "OK" if ok else res.get("error")
-            )
-            _log_techo_urgente_admin(
-                hotel_codigo,
-                f"{username}|{hotel_codigo}",
-                f"Techo URGENTE admin — {acumulado:,.2f} € — {mes_txt}",
-                ok, res.get("error")
+            if chat_id:
+                res = _send_telegram(chat_id, texto)
+                ok  = res.get("ok", False)
+                log.info(
+                    "[TECHO-URG] → admin %s hotel %s: %s",
+                    username, hotel_codigo, "OK" if ok else res.get("error")
+                )
+                _log_techo_urgente_admin(
+                    hotel_codigo,
+                    f"{username}|{hotel_codigo}",
+                    f"Techo URGENTE admin — {acumulado:,.2f} € — {mes_txt}",
+                    ok, res.get("error")
+                )
+            # ── Encolar en bridge agenda para este admin ─────────────────────
+            _encolar_bridge_notificacion(
+                usuario=username,
+                tipo="techo",
+                titulo=f"💰 [TECHO URGENTE] Hotel {hotel_codigo} — {mes_txt}",
+                mensaje=texto.replace("*", ""),
+                nivel="urgente",
+                pedido_id=None,
             )
 
         enviados += 1
@@ -1591,21 +1695,31 @@ def _job_alertas_techo_mensual_inner() -> None:
         )
 
         # ── Enviar a compradores ──────────────────────────────────────────────
+        nivel_techo = "urgente" if semaforo == "rojo" else "aviso"
         for comp in compradores:
             username = comp.get("username", "?")
             chat_id  = comp.get("telegram_chat_id")
-            if not chat_id:
+            if chat_id:
+                res = _send_telegram(chat_id, texto)
+                ok  = res.get("ok", False)
+                log.info("[TECHO-MES] → %s (%s): %s", username, hotel_codigo,
+                         "OK" if ok else res.get("error"))
+                _log_whatsapp_techo_mes(
+                    hotel_codigo, semaforo,
+                    f"{username}|{hotel_codigo}",
+                    f"Techo mensual {semaforo} — {acumulado:,.2f} € — {mes_txt}",
+                    ok, res.get("error")
+                )
+            else:
                 log.warning("[TECHO-MES] Sin telegram_chat_id para %s", username)
-                continue
-            res = _send_telegram(chat_id, texto)
-            ok  = res.get("ok", False)
-            log.info("[TECHO-MES] → %s (%s): %s", username, hotel_codigo,
-                     "OK" if ok else res.get("error"))
-            _log_whatsapp_techo_mes(
-                hotel_codigo, semaforo,
-                f"{username}|{hotel_codigo}",
-                f"Techo mensual {semaforo} — {acumulado:,.2f} € — {mes_txt}",
-                ok, res.get("error")
+            # ── Encolar en bridge agenda ──────────────────────────────────────
+            _encolar_bridge_notificacion(
+                usuario=username,
+                tipo="techo",
+                titulo=f"{emoji} [{nivel_txt}] Hotel {hotel_codigo} — {mes_txt}",
+                mensaje=texto.replace("*", ""),
+                nivel=nivel_techo,
+                pedido_id=None,
             )
 
         # ── Copia a admins: solo si es rojo (urgente) ───────────────────────
@@ -1659,11 +1773,19 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
         for comp in compradores:
             username = comp.get("username", "?")
             chat_id  = comp.get("telegram_chat_id")
-            if not chat_id:
-                continue
-            res = _send_telegram(chat_id, texto)
-            log.info("[TECHO] Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
-            resultados.append({"username": username, "chat_id": chat_id, **res})
+            if chat_id:
+                res = _send_telegram(chat_id, texto)
+                log.info("[TECHO] Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
+                resultados.append({"username": username, "chat_id": chat_id, **res})
+            # ── Encolar en bridge agenda ──────────────────────────────────────
+            _encolar_bridge_notificacion(
+                usuario=username,
+                tipo="techo",
+                titulo=f"🏦 Nuevo pedido sujeto a techo · Hotel {hotel_cod}",
+                mensaje=texto.replace("*", ""),
+                nivel="aviso",
+                pedido_id=pedido_id,
+            )
 
         # ── Copia de supervisión a admins: creación de pedido sujeto a techo es siempre urgente ──
         _enviar_supervision_admins(texto, "urgente")
@@ -4728,6 +4850,81 @@ def bridge_alertas_usuario():
         "usuario":     session.get("username"),
         "nombre":      session.get("nombre"),
         "rol":         rol,
+    })
+
+
+# ── API Bridge: cola de notificaciones push (v10.7.7) ────────────────────────
+
+@app.route("/api/bridge/notificaciones", methods=["GET"])
+@login_required
+def bridge_notificaciones_usuario():
+    """
+    Devuelve las notificaciones pendientes (no leídas) para el usuario de la sesión
+    y las marca como leídas en la misma transacción.
+
+    Garantiza paridad total con Telegram: cada vez que se envía un Telegram a un
+    comprador o admin, se encola una fila en bridge_notificaciones para que
+    main_agenda la reciba como popup inmediato.
+
+    Respuesta:
+    {
+        "notificaciones": [
+            {
+                "id": 42,
+                "tipo": "cambio_estado",      -- 'cambio_estado'|'alerta_auto'|'techo'|'supervision'
+                "pedido_id": 123,             -- puede ser null
+                "titulo": "...",
+                "mensaje": "...",
+                "nivel": "urgente",           -- 'aviso'|'urgente'
+                "creado_en": "2026-05-25T..."
+            }, ...
+        ],
+        "total": 3,
+        "usuario": "comprador1",
+        "rol": "compras"
+    }
+    """
+    usuario  = session.get("username", "").lower()
+    rol      = session.get("rol", "")
+
+    try:
+        rows = rows_to_list(query(
+            """SELECT id, tipo, pedido_id, titulo, mensaje, nivel, creado_en
+               FROM bridge_notificaciones
+               WHERE usuario = %s AND leido = FALSE
+               ORDER BY creado_en ASC""",
+            (usuario,)
+        ))
+    except Exception as exc:
+        log.warning("bridge_notif GET: error leyendo notificaciones — %s", exc)
+        return jsonify({"notificaciones": [], "total": 0, "usuario": usuario, "rol": rol})
+
+    if rows:
+        ids = [r["id"] for r in rows]
+        placeholders = ",".join(["%s"] * len(ids))
+        try:
+            db = get_db()
+            db.cursor().execute(
+                f"UPDATE bridge_notificaciones SET leido=TRUE WHERE id IN ({placeholders})",
+                ids
+            )
+            db.commit()
+        except Exception as exc:
+            log.warning("bridge_notif: no se pudo marcar como leído — %s", exc)
+
+    # Serializar timestamps a ISO string
+    notifs = []
+    for r in rows:
+        r = dict(r)
+        if hasattr(r.get("creado_en"), "isoformat"):
+            r["creado_en"] = r["creado_en"].isoformat()
+        notifs.append(r)
+
+    return jsonify({
+        "notificaciones": notifs,
+        "total":          len(notifs),
+        "usuario":        usuario,
+        "rol":            rol,
     })
 
 
