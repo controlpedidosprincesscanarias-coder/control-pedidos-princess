@@ -22,7 +22,7 @@ SECRET_KEY = os.environ["SECRET_KEY"]
 
 # Email — Resend (preferido) o SMTP como fallback
 RESEND_API_KEY   = os.environ.get("RESEND_API_KEY", "")
-EMAIL_FROM       = os.environ.get("EMAIL_FROM", "compras@princess.es")
+EMAIL_FROM       = os.environ.get("EMAIL_FROM", "centralcomprascanarias.princess@gmail.com")
 EMAILS_INTERNOS  = [e.strip() for e in os.environ.get("EMAILS_INTERNOS", "").split(",") if e.strip()]
 
 # SMTP fallback (solo si no hay RESEND_API_KEY)
