@@ -2418,13 +2418,19 @@ def solicitar_usuario_fase2():
         (usuario_windows,), one=True
     )
     if usuario_existente:
-        msg = (
-            f"El usuario Windows '{usuario_windows}' ya tiene una cuenta activa."
-            if usuario_existente["activo"]
-            else f"El usuario Windows '{usuario_windows}' existe pero está desactivado. "
-                 f"Contacta con el administrador."
-        )
-        return jsonify({"error": msg}), 409
+        if usuario_existente["activo"]:
+            return jsonify({
+                "error": f"El usuario Windows '{usuario_windows}' ya tiene una cuenta activa en el sistema. "
+                         f"Puedes iniciar sesión directamente o recuperar tu contraseña si la olvidaste.",
+                "ya_existe": True
+            }), 409
+        else:
+            return jsonify({
+                "error": f"El usuario Windows '{usuario_windows}' existe en el sistema pero está desactivado. "
+                         f"Contacta con el administrador para reactivar tu cuenta.",
+                "ya_existe": True,
+                "desactivado": True
+            }), 409
 
     db = get_db()
     with db.cursor() as cur:

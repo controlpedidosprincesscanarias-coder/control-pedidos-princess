@@ -936,6 +936,25 @@ tbody tr:last-child{border-bottom:none}
       </button>
     </div>
 
+    <!-- ── Usuario ya existe ─────────────────────────────────────── -->
+    <div id="sol-panel-ya-existe" style="display:none;padding:28px;text-align:center;">
+      <div style="font-size:52px;margin-bottom:16px;">👤</div>
+      <h3 style="margin:0 0 10px;color:#f59e0b;font-size:17px;">Tu cuenta ya existe</h3>
+      <p style="color:rgba(255,255,255,.7);font-size:14px;line-height:1.6;margin:0 0 24px;">
+        El usuario Windows detectado en tu PC ya tiene una cuenta activa
+        en el sistema. Puedes iniciar sesión directamente.
+      </p>
+      <button class="login-btn" onclick="cerrarSolicitudUsuario()"
+              style="width:100%;margin-bottom:12px;">
+        Ir a iniciar sesión
+      </button>
+      <button onclick="cerrarSolicitudUsuario(); setTimeout(()=>mostrarFormReset(),200);"
+              style="width:100%;padding:12px;background:transparent;border:1px solid rgba(255,255,255,.25);
+                     color:rgba(255,255,255,.6);border-radius:8px;cursor:pointer;font-size:13px;">
+        Olvidé mi contraseña
+      </button>
+    </div>
+
     <!-- ── Error grave ──────────────────────────────────────────── -->
     <div id="sol-panel-error" style="display:none;padding:28px;text-align:center;">
       <div style="font-size:48px;margin-bottom:16px;">⚠️</div>
@@ -1009,7 +1028,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.7.0
+          V 10.7.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1956,7 +1975,9 @@ async function api(url, method='GET', body=null) {
   const opts = { method, headers:{'Content-Type':'application/json'}, credentials:'same-origin' };
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(url, opts);
-  return r.json();
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
+  return data;
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -2091,7 +2112,8 @@ function cerrarSolicitudUsuario() {
 
 function _sol_resetPaneles() {
   ['sol-panel-fase1','sol-panel-fase1-ok',
-   'sol-panel-descarga-bat','sol-panel-fase2','sol-panel-fase2-ok','sol-panel-error'].forEach(id => {
+   'sol-panel-descarga-bat','sol-panel-fase2','sol-panel-fase2-ok',
+   'sol-panel-ya-existe','sol-panel-error'].forEach(id => {
     const el = document.getElementById(id); if (el) el.style.display = 'none';
   });
 }
@@ -2203,8 +2225,14 @@ async function sol_enviarFase2() {
     _sol_resetPaneles();
     document.getElementById('sol-panel-fase2-ok').style.display = '';
   } catch(e) {
-    mostrarErr(e.message || 'Error al completar la verificación.');
     if (btn) { btn.disabled = false; btn.textContent = '✅ Completar verificación'; }
+    // Si el usuario ya existe, mostrar panel específico con acciones
+    if (e.message && e.message.includes('ya tiene una cuenta activa')) {
+      _sol_resetPaneles();
+      document.getElementById('sol-panel-ya-existe').style.display = '';
+    } else {
+      mostrarErr(e.message || 'Error al completar la verificación.');
+    }
   }
 }
 
