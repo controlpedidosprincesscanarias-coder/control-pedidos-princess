@@ -1323,13 +1323,27 @@ def _job_techo_urgente_admins_inner() -> None:
         acumulado   = sum(float(p["importe"] or 0) for p in pedidos)
         num_pedidos = len(pedidos)
 
-        # Solo nos interesan los ROJOS (URGENTE)
+        # Semáforo — misma lógica que el resto del sistema (API + job mensual existente):
+        #   ROJO     → num_pedidos >= max_pedidos  O  acumulado >= techo_max_mes * pct_amarillo/100
+        #   AMARILLO → num_pedidos == max_pedidos-1  O  misma condición de importe (ya cubierta)
+        #   VERDE    → resto
+        # Nota: techo_pct_amarillo es el umbral configurado en Config alertas (p.ej. 90 %).
+        # Cuando el hotel supera ese %, el semáforo pasa a ROJO (URGENTE), no a amarillo,
+        # porque amarillo es el aviso previo que el operador ya debería haber resuelto.
+        # El 100 % (techo_max_mes) también es rojo, igual que antes.
+        umbral_rojo = cfg["techo_max_mes"] * cfg["techo_pct_amarillo"] / 100
+
         es_rojo = (
             num_pedidos >= cfg["techo_max_pedidos"]
-            or acumulado >= cfg["techo_max_mes"]
+            or acumulado >= umbral_rojo
         )
         if not es_rojo:
-            log.debug("[TECHO-URG] Hotel %s — no urgente, omitiendo", hotel_codigo)
+            log.debug(
+                "[TECHO-URG] Hotel %s — %.1f %% del techo (%d pedidos), no urgente",
+                hotel_codigo,
+                acumulado / cfg["techo_max_mes"] * 100 if cfg["techo_max_mes"] else 0,
+                num_pedidos
+            )
             continue
 
         # ── 2. Deduplicación diaria (máx. 1 aviso/hotel/día) ─────────────
@@ -1358,7 +1372,12 @@ def _job_techo_urgente_admins_inner() -> None:
 
         motivo = []
         if acumulado >= cfg["techo_max_mes"]:
-            motivo.append(f"gasto {acumulado:,.2f} € ≥ límite {cfg['techo_max_mes']:,.0f} €")
+            motivo.append(f"gasto {acumulado:,.2f} € ≥ límite {cfg['techo_max_mes']:,.0f} € (100 %)")
+        elif acumulado >= umbral_rojo:
+            motivo.append(
+                f"gasto {acumulado:,.2f} € ≥ {cfg['techo_pct_amarillo']:.0f} % del límite "
+                f"({umbral_rojo:,.0f} €)"
+            )
         if num_pedidos >= cfg["techo_max_pedidos"]:
             motivo.append(f"{num_pedidos} pedidos ≥ máximo {cfg['techo_max_pedidos']}")
 
