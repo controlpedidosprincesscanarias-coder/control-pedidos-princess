@@ -2504,23 +2504,7 @@ def solicitar_usuario_fase1():
         return jsonify({"ok": True, "sol_id": sol_id,
                         "msg": "Solicitud registrada (sin email de admin configurado)"})
 
-    if not RESEND_API_KEY:
-        return jsonify({
-            "ok": True, "sol_id": sol_id, "sin_email": True,
-            "destinatarios": destinatarios,
-            "asunto": asunto, "body_text": body_text,
-            "reply_to": email_sol,
-        })
-
-    enviado = False
-    for dest in destinatarios:
-        res = _send_email(dest, asunto, body_html, body_text=body_text)
-        if res.get("ok"):
-            enviado = True
-        else:
-            log.warning("[SOL_FASE1] Error enviando a %s: %s", dest, res.get("error"))
-
-    # Notificacion Telegram independiente del resultado del email
+    # Telegram SIEMPRE, antes de devolver la respuesta al frontend
     _notify_solicitud_telegram(
         f"\U0001F514 *[FASE 1] Nueva solicitud de acceso*\n\n"
         f"\U0001F464 *{nombre} {apellidos}*\n"
@@ -2531,16 +2515,13 @@ def solicitar_usuario_fase1():
         + (f"\n\U0001F517 {url_admin}" if url_admin else "")
     )
 
-    if not enviado:
-        return jsonify({
-            "ok": True, "sol_id": sol_id, "sin_email": True,
-            "destinatarios": destinatarios,
-            "asunto": asunto, "body_text": body_text,
-            "reply_to": email_sol,
-        })
-
-    return jsonify({"ok": True, "sol_id": sol_id,
-                    "msg": "Solicitud registrada. Los administradores han sido notificados."})
+    # Email via EmailJS en el frontend (sin_email=True siempre)
+    return jsonify({
+        "ok": True, "sol_id": sol_id, "sin_email": True,
+        "destinatarios": destinatarios,
+        "asunto": asunto, "body_text": body_text,
+        "reply_to": email_sol,
+    })
 
 
 # ─── ADMIN: listar solicitudes de acceso ──────────────────────────────────────
@@ -2891,27 +2872,7 @@ def solicitar_usuario_fase2():
         return jsonify({"ok": True,
                         "msg": "¡Verificación completada! Los administradores podrán verla en el panel."})
 
-    if not RESEND_API_KEY:
-        return jsonify({
-            "ok":            True,
-            "sin_email":     True,
-            "destinatarios": destinatarios,
-            "asunto":        asunto,
-            "body_text":     body_text,
-            "url_admin":     url_admin,
-            "reply_to":      sol["email"],
-            "msg": "¡Verificación completada! Los administradores han recibido todos los datos para crear tu cuenta."
-        })
-
-    enviado = False
-    for dest in destinatarios:
-        res = _send_email(dest, asunto, body_html, body_text=body_text)
-        if res.get("ok"):
-            enviado = True
-        else:
-            log.warning("[SOL_FASE2] Error enviando a %s: %s", dest, res.get("error"))
-
-    # Notificacion Telegram independiente del resultado del email
+    # Telegram SIEMPRE, antes de devolver la respuesta al frontend
     _notify_solicitud_telegram(
         f"\u2705 *[FASE 2 COMPLETADA] Alta pendiente de aprobar*\n\n"
         f"\U0001F464 *{nombre_c}*\n"
@@ -2922,20 +2883,15 @@ def solicitar_usuario_fase2():
         + (f"\n\U0001F517 {url_admin}" if url_admin else "")
     )
 
-    if not enviado:
-        return jsonify({
-            "ok":            True,
-            "sin_email":     True,
-            "destinatarios": destinatarios,
-            "asunto":        asunto,
-            "body_text":     body_text,
-            "url_admin":     url_admin,
-            "reply_to":      sol["email"],
-            "msg": "¡Verificación completada! Los administradores han recibido todos los datos para crear tu cuenta."
-        })
-
+    # Email via EmailJS en el frontend (sin_email=True siempre)
     return jsonify({
-        "ok":  True,
+        "ok":            True,
+        "sin_email":     True,
+        "destinatarios": destinatarios,
+        "asunto":        asunto,
+        "body_text":     body_text,
+        "url_admin":     url_admin,
+        "reply_to":      sol["email"],
         "msg": "¡Verificación completada! Los administradores han recibido todos los datos para crear tu cuenta."
     })
 
