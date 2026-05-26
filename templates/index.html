@@ -1010,7 +1010,7 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item" data-view="proveedores" onclick="showView('proveedores',this)">
       <span class="icon">🏭</span> Proveedores
     </div>
-    <div class="sb-item admin-only" data-view="eliminados" onclick="showView('eliminados',this)" style="display:none">
+    <div class="sb-item compras-readonly" data-view="eliminados" onclick="showView('eliminados',this)" style="display:none">
       <span class="icon">🗑️</span> Pedidos eliminados
     </div>
     <div class="sb-item" data-view="techo" onclick="showView('techo',this)">
@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.8.2
+          V 10.8.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1213,7 +1213,7 @@ tbody tr:last-child{border-bottom:none}
         <div class="card">
           <div class="card-header">
             <span class="card-title">🗑️ Registro de pedidos eliminados</span>
-            <span style="margin-left:auto;font-size:12px;color:var(--text-secondary)">Solo visible para Administradores</span>
+            <span style="margin-left:auto;font-size:12px;color:var(--text-secondary)">Solo consulta · Visible para Administradores y Compras</span>
           </div>
           <div class="table-wrap">
             <table>
@@ -1947,6 +1947,10 @@ async function doLogin() {
     // Mostrar elementos de menú solo para admin
     document.querySelectorAll('.admin-only').forEach(el => {
       el.style.display = G.rol === 'admin' ? '' : 'none';
+    });
+    // Mostrar elementos de solo consulta para compras (y admin)
+    document.querySelectorAll('.compras-readonly').forEach(el => {
+      el.style.display = (G.rol === 'admin' || G.rol === 'compras') ? '' : 'none';
     });
     // Ocultar botón nuevo pedido para usuario hotel (solo lectura + albarán)
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
@@ -4066,6 +4070,10 @@ function calcDias(s) {
     if (G.rol !== 'admin') document.getElementById('btn-delete-pedido').style.display='none';
     document.querySelectorAll('.admin-only').forEach(el => {
       el.style.display = G.rol === 'admin' ? '' : 'none';
+    });
+    // Mostrar elementos de solo consulta para compras (y admin)
+    document.querySelectorAll('.compras-readonly').forEach(el => {
+      el.style.display = (G.rol === 'admin' || G.rol === 'compras') ? '' : 'none';
     });
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
