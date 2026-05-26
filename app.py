@@ -229,7 +229,7 @@ def _auto_migrate():
                     ("techo_max_pedido",      "3000", "numero", "Techo — Importe máximo por pedido (€)",             "techo",             1),
                     ("techo_max_mes",         "6000", "numero", "Techo — Importe máximo mensual por hotel (€)",      "techo",             2),
                     ("techo_max_pedidos",        "2", "numero", "Techo — Nº máximo de pedidos por hotel/mes",        "techo",             3),
-                    ("techo_pct_amarillo",      "75", "numero", "Techo — % consumido para alerta amarilla",          "techo",             4),
+                    ("techo_pct_amarillo",      "60", "numero", "Techo — % consumido para alerta 🟡 amarilla (defecto 60%)",  "techo",             4),
                 ]
                 cur.executemany(
                     "INSERT INTO config_alertas (clave,valor,tipo,label,grupo,orden) VALUES (%s,%s,%s,%s,%s,%s)",
@@ -1019,7 +1019,7 @@ def get_config() -> dict:
         "cotizacion_primera": 2, "cotizacion_urgente": 3,
         "dias_critico": 60,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
-        "techo_max_pedidos": 2, "techo_pct_amarillo": 75,
+        "techo_max_pedidos": 2, "techo_pct_amarillo": 60,
     }
     for k, v in defaults.items():
         cfg.setdefault(k, v)
@@ -1419,19 +1419,13 @@ def _job_techo_urgente_admins_inner() -> None:
         acumulado   = sum(float(p["importe"] or 0) for p in pedidos)
         num_pedidos = len(pedidos)
 
-        # Semáforo — misma lógica que el resto del sistema (API + job mensual existente):
-        #   ROJO     → num_pedidos >= max_pedidos  O  acumulado >= techo_max_mes * pct_amarillo/100
-        #   AMARILLO → num_pedidos == max_pedidos-1  O  misma condición de importe (ya cubierta)
-        #   VERDE    → resto
-        # Nota: techo_pct_amarillo es el umbral configurado en Config alertas (p.ej. 90 %).
-        # Cuando el hotel supera ese %, el semáforo pasa a ROJO (URGENTE), no a amarillo,
-        # porque amarillo es el aviso previo que el operador ya debería haber resuelto.
-        # El 100 % (techo_max_mes) también es rojo, igual que antes.
-        umbral_rojo = cfg["techo_max_mes"] * cfg["techo_pct_amarillo"] / 100
-
+        # Semáforo urgente — solo dispara si es genuinamente ROJO:
+        #   ROJO → acumulado >= techo_max_mes (100%)  O  num_pedidos >= techo_max_pedidos
+        #   El job mensual ya cubre el amarillo (60% o 1 pedido) al comprador.
+        #   Este job urgente solo notifica a admins cuando el techo está realmente superado.
         es_rojo = (
-            num_pedidos >= cfg["techo_max_pedidos"]
-            or acumulado >= umbral_rojo
+            acumulado >= cfg["techo_max_mes"]
+            or num_pedidos >= cfg["techo_max_pedidos"]
         )
         if not es_rojo:
             log.debug(
@@ -1469,11 +1463,6 @@ def _job_techo_urgente_admins_inner() -> None:
         motivo = []
         if acumulado >= cfg["techo_max_mes"]:
             motivo.append(f"gasto {acumulado:,.2f} € ≥ límite {cfg['techo_max_mes']:,.0f} € (100 %)")
-        elif acumulado >= umbral_rojo:
-            motivo.append(
-                f"gasto {acumulado:,.2f} € ≥ {cfg['techo_pct_amarillo']:.0f} % del límite "
-                f"({umbral_rojo:,.0f} €)"
-            )
         if num_pedidos >= cfg["techo_max_pedidos"]:
             motivo.append(f"{num_pedidos} pedidos ≥ máximo {cfg['techo_max_pedidos']}")
 
@@ -1639,9 +1628,14 @@ def _job_alertas_techo_mensual_inner() -> None:
         acumulado   = sum(float(p["importe"] or 0) for p in pedidos)
         num_pedidos = len(pedidos)
 
-        if num_pedidos >= get_config()["techo_max_pedidos"] or acumulado >= get_config()["techo_max_mes"]:
+        # Semáforo:
+        #   ROJO     → acumulado >= techo_max_mes  O  num_pedidos >= techo_max_pedidos (techo realmente alcanzado)
+        #   AMARILLO → acumulado >= techo_max_mes * pct_amarillo/100  O  num_pedidos >= 1 (primer aviso)
+        #   VERDE    → sin actividad sujeta al techo (sin notificación)
+        umbral_amarillo = get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100
+        if acumulado >= get_config()["techo_max_mes"] or num_pedidos >= get_config()["techo_max_pedidos"]:
             semaforo = "rojo"
-        elif num_pedidos == get_config()["techo_max_pedidos"] - 1 or acumulado >= get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100:
+        elif acumulado >= umbral_amarillo or num_pedidos >= 1:
             semaforo = "amarillo"
         else:
             omitidos += 1
@@ -4213,10 +4207,13 @@ def techo_resumen():
         num_pedidos   = len(pedidos)
         familias_usadas = [p["familia_nombre"] for p in pedidos if p["familia_nombre"]]
 
-        # Semáforo
-        if num_pedidos >= get_config()["techo_max_pedidos"] or acumulado >= get_config()["techo_max_mes"]:
+        # Semáforo:
+        #   ROJO     → acumulado >= techo_max_mes  O  num_pedidos >= techo_max_pedidos
+        #   AMARILLO → acumulado >= techo_max_mes * pct_amarillo/100  O  num_pedidos >= 1
+        umbral_amarillo_r = get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100
+        if acumulado >= get_config()["techo_max_mes"] or num_pedidos >= get_config()["techo_max_pedidos"]:
             semaforo = "rojo"
-        elif num_pedidos == get_config()["techo_max_pedidos"] - 1 or acumulado >= get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100:
+        elif acumulado >= umbral_amarillo_r or num_pedidos >= 1:
             semaforo = "amarillo"
         else:
             semaforo = "verde"
@@ -4598,10 +4595,8 @@ def delete_pedido(pid):
 # ── Registro de pedidos eliminados ────────────────────────────────────────────
 
 @app.route("/api/pedidos_eliminados")
-@login_required
+@admin_required
 def get_pedidos_eliminados():
-    if session.get("rol") not in ("admin", "compras"):
-        return jsonify({"error": "Acceso restringido"}), 403
     registros = rows_to_list(query(
         "SELECT * FROM pedidos_eliminados ORDER BY eliminado_en DESC"
     ))
