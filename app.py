@@ -1425,7 +1425,7 @@ def _job_techo_urgente_admins_inner() -> None:
         #   Este job urgente solo notifica a admins cuando el techo está realmente superado.
         es_rojo = (
             acumulado >= cfg["techo_max_mes"]
-            or num_pedidos >= cfg["techo_max_pedidos"]
+            or num_pedidos > cfg["techo_max_pedidos"]
         )
         if not es_rojo:
             log.debug(
@@ -1629,13 +1629,13 @@ def _job_alertas_techo_mensual_inner() -> None:
         num_pedidos = len(pedidos)
 
         # Semáforo:
-        #   ROJO     → acumulado >= techo_max_mes  O  num_pedidos >= techo_max_pedidos (techo realmente alcanzado)
-        #   AMARILLO → acumulado >= techo_max_mes * pct_amarillo/100  O  num_pedidos >= 1 (primer aviso)
+        #   ROJO     → acumulado >= techo_max_mes  O  num_pedidos > techo_max_pedidos (techo realmente superado)
+        #   AMARILLO → acumulado >= techo_max_mes * pct_amarillo/100  O  num_pedidos >= techo_max_pedidos (límite alcanzado)
         #   VERDE    → sin actividad sujeta al techo (sin notificación)
         umbral_amarillo = get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100
-        if acumulado >= get_config()["techo_max_mes"] or num_pedidos >= get_config()["techo_max_pedidos"]:
+        if acumulado >= get_config()["techo_max_mes"] or num_pedidos > get_config()["techo_max_pedidos"]:
             semaforo = "rojo"
-        elif acumulado >= umbral_amarillo or num_pedidos >= 1:
+        elif acumulado >= umbral_amarillo or num_pedidos >= get_config()["techo_max_pedidos"]:
             semaforo = "amarillo"
         else:
             omitidos += 1
@@ -4164,12 +4164,12 @@ def techo_resumen():
         familias_usadas = [p["familia_nombre"] for p in pedidos if p["familia_nombre"]]
 
         # Semáforo:
-        #   ROJO     → acumulado >= techo_max_mes  O  num_pedidos >= techo_max_pedidos
-        #   AMARILLO → acumulado >= techo_max_mes * pct_amarillo/100  O  num_pedidos >= 1
+        #   ROJO     → acumulado >= techo_max_mes  O  num_pedidos > techo_max_pedidos (superado)
+        #   AMARILLO → acumulado >= techo_max_mes * pct_amarillo/100  O  num_pedidos >= techo_max_pedidos (alcanzado)
         umbral_amarillo_r = get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100
-        if acumulado >= get_config()["techo_max_mes"] or num_pedidos >= get_config()["techo_max_pedidos"]:
+        if acumulado >= get_config()["techo_max_mes"] or num_pedidos > get_config()["techo_max_pedidos"]:
             semaforo = "rojo"
-        elif acumulado >= umbral_amarillo_r or num_pedidos >= 1:
+        elif acumulado >= umbral_amarillo_r or num_pedidos >= get_config()["techo_max_pedidos"]:
             semaforo = "amarillo"
         else:
             semaforo = "verde"
