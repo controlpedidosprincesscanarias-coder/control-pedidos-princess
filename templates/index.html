@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.8.6
+          V 10.8.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1166,8 +1166,9 @@ tbody tr:last-child{border-bottom:none}
         </div>
 
         <div class="card">
-          <div class="card-header">
+          <div class="card-header" style="gap:10px">
             <span class="card-title">⚠️ Alertas de seguimiento de pedidos</span>
+            <button onclick="abrirModalImpresion('alertas')" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:5px 14px;font-size:12px;font-weight:600;border:1px solid #e67e00;border-radius:6px;cursor:pointer;background:#fff;color:#e67e00" title="Imprimir informe de alertas">🖨️ Imprimir</button>
           </div>
           <div class="table-wrap">
             <table>
@@ -1243,9 +1244,10 @@ tbody tr:last-child{border-bottom:none}
       <!-- ── Vista: Techo de Gastos (solo admin) ───────────────────────── -->
       <div id="view-techo" class="section-hidden">
         <div class="card">
-          <div class="card-header">
+          <div class="card-header" style="gap:10px">
             <span class="card-title">📉 Techo de Gastos — Mes en curso</span>
-            <span id="techo-mes-label" style="margin-left:auto;font-size:12px;color:var(--text-secondary)"></span>
+            <span id="techo-mes-label" style="font-size:12px;color:var(--text-secondary)"></span>
+            <button onclick="abrirModalImpresion('techo')" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:5px 14px;font-size:12px;font-weight:600;border:1px solid #1a73e8;border-radius:6px;cursor:pointer;background:#fff;color:#1a73e8" title="Imprimir informe de techo de gastos">🖨️ Imprimir</button>
           </div>
           <div id="techo-resumen-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;padding:16px 0"></div>
           <div id="techo-empty" class="empty-state section-hidden">
@@ -5547,6 +5549,227 @@ function meaEnviarWA() {
 document.getElementById('modal-email-alerta').addEventListener('click', function(e) {
   if (e.target === this) closeModal('modal-email-alerta');
 });
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL IMPRESION — Techo de Gastos / Alertas
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-impresion" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:3000;overflow-y:auto">
+  <div style="background:#fff;border-radius:14px;max-width:430px;margin:60px auto;padding:0;box-shadow:0 8px 40px rgba(0,0,0,.25)">
+    <div style="padding:20px 24px 14px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px">
+      <span style="font-size:20px">🖨️</span>
+      <strong id="modal-imp-titulo" style="font-size:15px">Imprimir informe</strong>
+      <button onclick="document.getElementById('modal-impresion').style.display='none'"
+              style="margin-left:auto;background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+    </div>
+    <div style="padding:20px 24px">
+      <p style="margin:0 0 16px;font-size:13px;color:#555">Selecciona qué hoteles incluir en el informe:</p>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
+        <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:10px 14px;border:2px solid #1a73e8;border-radius:8px;background:#f0f6ff">
+          <input type="radio" name="imp-scope" value="todo" checked style="accent-color:#1a73e8;width:16px;height:16px">
+          <span><strong>Todos los hoteles</strong> — informe completo</span>
+        </label>
+        <label id="lbl-imp-mis" style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:10px 14px;border:2px solid #e0e0e0;border-radius:8px">
+          <input type="radio" name="imp-scope" value="mis" style="accent-color:#1a73e8;width:16px;height:16px">
+          <span><strong>Solo mis hoteles</strong> — hoteles asignados a mi usuario</span>
+        </label>
+      </div>
+      <div style="display:flex;gap:10px;justify-content:flex-end">
+        <button onclick="document.getElementById('modal-impresion').style.display='none'"
+                style="padding:8px 18px;border:1px solid #ccc;border-radius:7px;background:#fff;cursor:pointer;font-size:13px">Cancelar</button>
+        <button onclick="ejecutarImpresion()"
+                style="padding:8px 22px;border:none;border-radius:7px;background:#1a73e8;color:#fff;font-weight:700;font-size:13px;cursor:pointer">🖨️ Imprimir</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =======================================================================
+   IMPRESION — Techo de Gastos / Alertas
+======================================================================= */
+var _impTipo = null;
+
+function abrirModalImpresion(tipo) {
+  _impTipo = tipo;
+  var titulos = { techo:'Imprimir — Techo de Gastos', alertas:'Imprimir — Alertas de Seguimiento' };
+  document.getElementById('modal-imp-titulo').textContent = titulos[tipo] || 'Imprimir';
+  var tieneHoteles = G.hotelesIds && G.hotelesIds.length > 0;
+  var lblMis = document.getElementById('lbl-imp-mis');
+  if (lblMis) lblMis.style.display = tieneHoteles ? '' : 'none';
+  document.querySelector('[name="imp-scope"][value="todo"]').checked = true;
+  document.getElementById('modal-impresion').style.display = '';
+}
+
+document.getElementById('modal-impresion').addEventListener('click', function(e){
+  if (e.target === this) this.style.display = 'none';
+});
+
+function ejecutarImpresion() {
+  var scope = document.querySelector('[name="imp-scope"]:checked').value;
+  document.getElementById('modal-impresion').style.display = 'none';
+  if (_impTipo === 'techo') imprimirTecho(scope);
+  else if (_impTipo === 'alertas') imprimirAlertas(scope);
+}
+
+function _fmtEur(n) {
+  return n != null ? Number(n).toLocaleString('es-ES', {minimumFractionDigits:2}) + ' \u20ac' : '\u2014';
+}
+
+async function imprimirTecho(scope) {
+  var d;
+  try { d = await api('/api/techo/resumen'); } catch(e) { alert('Error cargando datos: ' + e.message); return; }
+  var hoteles = d.hoteles || [];
+  if (scope === 'mis') {
+    hoteles = hoteles.filter(function(h){ return G.hotelesIds.includes(h.hotel_id) || G.hotelesIds.includes(String(h.hotel_id)); });
+  }
+  var mes = d.mes || '';
+  var ahora = new Date().toLocaleString('es-ES');
+  var semIcono  = { verde:'🟢', amarillo:'🟡', rojo:'🔴' };
+  var semColor  = { verde:'#155724', amarillo:'#856404', rojo:'#721c24' };
+  var semBg     = { verde:'#d4edda20', amarillo:'#fff3cd20', rojo:'#f8d7da20' };
+  var semBorder = { verde:'#c3e6cb', amarillo:'#ffeeba', rojo:'#f5c6cb' };
+
+  var tarjetas = hoteles.map(function(h){
+    var pct = h.techo_mes > 0 ? Math.min(100, Math.round((h.acumulado / h.techo_mes) * 100)) : 0;
+    var barColor = h.semaforo === 'rojo' ? '#dc3545' : h.semaforo === 'amarillo' ? '#ffc107' : '#28a745';
+    var pedidosRows = (h.pedidos && h.pedidos.length)
+      ? h.pedidos.map(function(p){
+          return '<tr>' +
+            '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.pedido_num || ('#'+p.norden) || '\u2014') + '</td>' +
+            '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.familia_nombre || 'Sin familia') + '</td>' +
+            '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.proveedor_nombre || '\u2014') + '</td>' +
+            '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:right;font-weight:700">' + _fmtEur(p.importe) + '</td>' +
+          '</tr>';
+        }).join('')
+      : '<tr><td colspan="4" style="padding:6px 8px;font-size:11px;color:#999;font-style:italic">Sin pedidos sujetos al techo este mes</td></tr>';
+
+    return '<div style="border:1.5px solid ' + semBorder[h.semaforo] + ';border-radius:10px;padding:16px;margin-bottom:16px;background:' + semBg[h.semaforo] + ';page-break-inside:avoid">' +
+      '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
+        '<strong style="font-size:14px;color:#1a1a2e">' + h.hotel_codigo + ' \u2014 ' + h.hotel_nombre + '</strong>' +
+        '<span style="font-size:22px">' + semIcono[h.semaforo] + '</span>' +
+      '</div>' +
+      '<div style="background:#e9ecef;border-radius:5px;height:10px;margin-bottom:10px;overflow:hidden">' +
+        '<div style="height:10px;width:' + pct + '%;background:' + barColor + ';border-radius:5px"></div>' +
+      '</div>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px">' +
+        '<tr>' +
+          '<td><span style="color:#555">Acumulado:</span> <strong style="color:' + semColor[h.semaforo] + '">' + _fmtEur(h.acumulado) + '</strong></td>' +
+          '<td style="text-align:right"><span style="color:#555">Techo mensual:</span> <strong>' + _fmtEur(h.techo_mes) + '</strong></td>' +
+        '</tr>' +
+        '<tr>' +
+          '<td style="padding-top:4px;color:#777;font-size:11px">Pedidos: <strong>' + h.num_pedidos + ' / ' + h.max_pedidos + '</strong></td>' +
+          '<td style="text-align:right;color:#777;font-size:11px">% Consumido: <strong style="color:' + semColor[h.semaforo] + '">' + pct + '%</strong></td>' +
+        '</tr>' +
+        '<tr><td colspan="2" style="padding-top:4px;color:#777;font-size:11px">Familias: ' + (h.familias_usadas && h.familias_usadas.length ? h.familias_usadas.join(', ') : '\u2014') + '</td></tr>' +
+      '</table>' +
+      '<table style="width:100%;border-collapse:collapse;border-top:1px solid #ddd;margin-top:8px">' +
+        '<thead><tr style="background:#f8f9fa">' +
+          '<th style="padding:5px 8px;font-size:10px;text-align:left;border-bottom:2px solid #dee2e6">Pedido</th>' +
+          '<th style="padding:5px 8px;font-size:10px;text-align:left;border-bottom:2px solid #dee2e6">Familia</th>' +
+          '<th style="padding:5px 8px;font-size:10px;text-align:left;border-bottom:2px solid #dee2e6">Proveedor</th>' +
+          '<th style="padding:5px 8px;font-size:10px;text-align:right;border-bottom:2px solid #dee2e6">Importe</th>' +
+        '</tr></thead>' +
+        '<tbody>' + pedidosRows + '</tbody>' +
+      '</table>' +
+    '</div>';
+  }).join('');
+
+  var rojos     = hoteles.filter(function(h){ return h.semaforo === 'rojo'; }).length;
+  var amarillos = hoteles.filter(function(h){ return h.semaforo === 'amarillo'; }).length;
+  var verdes    = hoteles.filter(function(h){ return h.semaforo === 'verde'; }).length;
+
+  var html = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<title>Techo de Gastos \u2014 ' + mes + '</title>' +
+    '<style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#1a1a2e;margin:0;padding:24px}' +
+    'h1{font-size:20px;margin:0 0 4px}.subtitle{font-size:12px;color:#666;margin-bottom:16px}' +
+    '.resumen{display:flex;gap:12px;margin-bottom:20px;flex-wrap:wrap}' +
+    '.res-item{padding:10px 18px;border-radius:8px;font-size:13px;font-weight:700}' +
+    '@media print{body{padding:12px}@page{margin:15mm}}' +
+    '</style></head><body>' +
+    '<h1>&#128201; Informe de Techo de Gastos</h1>' +
+    '<div class="subtitle">Mes: <strong>' + mes + '</strong> &nbsp;|&nbsp; Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + (scope === 'mis' ? ' &nbsp;|&nbsp; <em>Solo mis hoteles</em>' : '') + '</div>' +
+    '<div class="resumen">' +
+      '<div class="res-item" style="background:#f8d7da;color:#721c24">\uD83D\uDD34 Superados: ' + rojos + '</div>' +
+      '<div class="res-item" style="background:#fff3cd;color:#856404">\uD83D\uDFE1 En aviso: ' + amarillos + '</div>' +
+      '<div class="res-item" style="background:#d4edda;color:#155724">\uD83D\uDFE2 En rango: ' + verdes + '</div>' +
+      '<div class="res-item" style="background:#e9ecef;color:#495057">Total hoteles: ' + hoteles.length + '</div>' +
+    '</div>' +
+    (tarjetas || '<p style="color:#999;font-style:italic">No hay hoteles con datos este mes.</p>') +
+    '</body></html>';
+
+  _abrirVentanaImpresion(html);
+}
+
+async function imprimirAlertas(scope) {
+  var d;
+  try { d = await api('/api/stats'); } catch(e) { alert('Error cargando datos: ' + e.message); return; }
+  var alertas = d.alertas || [];
+  if (scope === 'mis') {
+    alertas = alertas.filter(function(p){ return G.hotelesIds.includes(p.hotel_id) || G.hotelesIds.includes(String(p.hotel_id)); });
+  }
+  var ahora    = new Date().toLocaleString('es-ES');
+  var urgentes = alertas.filter(function(p){ return p.nivel_alerta === 'urgente'; }).length;
+  var avisos   = alertas.filter(function(p){ return p.nivel_alerta === 'aviso'; }).length;
+
+  var estadoColors = { 'PENDIENTE COTIZACI\u00d3N':'#856404','EN TRAMITACI\u00d3N':'#004085','RECIBIDO':'#155724','CANCELADO':'#721c24' };
+
+  var filas = alertas.map(function(p, i){
+    var esUrgente  = p.nivel_alerta === 'urgente';
+    var bgRow      = esUrgente ? '#fff5f5' : (i%2===0 ? '#fffbf0' : '#fff');
+    var nivelText  = esUrgente ? '\uD83D\uDD34 URGENTE' : '\u26A0\uFE0F AVISO';
+    var nivelColor = esUrgente ? '#721c24' : '#856404';
+    var fechaRef   = p.estado === 'PENDIENTE COTIZACI\u00d3N' ? p.fecha_solicitud : p.fecha_tramitacion;
+    var fmtFecha   = fechaRef ? new Date(fechaRef).toLocaleDateString('es-ES') : '\u2014';
+    var estadoColor= estadoColors[p.estado] || '#495057';
+    return '<tr style="background:' + bgRow + '">' +
+      '<td style="padding:7px 8px;font-size:11px;font-weight:700;border-bottom:1px solid #eee">' + (p.norden || '\u2014') + '</td>' +
+      '<td style="padding:7px 8px;font-size:11px;font-weight:700;border-bottom:1px solid #eee;color:#1a3a6b">' + (p.hotel_codigo || '\u2014') + '</td>' +
+      '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.pedido_num || '\u2014') + '</td>' +
+      '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;color:' + estadoColor + ';font-weight:600">' + (p.estado || '\u2014') + '</td>' +
+      '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.proveedor_nombre || '\u2014') + '</td>' +
+      '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:center">' + fmtFecha + '</td>' +
+      '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:center;font-weight:700;color:' + (esUrgente?'#dc3545':'#e67e00') + '">' + p.dias_tramitacion + ' d\u00edas</td>' +
+      '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;font-weight:700;color:' + nivelColor + '">' + nivelText + '</td>' +
+    '</tr>';
+  }).join('');
+
+  var tablaHtml = alertas.length
+    ? '<table><thead><tr>' +
+        '<th>N\u00ba Orden</th><th>Hotel</th><th>Pedido DALI/SAP</th><th>Estado</th>' +
+        '<th>Proveedor</th><th>Fecha Ref.</th><th>D\u00edas</th><th>Nivel</th>' +
+      '</tr></thead><tbody>' + filas + '</tbody></table>'
+    : '<p style="color:#999;font-style:italic">No hay alertas activas.</p>';
+
+  var html = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<title>Alertas de Seguimiento</title>' +
+    '<style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#1a1a2e;margin:0;padding:24px}' +
+    'h1{font-size:20px;margin:0 0 4px}.subtitle{font-size:12px;color:#666;margin-bottom:16px}' +
+    'table{width:100%;border-collapse:collapse}th{background:#1a3a6b;color:#fff;padding:8px;font-size:11px;text-align:left}' +
+    '.resumen{display:flex;gap:12px;margin-bottom:18px;flex-wrap:wrap}' +
+    '.res-item{padding:9px 16px;border-radius:7px;font-size:13px;font-weight:700}' +
+    '@media print{body{padding:12px}@page{margin:12mm;size:landscape}table{font-size:10px}}' +
+    '</style></head><body>' +
+    '<h1>\u26A0\uFE0F Informe de Alertas de Seguimiento</h1>' +
+    '<div class="subtitle">Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + (scope === 'mis' ? ' &nbsp;|&nbsp; <em>Solo mis hoteles</em>' : '') + '</div>' +
+    '<div class="resumen">' +
+      '<div class="res-item" style="background:#fee2e2;color:#991b1b">\uD83D\uDD34 Urgentes: ' + urgentes + '</div>' +
+      '<div class="res-item" style="background:#fef3c7;color:#92400e">\u26A0\uFE0F Avisos: ' + avisos + '</div>' +
+      '<div class="res-item" style="background:#e9ecef;color:#495057">Total: ' + alertas.length + '</div>' +
+    '</div>' +
+    tablaHtml + '</body></html>';
+
+  _abrirVentanaImpresion(html);
+}
+
+function _abrirVentanaImpresion(html) {
+  var win = window.open('', '_blank', 'width=960,height=720,scrollbars=yes');
+  if (!win) { alert('El navegador bloque\u00f3 la ventana emergente. Permite ventanas emergentes para esta p\u00e1gina.'); return; }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+  win.onload = function() { setTimeout(function(){ win.focus(); win.print(); }, 300); };
+}
 </script>
 </body>
 </html>
