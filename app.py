@@ -4595,8 +4595,10 @@ def delete_pedido(pid):
 # ── Registro de pedidos eliminados ────────────────────────────────────────────
 
 @app.route("/api/pedidos_eliminados")
-@admin_required
+@login_required
 def get_pedidos_eliminados():
+    if session.get("rol") not in ("admin", "compras"):
+        return jsonify({"error": "Acceso restringido"}), 403
     registros = rows_to_list(query(
         "SELECT * FROM pedidos_eliminados ORDER BY eliminado_en DESC"
     ))
