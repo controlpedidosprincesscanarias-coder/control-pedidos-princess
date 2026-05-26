@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.9.2
+          V 10.9.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -5569,6 +5569,10 @@ document.getElementById('modal-email-alerta').addEventListener('click', function
           <input type="radio" name="imp-scope" value="todo" checked style="accent-color:#1a73e8;width:16px;height:16px">
           <span><strong>Todos los hoteles</strong> — informe completo</span>
         </label>
+        <label id="lbl-imp-selec" style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:10px 14px;border:2px solid #e0e0e0;border-radius:8px">
+          <input type="radio" name="imp-scope" value="seleccionados" style="accent-color:#1a73e8;width:16px;height:16px">
+          <span id="lbl-imp-selec-texto"><strong>Solo hoteles seleccionados</strong> — los que aparecen ahora en pantalla</span>
+        </label>
         <label id="lbl-imp-mis" style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:10px 14px;border:2px solid #e0e0e0;border-radius:8px">
           <input type="radio" name="imp-scope" value="mis" style="accent-color:#1a73e8;width:16px;height:16px">
           <span><strong>Solo mis hoteles</strong> — hoteles asignados a mi usuario</span>
@@ -5594,9 +5598,29 @@ function abrirModalImpresion(tipo) {
   _impTipo = tipo;
   var titulos = { techo:'Imprimir — Techo de Gastos', alertas:'Imprimir — Alertas de Seguimiento' };
   document.getElementById('modal-imp-titulo').textContent = titulos[tipo] || 'Imprimir';
+
+  // "Solo mis hoteles": solo si el usuario tiene hoteles asignados
   var tieneHoteles = G.hotelesIds && G.hotelesIds.length > 0;
   var lblMis = document.getElementById('lbl-imp-mis');
   if (lblMis) lblMis.style.display = tieneHoteles ? '' : 'none';
+
+  // "Solo hoteles seleccionados": contar visibles en pantalla según el contexto
+  var lblSelec = document.getElementById('lbl-imp-selec');
+  var nSelec = 0;
+  if (tipo === 'techo') {
+    nSelec = document.querySelectorAll('#techo-resumen-grid > div').length;
+  } else if (tipo === 'alertas') {
+    nSelec = document.querySelectorAll('#techo-alertas-list > div').length;
+  }
+  if (lblSelec) {
+    var textoSelec = document.getElementById('lbl-imp-selec-texto');
+    if (textoSelec) {
+      textoSelec.innerHTML = '<strong>Solo hoteles seleccionados</strong> \u2014 los que aparecen ahora en pantalla' +
+        (nSelec > 0 ? ' <span style="background:#1a73e8;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:4px">' + nSelec + '</span>' : '');
+    }
+    lblSelec.style.display = nSelec > 0 ? '' : 'none';
+  }
+
   document.querySelector('[name="imp-scope"][value="todo"]').checked = true;
   document.getElementById('modal-impresion').style.display = '';
 }
@@ -5622,6 +5646,13 @@ async function imprimirTecho(scope) {
   var hoteles = d.hoteles || [];
   if (scope === 'mis') {
     hoteles = hoteles.filter(function(h){ return G.hotelesIds.includes(h.hotel_id) || G.hotelesIds.includes(String(h.hotel_id)); });
+  } else if (scope === 'seleccionados') {
+    var codigosVisibles = Array.from(document.querySelectorAll('#techo-resumen-grid > div')).map(function(card){
+      var strong = card.querySelector('strong');
+      if (!strong) return null;
+      return strong.textContent.split('—')[0].trim();
+    }).filter(Boolean);
+    hoteles = hoteles.filter(function(h){ return codigosVisibles.includes(h.hotel_codigo); });
   }
   var mes = d.mes || '';
   var ahora = new Date().toLocaleString('es-ES');
@@ -5688,7 +5719,7 @@ async function imprimirTecho(scope) {
     '@media print{body{padding:12px}@page{margin:15mm}}' +
     '</style></head><body>' +
     '<h1>&#128201; Informe de Techo de Gastos</h1>' +
-    '<div class="subtitle">Mes: <strong>' + mes + '</strong> &nbsp;|&nbsp; Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + (scope === 'mis' ? ' &nbsp;|&nbsp; <em>Solo mis hoteles</em>' : '') + '</div>' +
+    '<div class="subtitle">Mes: <strong>' + mes + '</strong> &nbsp;|&nbsp; Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + (scope === 'mis' ? ' &nbsp;|&nbsp; <em>Solo mis hoteles</em>' : scope === 'seleccionados' ? ' &nbsp;|&nbsp; <em>Solo hoteles seleccionados</em>' : '') + '</div>' +
     '<div class="resumen">' +
       '<div class="res-item" style="background:#f8d7da;color:#721c24">\uD83D\uDD34 Superados: ' + rojos + '</div>' +
       '<div class="res-item" style="background:#fff3cd;color:#856404">\uD83D\uDFE1 En aviso: ' + amarillos + '</div>' +
@@ -5707,6 +5738,14 @@ async function imprimirAlertas(scope) {
   var alertas = d.alertas || [];
   if (scope === 'mis') {
     alertas = alertas.filter(function(p){ return G.hotelesIds.includes(p.hotel_id) || G.hotelesIds.includes(String(p.hotel_id)); });
+  } else if (scope === 'seleccionados') {
+    // Extraer códigos de hotel visibles en la lista de alertas de techo
+    var codigosAlertasVisibles = Array.from(document.querySelectorAll('#techo-alertas-list > div')).map(function(row){
+      var strong = row.querySelector('div[style*="font-weight:600"]');
+      if (!strong) return null;
+      return strong.textContent.split('—')[0].trim();
+    }).filter(Boolean);
+    alertas = alertas.filter(function(p){ return codigosAlertasVisibles.includes(p.hotel_codigo); });
   }
   var ahora    = new Date().toLocaleString('es-ES');
   var urgentes = alertas.filter(function(p){ return p.nivel_alerta === 'urgente'; }).length;
@@ -5751,7 +5790,7 @@ async function imprimirAlertas(scope) {
     '@media print{body{padding:12px}@page{margin:12mm;size:landscape}table{font-size:10px}}' +
     '</style></head><body>' +
     '<h1>\u26A0\uFE0F Informe de Alertas de Seguimiento</h1>' +
-    '<div class="subtitle">Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + (scope === 'mis' ? ' &nbsp;|&nbsp; <em>Solo mis hoteles</em>' : '') + '</div>' +
+    '<div class="subtitle">Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + (scope === 'mis' ? ' &nbsp;|&nbsp; <em>Solo mis hoteles</em>' : scope === 'seleccionados' ? ' &nbsp;|&nbsp; <em>Solo hoteles seleccionados</em>' : '') + '</div>' +
     '<div class="resumen">' +
       '<div class="res-item" style="background:#fee2e2;color:#991b1b">\uD83D\uDD34 Urgentes: ' + urgentes + '</div>' +
       '<div class="res-item" style="background:#fef3c7;color:#92400e">\u26A0\uFE0F Avisos: ' + avisos + '</div>' +
