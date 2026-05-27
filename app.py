@@ -1312,7 +1312,7 @@ def _ya_notificado_familia_repetida_hotel_hoy(hotel_codigo: str, tipo: str) -> b
                  AND destinatario LIKE %s
                  AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
                      CURRENT_DATE AT TIME ZONE 'Atlantic/Canary'""",
-            (tipo, f"%|{hotel_codigo}|famrep%"), one=True
+            (tipo, f"%{hotel_codigo}|famrep%"), one=True
         )
         return (row["n"] if row else 0) > 0
     except Exception:
@@ -1331,7 +1331,7 @@ def _dias_desde_ultimo_familia_repetida_admin(hotel_codigo: str) -> int | None:
                WHERE pedido_id IS NULL
                  AND tipo = 'familia_repetida_admin'
                  AND destinatario LIKE %s""",
-            (f"%|{hotel_codigo}|famrep%",), one=True
+            (f"%{hotel_codigo}|famrep%",), one=True
         )
         if not row or row["ultima"] is None:
             return None
@@ -1351,7 +1351,7 @@ def _log_familia_repetida_hotel(hotel_codigo: str, tipo: str,
         db.cursor().execute(
             "INSERT INTO whatsapp_log (pedido_id,tipo,destinatario,mensaje,enviado,error) "
             "VALUES (NULL,%s,%s,%s,%s,%s)",
-            (tipo, f"{destinatario}|{hotel_codigo}|famrep",
+            (tipo, f"{hotel_codigo}|famrep|{destinatario}",
              mensaje, 1 if enviado else 0, error)
         )
         db.commit()
@@ -1471,18 +1471,19 @@ def _job_familia_repetida_inner() -> None:
                 for comp in compradores:
                     username = comp.get("username", "?")
                     chat_id  = comp.get("telegram_chat_id")
+                    # ⚠️ LOG PRIMERO — garantiza dedup aunque falle el envío Telegram
+                    _log_familia_repetida_hotel(
+                        hotel_codigo, "familia_repetida_comprador",
+                        username,
+                        f"Familia repetida x{len(familias_repetidas)} — {mes_txt}",
+                        False  # se actualiza a True si el envío va bien
+                    )
                     if chat_id:
                         res = _send_telegram(chat_id, texto)
                         ok  = res.get("ok", False)
                         log.info("[FAM-REP] → comprador %s hotel %s (%d familias): %s",
                                  username, hotel_codigo, len(familias_repetidas),
                                  "OK" if ok else res.get("error"))
-                        _log_familia_repetida_hotel(
-                            hotel_codigo, "familia_repetida_comprador",
-                            username,
-                            f"Familia repetida x{len(familias_repetidas)} — {mes_txt}",
-                            ok, res.get("error")
-                        )
                     else:
                         log.warning("[FAM-REP] Sin telegram_chat_id para comprador %s", username)
                     _encolar_bridge_notificacion(
@@ -1513,18 +1514,19 @@ def _job_familia_repetida_inner() -> None:
                 for adm in admins:
                     username = adm.get("username", "?")
                     chat_id  = adm.get("telegram_chat_id")
+                    # ⚠️ LOG PRIMERO — garantiza dedup aunque falle el envío Telegram
+                    _log_familia_repetida_hotel(
+                        hotel_codigo, "familia_repetida_admin",
+                        username,
+                        f"Familia repetida x{len(familias_repetidas)} — {mes_txt}",
+                        False
+                    )
                     if chat_id:
                         res = _send_telegram(chat_id, texto)
                         ok  = res.get("ok", False)
                         log.info("[FAM-REP] → admin %s hotel %s (%d familias): %s",
                                  username, hotel_codigo, len(familias_repetidas),
                                  "OK" if ok else res.get("error"))
-                        _log_familia_repetida_hotel(
-                            hotel_codigo, "familia_repetida_admin",
-                            username,
-                            f"Familia repetida x{len(familias_repetidas)} — {mes_txt}",
-                            ok, res.get("error")
-                        )
                     else:
                         log.warning("[FAM-REP] Sin telegram_chat_id para admin %s", username)
                     _encolar_bridge_notificacion(
