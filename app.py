@@ -581,7 +581,9 @@ def _notify_solicitud_telegram(texto: str) -> None:
         )
 
 
-def _enviar_supervision_admins(texto: str, tipo_supervision: str) -> None:
+def _enviar_supervision_admins(texto: str, tipo_supervision: str,
+                               titulo_bridge: str = None,
+                               pedido_id_bridge: int = None) -> None:
     """
     Envía copia de supervisión a todos los admins con Telegram configurado,
     SOLO si el tipo_supervision está en TIPOS_SUPERVISION_ADMIN.
@@ -589,6 +591,9 @@ def _enviar_supervision_admins(texto: str, tipo_supervision: str) -> None:
     Parámetros:
         texto             – Mensaje ya construido (igual que el enviado al comprador).
         tipo_supervision  – "urgente" | "techo" | "cambio_estado" | "aviso" | …
+        titulo_bridge     – Título descriptivo para la entrada en Agenda/bridge.
+                            Si es None se usa un texto genérico de supervisión.
+        pedido_id_bridge  – ID del pedido relacionado (None para alertas sin pedido).
     """
     if tipo_supervision not in TIPOS_SUPERVISION_ADMIN:
         return  # Este tipo no requiere copia a admins
@@ -610,13 +615,14 @@ def _enviar_supervision_admins(texto: str, tipo_supervision: str) -> None:
                      username, chat_id, tipo_supervision,
                      "OK" if res.get("ok") else res.get("error"))
         # ── Encolar en bridge agenda para este admin ────────────────────────
+        # Usar el título descriptivo si se proporcionó, o uno genérico
         _encolar_bridge_notificacion(
             usuario=username,
             tipo="supervision",
-            titulo="📋 [Supervisión Admin] — copia automática",
+            titulo=titulo_bridge or "📋 [Supervisión Admin] — copia automática",
             mensaje=texto.replace("*", ""),
             nivel="urgente",
-            pedido_id=None,
+            pedido_id=pedido_id_bridge,
         )
 
 
@@ -782,7 +788,11 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
 
     # ── Copia de supervisión a admins (solo alertas urgentes) ─────────────────
     # Las alertas de tipo "aviso" (recordatorio) no se copian para evitar saturación.
-    _enviar_supervision_admins(texto, nivel)  # nivel="urgente" → copia; "aviso" → omite
+    _enviar_supervision_admins(
+        texto, nivel,
+        titulo_bridge=titulo_bridge,
+        pedido_id_bridge=pid_pedido,
+    )  # nivel="urgente" → copia; "aviso" → omite
 
     return resultados
 
@@ -936,7 +946,11 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
         # Cambio de estado normal o con alerta no urgente → solo al comprador.
         # Cambio de estado con alerta urgente → comprador + admins.
         if info_alerta and info_alerta.get("nivel") == "urgente":
-            _enviar_supervision_admins(texto, "urgente")
+            _enviar_supervision_admins(
+                texto, "urgente",
+                titulo_bridge=titulo_bridge,
+                pedido_id_bridge=pedido_id,
+            )
 
         # ── Log en whatsapp_log (tipo separado del job diario) ─────────────────
         nota_log = f"Cambio estado: {estado_antes} → {estado_nuevo}"
@@ -1780,7 +1794,11 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
             )
 
         # ── Copia de supervisión a admins: creación de pedido sujeto a techo es siempre urgente ──
-        _enviar_supervision_admins(texto, "urgente")
+        _enviar_supervision_admins(
+            texto, "urgente",
+            titulo_bridge=f"🏦 [Supervisión] Nuevo pedido techo · Hotel {hotel_cod}",
+            pedido_id_bridge=pedido_id,
+        )
 
         # Registrar en log
         db = get_db()
