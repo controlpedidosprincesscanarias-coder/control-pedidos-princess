@@ -505,7 +505,7 @@ ADMIN_TELEGRAM_CHAT_ID  = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "")
 # "aviso"         → recordatorio diario → NO se copia (evitar saturación)
 # Solo las alertas URGENTES llegan a admins por supervisión automática.
 # techo-rojo usa tipo="urgente"; techo-amarillo y cambio_estado sin alerta urgente NO llegan a admins.
-TIPOS_SUPERVISION_ADMIN = {"urgente"}
+TIPOS_SUPERVISION_ADMIN = {"urgente", "aviso"}
 
 
 def _get_admin_emails() -> list:
@@ -1124,7 +1124,8 @@ def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
         row = query(
             """SELECT COUNT(*) as n FROM whatsapp_log
                WHERE pedido_id=%s AND tipo=%s
-                 AND DATE(creado_en) = CURRENT_DATE""",
+                 AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
+                     (NOW() AT TIME ZONE 'Atlantic/Canary')::date""",
             (pedido_id, tipo), one=True
         )
         return (row["n"] if row else 0) > 0
@@ -1476,7 +1477,7 @@ def _job_familia_repetida_inner() -> None:
                         hotel_codigo, "familia_repetida_comprador",
                         username,
                         f"Familia repetida x{len(familias_repetidas)} — {mes_txt}",
-                        False  # se actualiza a True si el envío va bien
+                        False
                     )
                     if chat_id:
                         res = _send_telegram(chat_id, texto)
@@ -1484,6 +1485,22 @@ def _job_familia_repetida_inner() -> None:
                         log.info("[FAM-REP] → comprador %s hotel %s (%d familias): %s",
                                  username, hotel_codigo, len(familias_repetidas),
                                  "OK" if ok else res.get("error"))
+                        if ok:
+                            try:
+                                db = get_db()
+                                db.cursor().execute(
+                                    """UPDATE whatsapp_log SET enviado=1
+                                       WHERE ctid = (
+                                           SELECT ctid FROM whatsapp_log
+                                           WHERE tipo='familia_repetida_comprador'
+                                             AND destinatario=%s AND enviado=0
+                                           ORDER BY creado_en DESC LIMIT 1
+                                       )""",
+                                    (f"{hotel_codigo}|famrep|{username}",)
+                                )
+                                db.commit()
+                            except Exception as _elog:
+                                log.warning("[FAM-REP] No se pudo actualizar log enviado comprador %s: %s", username, _elog)
                     else:
                         log.warning("[FAM-REP] Sin telegram_chat_id para comprador %s", username)
                     _encolar_bridge_notificacion(
@@ -1527,6 +1544,22 @@ def _job_familia_repetida_inner() -> None:
                         log.info("[FAM-REP] → admin %s hotel %s (%d familias): %s",
                                  username, hotel_codigo, len(familias_repetidas),
                                  "OK" if ok else res.get("error"))
+                        if ok:
+                            try:
+                                db = get_db()
+                                db.cursor().execute(
+                                    """UPDATE whatsapp_log SET enviado=1
+                                       WHERE ctid = (
+                                           SELECT ctid FROM whatsapp_log
+                                           WHERE tipo='familia_repetida_admin'
+                                             AND destinatario=%s AND enviado=0
+                                           ORDER BY creado_en DESC LIMIT 1
+                                       )""",
+                                    (f"{hotel_codigo}|famrep|{username}",)
+                                )
+                                db.commit()
+                            except Exception as _elog:
+                                log.warning("[FAM-REP] No se pudo actualizar log enviado admin %s: %s", username, _elog)
                     else:
                         log.warning("[FAM-REP] Sin telegram_chat_id para admin %s", username)
                     _encolar_bridge_notificacion(
@@ -1813,7 +1846,8 @@ def _ya_notificado_techo_mes_hoy(hotel_codigo: str, semaforo: str) -> bool:
                WHERE pedido_id IS NULL
                  AND tipo = %s
                  AND destinatario LIKE %s
-                 AND DATE(creado_en) = CURRENT_DATE""",
+                 AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
+                     (NOW() AT TIME ZONE 'Atlantic/Canary')::date""",
             (tipo, f"%{hotel_codigo}%"), one=True
         )
         return (row["n"] if row else 0) > 0
@@ -6267,7 +6301,8 @@ def techo_dedup_reset():
         cur.execute(
             """DELETE FROM whatsapp_log
                WHERE tipo LIKE 'telegram_techo_mes_%'
-                 AND DATE(creado_en) = CURRENT_DATE"""
+                 AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
+                     (NOW() AT TIME ZONE 'Atlantic/Canary')::date"""
         )
         deleted = cur.rowcount
         db.commit()
@@ -6293,7 +6328,8 @@ def reset_alertas_hoy():
         cur.execute(
             """DELETE FROM whatsapp_log
                WHERE tipo = 'telegram_auto'
-                 AND DATE(creado_en) = CURRENT_DATE"""
+                 AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
+                     (NOW() AT TIME ZONE 'Atlantic/Canary')::date"""
         )
         deleted = cur.rowcount
         db.commit()
