@@ -505,7 +505,7 @@ ADMIN_TELEGRAM_CHAT_ID  = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "")
 # "aviso"         → recordatorio diario → NO se copia (evitar saturación)
 # Solo las alertas URGENTES llegan a admins por supervisión automática.
 # techo-rojo usa tipo="urgente"; techo-amarillo y cambio_estado sin alerta urgente NO llegan a admins.
-TIPOS_SUPERVISION_ADMIN = {"urgente", "aviso"}
+TIPOS_SUPERVISION_ADMIN = {"urgente", "techo"}
 
 
 def _get_admin_emails() -> list:
@@ -808,13 +808,29 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
             pedido_id=pid_pedido,
         )
 
-    # ── Copia de supervisión a admins (solo alertas urgentes) ─────────────────
-    # Las alertas de tipo "aviso" (recordatorio) no se copian para evitar saturación.
+    # ── Encolar en bridge agenda para ADMINS (paridad total con compradores) ─────
+    # Los admins reciben en su Agenda exactamente los mismos avisos que el comprador,
+    # independientemente del nivel (aviso o urgente), para poder supervisar el estado
+    # real de los pedidos sin depender únicamente del polling de 15 min.
+    for adm in _get_admins_telegram():
+        adm_username = adm.get("username", "admin")
+        _encolar_bridge_notificacion(
+            usuario=adm_username,
+            tipo="supervision",
+            titulo=titulo_bridge,
+            mensaje=texto.replace("*", ""),
+            nivel=nivel,
+            pedido_id=pid_pedido,
+        )
+
+    # ── Copia Telegram de supervisión a admins (solo alertas urgentes) ───────────
+    # El Telegram de supervisión solo se envía para urgentes (evitar saturación).
+    # El aviso en Agenda ya lo cubre el bloque anterior para todos los niveles.
     _enviar_supervision_admins(
         texto, nivel,
         titulo_bridge=titulo_bridge,
         pedido_id_bridge=pid_pedido,
-    )  # nivel="urgente" → copia; "aviso" → omite
+    )  # nivel="urgente" → copia Telegram; "aviso" → omite Telegram (Agenda ya encolada arriba)
 
     return resultados
 
@@ -5080,11 +5096,11 @@ def bridge_alertas_usuario():
             'PENDIENTE FIRMA DIRECCION COMPRAS',
             'PENDIENTE DE FIRMA DIRECCION HOTEL',
             'ENTREGA PARCIAL',
-            'PENDIENTE COTIZACION'
+            'PENDIENTE COTIZACIÓN'
         )
           AND (
             p.fecha_tramitacion IS NOT NULL
-            OR (p.estado = 'PENDIENTE COTIZACION' AND p.fecha_solicitud IS NOT NULL)
+            OR (p.estado = 'PENDIENTE COTIZACIÓN' AND p.fecha_solicitud IS NOT NULL)
           )
           {filtro_hotel_sql}
         ORDER BY p.fecha_tramitacion ASC
@@ -5119,7 +5135,7 @@ def bridge_alertas_usuario():
         "ENTREGA PARCIAL": {
             "primera": 10, "urgente": None, "ciclo": 10,
         },
-        "PENDIENTE COTIZACION": {
+        "PENDIENTE COTIZACIÓN": {
             "primera": 2, "urgente": 3, "ciclo": None, "fecha_ref": "fecha_solicitud",
         },
     }
