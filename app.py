@@ -3,7 +3,7 @@ Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase) + Resend
 Despliegue: Render.com  |  BD: Supabase  |  Email: Resend
 """
 
-import os, json, logging, secrets, atexit
+import os, json, logging, secrets, atexit, hashlib
 from datetime import datetime, timedelta, date as _date
 from functools import wraps
 
@@ -514,9 +514,31 @@ def _get_admin_emails() -> list:
     Prioridad: 1) EMAILS_INTERNOS (env var)  2) ADMIN_EMAIL (env var)
                3) emails de admins activos en BD.
     Garantiza que siempre haya destinatarios si los admins tienen email en BD.
+    USO: notificaciones de pedidos (cambios de estado, alertas).
+    NUNCA usar para solicitudes de acceso — usar _get_solo_admin_emails().
     """
     if EMAILS_INTERNOS:
         return EMAILS_INTERNOS
+    admin_email = os.environ.get("ADMIN_EMAIL", "").strip()
+    if admin_email:
+        return [admin_email]
+    try:
+        admins = rows_to_list(query(
+            "SELECT email FROM usuarios WHERE rol='admin' AND activo=1 "
+            "AND email IS NOT NULL AND TRIM(email) != ''"
+        )) or []
+        return [a["email"] for a in admins if a.get("email")]
+    except Exception:
+        return []
+
+
+def _get_solo_admin_emails() -> list:
+    """
+    Devuelve ÚNICAMENTE emails de administradores (rol='admin') del sistema.
+    Ignora EMAILS_INTERNOS deliberadamente — esa variable incluye compradores
+    y otros usuarios internos que NO deben recibir correos de solicitudes de acceso.
+    Prioridad: 1) ADMIN_EMAIL (env var)  2) admins activos en BD.
+    """
     admin_email = os.environ.get("ADMIN_EMAIL", "").strip()
     if admin_email:
         return [admin_email]
@@ -2516,6 +2538,21 @@ def _next_norden(db):
 def index():
     return send_from_directory("templates", "index.html")
 
+@app.route("/api/version")
+def app_version():
+    """
+    Devuelve un hash del index.html para que el cliente detecte nuevas versiones.
+    Si el hash difiere del que cargó el cliente, debe hacer un hard reload.
+    """
+    try:
+        tpl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "index.html")
+        mtime = str(os.path.getmtime(tpl_path))
+        size  = str(os.path.getsize(tpl_path))
+        version_hash = hashlib.md5((mtime + size).encode()).hexdigest()[:12]
+    except Exception:
+        version_hash = "unknown"
+    return jsonify({"version": version_hash})
+
 @app.route("/static/<path:filename>")
 def static_files(filename):
     return send_from_directory("static", filename)
@@ -2803,7 +2840,7 @@ def solicitar_usuario_fase1():
         f"Accede al panel de administración para revisar y enviar el archivo de verificación (Fase 2)."
     )
 
-    destinatarios = _get_admin_emails()
+    destinatarios = _get_solo_admin_emails()
 
     if not destinatarios:
         log.warning("[SOL_FASE1] Sin emails admin. Sol #%s", sol_id)
@@ -3169,7 +3206,7 @@ def solicitar_usuario_fase2():
         f"Crea la cuenta en el sistema con los datos anteriores."
     )
 
-    destinatarios = _get_admin_emails()
+    destinatarios = _get_solo_admin_emails()
     app_url       = os.environ.get("APP_URL", "").rstrip("/")
     url_admin     = f"{app_url}/admin/solicitudes#{sol['id']}" if app_url else ""
 
@@ -3382,7 +3419,7 @@ def admin_aprobar_solicitud(sol_id):
     </div>
     """
     admin_email = os.environ.get("ADMIN_EMAIL", "")
-    destinatarios = _get_admin_emails()
+    destinatarios = _get_solo_admin_emails()
     for dest in destinatarios:
         try:
             _send_email(dest, asunto_a, body_html_a)

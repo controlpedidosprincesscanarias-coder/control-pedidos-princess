@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.1.4
+          V 11.1.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1925,6 +1925,7 @@ let G = {
   editingProveedorId: null,
   currentPedidoData: null,
   currentView: 'dashboard',
+  _appVersion: null,   // hash de la versión cargada; se compara al pulsar Actualizar
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -1958,6 +1959,11 @@ async function doLogin() {
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
     await loadMaestros();
+    // Capturar versión actual para detectar despliegues nuevos al pulsar Actualizar
+    try {
+      const _vr = await fetch('/api/version?_=' + Date.now());
+      if (_vr.ok) { const _vd = await _vr.json(); G._appVersion = _vd.version || null; }
+    } catch(_) {}
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     // loadStats (llamado por showView) ya actualiza badge y card de alertas del dashboard.
     _checkIntegridadBadge();  // badge silencioso en sidebar para admin
@@ -2168,13 +2174,15 @@ async function sol_enviarFase1(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
   try {
     const r = await api('/api/solicitar-usuario', 'POST', { nombre, apellidos, email, movil, hoteles });
-    if (r.sin_email) {
+    if (r.sin_email && r.destinatarios && r.destinatarios.length) {
       try {
-        await emailjs.send(
-          typeof EMAILJS_SERVICE_ID !== 'undefined' ? EMAILJS_SERVICE_ID : '',
-          typeof EMAILJS_TEMPLATE_ID !== 'undefined' ? EMAILJS_TEMPLATE_ID : '',
-          { to_email: r.destinatarios[0], subject: r.asunto, message: r.body_text }
-        );
+        for (const dest of r.destinatarios) {
+          await emailjs.send(
+            typeof EMAILJS_SERVICE_ID !== 'undefined' ? EMAILJS_SERVICE_ID : '',
+            typeof EMAILJS_TEMPLATE_ID !== 'undefined' ? EMAILJS_TEMPLATE_ID : '',
+            { to_email: dest, subject: r.asunto, message: r.body_text }
+          );
+        }
       } catch(e) { console.warn('[SOL_F1] EmailJS fallback falló', e); }
     }
     _sol_resetPaneles();
@@ -2540,14 +2548,32 @@ function showView(view, el) {
   if (view==='config-alertas') loadConfigAlertas();
 }
 
-function refreshCurrentView() {
+async function refreshCurrentView() {
+  // Comprobar si hay nueva versión del servidor (equivalente a Ctrl+Shift+R)
+  try {
+    const vRes = await fetch('/api/version?_=' + Date.now());
+    if (vRes.ok) {
+      const vData = await vRes.json();
+      if (G._appVersion && vData.version && vData.version !== G._appVersion) {
+        // Nueva versión detectada → hard reload (borra caché del navegador)
+        location.reload(true);
+        return;
+      }
+    }
+  } catch(_) { /* si falla la comprobación, continuar con refresco normal */ }
+
+  // Sin cambios de versión → recargar datos de la vista actual + siempre el techo
+  _techoCache = null;  // invalidar caché del techo siempre
   const view = G.currentView || 'dashboard';
   if (view==='dashboard')   { loadStats(); }
   if (view==='pedidos')     loadPedidos();
-  if (view==='alertas')     loadAlertas(); loadTechoAlertas();
+  if (view==='alertas')     { loadAlertas(); loadTechoAlertas(); }
+  if (view==='techo')       { loadTecho(); loadTechoAlertas(); }
   if (view==='proveedores') loadProveedores();
   if (view==='eliminados')  loadEliminados();
   if (view==='usuarios')    { loadUsuarios(); adminCargarSolicitudes(); }
+  // Refrescar siempre el techo en segundo plano (badge + card de alertas)
+  if (view !== 'alertas' && view !== 'techo') loadTechoAlertas();
 }
 
 
@@ -3429,9 +3455,13 @@ async function savePedido() {
         : await api('/api/pedidos', 'POST', body);
     }
     if (r.error) { toast(r.error,'error'); return; }
-    if (G.currentView==='pedidos') loadPedidos();
+    if (G.currentView==='pedidos')   loadPedidos();
     if (G.currentView==='dashboard') loadStats();
-    if (G.currentView==='alertas') loadAlertas();
+    if (G.currentView==='alertas')   { loadAlertas(); loadTechoAlertas(); }
+    if (G.currentView==='techo')     loadTecho();
+    // Siempre invalidar la caché del techo (puede haber cambiado familia/importe/sujeto_techo)
+    _techoCache = null;
+    loadTechoAlertas();
     updateAlertBadge();
 
     if (!G.editingPedidoId && r.id) {
