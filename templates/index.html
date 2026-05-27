@@ -5718,14 +5718,17 @@ async function imprimirTecho(codigosSeleccionados) {
     var barColor = h.semaforo === 'rojo' ? '#dc3545' : h.semaforo === 'amarillo' ? '#ffc107' : '#28a745';
     var pedidosRows = (h.pedidos && h.pedidos.length)
       ? h.pedidos.map(function(p){
-          return '<tr>' +
-            '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.pedido_num || ('#'+p.norden) || '\u2014') + '</td>' +
-            '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.familia_nombre || 'Sin familia') + '</td>' +
-            '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.proveedor_nombre || '\u2014') + '</td>' +
-            '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:right;font-weight:700">' + _fmtEur(p.importe) + '</td>' +
-          '</tr>';
+           var estColors = {'PENDIENTE COTIZACIÓN':'#856404','EN TRAMITACIÓN':'#004085','RECIBIDO':'#155724','CANCELADO':'#721c24'};
+           var estColor = estColors[p.estado] || '#495057';
+           return '<tr>' +
+             '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.pedido_num || ('#'+p.norden) || '\u2014') + '</td>' +
+             '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.familia_nombre || 'Sin familia') + '</td>' +
+             '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;font-weight:600;color:' + estColor + '">' + (p.estado || '\u2014') + '</td>' +
+             '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.proveedor_nombre || '\u2014') + '</td>' +
+             '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:right;font-weight:700">' + _fmtEur(p.importe) + '</td>' +
+           '</tr>';
         }).join('')
-      : '<tr><td colspan="4" style="padding:6px 8px;font-size:11px;color:#999;font-style:italic">Sin pedidos sujetos al techo este mes</td></tr>';
+      : '<tr><td colspan="5" style="padding:6px 8px;font-size:11px;color:#999;font-style:italic">Sin pedidos sujetos al techo este mes</td></tr>';
 
     return '<div style="border:1.5px solid ' + semBorder[h.semaforo] + ';border-radius:10px;padding:16px;margin-bottom:16px;background:' + semBg[h.semaforo] + ';page-break-inside:avoid">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
@@ -5744,12 +5747,12 @@ async function imprimirTecho(codigosSeleccionados) {
           '<td style="padding-top:4px;color:#777;font-size:11px">Pedidos: <strong>' + h.num_pedidos + ' / ' + h.max_pedidos + '</strong></td>' +
           '<td style="text-align:right;color:#777;font-size:11px">% Consumido: <strong style="color:' + semColor[h.semaforo] + '">' + pct + '%</strong></td>' +
         '</tr>' +
-        '<tr><td colspan="2" style="padding-top:4px;color:#777;font-size:11px">Familias: ' + (h.familias_usadas && h.familias_usadas.length ? h.familias_usadas.join(', ') : '\u2014') + '</td></tr>' +
       '</table>' +
       '<table style="width:100%;border-collapse:collapse;border-top:1px solid #ddd;margin-top:8px">' +
         '<thead><tr style="background:#f8f9fa">' +
           '<th style="padding:5px 8px;font-size:10px;text-align:left;border-bottom:2px solid #dee2e6">Pedido</th>' +
           '<th style="padding:5px 8px;font-size:10px;text-align:left;border-bottom:2px solid #dee2e6">Familia</th>' +
+           '<th style="padding:5px 8px;font-size:10px;text-align:left;border-bottom:2px solid #dee2e6">Estado</th>' +
           '<th style="padding:5px 8px;font-size:10px;text-align:left;border-bottom:2px solid #dee2e6">Proveedor</th>' +
           '<th style="padding:5px 8px;font-size:10px;text-align:right;border-bottom:2px solid #dee2e6">Importe</th>' +
         '</tr></thead>' +
