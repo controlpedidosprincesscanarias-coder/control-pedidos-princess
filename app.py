@@ -1716,12 +1716,10 @@ def _job_alertas_techo_mensual_inner() -> None:
                 pedido_id=None,
             )
 
-        # ── Copia a admins: solo si es rojo (urgente) ───────────────────────
-        # Amarillo → solo al comprador, no satura a los admins.
-        if semaforo == "rojo":
-            _enviar_supervision_admins(texto, "urgente")
-            log.info("[TECHO-MES] Copia supervisión admins enviada — hotel %s semáforo=rojo",
-                     hotel_codigo)
+        # ── Copia a admins: gestionada exclusivamente por _job_techo_urgente_admins ──
+        # No se envía copia aquí para evitar duplicado. El job _job_techo_urgente_admins
+        # es el canal oficial hacia admins (con reenvío cada 2 días, horario laboral
+        # y deduplicación diaria).
 
         enviados += 1
 
