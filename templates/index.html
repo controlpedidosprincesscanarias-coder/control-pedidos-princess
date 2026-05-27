@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 10.9.4
+          V 10.9.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -5552,34 +5552,41 @@ document.getElementById('modal-email-alerta').addEventListener('click', function
 </script>
 
 <!-- ═══════════════════════════════════════════════════════════════════════
-     MODAL IMPRESION — Techo de Gastos / Alertas
+     MODAL IMPRESION — Techo de Gastos / Alertas  (selector por hotel)
 ════════════════════════════════════════════════════════════════════════ -->
 <div id="modal-impresion" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:3000;overflow-y:auto">
-  <div style="background:#fff;border-radius:14px;max-width:430px;margin:60px auto;padding:0;box-shadow:0 8px 40px rgba(0,0,0,.25)">
-    <div style="padding:20px 24px 14px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px">
+  <div style="background:#fff;border-radius:14px;max-width:480px;margin:50px auto 40px;padding:0;box-shadow:0 8px 40px rgba(0,0,0,.25)">
+
+    <!-- Cabecera -->
+    <div style="padding:18px 22px 14px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px">
       <span style="font-size:20px">🖨️</span>
       <strong id="modal-imp-titulo" style="font-size:15px">Imprimir informe</strong>
-      <button onclick="document.getElementById('modal-impresion').style.display='none'"
-              style="margin-left:auto;background:none;border:none;font-size:20px;cursor:pointer;color:#999">✕</button>
+      <button onclick="cerrarModalImpresion()"
+              style="margin-left:auto;background:none;border:none;font-size:20px;cursor:pointer;color:#999;line-height:1">✕</button>
     </div>
-    <div style="padding:20px 24px">
-      <p style="margin:0 0 16px;font-size:13px;color:#555">Selecciona qué hoteles incluir en el informe:</p>
-      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:20px">
-        <label style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:10px 14px;border:2px solid #1a73e8;border-radius:8px;background:#f0f6ff">
-          <input type="radio" name="imp-scope" value="todo" checked style="accent-color:#1a73e8;width:16px;height:16px">
-          <span><strong>Todos los hoteles</strong> — informe completo</span>
-        </label>
-        <label id="lbl-imp-selec" style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:10px 14px;border:2px solid #e0e0e0;border-radius:8px">
-          <input type="radio" name="imp-scope" value="seleccionados" style="accent-color:#1a73e8;width:16px;height:16px">
-          <span id="lbl-imp-selec-texto"><strong>Solo hoteles seleccionados</strong> — los que aparecen ahora en pantalla</span>
-        </label>
-        <label id="lbl-imp-mis" style="display:flex;align-items:center;gap:10px;font-size:13px;cursor:pointer;padding:10px 14px;border:2px solid #e0e0e0;border-radius:8px">
-          <input type="radio" name="imp-scope" value="mis" style="accent-color:#1a73e8;width:16px;height:16px">
-          <span><strong>Solo mis hoteles</strong> — hoteles asignados a mi usuario</span>
-        </label>
+
+    <!-- Cuerpo -->
+    <div style="padding:18px 22px">
+      <p style="margin:0 0 12px;font-size:13px;color:#555">Selecciona los hoteles a incluir en el informe:</p>
+
+      <!-- Barra seleccionar todo / ninguno -->
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+        <button onclick="impSeleccionarTodos(true)"
+                style="font-size:12px;padding:4px 12px;border:1px solid #1a73e8;border-radius:5px;background:#f0f6ff;color:#1a73e8;cursor:pointer;font-weight:600">✔ Todos</button>
+        <button onclick="impSeleccionarTodos(false)"
+                style="font-size:12px;padding:4px 12px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#555;cursor:pointer">✗ Ninguno</button>
+        <span id="imp-contador" style="margin-left:auto;font-size:12px;color:#777;font-weight:600"></span>
       </div>
-      <div style="display:flex;gap:10px;justify-content:flex-end">
-        <button onclick="document.getElementById('modal-impresion').style.display='none'"
+
+      <!-- Lista de hoteles con checkboxes -->
+      <div id="imp-lista-hoteles"
+           style="max-height:320px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;padding:4px 0">
+        <!-- Se rellena dinámicamente -->
+      </div>
+
+      <!-- Pie -->
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:16px">
+        <button onclick="cerrarModalImpresion()"
                 style="padding:8px 18px;border:1px solid #ccc;border-radius:7px;background:#fff;cursor:pointer;font-size:13px">Cancelar</button>
         <button onclick="ejecutarImpresion()"
                 style="padding:8px 22px;border:none;border-radius:7px;background:#1a73e8;color:#fff;font-weight:700;font-size:13px;cursor:pointer">🖨️ Imprimir</button>
@@ -5590,69 +5597,114 @@ document.getElementById('modal-email-alerta').addEventListener('click', function
 
 <script>
 /* =======================================================================
-   IMPRESION — Techo de Gastos / Alertas
+   IMPRESION — Techo de Gastos / Alertas  (selector por hotel)
 ======================================================================= */
 var _impTipo = null;
+
+function cerrarModalImpresion() {
+  document.getElementById('modal-impresion').style.display = 'none';
+}
+
+function _impActualizarContador() {
+  var total   = document.querySelectorAll('#imp-lista-hoteles input[type=checkbox]').length;
+  var marcados = document.querySelectorAll('#imp-lista-hoteles input[type=checkbox]:checked').length;
+  document.getElementById('imp-contador').textContent = marcados + ' / ' + total + ' seleccionados';
+}
+
+function impSeleccionarTodos(sel) {
+  document.querySelectorAll('#imp-lista-hoteles input[type=checkbox]').forEach(function(cb) {
+    cb.checked = sel;
+    var row = cb.closest('label');
+    if (row) row.style.background = sel ? '#f0f6ff' : '';
+  });
+  _impActualizarContador();
+}
 
 function abrirModalImpresion(tipo) {
   _impTipo = tipo;
   var titulos = { techo:'Imprimir — Techo de Gastos', alertas:'Imprimir — Alertas de Seguimiento' };
   document.getElementById('modal-imp-titulo').textContent = titulos[tipo] || 'Imprimir';
 
-  // "Solo mis hoteles": solo si el usuario tiene hoteles asignados
-  var tieneHoteles = G.hotelesIds && G.hotelesIds.length > 0;
-  var lblMis = document.getElementById('lbl-imp-mis');
-  if (lblMis) lblMis.style.display = tieneHoteles ? '' : 'none';
-
-  // "Solo hoteles seleccionados": contar visibles en pantalla según el contexto
-  var lblSelec = document.getElementById('lbl-imp-selec');
-  var nSelec = 0;
+  // Obtener lista de hoteles disponibles según el tipo
+  var hoteles = [];
   if (tipo === 'techo') {
-    nSelec = document.querySelectorAll('#techo-resumen-grid > div').length;
-  } else if (tipo === 'alertas') {
-    nSelec = document.querySelectorAll('#techo-alertas-list > div').length;
-  }
-  if (lblSelec) {
-    var textoSelec = document.getElementById('lbl-imp-selec-texto');
-    if (textoSelec) {
-      textoSelec.innerHTML = '<strong>Solo hoteles seleccionados</strong> \u2014 los que aparecen ahora en pantalla' +
-        (nSelec > 0 ? ' <span style="background:#1a73e8;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;margin-left:4px">' + nSelec + '</span>' : '');
+    // Leer los hoteles que hay actualmente en el grid de techo
+    var cards = document.querySelectorAll('#techo-resumen-grid > div');
+    if (cards.length > 0) {
+      cards.forEach(function(card) {
+        var strong = card.querySelector('strong');
+        if (!strong) return;
+        var partes = strong.textContent.split('—');
+        var codigo = partes[0].trim();
+        var nombre = partes.slice(1).join('—').trim();
+        hoteles.push({ codigo: codigo, nombre: nombre });
+      });
+    } else {
+      // Sin filtro activo → todos del maestro
+      (G.maestros && G.maestros.hoteles || []).forEach(function(h) {
+        hoteles.push({ codigo: h.codigo, nombre: h.nombre });
+      });
     }
-    lblSelec.style.display = nSelec > 0 ? '' : 'none';
+  } else if (tipo === 'alertas') {
+    // Para alertas: usar todos los hoteles del maestro que tengan alertas
+    (G.maestros && G.maestros.hoteles || []).forEach(function(h) {
+      hoteles.push({ codigo: h.codigo, nombre: h.nombre });
+    });
   }
 
-  document.querySelector('[name="imp-scope"][value="todo"]').checked = true;
+  // Renderizar lista de checkboxes
+  var lista = document.getElementById('imp-lista-hoteles');
+  lista.innerHTML = '';
+  if (hoteles.length === 0) {
+    lista.innerHTML = '<div style="padding:16px;text-align:center;color:#999;font-size:13px;font-style:italic">No hay hoteles disponibles</div>';
+  } else {
+    hoteles.forEach(function(h) {
+      var lbl = document.createElement('label');
+      lbl.style.cssText = 'display:flex;align-items:center;gap:10px;padding:9px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;background:#f0f6ff;transition:background .15s';
+      lbl.innerHTML =
+        '<input type="checkbox" checked style="accent-color:#1a73e8;width:15px;height:15px;flex-shrink:0">' +
+        '<span style="font-weight:700;color:#1a3a6b;min-width:36px">' + h.codigo + '</span>' +
+        '<span style="color:#444">' + h.nombre + '</span>';
+      var cb = lbl.querySelector('input');
+      cb.dataset.codigo = h.codigo;
+      cb.addEventListener('change', function() {
+        lbl.style.background = this.checked ? '#f0f6ff' : '';
+        _impActualizarContador();
+      });
+      lista.appendChild(lbl);
+    });
+  }
+
+  _impActualizarContador();
   document.getElementById('modal-impresion').style.display = '';
 }
 
-document.getElementById('modal-impresion').addEventListener('click', function(e){
-  if (e.target === this) this.style.display = 'none';
+document.getElementById('modal-impresion').addEventListener('click', function(e) {
+  if (e.target === this) cerrarModalImpresion();
 });
 
 function ejecutarImpresion() {
-  var scope = document.querySelector('[name="imp-scope"]:checked').value;
-  document.getElementById('modal-impresion').style.display = 'none';
-  if (_impTipo === 'techo') imprimirTecho(scope);
-  else if (_impTipo === 'alertas') imprimirAlertas(scope);
+  var seleccionados = Array.from(document.querySelectorAll('#imp-lista-hoteles input[type=checkbox]:checked'))
+                          .map(function(cb) { return cb.dataset.codigo; });
+  if (seleccionados.length === 0) {
+    alert('Selecciona al menos un hotel para imprimir.');
+    return;
+  }
+  cerrarModalImpresion();
+  if (_impTipo === 'techo') imprimirTecho(seleccionados);
+  else if (_impTipo === 'alertas') imprimirAlertas(seleccionados);
 }
 
 function _fmtEur(n) {
   return n != null ? Number(n).toLocaleString('es-ES', {minimumFractionDigits:2}) + ' \u20ac' : '\u2014';
 }
 
-async function imprimirTecho(scope) {
+async function imprimirTecho(codigosSeleccionados) {
   var d;
   try { d = await api('/api/techo/resumen'); } catch(e) { alert('Error cargando datos: ' + e.message); return; }
   var hoteles = d.hoteles || [];
-  if (scope === 'mis') {
-    hoteles = hoteles.filter(function(h){ return G.hotelesIds.includes(h.hotel_id) || G.hotelesIds.includes(String(h.hotel_id)); });
-  } else if (scope === 'seleccionados') {
-    var codigosVisibles = Array.from(document.querySelectorAll('#techo-resumen-grid > div')).map(function(card){
-      var strong = card.querySelector('strong');
-      if (!strong) return null;
-      return strong.textContent.split('—')[0].trim();
-    }).filter(Boolean);
-    hoteles = hoteles.filter(function(h){ return codigosVisibles.includes(h.hotel_codigo); });
+  if (Array.isArray(codigosSeleccionados) && codigosSeleccionados.length > 0) {
+    hoteles = hoteles.filter(function(h){ return codigosSeleccionados.includes(h.hotel_codigo); });
   }
   var mes = d.mes || '';
   var ahora = new Date().toLocaleString('es-ES');
@@ -5719,7 +5771,7 @@ async function imprimirTecho(scope) {
     '@media print{body{padding:12px}@page{margin:15mm}}' +
     '</style></head><body>' +
     '<h1>&#128201; Informe de Techo de Gastos</h1>' +
-    '<div class="subtitle">Mes: <strong>' + mes + '</strong> &nbsp;|&nbsp; Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + (scope === 'mis' ? ' &nbsp;|&nbsp; <em>Solo mis hoteles</em>' : scope === 'seleccionados' ? ' &nbsp;|&nbsp; <em>Solo hoteles seleccionados</em>' : '') + '</div>' +
+    '<div class="subtitle">Mes: <strong>' + mes + '</strong> &nbsp;|&nbsp; Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + ' &nbsp;|&nbsp; <em>' + hoteles.length + ' hoteles seleccionados</em></div>' +
     '<div class="resumen">' +
       '<div class="res-item" style="background:#f8d7da;color:#721c24">\uD83D\uDD34 Superados: ' + rojos + '</div>' +
       '<div class="res-item" style="background:#fff3cd;color:#856404">\uD83D\uDFE1 En aviso: ' + amarillos + '</div>' +
@@ -5732,20 +5784,12 @@ async function imprimirTecho(scope) {
   _abrirVentanaImpresion(html);
 }
 
-async function imprimirAlertas(scope) {
+async function imprimirAlertas(codigosSeleccionados) {
   var d;
   try { d = await api('/api/stats'); } catch(e) { alert('Error cargando datos: ' + e.message); return; }
   var alertas = d.alertas || [];
-  if (scope === 'mis') {
-    alertas = alertas.filter(function(p){ return G.hotelesIds.includes(p.hotel_id) || G.hotelesIds.includes(String(p.hotel_id)); });
-  } else if (scope === 'seleccionados') {
-    // Extraer códigos de hotel visibles en la lista de alertas de techo
-    var codigosAlertasVisibles = Array.from(document.querySelectorAll('#techo-alertas-list > div')).map(function(row){
-      var strong = row.querySelector('div[style*="font-weight:600"]');
-      if (!strong) return null;
-      return strong.textContent.split('—')[0].trim();
-    }).filter(Boolean);
-    alertas = alertas.filter(function(p){ return codigosAlertasVisibles.includes(p.hotel_codigo); });
+  if (Array.isArray(codigosSeleccionados) && codigosSeleccionados.length > 0) {
+    alertas = alertas.filter(function(p){ return codigosSeleccionados.includes(p.hotel_codigo); });
   }
   var ahora    = new Date().toLocaleString('es-ES');
   var urgentes = alertas.filter(function(p){ return p.nivel_alerta === 'urgente'; }).length;
@@ -5790,7 +5834,7 @@ async function imprimirAlertas(scope) {
     '@media print{body{padding:12px}@page{margin:12mm;size:landscape}table{font-size:10px}}' +
     '</style></head><body>' +
     '<h1>\u26A0\uFE0F Informe de Alertas de Seguimiento</h1>' +
-    '<div class="subtitle">Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + (scope === 'mis' ? ' &nbsp;|&nbsp; <em>Solo mis hoteles</em>' : scope === 'seleccionados' ? ' &nbsp;|&nbsp; <em>Solo hoteles seleccionados</em>' : '') + '</div>' +
+    '<div class="subtitle">Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + ' &nbsp;|&nbsp; <em>' + alertas.length + ' hoteles seleccionados</em></div>' +
     '<div class="resumen">' +
       '<div class="res-item" style="background:#fee2e2;color:#991b1b">\uD83D\uDD34 Urgentes: ' + urgentes + '</div>' +
       '<div class="res-item" style="background:#fef3c7;color:#92400e">\u26A0\uFE0F Avisos: ' + avisos + '</div>' +
