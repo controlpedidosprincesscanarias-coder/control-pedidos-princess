@@ -1292,19 +1292,18 @@ def _job_alertas_diarias_inner():
 # Disparo:  cuando un hotel repite familia dentro del mismo mes (Regla 2 de _check_techo).
 # Primera alerta: Telegram rojo 🔴 al comprador del hotel + a todos los admins.
 # Reenvíos:
-#   - Comprador  → cada día  (si el problema persiste)
-#   - Admins     → cada 2 días (si el problema persiste)
-# Deduplicación: máx. 1 notificación por hotel+familia+destinatario y día natural.
+#   - Comprador  → 1 mensaje por hotel y día (todas las familias agrupadas)
+#   - Admins     → 1 mensaje por hotel cada 2 días (todas las familias agrupadas)
+# Deduplicación: máx. 1 notificación por HOTEL (no por familia) y día natural.
 #
 # Tipos usados en whatsapp_log:
-#   'familia_repetida_comprador'   → dedup diario para comprador
-#   'familia_repetida_admin'       → dedup/ciclo 2 días para admins
+#   'familia_repetida_comprador'   → dedup diario a nivel hotel
+#   'familia_repetida_admin'       → dedup/ciclo 2 días a nivel hotel
 # ──────────────────────────────────────────────────────────────────────────────────
 
 
-def _ya_notificado_familia_repetida_hoy(hotel_codigo: str, familia_id: int,
-                                         tipo: str) -> bool:
-    """Devuelve True si ya se notificó hoy para este hotel+familia (tipo dado)."""
+def _ya_notificado_familia_repetida_hotel_hoy(hotel_codigo: str, tipo: str) -> bool:
+    """Devuelve True si ya se envió hoy una alerta de familia repetida para este hotel."""
     try:
         row = query(
             """SELECT COUNT(*) as n FROM whatsapp_log
@@ -1313,18 +1312,17 @@ def _ya_notificado_familia_repetida_hoy(hotel_codigo: str, familia_id: int,
                  AND destinatario LIKE %s
                  AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
                      CURRENT_DATE AT TIME ZONE 'Atlantic/Canary'""",
-            (tipo, f"%{hotel_codigo}|fam{familia_id}%"), one=True
+            (tipo, f"%|{hotel_codigo}|famrep%"), one=True
         )
         return (row["n"] if row else 0) > 0
     except Exception:
         return False
 
 
-def _dias_desde_ultimo_familia_repetida_admin(hotel_codigo: str,
-                                               familia_id: int) -> int | None:
+def _dias_desde_ultimo_familia_repetida_admin(hotel_codigo: str) -> int | None:
     """
     Días transcurridos desde la última notificación 'familia_repetida_admin'
-    para este hotel+familia. None si nunca se envió.
+    para este hotel. None si nunca se envió.
     """
     try:
         row = query(
@@ -1333,7 +1331,7 @@ def _dias_desde_ultimo_familia_repetida_admin(hotel_codigo: str,
                WHERE pedido_id IS NULL
                  AND tipo = 'familia_repetida_admin'
                  AND destinatario LIKE %s""",
-            (f"%{hotel_codigo}|fam{familia_id}%",), one=True
+            (f"%|{hotel_codigo}|famrep%",), one=True
         )
         if not row or row["ultima"] is None:
             return None
@@ -1344,28 +1342,28 @@ def _dias_desde_ultimo_familia_repetida_admin(hotel_codigo: str,
         return None
 
 
-def _log_familia_repetida(hotel_codigo: str, familia_id: int, tipo: str,
-                           destinatario: str, mensaje: str,
-                           enviado: bool, error=None) -> None:
-    """Registra en whatsapp_log el envío de alerta de familia repetida."""
+def _log_familia_repetida_hotel(hotel_codigo: str, tipo: str,
+                                 destinatario: str, mensaje: str,
+                                 enviado: bool, error=None) -> None:
+    """Registra en whatsapp_log el envío de alerta de familia repetida (a nivel hotel)."""
     try:
         db = get_db()
         db.cursor().execute(
             "INSERT INTO whatsapp_log (pedido_id,tipo,destinatario,mensaje,enviado,error) "
             "VALUES (NULL,%s,%s,%s,%s,%s)",
-            (tipo, f"{destinatario}|{hotel_codigo}|fam{familia_id}",
+            (tipo, f"{destinatario}|{hotel_codigo}|famrep",
              mensaje, 1 if enviado else 0, error)
         )
         db.commit()
     except Exception as exc:
-        log.error("[FAM-REP] Error guardando log %s fam%s %s: %s",
-                  hotel_codigo, familia_id, destinatario, exc)
+        log.error("[FAM-REP] Error guardando log %s %s: %s", hotel_codigo, destinatario, exc)
 
 
 def _job_familia_repetida() -> None:
     """
     Job que detecta hoteles con familia/partida repetida en el mes actual
-    y dispara alertas rojas al comprador (diario) y a los admins (cada 2 días).
+    y dispara UNA alerta agrupada al comprador (diario) y a los admins (cada 2 días).
+    Un único mensaje por hotel lista todas las familias repetidas.
     """
     with app.app_context():
         _job_familia_repetida_inner()
@@ -1404,7 +1402,7 @@ def _job_familia_repetida_inner() -> None:
 
         # ── Detectar familias que aparecen más de una vez este mes ─────────
         try:
-            pedidos_mes = rows_to_list(query("""
+            familias_repetidas = rows_to_list(query("""
                 SELECT p.familia_id, f.nombre as familia_nombre,
                        COUNT(*) as num_pedidos
                 FROM pedidos p
@@ -1417,129 +1415,130 @@ def _job_familia_repetida_inner() -> None:
                   AND p.familia_id IS NOT NULL
                 GROUP BY p.familia_id, f.nombre
                 HAVING COUNT(*) > 1
+                ORDER BY f.nombre
             """, (hotel_id, year, month)))
         except Exception as exc:
             log.error("[FAM-REP] Error consultando pedidos hotel %s: %s", hotel_codigo, exc)
             continue
 
-        if not pedidos_mes:
+        if not familias_repetidas:
             continue
 
-        # ── Por cada familia repetida, notificar si corresponde ────────────
-        for fila in pedidos_mes:
-            familia_id     = fila["familia_id"]
-            familia_nombre = fila["familia_nombre"] or f"ID {familia_id}"
-            num_pedidos    = fila["num_pedidos"]
+        # ── Construir UN único mensaje con todas las familias repetidas ────
+        reenvio_adm = _dias_desde_ultimo_familia_repetida_admin(hotel_codigo)
 
-            reenvio_comp = None
-            reenvio_adm  = _dias_desde_ultimo_familia_repetida_admin(hotel_codigo, familia_id)
+        reenvio_txt = (
+            f"⏱ Reenvío automático — sin resolver desde hace {reenvio_adm}d\n"
+            if reenvio_adm is not None else
+            "🔔 Primera alerta — familias repetidas detectadas\n"
+        )
 
-            # Texto de cabecera
-            es_primera = reenvio_adm is None
-            reenvio_txt = (
-                f"⏱ Reenvío automático — sin resolver desde hace {reenvio_adm}d\n"
-                if reenvio_adm is not None else
-                "🔔 Primera alerta — familia repetida detectada\n"
+        familias_lista = "\n".join(
+            "  • {} ({} pedidos)".format(
+                f["familia_nombre"] or "ID {}".format(f["familia_id"]),
+                f["num_pedidos"]
             )
+            for f in familias_repetidas
+        )
 
-            texto = (
-                "🔴 *ALERTA — Familia/Partida REPETIDA en el mes*\n"
-                "\n"
-                f"🏨 Hotel: *{hotel_codigo}* — {hotel_nombre}\n"
-                f"📂 Familia: *{familia_nombre}*\n"
-                f"📦 Aparece en *{num_pedidos} pedidos* este mes (máximo 1 permitido)\n"
-                "\n"
-                f"📅 Mes: {mes_txt}\n"
-                f"{reenvio_txt}"
-                "— Control Pedidos Princess Canarias"
-            )
+        texto = (
+            "🔴 *ALERTA — Familia/Partida REPETIDA en el mes*\n"
+            "\n"
+            f"🏨 Hotel: *{hotel_codigo}* — {hotel_nombre}\n"
+            "\n"
+            f"📂 Familias repetidas ({len(familias_repetidas)}):\n"
+            f"{familias_lista}\n"
+            "\n"
+            f"📅 Mes: {mes_txt}\n"
+            f"{reenvio_txt}"
+            "— Control Pedidos Princess Canarias"
+        )
 
-            # ── Notificar al COMPRADOR (diario) ───────────────────────────
-            skip_comp = _ya_notificado_familia_repetida_hoy(
-                hotel_codigo, familia_id, "familia_repetida_comprador"
-            )
-            if not skip_comp:
-                compradores = _get_compradores_hotel(hotel_codigo)
-                if not compradores:
-                    log.warning("[FAM-REP] Sin compradores para hotel %s", hotel_codigo)
-                else:
-                    for comp in compradores:
-                        username = comp.get("username", "?")
-                        chat_id  = comp.get("telegram_chat_id")
-                        if chat_id:
-                            res = _send_telegram(chat_id, texto)
-                            ok  = res.get("ok", False)
-                            log.info("[FAM-REP] → comprador %s hotel %s fam %s: %s",
-                                     username, hotel_codigo, familia_nombre,
-                                     "OK" if ok else res.get("error"))
-                            _log_familia_repetida(
-                                hotel_codigo, familia_id,
-                                "familia_repetida_comprador",
-                                username,
-                                f"Familia repetida {familia_nombre} — {mes_txt}",
-                                ok, res.get("error")
-                            )
-                        else:
-                            log.warning("[FAM-REP] Sin telegram_chat_id para comprador %s", username)
-                        # Bridge agenda
-                        _encolar_bridge_notificacion(
-                            usuario=username,
-                            tipo="techo",
-                            titulo=f"🔴 [FAMILIA REPETIDA] {hotel_codigo} — {familia_nombre}",
-                            mensaje=texto.replace("*", ""),
-                            nivel="urgente",
-                            pedido_id=None,
-                        )
+        titulo_bridge = (
+            f"🔴 [FAMILIA REPETIDA] {hotel_codigo} — "
+            f"{len(familias_repetidas)} familia(s)"
+        )
+
+        # ── Notificar al COMPRADOR (1 vez por hotel y día) ────────────────
+        skip_comp = _ya_notificado_familia_repetida_hotel_hoy(
+            hotel_codigo, "familia_repetida_comprador"
+        )
+        if not skip_comp:
+            compradores = _get_compradores_hotel(hotel_codigo)
+            if not compradores:
+                log.warning("[FAM-REP] Sin compradores para hotel %s", hotel_codigo)
             else:
-                log.debug("[FAM-REP] Comprador hotel %s fam%s — ya notificado hoy",
-                          hotel_codigo, familia_id)
-
-            # ── Notificar a ADMINS (cada 2 días) ──────────────────────────
-            skip_adm_hoy = _ya_notificado_familia_repetida_hoy(
-                hotel_codigo, familia_id, "familia_repetida_admin"
-            )
-            if skip_adm_hoy:
-                log.debug("[FAM-REP] Admin hotel %s fam%s — ya notificado hoy",
-                          hotel_codigo, familia_id)
-            elif reenvio_adm is not None and reenvio_adm < 2:
-                log.debug("[FAM-REP] Admin hotel %s fam%s — último aviso hace %d día(s), esperando 2d",
-                          hotel_codigo, familia_id, reenvio_adm)
-            else:
-                admins = _get_admins_telegram()
-                if not admins:
-                    log.warning("[FAM-REP] Sin admins con Telegram configurado")
-                else:
-                    for adm in admins:
-                        username = adm.get("username", "?")
-                        chat_id  = adm.get("telegram_chat_id")
-                        if chat_id:
-                            res = _send_telegram(chat_id, texto)
-                            ok  = res.get("ok", False)
-                            log.info("[FAM-REP] → admin %s hotel %s fam %s: %s",
-                                     username, hotel_codigo, familia_nombre,
-                                     "OK" if ok else res.get("error"))
-                            _log_familia_repetida(
-                                hotel_codigo, familia_id,
-                                "familia_repetida_admin",
-                                username,
-                                f"Familia repetida {familia_nombre} — {mes_txt}",
-                                ok, res.get("error")
-                            )
-                        else:
-                            log.warning("[FAM-REP] Sin telegram_chat_id para admin %s", username)
-                        # Bridge agenda
-                        _encolar_bridge_notificacion(
-                            usuario=username,
-                            tipo="techo",
-                            titulo=f"🔴 [FAMILIA REPETIDA] {hotel_codigo} — {familia_nombre}",
-                            mensaje=texto.replace("*", ""),
-                            nivel="urgente",
-                            pedido_id=None,
+                for comp in compradores:
+                    username = comp.get("username", "?")
+                    chat_id  = comp.get("telegram_chat_id")
+                    if chat_id:
+                        res = _send_telegram(chat_id, texto)
+                        ok  = res.get("ok", False)
+                        log.info("[FAM-REP] → comprador %s hotel %s (%d familias): %s",
+                                 username, hotel_codigo, len(familias_repetidas),
+                                 "OK" if ok else res.get("error"))
+                        _log_familia_repetida_hotel(
+                            hotel_codigo, "familia_repetida_comprador",
+                            username,
+                            f"Familia repetida x{len(familias_repetidas)} — {mes_txt}",
+                            ok, res.get("error")
                         )
+                    else:
+                        log.warning("[FAM-REP] Sin telegram_chat_id para comprador %s", username)
+                    _encolar_bridge_notificacion(
+                        usuario=username,
+                        tipo="techo",
+                        titulo=titulo_bridge,
+                        mensaje=texto.replace("*", ""),
+                        nivel="urgente",
+                        pedido_id=None,
+                    )
+        else:
+            log.debug("[FAM-REP] Comprador hotel %s — ya notificado hoy, omitiendo", hotel_codigo)
 
-            enviados += 1
+        # ── Notificar a ADMINS (1 vez por hotel cada 2 días) ──────────────
+        skip_adm_hoy = _ya_notificado_familia_repetida_hotel_hoy(
+            hotel_codigo, "familia_repetida_admin"
+        )
+        if skip_adm_hoy:
+            log.debug("[FAM-REP] Admin hotel %s — ya notificado hoy, omitiendo", hotel_codigo)
+        elif reenvio_adm is not None and reenvio_adm < 2:
+            log.debug("[FAM-REP] Admin hotel %s — último aviso hace %d día(s), esperando 2d",
+                      hotel_codigo, reenvio_adm)
+        else:
+            admins = _get_admins_telegram()
+            if not admins:
+                log.warning("[FAM-REP] Sin admins con Telegram configurado")
+            else:
+                for adm in admins:
+                    username = adm.get("username", "?")
+                    chat_id  = adm.get("telegram_chat_id")
+                    if chat_id:
+                        res = _send_telegram(chat_id, texto)
+                        ok  = res.get("ok", False)
+                        log.info("[FAM-REP] → admin %s hotel %s (%d familias): %s",
+                                 username, hotel_codigo, len(familias_repetidas),
+                                 "OK" if ok else res.get("error"))
+                        _log_familia_repetida_hotel(
+                            hotel_codigo, "familia_repetida_admin",
+                            username,
+                            f"Familia repetida x{len(familias_repetidas)} — {mes_txt}",
+                            ok, res.get("error")
+                        )
+                    else:
+                        log.warning("[FAM-REP] Sin telegram_chat_id para admin %s", username)
+                    _encolar_bridge_notificacion(
+                        usuario=username,
+                        tipo="techo",
+                        titulo=titulo_bridge,
+                        mensaje=texto.replace("*", ""),
+                        nivel="urgente",
+                        pedido_id=None,
+                    )
 
-    log.info("✅ [FAM-REP] Fin revisión — %d alertas de familia repetida procesadas", enviados)
+        enviados += 1
+
+    log.info("✅ [FAM-REP] Fin revisión — %d hoteles con familias repetidas notificados", enviados)
 
 
 # ── Job de techo URGENTE — cada 60 s, laborables 07:00-17:00, reenvío c/2 días ─
