@@ -1311,7 +1311,7 @@ def _ya_notificado_familia_repetida_hotel_hoy(hotel_codigo: str, tipo: str) -> b
                  AND tipo = %s
                  AND destinatario LIKE %s
                  AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
-                     CURRENT_DATE AT TIME ZONE 'Atlantic/Canary'""",
+                     (NOW() AT TIME ZONE 'Atlantic/Canary')::date""",
             (tipo, f"%{hotel_codigo}|famrep%"), one=True
         )
         return (row["n"] if row else 0) > 0
@@ -1575,7 +1575,7 @@ def _ya_notificado_techo_urgente_hoy(hotel_codigo: str) -> bool:
                  AND tipo = 'telegram_techo_urgente_admin'
                  AND destinatario LIKE %s
                  AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
-                     CURRENT_DATE AT TIME ZONE 'Atlantic/Canary'""",
+                     (NOW() AT TIME ZONE 'Atlantic/Canary')::date""",
             (f"%{hotel_codigo}%",), one=True
         )
         return (row["n"] if row else 0) > 0
