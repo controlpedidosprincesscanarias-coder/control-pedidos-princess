@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.3.0
+          V 11.4.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1534,13 +1534,25 @@ tbody tr:last-child{border-bottom:none}
         </div>
         <div class="form-group">
           <label class="form-label">Fecha tramitación</label>
-          <input type="date" class="form-control" id="p-f-tramit">
+          <input type="date" class="form-control" id="p-f-tramit" onchange="actualizarFechaEntregaPrevista()">
           <label class="adj-fecha-btn" id="lbl-tramit-eml" title="Adjuntar correo de tramitación" style="margin-top:6px">
             <input type="file" accept=".eml,.msg" multiple style="display:none"
                    onchange="subirAdjuntos(this,'tramit_eml')">
             ✉️ Adjuntar correo
           </label>
           <div id="adj-tramit-list" class="adj-fecha-list"></div>
+        </div>
+        <div class="form-group">
+          <label class="form-label" title="Plazo de entrega indicado por el proveedor. Se usa para calcular alertas automáticas de entrega.">
+            Plazo entrega (días)
+            <span style="font-size:10px;color:#888;font-weight:400"> (proveedor)</span>
+          </label>
+          <input type="number" class="form-control" id="p-plazo-entrega" min="1" step="1"
+                 placeholder="ej. 60" oninput="actualizarFechaEntregaPrevista()"
+                 style="max-width:140px">
+          <div id="p-fecha-entrega-prevista-info" style="margin-top:4px;font-size:11px;color:#1a73e8;display:none">
+            📅 Entrega prevista: <strong id="p-fecha-entrega-prevista-val"></strong>
+          </div>
         </div>
 
         <!-- Referencias DALI / SAP -->
@@ -2813,6 +2825,8 @@ async function openPedidoModal(id=null) {
     setVal('p-f-solicitud', p.fecha_solicitud);
     setVal('p-f-vb', p.fecha_envio_visto_bueno);
     setVal('p-f-tramit', p.fecha_tramitacion);
+    setVal('p-plazo-entrega', p.plazo_entrega_dias || '');
+    actualizarFechaEntregaPrevista();
     setVal('p-pedido-num', p.pedido_num);
     setVal('p-presup', p.presupuesto_num);
     setVal('p-estado', p.estado);
@@ -2867,7 +2881,7 @@ function _applyHotelRolePedidoModal(isEdit) {
   // IDs de secciones/campos a ocultar/deshabilitar para hotel
   const hideIds = [
     'p-hotel','p-depto',                          // hotel y departamento
-    'p-f-solicitud','p-f-vb','p-f-tramit',        // fechas
+    'p-f-solicitud','p-f-vb','p-f-tramit','p-plazo-entrega',        // fechas
     'p-pedido-num','p-presup',                    // números SAP/presupuesto
     'p-proveedor-input',                          // proveedor
     'p-observaciones',                            // observaciones
@@ -3340,8 +3354,9 @@ function _setFormCanceladoSilent(bloqueado) {
 
 
 function clearPedidoForm() {
-  ['p-hotel','p-depto','p-pedido-num','p-presup','p-observaciones','p-nota'].forEach(id=>setVal(id,''));
+  ['p-hotel','p-depto','p-pedido-num','p-presup','p-observaciones','p-nota','p-plazo-entrega'].forEach(id=>setVal(id,''));
   ['p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
+  document.getElementById('p-fecha-entrega-prevista-info').style.display = 'none';
   // Resetear checkbox cancelado y desbloquear formulario
   const chkCanc = document.getElementById('chk-cancelado');
   if (chkCanc) chkCanc.checked = false;
@@ -3358,6 +3373,21 @@ function clearPedidoForm() {
   document.getElementById('p-proveedor-input').value = '';
   document.getElementById('prov-dropdown').style.display = 'none';
   ['p-ab','p-jefe','p-rotura','p-ampliacion'].forEach(id=>document.getElementById(id).checked=false);
+}
+
+function actualizarFechaEntregaPrevista() {
+  const tramit = val('p-f-tramit');
+  const plazo  = parseInt(val('p-plazo-entrega'));
+  const info   = document.getElementById('p-fecha-entrega-prevista-info');
+  const label  = document.getElementById('p-fecha-entrega-prevista-val');
+  if (tramit && plazo > 0) {
+    const base = new Date(tramit + 'T00:00:00');
+    base.setDate(base.getDate() + plazo);
+    label.textContent = base.toLocaleDateString('es-ES', {day:'2-digit',month:'2-digit',year:'numeric'});
+    info.style.display = '';
+  } else {
+    info.style.display = 'none';
+  }
 }
 
 async function savePedido() {
@@ -3438,6 +3468,7 @@ async function savePedido() {
     sujeto_techo:         sujetoTecho,
     familia_id:           familiaId,
     importe:              importeVal,
+    plazo_entrega_dias:   parseInt(val('p-plazo-entrega')) || null,
   };
 
   const btn = document.getElementById('btn-save-pedido');
@@ -3545,6 +3576,9 @@ async function loadAlertas() {
     const fechaLabel = p.estado === 'PENDIENTE COTIZACIÓN'
       ? `<span title="Fecha de solicitud">${fmtDate(fechaRef)||'—'}</span>`
       : (fmtDate(fechaRef)||'—');
+    const entregaPrevLabel = p.fecha_entrega_prevista
+      ? `<br><span style="font-size:10px;color:#1a73e8" title="Entrega prevista (plazo proveedor)">📅 ${fmtDate(p.fecha_entrega_prevista)}</span>`
+      : '';
     return `
     <tr class="${rowClass}">
       <td class="monospace">${p.norden||'—'}</td>
@@ -3552,7 +3586,7 @@ async function loadAlertas() {
       <td class="monospace">${p.pedido_num||'—'}</td>
       <td>${estadoBadge(p.estado)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
-      <td class="monospace" style="font-size:12px">${fechaLabel}</td>
+      <td class="monospace" style="font-size:12px">${fechaLabel}${entregaPrevLabel}</td>
       <td>${diasLabel}</td>
       <td>${nivelBadge}</td>
       <td>
@@ -4727,9 +4761,23 @@ async function loadConfigAlertas() {
         const dot   = esUrgente ? '🔴' : esPrimera ? '🟡' : '⚪';
         const color = esUrgente ? '#dc3545' : esPrimera ? '#ffc107' : '#adb5bd';
         const unidad = (item.clave.includes('techo_max_pedido') || item.clave.includes('techo_max_mes'))
-          ? '€' : item.clave.includes('pct') ? '%' : 'días';
+          ? '€' : item.clave.includes('pct') ? '%' : (item.tipo === 'bool' ? '' : 'días');
         const nota = item.clave.includes('urgente')
           ? '<span style="font-size:10px;color:#888">(0=nunca)</span>' : '';
+        // Bool: render as toggle checkbox
+        if (item.tipo === 'bool') {
+          const checked = item.valor === '1' ? 'checked' : '';
+          html += `<div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px;grid-column:1/-1">
+            <div style="font-size:11px;color:#555;line-height:1.3;flex:1;min-width:0">⚙️ ${item.label}</div>
+            <label style="display:flex;align-items:center;gap:6px;flex-shrink:0;cursor:pointer">
+              <input type="checkbox" id="cfg_${item.clave}" ${checked}
+                     style="width:16px;height:16px;cursor:pointer"
+                     onchange="this.value=this.checked?'1':'0';document.getElementById(this.id+'_lbl').textContent=this.checked?'Activo':'Inactivo'">
+              <span id="cfg_${item.clave}_lbl" style="font-size:11px;color:#666;font-weight:600;min-width:40px">${checked ? 'Activo' : 'Inactivo'}</span>
+            </label>
+          </div>`;
+          continue;
+        }
         html += `<div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px">
           <div style="font-size:11px;color:#555;line-height:1.3;flex:1;min-width:0">${dot} ${item.label}${nota ? ' '+nota : ''}</div>
           <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
@@ -4748,9 +4796,16 @@ async function loadConfigAlertas() {
 }
 
 async function saveConfigAlertas() {
-  const inputs = document.querySelectorAll('[id^="cfg_"]');
+  const inputs = document.querySelectorAll('input[id^="cfg_"]');
   const data = {};
-  inputs.forEach(inp => { data[inp.id.replace('cfg_', '')] = inp.value; });
+  inputs.forEach(inp => {
+    const clave = inp.id.replace('cfg_', '');
+    if (inp.type === 'checkbox') {
+      data[clave] = inp.checked ? '1' : '0';
+    } else {
+      data[clave] = inp.value;
+    }
+  });
   const msg = document.getElementById('config-alertas-msg');
   try {
     const r = await fetch('/api/admin/config-alertas', {
