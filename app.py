@@ -4926,7 +4926,7 @@ def get_pedidos_eliminados():
 @app.route("/api/stats")
 @login_required
 def get_stats():
-    # ── Restricción rol hotel: solo sus hoteles asignados, sin alertas ni techo ──
+    # ── Restricción rol hotel: solo sus hoteles asignados, alertas filtradas ──
     if session.get("rol") == "hotel":
         hoteles_ids = session.get("hoteles_ids", [])
         if not hoteles_ids:
@@ -4945,8 +4945,65 @@ def get_stats():
                 WHERE h.id IN ({placeholders})
                 GROUP BY h.id, h.codigo, h.nombre ORDER BY total DESC""",
             hoteles_ids))
+        # Calcular alertas reales para los hoteles visibles del usuario hotel
+        alertas_raw_h = rows_to_list(query(f"""
+            {PEDIDO_SELECT}
+            WHERE p.estado IN (
+                'ENVIADO AL PROVEEDOR',
+                'PENDIENTE FIRMA DIRECCION COMPRAS',
+                'PENDIENTE DE FIRMA DIRECCION HOTEL',
+                'ENTREGA PARCIAL',
+                'PENDIENTE COTIZACIÓN'
+            )
+              AND p.hotel_id IN ({placeholders})
+              AND (
+                p.fecha_tramitacion IS NOT NULL
+                OR (p.estado = 'PENDIENTE COTIZACIÓN' AND p.fecha_solicitud IS NOT NULL)
+              )
+            ORDER BY p.fecha_tramitacion ASC
+        """, hoteles_ids))
+        from datetime import date as _date, datetime as _dt
+
+        def _dias_desde_h(fecha_str):
+            if not fecha_str:
+                return None
+            try:
+                if hasattr(fecha_str, 'date'):
+                    f = fecha_str.date()
+                elif isinstance(fecha_str, _date):
+                    f = fecha_str
+                else:
+                    s = str(fecha_str)[:10]
+                    f = _dt.strptime(s, "%Y-%m-%d").date()
+                return (_date.today() - f).days
+            except Exception:
+                return None
+
+        UMBRALES_H = {
+            "ENVIADO AL PROVEEDOR":              {"primera": 15, "urgente": 25, "ciclo": 10},
+            "PENDIENTE FIRMA DIRECCION COMPRAS": {"primera": 8,  "urgente": None, "ciclo": 8},
+            "PENDIENTE DE FIRMA DIRECCION HOTEL":{"primera": 5,  "urgente": None, "ciclo": 5},
+            "ENTREGA PARCIAL":                   {"primera": 10, "urgente": None, "ciclo": 10},
+            "PENDIENTE COTIZACIÓN":              {"primera": 2,  "urgente": 3, "ciclo": None, "fecha_ref": "fecha_solicitud"},
+        }
+        alertas_h = []
+        for p in alertas_raw_h:
+            cfg = UMBRALES_H.get(p["estado"])
+            if not cfg:
+                continue
+            fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
+            dias = _dias_desde_h(p.get(fecha_ref_campo))
+            if dias is None or dias < cfg["primera"]:
+                continue
+            urgente = cfg["urgente"]
+            nivel = "urgente" if (urgente and dias >= urgente) else "aviso"
+            p["dias_tramitacion"] = dias
+            p["nivel_alerta"]     = nivel
+            alertas_h.append(p)
+        alertas_h.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1, -x["dias_tramitacion"]))
         return jsonify({"total": total, "by_estado": by_estado,
-                        "by_hotel": by_hotel, "alertas": [], "num_alertas": 0})
+                        "by_hotel": by_hotel, "alertas": alertas_h,
+                        "num_alertas": len(alertas_h)})
     # ── Resto de roles ────────────────────────────────────────────────────────
     total     = query("SELECT COUNT(*) as n FROM pedidos", one=True)["n"]
     by_estado = rows_to_list(query(
