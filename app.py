@@ -226,6 +226,7 @@ def _auto_migrate():
                     ("cotizacion_primera",       "2", "numero", "Pendiente Cotización — 1ª alerta (días)",           "estado_cotizacion", 1),
                     ("cotizacion_urgente",       "3", "numero", "Pendiente Cotización — Urgente (días)",             "estado_cotizacion", 2),
                     ("dias_critico",            "60", "numero", "Días crítico global (fuerza reenvío urgente)",      "global",            1),
+                    ("activar_uso_plazo_entrega","1",  "bool",   "Activar alertas basadas en plazo de entrega del proveedor", "global", 2),
                     ("techo_max_pedido",      "3000", "numero", "Techo — Importe máximo por pedido (€)",             "techo",             1),
                     ("techo_max_mes",         "6000", "numero", "Techo — Importe máximo mensual por hotel (€)",      "techo",             2),
                     ("techo_max_pedidos",        "2", "numero", "Techo — Nº máximo de pedidos por hotel/mes",        "techo",             3),
@@ -1056,6 +1057,7 @@ def get_config() -> dict:
         "entrega_parcial_primera": 10, "entrega_parcial_urgente": 0, "entrega_parcial_ciclo": 10,
         "cotizacion_primera": 2, "cotizacion_urgente": 3,
         "dias_critico": 60,
+        "activar_uso_plazo_entrega": 1,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_pct_amarillo": 60,
     }
@@ -1160,6 +1162,7 @@ def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
 _JOB_PEDIDO_SQL = """
     SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
+           p.plazo_entrega_dias,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
@@ -1201,6 +1204,94 @@ def _dias_ultima_notificacion(pedido_id: int):
     except Exception:
         return None
 
+
+
+# ── Helpers para lógica de plazo de entrega ──────────────────────────────────
+
+def _calcular_fecha_entrega_prevista(fecha_tramitacion, plazo_dias):
+    """
+    Devuelve (date) fecha_tramitacion + plazo_dias, o None si falta algún dato.
+    """
+    if not fecha_tramitacion or not plazo_dias:
+        return None
+    try:
+        from datetime import datetime as _dt, date as _d, timedelta
+        if hasattr(fecha_tramitacion, 'date'):
+            base = fecha_tramitacion.date()
+        elif isinstance(fecha_tramitacion, _d):
+            base = fecha_tramitacion
+        else:
+            base = _dt.strptime(str(fecha_tramitacion)[:10], "%Y-%m-%d").date()
+        return base + timedelta(days=int(plazo_dias))
+    except Exception:
+        return None
+
+
+def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
+    """
+    Calcula si hoy debe generarse una alerta basada en el plazo de entrega
+    informado por el proveedor. Solo aplica al estado 'ENVIADO AL PROVEEDOR'.
+
+    Reglas (según spec):
+      - primerAviso : fecha_entrega_prevista - 5 días
+      - avisoEntrega: fecha_entrega_prevista
+      - urgenteCada : cada 2 días desde fecha_entrega_prevista + 1
+
+    Devuelve None si no aplica, o dict {"nivel": "aviso"|"urgente", "motivo": str,
+                                         "fecha_entrega_prevista": date}
+    """
+    if not cfg_activado:
+        return None
+    if pedido.get("estado") != "ENVIADO AL PROVEEDOR":
+        return None
+    plazo = pedido.get("plazo_entrega_dias")
+    if not plazo:
+        return None
+
+    fecha_entrega = _calcular_fecha_entrega_prevista(
+        pedido.get("fecha_tramitacion"), plazo
+    )
+    if not fecha_entrega:
+        return None
+
+    from datetime import date as _d
+    hoy = _d.today()
+    delta = (hoy - fecha_entrega).days  # negativo = antes, 0 = hoy, positivo = después
+
+    fecha_str = fecha_entrega.strftime("%d/%m/%Y")
+
+    if delta < -5:
+        return None  # aún fuera del primer umbral
+
+    if -5 <= delta < 0:
+        return {
+            "nivel": "aviso",
+            "motivo": f"Entrega prevista el {fecha_str} (en {-delta} día(s))",
+            "fecha_entrega_prevista": fecha_entrega,
+        }
+    if delta == 0:
+        return {
+            "nivel": "urgente",
+            "motivo": f"Hoy es la fecha de entrega prevista ({fecha_str})",
+            "fecha_entrega_prevista": fecha_entrega,
+        }
+    # delta > 0 → entrega ya superada; urgente cada 2 días
+    if delta % 2 == 0:
+        return {
+            "nivel": "urgente",
+            "motivo": f"Entrega prevista {fecha_str} superada hace {delta} día(s)",
+            "fecha_entrega_prevista": fecha_entrega,
+        }
+    return None
+
+
+def _debe_usar_logica_plazo(pedido: dict) -> bool:
+    """True si el pedido tiene plazo informado Y la feature está activada en config."""
+    cfg = get_config()
+    activado = bool(int(cfg.get("activar_uso_plazo_entrega", 1) or 0))
+    return activado and bool(pedido.get("plazo_entrega_dias"))
+
+
 def _job_alertas_diarias():
     """
     Job automático: calcula alertas por fecha y envía Telegram
@@ -1241,8 +1332,45 @@ def _job_alertas_diarias_inner():
 
     enviados = 0
     omitidos = 0
+    cfg_activar_plazo = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
 
     for p in alertas_raw:
+        # ── Lógica por plazo de entrega (si el pedido la tiene y está activada) ─
+        info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
+        if info_plazo:
+            # Usar lógica de plazo en lugar de la estándar para ENVIADO AL PROVEEDOR
+            nivel  = info_plazo["nivel"]
+            motivo = info_plazo["motivo"]
+            dias   = _dias_desde_fecha(p.get("fecha_tramitacion")) or 0
+
+            if _ya_notificado_hoy(p["id"], "telegram_auto"):
+                omitidos += 1
+                continue
+
+            # Para alertas de plazo: siempre enviar si corresponde (ciclo cada 2 días
+            # ya está controlado por _alertas_plazo_entrega — solo devuelve algo
+            # en días que toca). Dedup entre jobs del mismo día: _ya_notificado_hoy.
+            debe_enviar = True
+            log.info("[SCHEDULER-PLAZO] Pedido %s — %s (%s)", p["id"], nivel, motivo)
+
+            resultados = _enviar_telegram_compradores(p, dias, nivel)
+            try:
+                db = get_db()
+                for r in resultados:
+                    _log_whatsapp(
+                        db, p["id"], "telegram_auto",
+                        r.get("username", "?"),
+                        f"Alerta plazo entrega {nivel} — {motivo}",
+                        r.get("ok", False),
+                        r.get("error"),
+                    )
+                db.commit()
+            except Exception as exc:
+                log.error("[SCHEDULER] Error guardando log (plazo) pedido %s: %s", p["id"], exc)
+            enviados += 1
+            continue
+        # ── Lógica estándar (sin plazo informado o feature desactivada) ──────────
+
         cfg = _build_umbrales().get(p["estado"])
         if not cfg:
             continue
@@ -4692,9 +4820,10 @@ def create_pedido():
             parte_rotura, parte_ampliacion,
             proveedor_id, observaciones,
             familia_id, importe, sujeto_techo,
+            plazo_entrega_dias,
             creado_por_id, modificado_por_id,
             creado_por_nombre, modificado_por_nombre
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         RETURNING id
     """, (
         norden,
@@ -4710,6 +4839,7 @@ def create_pedido():
         1 if data.get("parte_ampliacion") else 0,
         data.get("proveedor_id"), data.get("observaciones"),
         familia_id, importe, sujeto_techo,
+        data.get("plazo_entrega_dias") or None,
         uid, uid,
         session.get("nombre"), session.get("nombre"),
     ))
@@ -4822,6 +4952,7 @@ def update_pedido(pid):
             parte_rotura=%s, parte_ampliacion=%s,
             proveedor_id=%s, observaciones=%s,
             familia_id=%s, importe=%s, sujeto_techo=%s,
+            plazo_entrega_dias=%s,
             modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
         WHERE id=%s
     """, (
@@ -4841,6 +4972,7 @@ def update_pedido(pid):
         data.get("proveedor_id",  pedido_actual["proveedor_id"]),
         data.get("observaciones", pedido_actual["observaciones"]),
         familia_id, importe, sujeto_techo,
+        data.get("plazo_entrega_dias", pedido_actual.get("plazo_entrega_dias")) or None,
         uid, session.get("nombre"), pid,
     ))
 
@@ -4987,7 +5119,19 @@ def get_stats():
             "PENDIENTE COTIZACIÓN":              {"primera": 2,  "urgente": 3, "ciclo": None, "fecha_ref": "fecha_solicitud"},
         }
         alertas_h = []
+        cfg_activar_plazo_h = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
         for p in alertas_raw_h:
+            # ── Lógica plazo de entrega ────────────────────────────────────
+            info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo_h)
+            if info_plazo:
+                dias = _dias_desde_h(p.get("fecha_tramitacion")) or 0
+                p["dias_tramitacion"] = dias
+                p["nivel_alerta"]     = info_plazo["nivel"]
+                fep = info_plazo["fecha_entrega_prevista"]
+                p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
+                alertas_h.append(p)
+                continue
+            # ── Lógica estándar ────────────────────────────────────────────
             cfg = UMBRALES_H.get(p["estado"])
             if not cfg:
                 continue
@@ -4999,6 +5143,7 @@ def get_stats():
             nivel = "urgente" if (urgente and dias >= urgente) else "aviso"
             p["dias_tramitacion"] = dias
             p["nivel_alerta"]     = nivel
+            p["fecha_entrega_prevista"] = None
             alertas_h.append(p)
         alertas_h.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1, -x["dias_tramitacion"]))
         return jsonify({"total": total, "by_estado": by_estado,
@@ -5073,7 +5218,19 @@ def get_stats():
     }
 
     alertas = []
+    cfg_activar_plazo = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
     for p in alertas_raw:
+        # ── Lógica plazo de entrega ────────────────────────────────────────
+        info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
+        if info_plazo:
+            dias = _dias_desde(p.get("fecha_tramitacion")) or 0
+            p["dias_tramitacion"] = dias
+            p["nivel_alerta"]     = info_plazo["nivel"]
+            fep = info_plazo["fecha_entrega_prevista"]
+            p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
+            alertas.append(p)
+            continue
+        # ── Lógica estándar ────────────────────────────────────────────────
         cfg = UMBRALES.get(p["estado"])
         if not cfg:
             continue
@@ -5092,6 +5249,7 @@ def get_stats():
         nivel = "urgente" if (urgente and dias >= urgente) else "aviso"
         p["dias_tramitacion"] = dias
         p["nivel_alerta"]     = nivel
+        p["fecha_entrega_prevista"] = None
         alertas.append(p)
 
     # Urgentes primero, luego por días descendente
@@ -5163,6 +5321,7 @@ def bridge_alertas_usuario():
     sql = f"""
         SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
                p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
+               p.plazo_entrega_dias,
                h.codigo as hotel_codigo, h.nombre as hotel_nombre,
                d.nombre as departamento_nombre,
                pr.nombre as proveedor_nombre
@@ -5220,7 +5379,19 @@ def bridge_alertas_usuario():
     }
 
     alertas = []
+    cfg_activar_plazo_bridge = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
     for p in alertas_raw:
+        # ── Lógica plazo de entrega ────────────────────────────────────────
+        info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo_bridge)
+        if info_plazo:
+            dias = _dias_desde(p.get("fecha_tramitacion")) or 0
+            p["dias_tramitacion"] = dias
+            p["nivel_alerta"]     = info_plazo["nivel"]
+            fep = info_plazo["fecha_entrega_prevista"]
+            p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
+            alertas.append(p)
+            continue
+        # ── Lógica estándar ────────────────────────────────────────────────
         cfg = UMBRALES_BRIDGE.get(p["estado"])
         if not cfg:
             continue
@@ -5233,6 +5404,7 @@ def bridge_alertas_usuario():
         nivel = "urgente" if (cfg.get("urgente") and dias >= cfg["urgente"]) else "aviso"
         p["dias_tramitacion"] = dias
         p["nivel_alerta"]     = nivel
+        p["fecha_entrega_prevista"] = None
         alertas.append(p)
 
     alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1,
