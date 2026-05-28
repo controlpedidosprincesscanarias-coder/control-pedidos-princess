@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.2.8
+          V 11.3.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -5007,11 +5007,11 @@ async function loadUsuarios() {
           ? `<span style="font-size:12px;color:#7a5c00;font-weight:600">${compradorMap[u.id].join(', ')}</span>`
           : '<span style="color:#ccc;font-size:12px">Sin asignar</span>')
       : '<span style="color:#ddd;font-size:12px">—</span>';
-    const tgCell = (u.rol === 'compras' || u.rol === 'user')
-      ? ((u.telegram_chat_id || '').trim()
-          ? `<span title="Chat ID: ${u.telegram_chat_id}" style="font-size:13px;cursor:default">✅ <span style="font-family:monospace;font-size:11px;color:#555">${u.telegram_chat_id}</span></span>`
-          : `<span style="color:#dc3545;font-size:12px;font-weight:600">❌ Sin ID</span>`)
-      : '<span style="color:#ddd;font-size:12px">—</span>';
+    const tgCell = (u.telegram_chat_id || '').trim()
+      ? `<span title="Chat ID: ${u.telegram_chat_id}" style="font-size:13px;cursor:default">✅ <span style="font-family:monospace;font-size:11px;color:#555">${u.telegram_chat_id}</span></span>`
+      : (u.rol === 'compras' || u.rol === 'user')
+        ? `<span style="color:#dc3545;font-size:12px;font-weight:600">❌ Sin ID</span>`
+        : '<span style="color:#ddd;font-size:12px">—</span>';
     return `<tr>
       <td class="monospace" style="font-size:13px">${u.username}</td>
       <td>${u.nombre}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
