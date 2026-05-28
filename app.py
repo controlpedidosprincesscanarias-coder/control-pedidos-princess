@@ -23,7 +23,7 @@ SECRET_KEY = os.environ["SECRET_KEY"]
 # Email — Resend (preferido) o SMTP como fallback
 RESEND_API_KEY   = os.environ.get("RESEND_API_KEY", "")
 EMAIL_FROM       = os.environ.get("EMAIL_FROM", "centralcomprascanarias.princess@gmail.com")
-EMAILS_INTERNOS  = [e.strip() for e in os.environ.get("EMAILS_INTERNOS", "").split(",") if e.strip()]
+# EMAILS_INTERNOS eliminado: los destinatarios internos se leen siempre de la BD (rol admin/compras)
 
 # SMTP fallback (solo si no hay RESEND_API_KEY)
 SMTP_HOST     = os.environ.get("SMTP_HOST", "")
@@ -447,7 +447,11 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         subject = f"Pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
         # Obtener email del comprador responsable del hotel
         _compradores_estado = _get_compradores_cc(pedido.get("hotel_codigo",""))
-        _email_comprador_estado = _compradores_estado[0]["email"] if _compradores_estado and _compradores_estado[0].get("email") else "compras@princess.es"
+        if not (_compradores_estado and _compradores_estado[0].get("email")):
+            log.warning("[EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email a proveedor omitido",
+                        pedido_id, pedido.get("hotel_codigo",""))
+            return
+        _email_comprador_estado = _compradores_estado[0]["email"]
         body = f"""
         <p>Estimado/a proveedor/a,</p>
         <p>Le informamos que el pedido que figura a continuación ha sido tramitado:</p>
@@ -466,9 +470,11 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _log_email(db, pedido_id, "proveedor", pedido["proveedor_email"], subject,
                    res["ok"], res.get("error"))
 
-    if estado_nuevo in ESTADOS_EMAIL_INTERNO and EMAILS_INTERNOS:
-        subject = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {estado_nuevo}"
-        body = f"""
+    if estado_nuevo in ESTADOS_EMAIL_INTERNO:
+        destinatarios_internos = _get_admin_emails()
+        if destinatarios_internos:
+            subject = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {estado_nuevo}"
+            body = f"""
         <p>Cambio de estado en el sistema de Control de Pedidos:</p>
         <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif">
           <tr><td><b>Hotel</b></td><td>{pedido.get('hotel_nombre','')}</td></tr>
@@ -479,10 +485,10 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
           <tr><td><b>Estado nuevo</b></td><td><b>{estado_nuevo}</b></td></tr>
         </table>
         """
-        for dest in EMAILS_INTERNOS:
-            res = _send_email(dest, subject, body)
-            _log_email(db, pedido_id, "interno", dest, subject,
-                       res["ok"], res.get("error"))
+            for dest in destinatarios_internos:
+                res = _send_email(dest, subject, body)
+                _log_email(db, pedido_id, "interno", dest, subject,
+                           res["ok"], res.get("error"))
 
 # ── Helper norden ──────────────────────────────────────────────────────────────
 
@@ -494,9 +500,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 
 # ── Telegram Bot — alertas automáticas ─────────────────────────────────────────
 TELEGRAM_BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-# Chat-id del administrador del sistema (para recibir alertas de integridad).
-# Configurar en Render/entorno igual que TELEGRAM_BOT_TOKEN.
-ADMIN_TELEGRAM_CHAT_ID  = os.environ.get("ADMIN_TELEGRAM_CHAT_ID", "")
+# ADMIN_TELEGRAM_CHAT_ID eliminado: los chat_id se gestionan desde el panel de admin (campo telegram_chat_id en usuario)
 
 # ── Tipos de alerta que generan copia de supervisión a los administradores ──────
 # "urgente"       → job diario con nivel urgente (pedidos críticos parados)
@@ -510,21 +514,14 @@ TIPOS_SUPERVISION_ADMIN = {"urgente", "techo"}
 
 def _get_admin_emails() -> list:
     """
-    Devuelve lista de emails de admins activos.
-    Prioridad: 1) EMAILS_INTERNOS (env var)  2) ADMIN_EMAIL (env var)
-               3) emails de admins activos en BD.
-    Garantiza que siempre haya destinatarios si los admins tienen email en BD.
+    Devuelve lista de emails de todos los usuarios con rol admin o compras activos en BD.
+    Los destinatarios se gestionan exclusivamente desde el panel de administración.
     USO: notificaciones de pedidos (cambios de estado, alertas).
     NUNCA usar para solicitudes de acceso — usar _get_solo_admin_emails().
     """
-    if EMAILS_INTERNOS:
-        return EMAILS_INTERNOS
-    admin_email = os.environ.get("ADMIN_EMAIL", "").strip()
-    if admin_email:
-        return [admin_email]
     try:
         admins = rows_to_list(query(
-            "SELECT email FROM usuarios WHERE rol='admin' AND activo=1 "
+            "SELECT email FROM usuarios WHERE rol IN ('admin','compras') AND activo=1 "
             "AND email IS NOT NULL AND TRIM(email) != ''"
         )) or []
         return [a["email"] for a in admins if a.get("email")]
@@ -534,14 +531,9 @@ def _get_admin_emails() -> list:
 
 def _get_solo_admin_emails() -> list:
     """
-    Devuelve ÚNICAMENTE emails de administradores (rol='admin') del sistema.
-    Ignora EMAILS_INTERNOS deliberadamente — esa variable incluye compradores
-    y otros usuarios internos que NO deben recibir correos de solicitudes de acceso.
-    Prioridad: 1) ADMIN_EMAIL (env var)  2) admins activos en BD.
+    Devuelve ÚNICAMENTE emails de administradores (rol='admin') activos en BD.
+    Los administradores se gestionan exclusivamente desde el panel de administración.
     """
-    admin_email = os.environ.get("ADMIN_EMAIL", "").strip()
-    if admin_email:
-        return [admin_email]
     try:
         admins = rows_to_list(query(
             "SELECT email FROM usuarios WHERE rol='admin' AND activo=1 "
@@ -556,7 +548,7 @@ def _get_admins_telegram() -> list:
     """
     Devuelve lista de dicts {username, nombre, telegram_chat_id} de todos los
     administradores activos que tienen telegram_chat_id configurado en BD.
-    Fallback: ADMIN_TELEGRAM_CHAT_ID (variable de entorno).
+    El campo telegram_chat_id se gestiona desde el panel de administración.
     """
     try:
         admins = rows_to_list(query(
@@ -566,12 +558,6 @@ def _get_admins_telegram() -> list:
         )) or []
     except Exception:
         admins = []
-
-    if not admins:
-        fallback = (ADMIN_TELEGRAM_CHAT_ID or "").strip()
-        if fallback:
-            admins = [{"username": "admin_env", "nombre": "Admin (env)",
-                       "telegram_chat_id": fallback}]
     return admins
 
 
@@ -2151,7 +2137,7 @@ def _get_compradores_cc(hotel_codigo: str):
 
 # ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
 
-def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, comprador_email: str = "compras@princess.es") -> tuple:
+def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, comprador_email: str = "") -> tuple:
     """Pedido enviado al proveedor sin acuse de recibo tras varios días."""
     nivel = "URGENTE" if urgente else "Recordatorio"
     subject = f"[{nivel}] Seguimiento pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
@@ -2229,7 +2215,7 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
     """
     return subject, body
 
-def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: str = "compras@princess.es") -> tuple:
+def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: str = "") -> tuple:
     """Pedido con entrega parcial sin cierre."""
     subject = f"[Seguimiento] Pedido Nº {pedido.get('pedido_num','—')} — Entrega parcial pendiente de completar"
     body = f"""
@@ -2261,7 +2247,7 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
     """
     return subject, body
 
-def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool, comprador_email: str = "compras@princess.es") -> tuple:
+def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool, comprador_email: str = "") -> tuple:
     """Pedido pendiente de cotización del proveedor."""
     nivel = "URGENTE" if urgente else "Solicitud de cotización"
     subject = f"[{nivel}] Cotización solicitada — {pedido.get('hotel_nombre','Princess Hotels')} — Princess Hotels & Resorts"
@@ -2294,12 +2280,17 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
     return subject, body
 
 def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
-    """Selecciona la plantilla correcta según el estado del pedido y devuelve (subject, body, es_proveedor)."""
+    """Selecciona la plantilla correcta según el estado del pedido y devuelve (subject, body, es_proveedor).
+    Devuelve (None, None, False) si no hay comprador con email asignado al hotel."""
     estado    = pedido.get("estado", "")
     urgente   = nivel == "urgente"
     # Obtener email del comprador responsable del hotel para incluir en la firma
     _compradores = _get_compradores_cc(pedido.get("hotel_codigo",""))
-    _comprador_email = _compradores[0]["email"] if _compradores and _compradores[0].get("email") else "compras@princess.es"
+    if not (_compradores and _compradores[0].get("email")):
+        log.warning("[ALERTA EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email de alerta omitido",
+                    pedido.get("id"), pedido.get("hotel_codigo",""))
+        return None, None, False
+    _comprador_email = _compradores[0]["email"]
     if estado == "ENVIADO AL PROVEEDOR":
         s, b = _email_template_enviado_proveedor(pedido, dias, urgente, _comprador_email)
         return s, b, True
@@ -2659,17 +2650,19 @@ def solicitar_reset_password():
     res_email = _send_email(user["email"], subject, body_html)
     email_enviado = res_email["ok"]
 
-    # Fallback: si falla, intentar con ADMIN_EMAIL
-    admin_email = os.environ.get("ADMIN_EMAIL", "")
-    if not email_enviado and admin_email:
-        admin_body = f"""
+    # Fallback: si falla el envío al usuario, notificar a los admins activos en BD
+    if not email_enviado:
+        admins_email = _get_solo_admin_emails()
+        if admins_email:
+            admin_body = f"""
         <p><strong>Solicitud de reset de contraseña</strong></p>
         <p>El usuario <strong>{user['nombre']}</strong> ({user['username']}) solicitó
         restablecer su contraseña pero el envío directo falló.</p>
         <p>Enlace (válido 2h): <a href="{link}">{link}</a></p>
         <p style="color:#666;font-size:12px;">Reenvía este enlace manualmente al usuario.</p>
         """
-        _send_email(admin_email, f"[RESET] Contraseña usuario {user['username']}", admin_body)  # best-effort
+            for adm in admins_email:
+                _send_email(adm, f"[RESET] Contraseña usuario {user['username']}", admin_body)  # best-effort
 
     # Si no hay email configurado en absoluto, devolver el enlace + datos del usuario
     # para que el frontend lo envíe via EmailJS
@@ -3434,7 +3427,6 @@ def admin_aprobar_solicitud(sol_id):
       </div>
     </div>
     """
-    admin_email = os.environ.get("ADMIN_EMAIL", "")
     destinatarios = _get_solo_admin_emails()
     for dest in destinatarios:
         try:
@@ -6065,20 +6057,8 @@ def _job_health_check_inner(force: bool = False):
     resultado = _validar_integridad_operativa()
 
     # ── Destinatarios: todos los admins activos con telegram_chat_id en BD ──
-    # Si ninguno tiene chat_id, fallback a ADMIN_TELEGRAM_CHAT_ID (env var).
-    try:
-        admins_bd = rows_to_list(query(
-            "SELECT username, nombre, telegram_chat_id FROM usuarios "
-            "WHERE rol='admin' AND activo=1 AND telegram_chat_id IS NOT NULL "
-            "AND TRIM(telegram_chat_id) != ''"
-        )) or []
-    except Exception:
-        admins_bd = []
-
-    # Fallback: variable de entorno si no hay admins con chat_id en BD
-    fallback_chat = (ADMIN_TELEGRAM_CHAT_ID or "").strip()
-    if not admins_bd and fallback_chat:
-        admins_bd = [{"username": "admin_env", "nombre": "Admin (env)", "telegram_chat_id": fallback_chat}]
+    # El campo telegram_chat_id se gestiona exclusivamente desde el panel de administración.
+    admins_bd = _get_admins_telegram()
 
     def _enviar_a_admins(texto_msg):
         for adm in admins_bd:

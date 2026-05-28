@@ -205,17 +205,9 @@ SQL_STATEMENTS = [
         ('ANIMACION'), ('ADMINISTRACION'), ('DIRECCION'), ('RRHH')
     ON CONFLICT DO NOTHING
     """,
-    """
-    INSERT INTO usuarios (username, nombre, email, password, rol) VALUES
-        ('dcompras',    'Jesus Curbelo',   'jesus.curbelo@princess.es',   'Princess2026', 'admin'),
-        ('comprascan',  'Victor Martin',   'victor.martin@princess.es',   'Princess2026', 'admin'),
-        ('comprascan4', 'Fran Gonzalez',   'fran.gonzalez@princess.es',   'Princess2026', 'admin'),
-        ('comprascan2', 'Said Driss',      'said.driss@princess.es',      'comprascan2',  'user'),
-        ('comprascan3', 'David Rodriguez', 'david.rodriguez@princess.es', 'comprascan3',  'user'),
-        ('comprascan6', 'Maria Cruz',      'maria.cruz@princess.es',      'comprascan6',  'user')
-    ON CONFLICT DO NOTHING
-    """,
 ]
+# Los usuarios se crean y gestionan exclusivamente desde el panel de administración.
+# No hay usuarios predefinidos en el código. Para el primer arranque usa seed_admin.py.
 
 ESTADOS_VALIDOS = [
     "PENDIENTE FIRMA DIRECCION COMPRAS",
