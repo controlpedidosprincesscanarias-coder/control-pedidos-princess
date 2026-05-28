@@ -3909,7 +3909,12 @@ def get_proveedores():
             (f"%{q}%",))
     else:
         rows = query("SELECT id,codigo,nombre,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre")
-    return jsonify(_prov_with_contactos(rows))
+    result = _prov_with_contactos(rows)
+    # Rol hotel: solo consulta — se eliminan observaciones de la respuesta
+    if session.get("rol") == "hotel":
+        for p in result:
+            p.pop("observaciones", None)
+    return jsonify(result)
 
 @app.route("/api/proveedores", methods=["POST"])
 @admin_required
@@ -4015,6 +4020,8 @@ def delete_proveedor(pid):
 @app.route("/api/proveedores/exportar", methods=["GET"])
 @login_required
 def exportar_proveedores():
+    if session.get("rol") == "hotel":
+        return jsonify({"error": "Sin permisos"}), 403
     try:
         import openpyxl, io
         from openpyxl.styles import Font, PatternFill, Alignment
@@ -4488,6 +4495,8 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
 @login_required
 def techo_resumen():
     """Devuelve el resumen del techo de gastos del mes actual por hotel."""
+    if session.get("rol") == "hotel":
+        return jsonify({"error": "Sin permisos"}), 403
     from datetime import date
     hoy    = date.today()
     year   = hoy.year
@@ -4917,6 +4926,28 @@ def get_pedidos_eliminados():
 @app.route("/api/stats")
 @login_required
 def get_stats():
+    # ── Restricción rol hotel: solo sus hoteles asignados, sin alertas ni techo ──
+    if session.get("rol") == "hotel":
+        hoteles_ids = session.get("hoteles_ids", [])
+        if not hoteles_ids:
+            return jsonify({"total": 0, "by_estado": [], "by_hotel": [],
+                            "alertas": [], "num_alertas": 0})
+        placeholders = ",".join(["%s"] * len(hoteles_ids))
+        total = query(
+            f"SELECT COUNT(*) as n FROM pedidos WHERE hotel_id IN ({placeholders})",
+            hoteles_ids, one=True)["n"]
+        by_estado = rows_to_list(query(
+            f"SELECT estado, COUNT(*) as total FROM pedidos WHERE hotel_id IN ({placeholders}) GROUP BY estado ORDER BY total DESC",
+            hoteles_ids))
+        by_hotel = rows_to_list(query(
+            f"""SELECT h.codigo, h.nombre, COUNT(p.id) as total
+                FROM hoteles h LEFT JOIN pedidos p ON p.hotel_id=h.id
+                WHERE h.id IN ({placeholders})
+                GROUP BY h.id, h.codigo, h.nombre ORDER BY total DESC""",
+            hoteles_ids))
+        return jsonify({"total": total, "by_estado": by_estado,
+                        "by_hotel": by_hotel, "alertas": [], "num_alertas": 0})
+    # ── Resto de roles ────────────────────────────────────────────────────────
     total     = query("SELECT COUNT(*) as n FROM pedidos", one=True)["n"]
     by_estado = rows_to_list(query(
         "SELECT estado, COUNT(*) as total FROM pedidos GROUP BY estado ORDER BY total DESC"
@@ -5042,9 +5073,13 @@ def bridge_alertas_usuario():
 
     # ── Determinar qué hotel_ids aplican al usuario ───────────────────────────
     if rol == "admin":
-        # Admin ve todo: sin filtro de hotel
-        filtro_hotel_sql = ""
-        filtro_args      = []
+        # El admin recibe sus avisos exclusivamente por la cola push
+        # (/api/bridge/notificaciones): techo urgente y supervisión de pedidos urgentes.
+        # El polling de todos los pedidos en estado alertable es el canal del comprador,
+        # no del supervisor. Devolver vacío evita que la agenda del admin muestre
+        # el seguimiento diario de cada pedido de todos los hoteles.
+        return jsonify({"alertas": [], "num_alertas": 0,
+                        "usuario": session.get("username"), "rol": rol})
     elif rol == "compras":
         # Hoteles asignados al comprador en usuario_comprador_hoteles
         rows = rows_to_list(query(
@@ -5059,14 +5094,9 @@ def bridge_alertas_usuario():
         filtro_hotel_sql = f"AND p.hotel_id IN ({placeholders})"
         filtro_args      = hotel_ids
     elif rol == "hotel":
-        # Hoteles de lectura asignados al usuario hotel
-        hotel_ids = session.get("hoteles_ids", [])
-        if not hotel_ids:
-            return jsonify({"alertas": [], "num_alertas": 0,
-                            "usuario": session.get("username"), "rol": rol})
-        placeholders = ",".join(["%s"] * len(hotel_ids))
-        filtro_hotel_sql = f"AND p.hotel_id IN ({placeholders})"
-        filtro_args      = hotel_ids
+        # Rol hotel: no accede a la vista de alertas
+        return jsonify({"alertas": [], "num_alertas": 0,
+                        "usuario": session.get("username"), "rol": rol})
     else:
         # Rol desconocido: sin alertas
         return jsonify({"alertas": [], "num_alertas": 0,
