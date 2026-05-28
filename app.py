@@ -276,6 +276,19 @@ def _auto_migrate():
                 "CREATE INDEX IF NOT EXISTS idx_bridge_notif_usuario_leido "
                 "ON bridge_notificaciones(usuario, leido)"
             )
+            # ── v11.4.0 — Plazo de entrega por pedido ─────────────────────────
+            cur.execute(
+                "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS plazo_entrega_dias INTEGER"
+            )
+            cur.execute("""
+                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                VALUES (
+                    'activar_uso_plazo_entrega', '1', 'bool',
+                    'Activar alertas basadas en plazo de entrega del proveedor',
+                    'global', 2
+                )
+                ON CONFLICT (clave) DO NOTHING
+            """)
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
