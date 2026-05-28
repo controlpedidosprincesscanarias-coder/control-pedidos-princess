@@ -1001,7 +1001,7 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item" data-view="pedidos" onclick="showView('pedidos',this)">
       <span class="icon">📋</span> Pedidos
     </div>
-    <div class="sb-item" data-view="alertas" onclick="showView('alertas',this)">
+    <div class="sb-item no-hotel" data-view="alertas" onclick="showView('alertas',this)">
       <span class="icon">⚠️</span> Alertas
       <span class="sb-badge" id="sb-alert-count" style="display:none">0</span>
     </div>
@@ -1013,7 +1013,7 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item compras-readonly" data-view="eliminados" onclick="showView('eliminados',this)" style="display:none">
       <span class="icon">🗑️</span> Pedidos eliminados
     </div>
-    <div class="sb-item" data-view="techo" onclick="showView('techo',this)">
+    <div class="sb-item no-hotel" data-view="techo" onclick="showView('techo',this)">
       <span class="icon">📉</span> Techo de gastos
       <span class="sb-badge" id="sb-techo-count" style="display:none;background:#dc3545">!</span>
     </div>
@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.2.4
+          V 11.2.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1951,6 +1951,10 @@ async function doLogin() {
     document.querySelectorAll('.admin-only').forEach(el => {
       el.style.display = G.rol === 'admin' ? '' : 'none';
     });
+    // Ocultar elementos de menú no disponibles para rol hotel
+    document.querySelectorAll('.no-hotel').forEach(el => {
+      el.style.display = G.rol === 'hotel' ? 'none' : '';
+    });
     // Mostrar elementos de solo consulta para compras (y admin)
     document.querySelectorAll('.compras-readonly').forEach(el => {
       el.style.display = (G.rol === 'admin' || G.rol === 'compras') ? '' : 'none';
@@ -2637,7 +2641,8 @@ async function loadStats() {
   ]);
   if (techo) _techoCache = techo;
 
-  const nTecho = _techoCache?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0;
+  const nTecho = (G.rol === 'hotel') ? 0 :
+    (_techoCache?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0);
 
   document.getElementById('st-total').textContent    = d.total;
   // Bug fix: el card de alertas del dashboard también suma las alertas de techo
@@ -2657,7 +2662,7 @@ async function loadStats() {
   // Badge techo sidebar
   const badgeTecho = document.getElementById('sb-techo-count');
   if (badgeTecho) {
-    const rojos = _techoCache?.hoteles?.filter(h => h.semaforo === 'rojo').length || 0;
+    const rojos = (G.rol === 'hotel') ? 0 : (_techoCache?.hoteles?.filter(h => h.semaforo === 'rojo').length || 0);
     badgeTecho.style.display = rojos > 0 ? '' : 'none';
     badgeTecho.textContent   = rojos;
   }
@@ -4103,6 +4108,10 @@ function calcDias(s) {
     document.querySelectorAll('.admin-only').forEach(el => {
       el.style.display = G.rol === 'admin' ? '' : 'none';
     });
+    // Ocultar elementos de menú no disponibles para rol hotel
+    document.querySelectorAll('.no-hotel').forEach(el => {
+      el.style.display = G.rol === 'hotel' ? 'none' : '';
+    });
     // Mostrar elementos de solo consulta para compras (y admin)
     document.querySelectorAll('.compras-readonly').forEach(el => {
       el.style.display = (G.rol === 'admin' || G.rol === 'compras') ? '' : 'none';
@@ -4600,7 +4609,8 @@ async function updateAlertBadge() {
     _techoCache = techo;
 
     const nPedidos = stats.num_alertas || 0;
-    const nTecho   = techo?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0;
+    const nTecho   = (G.rol === 'hotel') ? 0 :
+      (techo?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0);
     const total    = nPedidos + nTecho;
 
     const badge = document.getElementById('sb-alert-count');
