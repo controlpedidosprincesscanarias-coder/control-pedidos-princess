@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.4.6
+          V 11.4.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1975,10 +1975,23 @@ async function doLogin() {
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
     await loadMaestros();
-    // Capturar versión actual para detectar despliegues nuevos al pulsar Actualizar
+    // Capturar versión y comparar con la última conocida (localStorage)
     try {
       const _vr = await fetch('/api/version?_=' + Date.now());
-      if (_vr.ok) { const _vd = await _vr.json(); G._appVersion = _vd.version || null; }
+      if (_vr.ok) {
+        const _vd = await _vr.json();
+        const _nuevaVersion = _vd.version || null;
+        const _versionGuardada = localStorage.getItem('app_version_hash');
+        if (_versionGuardada && _nuevaVersion && _versionGuardada !== _nuevaVersion) {
+          // Hay versión nueva desde la última vez que entró → mostrar modal
+          G._appVersion = _versionGuardada;
+          setTimeout(() => _mostrarModalNuevaVersion(), 800);
+        } else {
+          // Primera vez o misma versión → guardar y continuar
+          G._appVersion = _nuevaVersion;
+          if (_nuevaVersion) localStorage.setItem('app_version_hash', _nuevaVersion);
+        }
+      }
     } catch(_) {}
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     // loadStats (llamado por showView) ya actualiza badge y card de alertas del dashboard.
@@ -6020,10 +6033,10 @@ function _abrirVentanaImpresion(html) {
         </span>
       </div>
       <div style="background:#f4f6fa;border:1px solid #d5daea;border-radius:12px;
-                  max-height:300px;overflow-y:auto;padding:18px 20px;">
-        <pre id="modal-nv-changelog"
-             style="margin:0;font-size:.86rem;line-height:1.7;white-space:pre-wrap;
-                    font-family:'DM Sans',sans-serif;color:#1c2b45;"></pre>
+                  max-height:320px;overflow-y:auto;padding:18px 20px;">
+        <div id="modal-nv-changelog"
+             style="margin:0;font-size:.86rem;line-height:1.7;
+                    font-family:'DM Sans',sans-serif;color:#1c2b45;"></div>
       </div>
     </div>
 
@@ -6043,7 +6056,7 @@ function _abrirVentanaImpresion(html) {
                 onmouseout="this.style.background='#fff';this.style.borderColor='#d5daea'">
           Ahora no
         </button>
-        <button onclick="location.reload(true)"
+        <button onclick="_recargarConVersion()"
                 style="padding:10px 26px;border:none;border-radius:9px;cursor:pointer;
                        background:linear-gradient(135deg,#0f2044,#1a3a6b);color:#fff;
                        font-weight:600;font-size:.88rem;font-family:'DM Sans',sans-serif;
@@ -6080,21 +6093,95 @@ async function _pollVersion() {
     console.log('[Version] Poll — servidor:', d.version, '| local:', G._appVersion);
     if (G._appVersion && d.version && d.version !== G._appVersion) {
       _mostrarModalNuevaVersion();
+    } else if (d.version) {
+      // Mantener localStorage sincronizado mientras no hay cambio
+      localStorage.setItem('app_version_hash', d.version);
     }
   } catch(_) { /* red no disponible, ignorar */ }
 }
 
+function _renderChangelog(texto) {
+  // Convierte el CHANGELOG.md en HTML visual con badges y estilos
+  const BADGES = {
+    '✅': { bg:'#e6f7ee', color:'#1a7f4b', label:'Nuevo' },
+    '🐛': { bg:'#fff3e0', color:'#b45309', label:'Fix' },
+    '🔧': { bg:'#e8f0fe', color:'#1a56a0', label:'Mejora' },
+    '⚠️': { bg:'#fff8e1', color:'#92600a', label:'Atención' },
+    '🗑️': { bg:'#fde8e8', color:'#991b1b', label:'Eliminado' },
+  };
+  let html = '';
+  const lines = texto.split('\n');
+  let inList = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // Bloque de versión: ## v11.4.4 — 29 mayo 2026
+    if (line.startsWith('## ')) {
+      if (inList) { html += '</ul>'; inList = false; }
+      if (i > 0) html += '<div style="border-top:1px solid #d5daea;margin:16px 0 14px;"></div>';
+      const txt = line.replace(/^## /, '');
+      const [ver, ...resto] = txt.split(' — ');
+      html += `<div style="display:flex;align-items:baseline;gap:10px;margin-bottom:10px;">
+        <span style="font-size:.95rem;font-weight:700;color:#0f2044;">${ver}</span>
+        ${resto.length ? `<span style="font-size:.78rem;color:#6b7a99;">${resto.join(' — ')}</span>` : ''}
+      </div>`;
+      continue;
+    }
+    // Sub-sección: ### Novedades
+    if (line.startsWith('### ')) {
+      if (inList) { html += '</ul>'; inList = false; }
+      html += `<div style="font-size:.75rem;font-weight:700;letter-spacing:.07em;text-transform:uppercase;
+                            color:#6b7a99;margin:10px 0 6px;">${line.replace(/^### /, '')}</div>`;
+      continue;
+    }
+    // Línea con emoji conocido: - ✅ Texto  o  ✅ Texto
+    const emojiMatch = line.match(/^[-*]?\s*(✅|🐛|🔧|⚠️|🗑️)\s+(.+)/u);
+    if (emojiMatch) {
+      if (!inList) { html += '<ul style="margin:0;padding:0;list-style:none;">'; inList = true; }
+      const emoji = emojiMatch[1];
+      const texto = emojiMatch[2];
+      const b = BADGES[emoji] || { bg:'#f0f0f0', color:'#444', label:emoji };
+      html += `<li style="display:flex;align-items:flex-start;gap:8px;margin-bottom:7px;">
+        <span style="flex-shrink:0;margin-top:1px;font-size:.72rem;font-weight:700;
+                     background:${b.bg};color:${b.color};border-radius:4px;
+                     padding:2px 6px;letter-spacing:.03em;">${b.label}</span>
+        <span style="color:#1c2b45;line-height:1.5;">${texto}</span>
+      </li>`;
+      continue;
+    }
+    // Línea de lista normal: - texto
+    const listMatch = line.match(/^[-*]\s+(.+)/);
+    if (listMatch) {
+      if (!inList) { html += '<ul style="margin:0;padding:0;list-style:none;">'; inList = true; }
+      html += `<li style="display:flex;align-items:flex-start;gap:8px;margin-bottom:6px;padding-left:4px;">
+        <span style="color:#c9a84c;flex-shrink:0;margin-top:3px;">▸</span>
+        <span style="color:#1c2b45;line-height:1.5;">${listMatch[1]}</span>
+      </li>`;
+      continue;
+    }
+    // Línea vacía
+    if (line.trim() === '') {
+      if (inList) { html += '</ul>'; inList = false; }
+      continue;
+    }
+    // Texto normal
+    if (inList) { html += '</ul>'; inList = false; }
+    html += `<p style="margin:4px 0;color:#1c2b45;">${line}</p>`;
+  }
+  if (inList) html += '</ul>';
+  return html;
+}
+
 async function _mostrarModalNuevaVersion() {
   const modal = document.getElementById('modal-nueva-version');
+  const el = document.getElementById('modal-nv-changelog');
   // Cargar changelog desde el servidor
   try {
     const r = await fetch('/api/changelog?_=' + Date.now());
     const d = r.ok ? await r.json() : {};
-    document.getElementById('modal-nv-changelog').textContent =
-      d.changelog || 'Sin notas de versión disponibles.';
+    const texto = d.changelog || 'Sin notas de versión disponibles.';
+    el.innerHTML = _renderChangelog(texto);
   } catch(_) {
-    document.getElementById('modal-nv-changelog').textContent =
-      'No se pudieron cargar las notas de versión.';
+    el.innerHTML = '<p style="color:#6b7a99;">No se pudieron cargar las notas de versión.</p>';
   }
   modal.classList.remove('nv-hidden');
   modal.style.display = 'flex';
@@ -6108,11 +6195,28 @@ function _cerrarModalVersion() {
   // Actualizar el hash conocido para no volver a avisar por esta misma versión
   fetch('/api/version?_=' + Date.now())
     .then(r => r.ok ? r.json() : null)
-    .then(d => { if (d && d.version) G._appVersion = d.version; })
+    .then(d => {
+      if (d && d.version) {
+        G._appVersion = d.version;
+        localStorage.setItem('app_version_hash', d.version);
+      }
+    })
     .catch(() => {});
 }
 
 // Función de test — ejecutar en consola del navegador: _testModalVersion()
+function _recargarConVersion() {
+  // Guardar la versión nueva en localStorage ANTES de recargar
+  // para que al volver a entrar no vuelva a saltar el modal
+  fetch('/api/version?_=' + Date.now())
+    .then(r => r.ok ? r.json() : null)
+    .then(d => {
+      if (d && d.version) localStorage.setItem('app_version_hash', d.version);
+    })
+    .catch(() => {})
+    .finally(() => location.reload(true));
+}
+
 window._testModalVersion = function() {
   console.log('[Version] Forzando modal de prueba...');
   const prev = G._appVersion;

@@ -1,16 +1,18 @@
-## v11.4.6 — 29 mayo 2026
+## v11.4.8 — 29 mayo 2026
 
 ### ✅ Novedades
 - Campo de plazo de entrega en pedidos con cálculo automático de fecha prevista.
 - Sistema de alertas de techo por familia de producto.
+- Desde el panel de Admin. se pueden establecer plazos para los avisos de todas las alertas.
 
 ### 🐛 Correcciones
 - Badge de alertas no se actualizaba correctamente al cambiar de vista.
 - Importación de proveedores ahora actualiza contactos existentes por código.
+- Penel de actualizacion mejorado.
 
 ---
 
-## v11.4.4 — 28 mayo 2026
+## v11.4.6 — 27 mayo 2026
 
 ### ✅ Novedades
 - Al detectar una nueva versión en el servidor se muestra una ventana
