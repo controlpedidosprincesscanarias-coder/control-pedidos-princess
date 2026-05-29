@@ -142,7 +142,6 @@ def _auto_migrate():
                     PRIMARY KEY (usuario_id, hotel_id)
                 )
             """)
-            # ── Tabla asignación hoteles a usuario compras (v9.9.8) ───────────
             # Permite gestionar desde admin qué hoteles atiende cada comprador,
             # reemplazando el diccionario HOTEL_COMPRADOR hardcodeado.
             cur.execute("""
@@ -152,9 +151,7 @@ def _auto_migrate():
                     PRIMARY KEY (usuario_id, hotel_id)
                 )
             """)
-            # ── Columna telegram_chat_id en usuarios (v9.9.8) ─────────────────
             cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT")
-            # ── Modelo 1 hotel → 1 comprador (v9.9.9) ────────────────────────
             # Añade índice único sobre hotel_id para garantizar a nivel de BD
             # que ningún hotel pueda tener más de un comprador asignado.
             # Se usa CREATE UNIQUE INDEX IF NOT EXISTS para ser idempotente.
@@ -513,7 +510,6 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 
 # ── Helper norden ──────────────────────────────────────────────────────────────
 
-# ── Asignación de compradores por hotel (v9.9.8 — dinámica desde BD) ───────────
 # La asignación ya no está hardcodeada: se gestiona desde el panel de admin
 # en Usuarios → sección "Hoteles asignados (compras)".
 # La función _get_compradores_hotel(hotel_codigo) sustituye al antiguo diccionario
@@ -1152,7 +1148,6 @@ def _dias_desde_fecha(fecha_str):
     if not fecha_str:
         return None
     try:
-        from datetime import datetime as _dt, date as _d
         if hasattr(fecha_str, 'date'):
             f = fecha_str.date()
         elif isinstance(fecha_str, _d):
@@ -1239,7 +1234,6 @@ def _calcular_fecha_entrega_prevista(fecha_tramitacion, plazo_dias):
     if not fecha_tramitacion or not plazo_dias:
         return None
     try:
-        from datetime import datetime as _dt, date as _d, timedelta
         if hasattr(fecha_tramitacion, 'date'):
             base = fecha_tramitacion.date()
         elif isinstance(fecha_tramitacion, _d):
@@ -4222,6 +4216,7 @@ def exportar_proveedores():
         return jsonify({"error": "Sin permisos"}), 403
     try:
         import openpyxl, io
+        from datetime import datetime as dt
         from openpyxl.styles import Font, PatternFill, Alignment
         from flask import send_file
 
@@ -4316,7 +4311,6 @@ def exportar_proveedores():
         buf = io.BytesIO()
         wb.save(buf)
         buf.seek(0)
-        from datetime import datetime as dt
         filename = f"PROVEEDORES_{dt.now().strftime('%Y%m%d_%H%M')}.xlsx"
         return send_file(buf, as_attachment=True, download_name=filename,
                          mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
@@ -5643,9 +5637,9 @@ def reset_e_importar():
     y el historial. Luego importa el Excel recibido desde cero.
     Solo accesible para administradores.
     """
+    from datetime import datetime as dt
     try:
         import openpyxl
-        from datetime import datetime as dt
 
         if "archivo" not in request.files:
             return jsonify({"ok": False, "error": "No se recibió ningún archivo"}), 400
@@ -6253,7 +6247,6 @@ def _validar_integridad_operativa() -> dict:
         }
       }
     """
-    from datetime import datetime as _dt
 
     problemas: dict = {
         "hoteles_sin_comprador":    [],
