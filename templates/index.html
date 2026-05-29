@@ -1985,6 +1985,7 @@ async function doLogin() {
     _checkIntegridadBadge();  // badge silencioso en sidebar para admin
     _startVersionPolling();   // polling automático de nueva versión cada 5 min
   } catch(e) { err.textContent='Error de conexión'; err.style.display='block'; }
+}
 
 async function doLogout() {
   await api('/api/logout','POST');
