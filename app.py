@@ -227,6 +227,10 @@ def _auto_migrate():
                     ("cotizacion_urgente",       "3", "numero", "Pendiente Cotización — Urgente (días)",             "estado_cotizacion", 2),
                     ("dias_critico",            "60", "numero", "Días crítico global (fuerza reenvío urgente)",      "global",            1),
                     ("activar_uso_plazo_entrega","1",  "bool",   "Activar alertas basadas en plazo de entrega del proveedor", "global", 2),
+                    ("plazo_aviso_dias_antes",   "5",  "numero", "Plazo entrega — Aviso previo (días antes de la entrega)",   "plazo_entrega", 1),
+                    ("plazo_urgente_ciclo",       "2",  "numero", "Plazo entrega — Ciclo urgente tras vencer (cada N días)",   "plazo_entrega", 2),
+                    ("plazo_parcial_aviso_dias_antes", "3", "numero", "Entrega Parcial c/plazo — Aviso previo (días antes)",   "plazo_entrega", 3),
+                    ("plazo_parcial_urgente_ciclo",    "2", "numero", "Entrega Parcial c/plazo — Ciclo urgente (cada N días)", "plazo_entrega", 4),
                     ("techo_max_pedido",      "3000", "numero", "Techo — Importe máximo por pedido (€)",             "techo",             1),
                     ("techo_max_mes",         "6000", "numero", "Techo — Importe máximo mensual por hotel (€)",      "techo",             2),
                     ("techo_max_pedidos",        "2", "numero", "Techo — Nº máximo de pedidos por hotel/mes",        "techo",             3),
@@ -280,15 +284,18 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS plazo_entrega_dias INTEGER"
             )
-            cur.execute("""
-                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
-                VALUES (
-                    'activar_uso_plazo_entrega', '1', 'bool',
-                    'Activar alertas basadas en plazo de entrega del proveedor',
-                    'global', 2
-                )
-                ON CONFLICT (clave) DO NOTHING
-            """)
+            for _clave, _valor, _tipo, _label, _grupo, _orden in [
+                ('activar_uso_plazo_entrega',      '1', 'bool',   'Activar alertas basadas en plazo de entrega del proveedor', 'global',        2),
+                ('plazo_aviso_dias_antes',          '5', 'numero', 'Plazo entrega — Aviso previo (días antes de la entrega)',   'plazo_entrega', 1),
+                ('plazo_urgente_ciclo',             '2', 'numero', 'Plazo entrega — Ciclo urgente tras vencer (cada N días)',   'plazo_entrega', 2),
+                ('plazo_parcial_aviso_dias_antes',  '3', 'numero', 'Entrega Parcial c/plazo — Aviso previo (días antes)',       'plazo_entrega', 3),
+                ('plazo_parcial_urgente_ciclo',     '2', 'numero', 'Entrega Parcial c/plazo — Ciclo urgente (cada N días)',     'plazo_entrega', 4),
+            ]:
+                cur.execute("""
+                    INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (clave) DO NOTHING
+                """, (_clave, _valor, _tipo, _label, _grupo, _orden))
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -1071,6 +1078,10 @@ def get_config() -> dict:
         "cotizacion_primera": 2, "cotizacion_urgente": 3,
         "dias_critico": 60,
         "activar_uso_plazo_entrega": 1,
+        "plazo_aviso_dias_antes": 5,
+        "plazo_urgente_ciclo": 2,
+        "plazo_parcial_aviso_dias_antes": 3,
+        "plazo_parcial_urgente_ciclo": 2,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_pct_amarillo": 60,
     }
@@ -1243,20 +1254,38 @@ def _calcular_fecha_entrega_prevista(fecha_tramitacion, plazo_dias):
 def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
     """
     Calcula si hoy debe generarse una alerta basada en el plazo de entrega
-    informado por el proveedor. Solo aplica al estado 'ENVIADO AL PROVEEDOR'.
+    informado por el proveedor.
 
-    Reglas (según spec):
-      - primerAviso : fecha_entrega_prevista - 5 días
-      - avisoEntrega: fecha_entrega_prevista
-      - urgenteCada : cada 2 días desde fecha_entrega_prevista + 1
+    Estados soportados:
+      - ENVIADO AL PROVEEDOR  → usa plazo_aviso_dias_antes / plazo_urgente_ciclo
+      - ENTREGA PARCIAL       → usa plazo_parcial_aviso_dias_antes / plazo_parcial_urgente_ciclo
+
+    Reglas (umbrales configurables desde Admin → Config Alertas):
+      - primerAviso : EXACTAMENTE N días antes de fecha_entrega_prevista
+      - silencio    : entre N-1 y 1 días antes
+      - avisoEntrega: el mismo día de fecha_entrega_prevista  (delta == 0)
+      - urgenteCada : cada M días a partir del día siguiente  (delta == M, 2M, 3M …)
 
     Devuelve None si no aplica, o dict {"nivel": "aviso"|"urgente", "motivo": str,
                                          "fecha_entrega_prevista": date}
     """
     if not cfg_activado:
         return None
-    if pedido.get("estado") != "ENVIADO AL PROVEEDOR":
+
+    estado = pedido.get("estado")
+    if estado == "ENVIADO AL PROVEEDOR":
+        cfg_key_aviso  = "plazo_aviso_dias_antes"
+        cfg_key_ciclo  = "plazo_urgente_ciclo"
+        cfg_def_aviso  = 5
+        cfg_def_ciclo  = 2
+    elif estado == "ENTREGA PARCIAL":
+        cfg_key_aviso  = "plazo_parcial_aviso_dias_antes"
+        cfg_key_ciclo  = "plazo_parcial_urgente_ciclo"
+        cfg_def_aviso  = 3
+        cfg_def_ciclo  = 2
+    else:
         return None
+
     plazo = pedido.get("plazo_entrega_dias")
     if not plazo:
         return None
@@ -1267,34 +1296,46 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
     if not fecha_entrega:
         return None
 
+    cfg = get_config()
+    dias_aviso = int(cfg.get(cfg_key_aviso, cfg_def_aviso) or cfg_def_aviso)
+    ciclo      = int(cfg.get(cfg_key_ciclo,  cfg_def_ciclo)  or cfg_def_ciclo)
+    if ciclo < 1:
+        ciclo = 1  # evitar división por cero
+
     from datetime import date as _d
-    hoy = _d.today()
+    hoy   = _d.today()
     delta = (hoy - fecha_entrega).days  # negativo = antes, 0 = hoy, positivo = después
 
     fecha_str = fecha_entrega.strftime("%d/%m/%Y")
 
-    if delta < -5:
-        return None  # aún fuera del primer umbral
-
-    if -5 <= delta < 0:
+    # Primer aviso: únicamente el día exacto de N días antes
+    if delta == -dias_aviso:
         return {
-            "nivel": "aviso",
-            "motivo": f"Entrega prevista el {fecha_str} (en {-delta} día(s))",
+            "nivel":  "aviso",
+            "motivo": f"Entrega prevista el {fecha_str} (faltan {dias_aviso} días)",
             "fecha_entrega_prevista": fecha_entrega,
         }
+
+    # Silencio entre -(N-1) y -1 inclusive
+    if -(dias_aviso - 1) <= delta <= -1:
+        return None
+
+    # Aviso el día exacto de la entrega
     if delta == 0:
         return {
-            "nivel": "urgente",
+            "nivel":  "urgente",
             "motivo": f"Hoy es la fecha de entrega prevista ({fecha_str})",
             "fecha_entrega_prevista": fecha_entrega,
         }
-    # delta > 0 → entrega ya superada; urgente cada 2 días
-    if delta % 2 == 0:
+
+    # Urgente cada M días a partir del día siguiente (delta == M, 2M, 3M …)
+    if delta > 0 and delta % ciclo == 0:
         return {
-            "nivel": "urgente",
+            "nivel":  "urgente",
             "motivo": f"Entrega prevista {fecha_str} superada hace {delta} día(s)",
             "fecha_entrega_prevista": fecha_entrega,
         }
+
     return None
 
 
@@ -2700,6 +2741,22 @@ def app_version():
     except Exception:
         version_hash = "unknown"
     return jsonify({"version": version_hash})
+
+@app.route("/api/changelog")
+def app_changelog():
+    """
+    Devuelve el contenido del archivo CHANGELOG.md para mostrarlo en el modal
+    de nueva versión detectada en el cliente.
+    """
+    try:
+        changelog_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "CHANGELOG.md")
+        with open(changelog_path, "r", encoding="utf-8") as f:
+            contenido = f.read()
+    except FileNotFoundError:
+        contenido = "_No hay notas de versión disponibles._"
+    except Exception as e:
+        contenido = f"_Error al leer el changelog: {e}_"
+    return jsonify({"changelog": contenido})
 
 @app.route("/static/<path:filename>")
 def static_files(filename):

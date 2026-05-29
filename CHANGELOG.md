@@ -1,0 +1,23 @@
+## v11.4.1 — 28 mayo 2026
+
+### ✅ Novedades
+- Al detectar una nueva versión en el servidor se muestra una ventana
+  con las notas de actualización en lugar de recargar silenciosamente.
+- Comprobación automática de nueva versión cada 5 minutos en segundo plano.
+- Nuevo endpoint `/api/changelog` que sirve este archivo.
+
+### 🔧 Mejoras
+- El botón "Ahora no" cierra el aviso y no vuelve a aparecer hasta la
+  siguiente versión distinta.
+
+---
+
+## v11.4.0 — 20 mayo 2026
+
+### ✅ Novedades
+- Campo de plazo de entrega en pedidos con cálculo automático de fecha prevista.
+- Sistema de alertas de techo por familia de producto.
+
+### 🐛 Correcciones
+- Badge de alertas no se actualizaba correctamente al cambiar de vista.
+- Importación de proveedores ahora actualiza contactos existentes por código.

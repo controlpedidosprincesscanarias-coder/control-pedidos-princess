@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.4.0
+          V 11.4.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1983,8 +1983,8 @@ async function doLogin() {
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     // loadStats (llamado por showView) ya actualiza badge y card de alertas del dashboard.
     _checkIntegridadBadge();  // badge silencioso en sidebar para admin
+    _startVersionPolling();   // polling automático de nueva versión cada 5 min
   } catch(e) { err.textContent='Error de conexión'; err.style.display='block'; }
-}
 
 async function doLogout() {
   await api('/api/logout','POST');
@@ -2571,8 +2571,8 @@ async function refreshCurrentView() {
     if (vRes.ok) {
       const vData = await vRes.json();
       if (G._appVersion && vData.version && vData.version !== G._appVersion) {
-        // Nueva versión detectada → hard reload (borra caché del navegador)
-        location.reload(true);
+        // Nueva versión detectada → mostrar modal con changelog
+        _mostrarModalNuevaVersion();
         return;
       }
     }
@@ -4739,6 +4739,7 @@ const GRUPOS_LABEL = {
   estado_firma:      '✏️ Pendiente de firma',
   estado_entrega:    '🚚 Entrega parcial',
   estado_cotizacion: '💬 Pendiente cotización',
+  plazo_entrega:     '📅 Plazo de entrega proveedor',
   global:            '🌐 Umbrales globales',
   techo:             '💳 Techo de gastos',
 };
@@ -4756,13 +4757,13 @@ async function loadConfigAlertas() {
         <div style="font-weight:700;font-size:13px;color:#1a73e8;border-bottom:2px solid #e8f0fe;padding-bottom:5px;margin-bottom:8px">${label}</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px">`;
       for (const item of items) {
-        const esUrgente = item.clave.includes('urgente');
-        const esPrimera = item.clave.includes('primera');
+        const esUrgente = item.clave.includes('urgente') || item.clave.includes('ciclo');
+        const esPrimera = item.clave.includes('primera') || item.clave.includes('dias_antes');
         const dot   = esUrgente ? '🔴' : esPrimera ? '🟡' : '⚪';
         const color = esUrgente ? '#dc3545' : esPrimera ? '#ffc107' : '#adb5bd';
         const unidad = (item.clave.includes('techo_max_pedido') || item.clave.includes('techo_max_mes'))
           ? '€' : item.clave.includes('pct') ? '%' : (item.tipo === 'bool' ? '' : 'días');
-        const nota = item.clave.includes('urgente')
+        const nota = (item.clave.includes('urgente') && !item.clave.includes('ciclo'))
           ? '<span style="font-size:10px;color:#888">(0=nunca)</span>' : '';
         // Bool: render as toggle checkbox
         if (item.tipo === 'bool') {
@@ -5964,6 +5965,88 @@ function _abrirVentanaImpresion(html) {
   win.document.write(html);
   win.document.close();
   win.onload = function() { setTimeout(function(){ win.focus(); win.print(); }, 300); };
+}
+<!-- ── Modal Nueva Versión ─────────────────────────────────────────────── -->
+<div id="modal-nueva-version"
+     style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);
+            z-index:9999;align-items:center;justify-content:center;">
+  <div style="background:var(--surface);border-radius:14px;padding:28px 32px;
+              max-width:500px;width:92%;box-shadow:0 12px 40px rgba(0,0,0,.3);
+              font-family:inherit;">
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+      <span style="font-size:1.6rem;">🚀</span>
+      <h3 style="margin:0;font-size:1.15rem;">Nueva versión disponible</h3>
+    </div>
+    <p style="margin:0 0 14px;color:var(--text-muted);font-size:.88rem;">
+      Se ha desplegado una actualización en el servidor.
+      Recarga la página para aplicarla.
+    </p>
+    <div style="background:var(--bg);border:1px solid var(--border);border-radius:8px;
+                padding:14px 16px;max-height:280px;overflow-y:auto;margin-bottom:20px;">
+      <pre id="modal-nv-changelog"
+           style="margin:0;font-size:.82rem;white-space:pre-wrap;
+                  font-family:inherit;color:var(--text);"></pre>
+    </div>
+    <div style="display:flex;gap:10px;justify-content:flex-end;">
+      <button onclick="_cerrarModalVersion()"
+              style="padding:8px 20px;border:1px solid var(--border);border-radius:7px;
+                     cursor:pointer;background:transparent;font-size:.9rem;">
+        Ahora no
+      </button>
+      <button onclick="location.reload(true)"
+              style="padding:8px 20px;border:none;border-radius:7px;cursor:pointer;
+                     background:var(--accent,#3b82f6);color:#fff;
+                     font-weight:600;font-size:.9rem;">
+        ↻ Recargar ahora
+      </button>
+    </div>
+  </div>
+</div>
+
+<script>
+/* ── Detector automático de nueva versión ───────────────────────────────── */
+let _versionPollTimer = null;
+
+function _startVersionPolling() {
+  if (_versionPollTimer) return;                   // ya activo, no duplicar
+  const INTERVAL_MS = 5 * 60 * 1000;              // cada 5 minutos
+  _versionPollTimer = setInterval(_pollVersion, INTERVAL_MS);
+}
+
+async function _pollVersion() {
+  // No molestar si el modal ya está visible
+  if (document.getElementById('modal-nueva-version').style.display !== 'none') return;
+  try {
+    const r = await fetch('/api/version?_=' + Date.now());
+    if (!r.ok) return;
+    const d = await r.json();
+    if (G._appVersion && d.version && d.version !== G._appVersion) {
+      _mostrarModalNuevaVersion();
+    }
+  } catch(_) { /* red no disponible, ignorar */ }
+}
+
+async function _mostrarModalNuevaVersion() {
+  // Cargar changelog desde el servidor
+  try {
+    const r = await fetch('/api/changelog?_=' + Date.now());
+    const d = r.ok ? await r.json() : {};
+    document.getElementById('modal-nv-changelog').textContent =
+      d.changelog || 'Sin notas de versión disponibles.';
+  } catch(_) {
+    document.getElementById('modal-nv-changelog').textContent =
+      'No se pudieron cargar las notas de versión.';
+  }
+  document.getElementById('modal-nueva-version').style.display = 'flex';
+}
+
+function _cerrarModalVersion() {
+  document.getElementById('modal-nueva-version').style.display = 'none';
+  // Actualizar el hash conocido para no volver a avisar por esta misma versión
+  fetch('/api/version?_=' + Date.now())
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d && d.version) G._appVersion = d.version; })
+    .catch(() => {});
 }
 </script>
 </body>
