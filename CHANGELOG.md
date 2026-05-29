@@ -1,4 +1,4 @@
-## v11.4.4 — 29 mayo 2026
+## v11.4.6 — 29 mayo 2026
 
 ### ✅ Novedades
 - Campo de plazo de entrega en pedidos con cálculo automático de fecha prevista.
@@ -10,7 +10,7 @@
 
 ---
 
-## v11.4.2 — 28 mayo 2026
+## v11.4.4 — 28 mayo 2026
 
 ### ✅ Novedades
 - Al detectar una nueva versión en el servidor se muestra una ventana
