@@ -2724,14 +2724,13 @@ def index():
 @app.route("/api/version")
 def app_version():
     """
-    Devuelve un hash del index.html para que el cliente detecte nuevas versiones.
-    Si el hash difiere del que cargó el cliente, debe hacer un hard reload.
+    Devuelve un hash MD5 del contenido real de index.html.
+    Cualquier cambio en el archivo, por pequeño que sea, produce un hash diferente.
     """
     try:
         tpl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "index.html")
-        mtime = str(os.path.getmtime(tpl_path))
-        size  = str(os.path.getsize(tpl_path))
-        version_hash = hashlib.md5((mtime + size).encode()).hexdigest()[:12]
+        with open(tpl_path, "rb") as f:
+            version_hash = hashlib.md5(f.read()).hexdigest()[:12]
     except Exception:
         version_hash = "unknown"
     return jsonify({"version": version_hash})
