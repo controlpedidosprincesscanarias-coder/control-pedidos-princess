@@ -5968,7 +5968,7 @@ function _abrirVentanaImpresion(html) {
   win.onload = function() { setTimeout(function(){ win.focus(); win.print(); }, 300); };
 }
 <!-- ── Modal Nueva Versión ─────────────────────────────────────────────── -->
-<div id="modal-nueva-version"
+<div id="modal-nueva-version" class="nv-hidden"
      style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);
             z-index:9999;align-items:center;justify-content:center;">
   <div style="background:var(--surface);border-radius:14px;padding:28px 32px;
@@ -6012,15 +6012,17 @@ function _startVersionPolling() {
   if (_versionPollTimer) return;                   // ya activo, no duplicar
   const INTERVAL_MS = 5 * 60 * 1000;              // cada 5 minutos
   _versionPollTimer = setInterval(_pollVersion, INTERVAL_MS);
+  console.log('[Version] Polling activo cada 5 min. Hash actual:', G._appVersion);
 }
 
 async function _pollVersion() {
-  // No molestar si el modal ya está visible
-  if (document.getElementById('modal-nueva-version').style.display !== 'none') return;
+  const modal = document.getElementById('modal-nueva-version');
+  if (modal && !modal.classList.contains('nv-hidden')) return; // ya visible
   try {
     const r = await fetch('/api/version?_=' + Date.now());
     if (!r.ok) return;
     const d = await r.json();
+    console.log('[Version] Poll — servidor:', d.version, '| local:', G._appVersion);
     if (G._appVersion && d.version && d.version !== G._appVersion) {
       _mostrarModalNuevaVersion();
     }
@@ -6028,6 +6030,7 @@ async function _pollVersion() {
 }
 
 async function _mostrarModalNuevaVersion() {
+  const modal = document.getElementById('modal-nueva-version');
   // Cargar changelog desde el servidor
   try {
     const r = await fetch('/api/changelog?_=' + Date.now());
@@ -6038,17 +6041,29 @@ async function _mostrarModalNuevaVersion() {
     document.getElementById('modal-nv-changelog').textContent =
       'No se pudieron cargar las notas de versión.';
   }
-  document.getElementById('modal-nueva-version').style.display = 'flex';
+  modal.classList.remove('nv-hidden');
+  modal.style.display = 'flex';
+  console.log('[Version] Modal de nueva versión mostrado.');
 }
 
 function _cerrarModalVersion() {
-  document.getElementById('modal-nueva-version').style.display = 'none';
+  const modal = document.getElementById('modal-nueva-version');
+  modal.classList.add('nv-hidden');
+  modal.style.display = 'none';
   // Actualizar el hash conocido para no volver a avisar por esta misma versión
   fetch('/api/version?_=' + Date.now())
     .then(r => r.ok ? r.json() : null)
     .then(d => { if (d && d.version) G._appVersion = d.version; })
     .catch(() => {});
 }
+
+// Función de test — ejecutar en consola del navegador: _testModalVersion()
+window._testModalVersion = function() {
+  console.log('[Version] Forzando modal de prueba...');
+  const prev = G._appVersion;
+  G._appVersion = 'test-forzado';
+  _mostrarModalNuevaVersion().then(() => { G._appVersion = prev; });
+};
 </script>
 </body>
 </html>
