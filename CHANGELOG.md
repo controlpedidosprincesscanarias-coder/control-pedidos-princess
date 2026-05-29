@@ -1,3 +1,8 @@
+## v11.5.0 — 29 mayo 2026
+
+### ✅ Novedades
+- Limpieza y organizacion codigo.
+
 ## v11.4.8 — 29 mayo 2026
 
 ### ✅ Novedades
