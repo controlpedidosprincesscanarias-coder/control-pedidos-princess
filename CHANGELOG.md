@@ -1,7 +1,13 @@
+## v11.5.8 — 01 junio 2026
+
+### ✅ Novedades
+- Ahora podemos imprimir los pedidos, tramos fechas y estados.
 ## v11.5.6 — 01 junio 2026
 
 ### ✅ Novedades
 - Ahora podemos imprimir los pedidos.
+
+---
 
 ## v11.5.4 — 01 junio 2026
 
@@ -26,8 +32,6 @@
 - Badge de alertas no se actualizaba correctamente al cambiar de vista.
 - Importación de proveedores ahora actualiza contactos existentes por código.
 - Penel de actualizacion mejorado.
-
----
 
 ## v11.4.8 — 27 mayo 2026
 
