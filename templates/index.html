@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.5.2
+          V 11.5.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -5672,6 +5672,36 @@ document.getElementById('modal-email-alerta').addEventListener('click', function
 
     <!-- Cuerpo -->
     <div style="padding:18px 22px">
+
+      <!-- Selector de mes (solo para tipo techo) -->
+      <div id="imp-mes-selector" style="display:none;margin-bottom:14px;padding:12px 14px;background:#f0f6ff;border:1px solid #c7d9f5;border-radius:8px">
+        <p style="margin:0 0 8px;font-size:12px;font-weight:700;color:#1a3a6b">📅 Período a imprimir:</p>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:5px 12px;border-radius:6px;border:1.5px solid #1a73e8;background:#fff;color:#1a73e8;font-weight:700">
+            <input type="radio" name="imp-periodo" value="actual" checked onchange="_impToggleMes(this)" style="accent-color:#1a73e8"> Mes actual
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:5px 12px;border-radius:6px;border:1.5px solid #aaa;background:#fff;color:#555;font-weight:700">
+            <input type="radio" name="imp-periodo" value="historico" onchange="_impToggleMes(this)" style="accent-color:#1a73e8"> Mes pasado
+          </label>
+        </div>
+        <div id="imp-mes-picker" style="display:none;margin-top:10px">
+          <div style="display:flex;gap:8px;align-items:center">
+            <select id="imp-sel-mes" style="flex:1;padding:6px 10px;border:1px solid #ccc;border-radius:6px;font-size:13px">
+              <option value="1">Enero</option><option value="2">Febrero</option>
+              <option value="3">Marzo</option><option value="4">Abril</option>
+              <option value="5">Mayo</option><option value="6">Junio</option>
+              <option value="7">Julio</option><option value="8">Agosto</option>
+              <option value="9">Septiembre</option><option value="10">Octubre</option>
+              <option value="11">Noviembre</option><option value="12">Diciembre</option>
+            </select>
+            <select id="imp-sel-year" style="width:90px;padding:6px 10px;border:1px solid #ccc;border-radius:6px;font-size:13px"></select>
+          </div>
+          <p style="margin:6px 0 0;font-size:11px;color:#856404;background:#fff8e1;padding:5px 9px;border-radius:5px;border:1px solid #ffeeba">
+            ⚠️ Histórico: solo se incluyen pedidos con estado <strong>Enviado al proveedor</strong>
+          </p>
+        </div>
+      </div>
+
       <p style="margin:0 0 12px;font-size:13px;color:#555">Selecciona los hoteles a incluir en el informe:</p>
 
       <!-- Barra seleccionar todo / ninguno -->
@@ -5725,10 +5755,43 @@ function impSeleccionarTodos(sel) {
   _impActualizarContador();
 }
 
+function _impToggleMes(radio) {
+  var picker = document.getElementById('imp-mes-picker');
+  picker.style.display = (radio.value === 'historico') ? 'block' : 'none';
+}
+
+function _impInicializarSelectorMes() {
+  var hoy  = new Date();
+  var yearSel = document.getElementById('imp-sel-year');
+  var mesSel  = document.getElementById('imp-sel-mes');
+  yearSel.innerHTML = '';
+  for (var y = hoy.getFullYear(); y >= 2023; y--) {
+    var opt = document.createElement('option');
+    opt.value = y; opt.textContent = y;
+    yearSel.appendChild(opt);
+  }
+  // Preseleccionar mes anterior
+  var mesAnterior = hoy.getMonth(); // 0-based, por tanto es el mes anterior (1-based)
+  var yearAnterior = hoy.getFullYear();
+  if (mesAnterior === 0) { mesAnterior = 12; yearAnterior--; }
+  mesSel.value  = mesAnterior;
+  yearSel.value = yearAnterior;
+  // Reset radio a "actual"
+  var radios = document.querySelectorAll('input[name="imp-periodo"]');
+  radios.forEach(function(r){ r.checked = (r.value === 'actual'); });
+  document.getElementById('imp-mes-picker').style.display = 'none';
+}
+
 function abrirModalImpresion(tipo) {
   _impTipo = tipo;
   var titulos = { techo:'Imprimir — Techo de Gastos', alertas:'Imprimir — Alertas de Seguimiento' };
   document.getElementById('modal-imp-titulo').textContent = titulos[tipo] || 'Imprimir';
+  // Mostrar selector de mes solo en techo
+  var selMes = document.getElementById('imp-mes-selector');
+  if (selMes) {
+    selMes.style.display = (tipo === 'techo') ? 'block' : 'none';
+    if (tipo === 'techo') _impInicializarSelectorMes();
+  }
 
   // Obtener lista de hoteles disponibles según el tipo
   var hoteles = [];
@@ -5805,8 +5868,21 @@ function _fmtEur(n) {
 }
 
 async function imprimirTecho(codigosSeleccionados) {
+  // Determinar si es mes actual o histórico
+  var periodoRadio = document.querySelector('input[name="imp-periodo"]:checked');
+  var esHistorico  = periodoRadio && periodoRadio.value === 'historico';
   var d;
-  try { d = await api('/api/techo/resumen'); } catch(e) { alert('Error cargando datos: ' + e.message); return; }
+  try {
+    if (esHistorico) {
+      var selMes  = document.getElementById('imp-sel-mes');
+      var selYear = document.getElementById('imp-sel-year');
+      var mes     = selMes  ? parseInt(selMes.value)  : new Date().getMonth() + 1;
+      var year    = selYear ? parseInt(selYear.value) : new Date().getFullYear();
+      d = await api('/api/techo/resumen-historico?year=' + year + '&month=' + mes);
+    } else {
+      d = await api('/api/techo/resumen');
+    }
+  } catch(e) { alert('Error cargando datos: ' + e.message); return; }
   var hoteles = d.hoteles || [];
   if (Array.isArray(codigosSeleccionados) && codigosSeleccionados.length > 0) {
     hoteles = hoteles.filter(function(h){ return codigosSeleccionados.includes(h.hotel_codigo); });
@@ -5894,8 +5970,8 @@ async function imprimirTecho(codigosSeleccionados) {
     '.res-item{padding:10px 18px;border-radius:8px;font-size:13px;font-weight:700}' +
     '@media print{body{padding:12px}@page{margin:8mm;size:A4 landscape}}' +
     '</style></head><body>' +
-    '<h1>&#128201; Informe de Techo de Gastos</h1>' +
-    '<div class="subtitle">Mes: <strong>' + mes + '</strong> &nbsp;|&nbsp; Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + ' &nbsp;|&nbsp; <em>' + hoteles.length + ' hoteles seleccionados</em></div>' +
+    '<h1>&#128201; Informe de Techo de Gastos' + (d.historico ? ' — <span style="color:#856404;font-size:16px">Histórico</span>' : '') + '</h1>' +
+    '<div class="subtitle">Mes: <strong>' + mes + '</strong> &nbsp;|&nbsp; Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '\u2014') + ' &nbsp;|&nbsp; <em>' + hoteles.length + ' hoteles seleccionados</em>' + (d.historico ? ' &nbsp;|&nbsp; <span style="background:#fff3cd;color:#856404;padding:1px 8px;border-radius:4px;font-weight:700;font-size:11px">Solo pedidos: Enviado al proveedor</span>' : '') + '</div>' +
     '<div class="resumen">' +
       '<div class="res-item" style="background:#f8d7da;color:#721c24">\uD83D\uDD34 Superados: ' + rojos + '</div>' +
       '<div class="res-item" style="background:#fff3cd;color:#856404">\uD83D\uDFE1 En aviso: ' + amarillos + '</div>' +

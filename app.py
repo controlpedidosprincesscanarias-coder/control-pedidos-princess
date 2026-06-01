@@ -4742,6 +4742,69 @@ def techo_resumen():
 
     return jsonify({"mes": f"{year}-{month:02d}", "hoteles": resultado})
 
+
+@app.route("/api/techo/resumen-historico")
+@login_required
+def techo_resumen_historico():
+    """Devuelve el techo de gastos de un mes/año concreto, solo pedidos ENVIADO AL PROVEEDOR."""
+    if session.get("rol") == "hotel":
+        return jsonify({"error": "Sin permisos"}), 403
+
+    try:
+        year  = int(request.args.get("year",  0))
+        month = int(request.args.get("month", 0))
+        if not (2020 <= year <= 2099 and 1 <= month <= 12):
+            return jsonify({"error": "Parámetros year/month inválidos"}), 400
+    except (TypeError, ValueError):
+        return jsonify({"error": "Parámetros year/month inválidos"}), 400
+
+    hoteles = rows_to_list(query("SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"))
+    resultado = []
+    for hotel in hoteles:
+        pedidos = rows_to_list(query("""
+            SELECT p.id, p.importe, p.familia_id, f.nombre as familia_nombre,
+                   p.pedido_num, p.estado, p.norden, pr.nombre as proveedor_nombre,
+                   p.observaciones
+            FROM pedidos p
+            LEFT JOIN familias f ON p.familia_id = f.id
+            LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
+            WHERE p.hotel_id = %s
+              AND p.sujeto_techo = 1
+              AND p.estado = 'ENVIADO AL PROVEEDOR'
+              AND EXTRACT(YEAR  FROM p.creado_en) = %s
+              AND EXTRACT(MONTH FROM p.creado_en) = %s
+            ORDER BY p.creado_en
+        """, (hotel["id"], year, month)))
+
+        acumulado   = sum(float(p["importe"] or 0) for p in pedidos)
+        num_pedidos = len(pedidos)
+        familias_usadas = [p["familia_nombre"] for p in pedidos if p["familia_nombre"]]
+
+        umbral_amarillo_r = get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100
+        if acumulado >= get_config()["techo_max_mes"] or num_pedidos > get_config()["techo_max_pedidos"]:
+            semaforo = "rojo"
+        elif acumulado >= umbral_amarillo_r or num_pedidos >= get_config()["techo_max_pedidos"]:
+            semaforo = "amarillo"
+        else:
+            semaforo = "verde"
+
+        resultado.append({
+            "hotel_id":        hotel["id"],
+            "hotel_codigo":    hotel["codigo"],
+            "hotel_nombre":    hotel["nombre"],
+            "num_pedidos":     num_pedidos,
+            "max_pedidos":     get_config()["techo_max_pedidos"],
+            "acumulado":       acumulado,
+            "techo_mes":       get_config()["techo_max_mes"],
+            "techo_pedido":    get_config()["techo_max_pedido"],
+            "familias_usadas": familias_usadas,
+            "semaforo":        semaforo,
+            "pedidos":         pedidos,
+        })
+
+    return jsonify({"mes": f"{year}-{month:02d}", "hoteles": resultado, "historico": True})
+
+
 # ── API Pedidos ────────────────────────────────────────────────────────────────
 
 PEDIDO_SELECT = """
