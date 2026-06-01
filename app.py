@@ -4746,7 +4746,12 @@ def techo_resumen():
 @app.route("/api/techo/resumen-historico")
 @login_required
 def techo_resumen_historico():
-    """Devuelve el techo de gastos de un mes/año concreto, solo pedidos ENVIADO AL PROVEEDOR."""
+    """Devuelve el techo de gastos de un mes/año concreto, solo pedidos ENVIADO AL PROVEEDOR.
+    
+    Usa la fecha en que el pedido cambió a 'ENVIADO AL PROVEEDOR' (historial_estados)
+    para asignar el pedido al mes correcto, independientemente de cuándo fue creado.
+    Si no hay historial, cae en fecha_tramitacion y por último en creado_en como fallback.
+    """
     if session.get("rol") == "hotel":
         return jsonify({"error": "Sin permisos"}), 403
 
@@ -4761,20 +4766,45 @@ def techo_resumen_historico():
     hoteles = rows_to_list(query("SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"))
     resultado = []
     for hotel in hoteles:
+        # Fecha de referencia: cuándo pasó a ENVIADO AL PROVEEDOR (historial),
+        # si no existe ese historial usamos fecha_tramitacion, y como último recurso creado_en.
         pedidos = rows_to_list(query("""
             SELECT p.id, p.importe, p.familia_id, f.nombre as familia_nombre,
                    p.pedido_num, p.estado, p.norden, pr.nombre as proveedor_nombre,
-                   p.observaciones
+                   p.observaciones,
+                   COALESCE(
+                       (SELECT h.creado_en FROM historial_estados h
+                        WHERE h.pedido_id = p.id
+                          AND h.estado_nuevo = 'ENVIADO AL PROVEEDOR'
+                        ORDER BY h.creado_en DESC LIMIT 1),
+                       p.fecha_tramitacion::timestamptz,
+                       p.creado_en
+                   ) AS fecha_envio
             FROM pedidos p
             LEFT JOIN familias f ON p.familia_id = f.id
             LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
             WHERE p.hotel_id = %s
               AND p.sujeto_techo = 1
               AND p.estado = 'ENVIADO AL PROVEEDOR'
-              AND EXTRACT(YEAR  FROM p.creado_en) = %s
-              AND EXTRACT(MONTH FROM p.creado_en) = %s
             ORDER BY p.creado_en
-        """, (hotel["id"], year, month)))
+        """, (hotel["id"],)))
+
+        # Filtrar por mes/año usando fecha_envio
+        def en_mes(p):
+            fe = p.get("fecha_envio")
+            if fe is None:
+                return False
+            if hasattr(fe, "year"):
+                return fe.year == year and fe.month == month
+            # string ISO
+            try:
+                from datetime import datetime as _dtt
+                dt = _dtt.fromisoformat(str(fe)[:19])
+                return dt.year == year and dt.month == month
+            except Exception:
+                return False
+
+        pedidos = [p for p in pedidos if en_mes(p)]
 
         acumulado   = sum(float(p["importe"] or 0) for p in pedidos)
         num_pedidos = len(pedidos)
