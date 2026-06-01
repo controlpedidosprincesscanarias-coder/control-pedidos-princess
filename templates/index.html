@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.5.4
+          V 11.5.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1114,7 +1114,10 @@ tbody tr:last-child{border-bottom:none}
           <select class="filter-select" id="f-depto" onchange="loadPedidos()">
             <option value="">Todos los departamentos</option>
           </select>
+          <input class="filter-input" id="f-fecha-desde" type="date" title="Fecha solicitud desde" style="width:140px" onchange="loadPedidos()">
+          <input class="filter-input" id="f-fecha-hasta" type="date" title="Fecha solicitud hasta" style="width:140px" onchange="loadPedidos()">
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
+          <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
         </div>
         <div class="search-chips">
           <span class="search-chips-label">Busca por:</span>
@@ -2720,12 +2723,16 @@ async function loadPedidos() {
   const hotel  = document.getElementById('f-hotel').value;
   const estado = document.getElementById('f-estado').value;
   const depto  = document.getElementById('f-depto').value;
+  const desde  = document.getElementById('f-fecha-desde') ? document.getElementById('f-fecha-desde').value : '';
+  const hasta  = document.getElementById('f-fecha-hasta') ? document.getElementById('f-fecha-hasta').value : '';
   const params = new URLSearchParams({
     page: G.page, page_size: 20,
     ...(q      && {q}),
     ...(hotel  && {hotel_id:hotel}),
     ...(estado && {estado}),
     ...(depto  && {departamento_id:depto}),
+    ...(desde  && {fecha_desde:desde}),
+    ...(hasta  && {fecha_hasta:hasta}),
   });
 
   document.getElementById('pedidos-loading').style.display='';
@@ -2800,9 +2807,9 @@ function renderPagination(page, pages, total) {
 function goPage(p) { G.page = p; loadPedidos(); }
 
 function clearFilters() {
-  ['f-q','f-hotel','f-estado','f-depto'].forEach(id => {
+  ['f-q','f-hotel','f-estado','f-depto','f-fecha-desde','f-fecha-hasta'].forEach(id => {
     const el = document.getElementById(id);
-    el.value = '';
+    if (el) el.value = '';
   });
   G.page = 1; loadPedidos();
 }
@@ -5654,6 +5661,390 @@ function meaEnviarWA() {
 document.getElementById('modal-email-alerta').addEventListener('click', function(e) {
   if (e.target === this) closeModal('modal-email-alerta');
 });
+</script>
+
+<!-- ═══════════════════════════════════════════════════════════════════════
+     MODAL IMPRESION — Pedidos  (opciones de agrupación + filtros activos)
+════════════════════════════════════════════════════════════════════════ -->
+<div id="modal-impresion-pedidos" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:3000;overflow-y:auto">
+  <div style="background:#fff;border-radius:14px;max-width:500px;margin:50px auto 40px;padding:0;box-shadow:0 8px 40px rgba(0,0,0,.25)">
+    <div style="padding:18px 22px 14px;border-bottom:1px solid #eee;display:flex;align-items:center;gap:10px;background:linear-gradient(135deg,#0f2044,#1a3a6b);border-radius:14px 14px 0 0">
+      <span style="font-size:20px">🖨️</span>
+      <strong style="font-size:15px;color:#fff">Imprimir — Listado de Pedidos</strong>
+      <button onclick="document.getElementById('modal-impresion-pedidos').style.display='none'"
+              style="margin-left:auto;background:none;border:none;font-size:20px;cursor:pointer;color:rgba(255,255,255,.7);line-height:1">✕</button>
+    </div>
+    <div style="padding:18px 22px">
+
+      <!-- Resumen de filtros activos -->
+      <div id="imp-ped-filtros" style="margin-bottom:14px;padding:10px 14px;background:#f0f6ff;border:1px solid #c7d9f5;border-radius:8px;font-size:12px;color:#1a3a6b">
+        <!-- Se rellena dinámicamente -->
+      </div>
+
+      <!-- Opciones de agrupación -->
+      <p style="margin:0 0 10px;font-size:13px;font-weight:700;color:#1a3a6b">📋 Agrupar listado por:</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 14px;border-radius:7px;border:1.5px solid #1a73e8;background:#f0f6ff;color:#1a73e8;font-weight:700">
+          <input type="radio" name="imp-ped-grupo" value="hotel" checked style="accent-color:#1a73e8"> 🏨 Hotel
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 14px;border-radius:7px;border:1.5px solid #aaa;background:#fff;color:#555;font-weight:700">
+          <input type="radio" name="imp-ped-grupo" value="estado" style="accent-color:#1a73e8"> 🔖 Estado
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 14px;border-radius:7px;border:1.5px solid #aaa;background:#fff;color:#555;font-weight:700">
+          <input type="radio" name="imp-ped-grupo" value="fecha" style="accent-color:#1a73e8"> 📅 Fecha solicitud
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 14px;border-radius:7px;border:1.5px solid #aaa;background:#fff;color:#555;font-weight:700">
+          <input type="radio" name="imp-ped-grupo" value="ninguno" style="accent-color:#1a73e8"> 📄 Sin agrupar
+        </label>
+      </div>
+
+      <!-- Opciones de columnas -->
+      <p style="margin:0 0 8px;font-size:13px;font-weight:700;color:#1a3a6b">📌 Columnas a mostrar:</p>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="imp-col-importe" checked style="accent-color:#1a73e8"> Importe
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="imp-col-proveedor" checked style="accent-color:#1a73e8"> Proveedor
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="imp-col-depto" checked style="accent-color:#1a73e8"> Departamento
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="imp-col-obs" checked style="accent-color:#1a73e8"> Observaciones
+        </label>
+        <label style="display:flex;align-items:center;gap:5px;font-size:12px;cursor:pointer">
+          <input type="checkbox" id="imp-col-ftramit" checked style="accent-color:#1a73e8"> F. Tramitación
+        </label>
+      </div>
+
+      <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:4px">
+        <button onclick="document.getElementById('modal-impresion-pedidos').style.display='none'"
+                style="padding:8px 18px;border:1px solid #ccc;border-radius:7px;background:#fff;cursor:pointer;font-size:13px">Cancelar</button>
+        <button onclick="ejecutarImpresionPedidos()"
+                style="padding:8px 22px;border:none;border-radius:7px;background:#1a3a6b;color:#fff;font-weight:700;font-size:13px;cursor:pointer">🖨️ Imprimir</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+/* =======================================================================
+   IMPRESION — Pedidos
+======================================================================= */
+
+document.getElementById('modal-impresion-pedidos').addEventListener('click', function(e) {
+  if (e.target === this) this.style.display = 'none';
+});
+
+// Estilos radio dinámico
+document.querySelectorAll('input[name="imp-ped-grupo"]').forEach(function(r) {
+  r.addEventListener('change', function() {
+    document.querySelectorAll('input[name="imp-ped-grupo"]').forEach(function(x) {
+      var lbl = x.closest('label');
+      if (lbl) {
+        lbl.style.borderColor = x.checked ? '#1a73e8' : '#aaa';
+        lbl.style.background  = x.checked ? '#f0f6ff' : '#fff';
+        lbl.style.color       = x.checked ? '#1a73e8' : '#555';
+      }
+    });
+  });
+});
+
+function abrirModalImpresionPedidos() {
+  // Mostrar resumen de filtros activos
+  var partes = [];
+  var q      = document.getElementById('f-q') ? document.getElementById('f-q').value.trim() : '';
+  var hotel  = document.getElementById('f-hotel');
+  var estado = document.getElementById('f-estado');
+  var depto  = document.getElementById('f-depto');
+  var desde  = document.getElementById('f-fecha-desde') ? document.getElementById('f-fecha-desde').value : '';
+  var hasta  = document.getElementById('f-fecha-hasta') ? document.getElementById('f-fecha-hasta').value : '';
+  if (q)      partes.push('🔍 Búsqueda: <strong>' + q + '</strong>');
+  if (hotel  && hotel.value)  partes.push('🏨 Hotel: <strong>' + hotel.options[hotel.selectedIndex].text + '</strong>');
+  if (estado && estado.value) partes.push('🔖 Estado: <strong>' + estado.value + '</strong>');
+  if (depto  && depto.value)  partes.push('🏢 Depto: <strong>' + depto.options[depto.selectedIndex].text + '</strong>');
+  if (desde)  partes.push('📅 Desde: <strong>' + desde + '</strong>');
+  if (hasta)  partes.push('📅 Hasta: <strong>' + hasta + '</strong>');
+
+  var filtrosEl = document.getElementById('imp-ped-filtros');
+  if (partes.length > 0) {
+    filtrosEl.innerHTML = '<span style="font-weight:700;margin-right:6px">Filtros activos:</span>' + partes.join(' &nbsp;·&nbsp; ');
+    filtrosEl.style.display = '';
+  } else {
+    filtrosEl.innerHTML = '📋 <em>Sin filtros activos — se imprimirán <strong>todos</strong> los pedidos</em>';
+    filtrosEl.style.display = '';
+  }
+
+  document.getElementById('modal-impresion-pedidos').style.display = '';
+}
+
+async function ejecutarImpresionPedidos() {
+  document.getElementById('modal-impresion-pedidos').style.display = 'none';
+
+  var q      = document.getElementById('f-q') ? document.getElementById('f-q').value.trim() : '';
+  var hotel  = document.getElementById('f-hotel') ? document.getElementById('f-hotel').value : '';
+  var estado = document.getElementById('f-estado') ? document.getElementById('f-estado').value : '';
+  var depto  = document.getElementById('f-depto') ? document.getElementById('f-depto').value : '';
+  var desde  = document.getElementById('f-fecha-desde') ? document.getElementById('f-fecha-desde').value : '';
+  var hasta  = document.getElementById('f-fecha-hasta') ? document.getElementById('f-fecha-hasta').value : '';
+
+  var grupoEl = document.querySelector('input[name="imp-ped-grupo"]:checked');
+  var grupo   = grupoEl ? grupoEl.value : 'hotel';
+
+  var mostrarImporte   = document.getElementById('imp-col-importe') ? document.getElementById('imp-col-importe').checked : true;
+  var mostrarProveedor = document.getElementById('imp-col-proveedor') ? document.getElementById('imp-col-proveedor').checked : true;
+  var mostrarDepto     = document.getElementById('imp-col-depto') ? document.getElementById('imp-col-depto').checked : true;
+  var mostrarObs       = document.getElementById('imp-col-obs') ? document.getElementById('imp-col-obs').checked : true;
+  var mostrarFTramit   = document.getElementById('imp-col-ftramit') ? document.getElementById('imp-col-ftramit').checked : true;
+
+  var params = new URLSearchParams({ page: 1, page_size: 1000 });
+  if (q)      params.set('q', q);
+  if (hotel)  params.set('hotel_id', hotel);
+  if (estado) params.set('estado', estado);
+  if (depto)  params.set('departamento_id', depto);
+  if (desde)  params.set('fecha_desde', desde);
+  if (hasta)  params.set('fecha_hasta', hasta);
+
+  var d;
+  try { d = await api('/api/pedidos?' + params.toString()); }
+  catch(e) { alert('Error cargando pedidos: ' + e.message); return; }
+
+  var pedidos = d.pedidos || [];
+  var ahora   = new Date().toLocaleString('es-ES');
+  var usuario = G.nombre || G.user || '—';
+
+  // ── Colores por estado ──────────────────────────────────────────────
+  var ESTADO_CFG = {
+    'PENDIENTE COTIZACIÓN':               { bg:'#fff3cd', border:'#ffc107', text:'#856404', badge:'#ffc107', badgeTxt:'#000' },
+    'PENDIENTE FIRMA DIRECCION COMPRAS':  { bg:'#e8f4fd', border:'#3b9ded', text:'#1a3a6b', badge:'#3b9ded', badgeTxt:'#fff' },
+    'PENDIENTE DE FIRMA DIRECCION HOTEL': { bg:'#e8f4fd', border:'#5ba8e5', text:'#1a3a6b', badge:'#5ba8e5', badgeTxt:'#fff' },
+    'ENVIADO AL PROVEEDOR':               { bg:'#e8f0fe', border:'#1a73e8', text:'#174ea6', badge:'#1a73e8', badgeTxt:'#fff' },
+    'ENTREGA PARCIAL':                    { bg:'#fff8e1', border:'#f59e0b', text:'#92400e', badge:'#f59e0b', badgeTxt:'#000' },
+    'ENTREGADO':                          { bg:'#d4edda', border:'#28a745', text:'#155724', badge:'#28a745', badgeTxt:'#fff' },
+    'CANCELADO':                          { bg:'#f8d7da', border:'#dc3545', text:'#721c24', badge:'#dc3545', badgeTxt:'#fff' },
+  };
+  function getEstadoCfg(e) {
+    return ESTADO_CFG[e] || { bg:'#f8f9fa', border:'#adb5bd', text:'#495057', badge:'#6c757d', badgeTxt:'#fff' };
+  }
+
+  function fmtD(s) {
+    if (!s) return '—';
+    var p = s.split('T')[0].split('-');
+    return p.length===3 ? p[2]+'/'+p[1]+'/'+p[0] : s;
+  }
+  function fmtImporte(v) {
+    return v != null ? Number(v).toLocaleString('es-ES',{minimumFractionDigits:2}) + ' €' : '—';
+  }
+
+  // ── Construir columnas activas ──────────────────────────────────────
+  function buildHeaderRow() {
+    var cols = ['<th>Nº</th>', '<th>Pedido DALI/SAP</th>', '<th>F. Solicitud</th>'];
+    if (grupo !== 'hotel')   cols.push('<th>Hotel</th>');
+    if (grupo !== 'estado')  cols.push('<th>Estado</th>');
+    if (mostrarDepto)   cols.push('<th>Departamento</th>');
+    if (mostrarFTramit) cols.push('<th>F. Tramitación</th>');
+    if (mostrarProveedor) cols.push('<th>Proveedor</th>');
+    if (mostrarImporte) cols.push('<th style="text-align:right">Importe</th>');
+    if (mostrarObs)     cols.push('<th>Observaciones</th>');
+    return '<tr>' + cols.join('') + '</tr>';
+  }
+
+  function buildRow(p, rowIdx) {
+    var bg = rowIdx % 2 === 0 ? '#fff' : '#f8f9fb';
+    var cfg = getEstadoCfg(p.estado);
+    var estadoBadgeHtml = '<span style="display:inline-block;padding:2px 8px;border-radius:4px;font-size:10px;font-weight:700;background:' + cfg.badge + ';color:' + cfg.badgeTxt + '">' + (p.estado||'—') + '</span>';
+    var techoHtml = p.sujeto_techo ? ' <span style="display:inline-block;background:#fff3cd;border:1px solid #ffc107;color:#856404;border-radius:3px;font-size:9px;padding:1px 4px;font-weight:700">📉T</span>' : '';
+    var cols = [
+      '<td style="padding:6px 8px;font-size:11px;font-weight:700;border-bottom:1px solid #eee">' + (p.norden||'—') + '</td>',
+      '<td style="padding:6px 8px;font-size:11px;font-family:monospace;border-bottom:1px solid #eee">' + (p.pedido_num||'—') + techoHtml + '</td>',
+      '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + fmtD(p.fecha_solicitud) + '</td>',
+    ];
+    if (grupo !== 'hotel')   cols.push('<td style="padding:6px 8px;font-size:11px;font-weight:700;color:#1a3a6b;border-bottom:1px solid #eee">' + (p.hotel_codigo||'—') + '</td>');
+    if (grupo !== 'estado')  cols.push('<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + estadoBadgeHtml + '</td>');
+    if (mostrarDepto)   cols.push('<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.departamento_nombre||'—') + '</td>');
+    if (mostrarFTramit) cols.push('<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + fmtD(p.fecha_tramitacion) + '</td>');
+    if (mostrarProveedor) cols.push('<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.proveedor_nombre||'—') + '</td>');
+    if (mostrarImporte) cols.push('<td style="padding:6px 8px;font-size:11px;text-align:right;font-weight:700;border-bottom:1px solid #eee">' + fmtImporte(p.importe) + '</td>');
+    if (mostrarObs)     cols.push('<td style="padding:6px 8px;font-size:11px;color:#555;font-style:italic;border-bottom:1px solid #eee;max-width:200px">' + (p.observaciones||'') + '</td>');
+    return '<tr style="background:' + bg + '">' + cols.join('') + '</tr>';
+  }
+
+  // ── Agrupar ─────────────────────────────────────────────────────────
+  var bodyHtml = '';
+  var colCount = 3 +
+    (grupo !== 'hotel' ? 1 : 0) +
+    (grupo !== 'estado' ? 1 : 0) +
+    (mostrarDepto ? 1 : 0) + (mostrarFTramit ? 1 : 0) +
+    (mostrarProveedor ? 1 : 0) + (mostrarImporte ? 1 : 0) + (mostrarObs ? 1 : 0);
+
+  if (grupo === 'ninguno') {
+    bodyHtml += pedidos.map(function(p, i){ return buildRow(p, i); }).join('');
+  } else {
+    // Extraer clave de agrupación
+    function getKey(p) {
+      if (grupo === 'hotel')  return (p.hotel_codigo || '?') + '|||' + (p.hotel_nombre || '');
+      if (grupo === 'estado') return p.estado || 'Sin estado';
+      if (grupo === 'fecha') {
+        if (!p.fecha_solicitud) return 'Sin fecha';
+        var s = p.fecha_solicitud.split('T')[0]; // YYYY-MM-DD
+        var parts = s.split('-');
+        var meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+        return meses[parseInt(parts[1],10)-1] + ' ' + parts[0] + '|||' + s.slice(0,7);
+      }
+      return '';
+    }
+    function getGroupLabel(key) {
+      if (grupo === 'hotel') {
+        var p = key.split('|||');
+        return '🏨 ' + p[0] + (p[1] ? ' — ' + p[1] : '');
+      }
+      if (grupo === 'estado') {
+        var cfg = getEstadoCfg(key);
+        return '<span style="display:inline-block;padding:3px 12px;border-radius:5px;font-size:13px;font-weight:700;background:' + cfg.badge + ';color:' + cfg.badgeTxt + '">' + key + '</span>';
+      }
+      if (grupo === 'fecha') return '📅 ' + key.split('|||')[0];
+      return key;
+    }
+    function getGroupColor(key) {
+      if (grupo === 'hotel')  return '#1a3a6b';
+      if (grupo === 'estado') return getEstadoCfg(key).border;
+      if (grupo === 'fecha')  return '#4a7c59';
+      return '#333';
+    }
+    function getGroupBg(key) {
+      if (grupo === 'hotel')  return 'linear-gradient(90deg,#1a3a6b 0%,#2756a8 100%)';
+      if (grupo === 'estado') { var c = getEstadoCfg(key); return c.bg; }
+      if (grupo === 'fecha')  return 'linear-gradient(90deg,#2d6a4f 0%,#40916c 100%)';
+      return '#f0f0f0';
+    }
+    function getGroupTxtColor(key) {
+      if (grupo === 'hotel') return '#fff';
+      if (grupo === 'fecha') return '#fff';
+      if (grupo === 'estado') return getEstadoCfg(key).text;
+      return '#333';
+    }
+
+    // Construir mapa ordenado
+    var groupMap = {};
+    var groupOrder = [];
+    pedidos.forEach(function(p) {
+      var k = getKey(p);
+      if (!groupMap[k]) { groupMap[k] = []; groupOrder.push(k); }
+      groupMap[k].push(p);
+    });
+
+    groupOrder.forEach(function(k) {
+      var rows = groupMap[k];
+      var bg   = getGroupBg(k);
+      var txt  = getGroupTxtColor(k);
+      var lbl  = getGroupLabel(k);
+
+      // Calcular totales del grupo
+      var totalImporte = rows.reduce(function(s,p){ return s + (p.importe ? Number(p.importe) : 0); }, 0);
+      var hasImportes  = rows.some(function(p){ return p.importe != null; });
+
+      var totalCell = (mostrarImporte && hasImportes)
+        ? '<span style="float:right;font-size:12px;opacity:.9">Total: <strong>' + fmtImporte(totalImporte) + '</strong></span>'
+        : '';
+
+      bodyHtml += '<tr><td colspan="' + colCount + '" style="background:' + bg + ';padding:9px 12px;font-size:13px;font-weight:700;color:' + txt + ';border-bottom:2px solid rgba(0,0,0,.1)">' +
+        lbl + '&nbsp;&nbsp;<span style="font-size:11px;opacity:.8;font-weight:400">(' + rows.length + ' pedido' + (rows.length!==1?'s':'') + ')</span>' + totalCell +
+        '</td></tr>';
+      rows.forEach(function(p, i){ bodyHtml += buildRow(p, i); });
+
+      // Fila de subtotal importe si aplica
+      if (mostrarImporte && hasImportes) {
+        var emptyCols = colCount - 2;
+        bodyHtml += '<tr style="background:#f0f4f8"><td colspan="' + emptyCols + '" style="padding:5px 8px;font-size:11px;color:#777;border-bottom:2px solid #dee2e6;font-style:italic">Subtotal grupo</td>' +
+          '<td style="padding:5px 8px;font-size:11px;text-align:right;font-weight:700;color:#1a3a6b;border-bottom:2px solid #dee2e6">' + fmtImporte(totalImporte) + '</td>' +
+          (mostrarObs ? '<td style="border-bottom:2px solid #dee2e6"></td>' : '') + '</tr>';
+      }
+    });
+  }
+
+  // ── Resumen general ──────────────────────────────────────────────────
+  var totalImporteGlobal = pedidos.reduce(function(s,p){ return s + (p.importe ? Number(p.importe) : 0); }, 0);
+  var countByEstado = {};
+  pedidos.forEach(function(p){ countByEstado[p.estado] = (countByEstado[p.estado]||0) + 1; });
+  var resumenEstados = Object.keys(countByEstado).map(function(e) {
+    var cfg = getEstadoCfg(e);
+    return '<div style="display:inline-flex;align-items:center;gap:6px;padding:6px 14px;border-radius:7px;border:1px solid ' + cfg.border + ';background:' + cfg.bg + ';margin:3px">' +
+      '<span style="width:10px;height:10px;border-radius:50%;background:' + cfg.badge + ';display:inline-block"></span>' +
+      '<span style="font-size:12px;font-weight:700;color:' + cfg.text + '">' + e + ': ' + countByEstado[e] + '</span></div>';
+  }).join('');
+
+  // ── Descripción de filtros ───────────────────────────────────────────
+  var filtrosDesc = [];
+  var qVal     = document.getElementById('f-q') ? document.getElementById('f-q').value.trim() : '';
+  var hotelEl  = document.getElementById('f-hotel');
+  var estadoEl = document.getElementById('f-estado');
+  var deptoEl  = document.getElementById('f-depto');
+  var desdeVal = document.getElementById('f-fecha-desde') ? document.getElementById('f-fecha-desde').value : '';
+  var hastaVal = document.getElementById('f-fecha-hasta') ? document.getElementById('f-fecha-hasta').value : '';
+  if (qVal)       filtrosDesc.push('Búsqueda: <em>' + qVal + '</em>');
+  if (hotelEl && hotelEl.value)  filtrosDesc.push('Hotel: <em>' + hotelEl.options[hotelEl.selectedIndex].text + '</em>');
+  if (estadoEl && estadoEl.value) filtrosDesc.push('Estado: <em>' + estadoEl.value + '</em>');
+  if (deptoEl && deptoEl.value)  filtrosDesc.push('Depto: <em>' + deptoEl.options[deptoEl.selectedIndex].text + '</em>');
+  if (desdeVal)   filtrosDesc.push('Desde: <em>' + desdeVal + '</em>');
+  if (hastaVal)   filtrosDesc.push('Hasta: <em>' + hastaVal + '</em>');
+  var filtrosLine = filtrosDesc.length > 0
+    ? 'Filtros: ' + filtrosDesc.join(' · ')
+    : 'Sin filtros — todos los pedidos';
+
+  var grupoLabels = { hotel:'Por hotel', estado:'Por estado', fecha:'Por fecha de solicitud', ninguno:'Sin agrupación' };
+
+  var html = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<title>Listado de Pedidos</title>' +
+    '<style>' +
+    '*{box-sizing:border-box}' +
+    'body{font-family:Arial,sans-serif;color:#1a1a2e;margin:0;padding:20px}' +
+    'h1{font-size:18px;margin:0 0 3px;color:#0f2044}' +
+    '.subtitle{font-size:11px;color:#666;margin-bottom:14px;line-height:1.6}' +
+    '.resumen-estados{margin-bottom:16px;padding:10px 14px;background:#f8f9fa;border-radius:8px;border:1px solid #dee2e6}' +
+    'table{width:100%;border-collapse:collapse}' +
+    'thead tr{background:#0f2044}' +
+    'thead th{color:#fff;padding:7px 8px;font-size:10px;text-align:left;font-weight:700;letter-spacing:.03em}' +
+    'thead th:last-child{text-align:right}' +
+    '.total-row{background:#e8f0fe!important;font-weight:700}' +
+    '.grand-total{background:#0f2044;color:#fff;padding:10px 14px;margin-top:16px;border-radius:7px;display:flex;justify-content:space-between;align-items:center;font-size:13px}' +
+    '@media print{body{padding:10px}@page{margin:8mm;size:A4 landscape}thead{display:table-header-group}}' +
+    '</style></head><body>' +
+
+    '<div style="display:flex;align-items:center;gap:12px;margin-bottom:12px">' +
+      '<div style="width:42px;height:42px;border-radius:10px;background:linear-gradient(135deg,#0f2044,#1a73e8);display:flex;align-items:center;justify-content:center;font-size:20px;flex-shrink:0">📋</div>' +
+      '<div>' +
+        '<h1>Listado de Pedidos — Princess Hotels &amp; Resorts</h1>' +
+        '<div class="subtitle">' +
+          'Generado: <strong>' + ahora + '</strong> &nbsp;·&nbsp; ' +
+          'Usuario: <strong>' + usuario + '</strong> &nbsp;·&nbsp; ' +
+          'Total: <strong>' + pedidos.length + ' pedido' + (pedidos.length!==1?'s':'') + '</strong> &nbsp;·&nbsp; ' +
+          'Agrupación: <strong>' + grupoLabels[grupo] + '</strong><br>' +
+          filtrosLine +
+        '</div>' +
+      '</div>' +
+    '</div>' +
+
+    '<div class="resumen-estados">' +
+      '<div style="font-size:11px;font-weight:700;color:#333;margin-bottom:6px">Resumen por estado:</div>' +
+      resumenEstados +
+    '</div>' +
+
+    (pedidos.length === 0
+      ? '<p style="color:#999;font-style:italic;text-align:center;padding:30px">No hay pedidos con los filtros seleccionados.</p>'
+      : '<table>' +
+          '<thead>' + buildHeaderRow() + '</thead>' +
+          '<tbody>' + bodyHtml + '</tbody>' +
+        '</table>' +
+        (mostrarImporte
+          ? '<div class="grand-total">📊 Total global de importes: <strong>' + fmtImporte(totalImporteGlobal) + '</strong> &nbsp;·&nbsp; ' + pedidos.length + ' pedidos</div>'
+          : '')
+    ) +
+
+    '</body></html>';
+
+  _abrirVentanaImpresion(html);
+}
 </script>
 
 <!-- ═══════════════════════════════════════════════════════════════════════

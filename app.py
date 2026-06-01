@@ -4877,11 +4877,13 @@ def get_pedidos():
         wheres.append(f"p.hotel_id IN ({placeholders})")
         args += hoteles_ids
 
-    q      = request.args.get("q", "").strip()
-    hotel  = request.args.get("hotel_id", "")
-    estado = request.args.get("estado", "")
-    depto  = request.args.get("departamento_id", "")
-    alerta = request.args.get("alerta", "")
+    q           = request.args.get("q", "").strip()
+    hotel       = request.args.get("hotel_id", "")
+    estado      = request.args.get("estado", "")
+    depto       = request.args.get("departamento_id", "")
+    alerta      = request.args.get("alerta", "")
+    fecha_desde = request.args.get("fecha_desde", "").strip()
+    fecha_hasta = request.args.get("fecha_hasta", "").strip()
 
     if q:
         wheres.append("(p.pedido_num ILIKE %s OR pr.nombre ILIKE %s OR p.observaciones ILIKE %s OR h.codigo ILIKE %s)")
@@ -4892,6 +4894,10 @@ def get_pedidos():
         wheres.append("p.estado = %s"); args.append(estado)
     if depto:
         wheres.append("p.departamento_id = %s"); args.append(depto)
+    if fecha_desde:
+        wheres.append("p.fecha_solicitud >= %s"); args.append(fecha_desde)
+    if fecha_hasta:
+        wheres.append("p.fecha_solicitud <= %s"); args.append(fecha_hasta)
     if alerta == "1":
         # Filtro rápido: pedidos con fecha_tramitacion y estado activo
         # (el cálculo exacto de días y nivel se hace en /api/stats)
