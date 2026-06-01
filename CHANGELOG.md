@@ -1,3 +1,7 @@
+## v11.5.2 — 29 mayo 2026
+
+### ✅ Novedades
+- Organización Telegram Administradores.
 ## v11.5.0 — 29 mayo 2026
 
 ### ✅ Novedades

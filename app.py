@@ -526,7 +526,7 @@ TELEGRAM_BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 # "aviso"         → recordatorio diario → NO se copia (evitar saturación)
 # Solo las alertas URGENTES llegan a admins por supervisión automática.
 # techo-rojo usa tipo="urgente"; techo-amarillo y cambio_estado sin alerta urgente NO llegan a admins.
-TIPOS_SUPERVISION_ADMIN = {"urgente", "techo"}
+TIPOS_SUPERVISION_ADMIN = {"urgente"}
 
 
 def _get_admin_emails() -> list:
