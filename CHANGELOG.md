@@ -1,3 +1,13 @@
+## v11.5.6 — 01 junio 2026
+
+### ✅ Novedades
+- Ahora podemos imprimir los pedidos.
+
+## v11.5.4 — 01 junio 2026
+
+### ✅ Novedades
+- Ahora podemos imprimir los historicos de techo de gastos. Pedidos enviados.
+
 ## v11.5.2 — 29 mayo 2026
 
 ### ✅ Novedades
@@ -6,8 +16,6 @@
 
 ### ✅ Novedades
 - Limpieza y organizacion codigo.
-
-## v11.4.8 — 29 mayo 2026
 
 ### ✅ Novedades
 - Campo de plazo de entrega en pedidos con cálculo automático de fecha prevista.
@@ -21,7 +29,7 @@
 
 ---
 
-## v11.4.6 — 27 mayo 2026
+## v11.4.8 — 27 mayo 2026
 
 ### ✅ Novedades
 - Al detectar una nueva versión en el servidor se muestra una ventana
