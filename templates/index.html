@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.6.0
+          V 11.6.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -5729,6 +5729,22 @@ document.getElementById('modal-email-alerta').addEventListener('click', function
         </p>
       </div>
 
+      <!-- Filtro por hoteles -->
+      <div style="margin-bottom:16px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <p style="margin:0;font-size:13px;font-weight:700;color:#1a3a6b">🏨 Hoteles a incluir:</p>
+          <button onclick="impPedSeleccionarTodos(true)"
+                  style="font-size:11px;padding:3px 10px;border:1px solid #1a73e8;border-radius:5px;background:#f0f6ff;color:#1a73e8;cursor:pointer;font-weight:600">✔ Todos</button>
+          <button onclick="impPedSeleccionarTodos(false)"
+                  style="font-size:11px;padding:3px 10px;border:1px solid #ccc;border-radius:5px;background:#fff;color:#555;cursor:pointer">✗ Ninguno</button>
+          <span id="imp-ped-contador" style="margin-left:auto;font-size:11px;color:#777;font-weight:600"></span>
+        </div>
+        <div id="imp-ped-lista-hoteles"
+             style="max-height:180px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;padding:4px 0">
+          <!-- Se rellena dinámicamente -->
+        </div>
+      </div>
+
       <!-- Opciones de agrupación -->
       <p style="margin:0 0 10px;font-size:13px;font-weight:700;color:#1a3a6b">📋 Agrupar listado por:</p>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px">
@@ -5803,13 +5819,11 @@ function abrirModalImpresionPedidos() {
   // Mostrar resumen de filtros activos
   var partes = [];
   var q      = document.getElementById('f-q') ? document.getElementById('f-q').value.trim() : '';
-  var hotel  = document.getElementById('f-hotel');
   var estado = document.getElementById('f-estado');
   var depto  = document.getElementById('f-depto');
   var desde  = document.getElementById('f-fecha-desde') ? document.getElementById('f-fecha-desde').value : '';
   var hasta  = document.getElementById('f-fecha-hasta') ? document.getElementById('f-fecha-hasta').value : '';
   if (q)      partes.push('🔍 Búsqueda: <strong>' + q + '</strong>');
-  if (hotel  && hotel.value)  partes.push('🏨 Hotel: <strong>' + hotel.options[hotel.selectedIndex].text + '</strong>');
   if (estado && estado.value) partes.push('🔖 Estado: <strong>' + estado.value + '</strong>');
   if (depto  && depto.value)  partes.push('🏢 Depto: <strong>' + depto.options[depto.selectedIndex].text + '</strong>');
   if (desde)  partes.push('📅 Desde: <strong>' + desde + '</strong>');
@@ -5832,14 +5846,66 @@ function abrirModalImpresionPedidos() {
   if (impDesdeEl) impDesdeEl.value = screenDesde;
   if (impHastaEl) impHastaEl.value = screenHasta;
 
+  // Rellenar lista de hoteles
+  var hotelFiltro = document.getElementById('f-hotel') ? document.getElementById('f-hotel').value : '';
+  var hotelesMaestro = (G.maestros && G.maestros.hoteles) ? G.maestros.hoteles : [];
+  var lista = document.getElementById('imp-ped-lista-hoteles');
+  lista.innerHTML = '';
+  if (hotelesMaestro.length === 0) {
+    lista.innerHTML = '<div style="padding:12px;text-align:center;color:#999;font-size:13px;font-style:italic">No hay hoteles disponibles</div>';
+  } else {
+    hotelesMaestro.forEach(function(h) {
+      var preselected = !hotelFiltro || String(h.id) === String(hotelFiltro);
+      var lbl = document.createElement('label');
+      lbl.style.cssText = 'display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer;font-size:13px;border-bottom:1px solid #f0f0f0;' + (preselected ? 'background:#f0f6ff;' : '');
+      lbl.innerHTML =
+        '<input type="checkbox"' + (preselected ? ' checked' : '') + ' style="accent-color:#1a73e8;width:14px;height:14px;flex-shrink:0">' +
+        '<span style="font-weight:700;color:#1a3a6b;min-width:40px">' + h.codigo + '</span>' +
+        '<span style="color:#444">' + h.nombre + '</span>';
+      var cb = lbl.querySelector('input');
+      cb.dataset.hotelId = h.id;
+      cb.dataset.codigo  = h.codigo;
+      cb.addEventListener('change', function() {
+        lbl.style.background = this.checked ? '#f0f6ff' : '';
+        _impPedActualizarContador();
+      });
+      lista.appendChild(lbl);
+    });
+  }
+  _impPedActualizarContador();
+
   document.getElementById('modal-impresion-pedidos').style.display = '';
 }
 
+function _impPedActualizarContador() {
+  var total   = document.querySelectorAll('#imp-ped-lista-hoteles input[type=checkbox]').length;
+  var marcados = document.querySelectorAll('#imp-ped-lista-hoteles input[type=checkbox]:checked').length;
+  var el = document.getElementById('imp-ped-contador');
+  if (el) el.textContent = marcados + ' / ' + total + ' seleccionados';
+}
+
+function impPedSeleccionarTodos(sel) {
+  document.querySelectorAll('#imp-ped-lista-hoteles input[type=checkbox]').forEach(function(cb) {
+    cb.checked = sel;
+    var row = cb.closest('label');
+    if (row) row.style.background = sel ? '#f0f6ff' : '';
+  });
+  _impPedActualizarContador();
+}
+
 async function ejecutarImpresionPedidos() {
+  // Validar que haya al menos un hotel seleccionado
+  var hotelesSeleccionados = Array.from(document.querySelectorAll('#imp-ped-lista-hoteles input[type=checkbox]:checked'));
+  if (hotelesSeleccionados.length === 0) {
+    alert('Selecciona al menos un hotel para imprimir.');
+    return;
+  }
   document.getElementById('modal-impresion-pedidos').style.display = 'none';
 
+  var hotelesTotalMaestro = (G.maestros && G.maestros.hoteles) ? G.maestros.hoteles.length : 0;
+  var todosHoteles = hotelesSeleccionados.length === hotelesTotalMaestro;
+
   var q      = document.getElementById('f-q') ? document.getElementById('f-q').value.trim() : '';
-  var hotel  = document.getElementById('f-hotel') ? document.getElementById('f-hotel').value : '';
   var estado = document.getElementById('f-estado') ? document.getElementById('f-estado').value : '';
   var depto  = document.getElementById('f-depto') ? document.getElementById('f-depto').value : '';
   // Usar fechas del modal de impresión (tienen prioridad) o los filtros de pantalla como fallback
@@ -5859,19 +5925,60 @@ async function ejecutarImpresionPedidos() {
   var mostrarObs       = document.getElementById('imp-col-obs') ? document.getElementById('imp-col-obs').checked : true;
   var mostrarFTramit   = document.getElementById('imp-col-ftramit') ? document.getElementById('imp-col-ftramit').checked : true;
 
-  var params = new URLSearchParams({ page: 1, page_size: 1000 });
-  if (q)      params.set('q', q);
-  if (hotel)  params.set('hotel_id', hotel);
-  if (estado) params.set('estado', estado);
-  if (depto)  params.set('departamento_id', depto);
-  if (desde)  params.set('fecha_desde', desde);
-  if (hasta)  params.set('fecha_hasta', hasta);
+  // Construir llamadas por hotel si es selección parcial, o una sola si son todos
+  var pedidos = [];
+  if (todosHoteles) {
+    var params = new URLSearchParams({ page: 1, page_size: 5000 });
+    if (q)      params.set('q', q);
+    if (estado) params.set('estado', estado);
+    if (depto)  params.set('departamento_id', depto);
+    if (desde)  params.set('fecha_desde', desde);
+    if (hasta)  params.set('fecha_hasta', hasta);
+    var d;
+    try { d = await api('/api/pedidos?' + params.toString()); }
+    catch(e) { alert('Error cargando pedidos: ' + e.message); return; }
+    pedidos = d.pedidos || [];
+  } else {
+    // Llamada por cada hotel seleccionado (o una sola con hotel_id si es uno)
+    if (hotelesSeleccionados.length === 1) {
+      var params = new URLSearchParams({ page: 1, page_size: 5000 });
+      params.set('hotel_id', hotelesSeleccionados[0].dataset.hotelId);
+      if (q)      params.set('q', q);
+      if (estado) params.set('estado', estado);
+      if (depto)  params.set('departamento_id', depto);
+      if (desde)  params.set('fecha_desde', desde);
+      if (hasta)  params.set('fecha_hasta', hasta);
+      var d;
+      try { d = await api('/api/pedidos?' + params.toString()); }
+      catch(e) { alert('Error cargando pedidos: ' + e.message); return; }
+      pedidos = d.pedidos || [];
+    } else {
+      // Múltiples hoteles: una llamada por hotel y combinar
+      var hotelIds = hotelesSeleccionados.map(function(cb) { return cb.dataset.hotelId; });
+      try {
+        var resultados = await Promise.all(hotelIds.map(function(hid) {
+          var params = new URLSearchParams({ page: 1, page_size: 5000 });
+          params.set('hotel_id', hid);
+          if (q)      params.set('q', q);
+          if (estado) params.set('estado', estado);
+          if (depto)  params.set('departamento_id', depto);
+          if (desde)  params.set('fecha_desde', desde);
+          if (hasta)  params.set('fecha_hasta', hasta);
+          return api('/api/pedidos?' + params.toString());
+        }));
+        resultados.forEach(function(r) { pedidos = pedidos.concat(r.pedidos || []); });
+      } catch(e) { alert('Error cargando pedidos: ' + e.message); return; }
+    }
+  }
 
-  var d;
-  try { d = await api('/api/pedidos?' + params.toString()); }
-  catch(e) { alert('Error cargando pedidos: ' + e.message); return; }
+  // Nombres de hoteles seleccionados para encabezado
+  var hotelesNombres = hotelesSeleccionados.map(function(cb) {
+    return cb.dataset.codigo;
+  });
 
-  var pedidos = d.pedidos || [];
+  var ahora   = new Date().toLocaleString('es-ES');
+
+  // Usar fechas del modal de impresión (tienen prioridad) o los filtros de pantalla como fallback
   var ahora   = new Date().toLocaleString('es-ES');
   var usuario = G.nombre || G.user || '—';
 
@@ -6038,13 +6145,15 @@ async function ejecutarImpresionPedidos() {
   // ── Descripción de filtros ───────────────────────────────────────────
   var filtrosDesc = [];
   var qVal     = document.getElementById('f-q') ? document.getElementById('f-q').value.trim() : '';
-  var hotelEl  = document.getElementById('f-hotel');
   var estadoEl = document.getElementById('f-estado');
   var deptoEl  = document.getElementById('f-depto');
   var desdeVal = desde;  // ya calculado: modal tiene prioridad
   var hastaVal = hasta;  // ya calculado: modal tiene prioridad
   if (qVal)       filtrosDesc.push('Búsqueda: <em>' + qVal + '</em>');
-  if (hotelEl && hotelEl.value)  filtrosDesc.push('Hotel: <em>' + hotelEl.options[hotelEl.selectedIndex].text + '</em>');
+  // Mostrar hoteles seleccionados en el modal
+  if (!todosHoteles) {
+    filtrosDesc.push('Hoteles: <em>' + hotelesNombres.join(', ') + '</em>');
+  }
   if (estadoEl && estadoEl.value) filtrosDesc.push('Estado: <em>' + estadoEl.value + '</em>');
   if (deptoEl && deptoEl.value)  filtrosDesc.push('Depto: <em>' + deptoEl.options[deptoEl.selectedIndex].text + '</em>');
   if (desdeVal)   filtrosDesc.push('Desde: <em>' + desdeVal + '</em>');

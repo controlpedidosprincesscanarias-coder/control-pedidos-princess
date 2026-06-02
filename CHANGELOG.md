@@ -1,5 +1,8 @@
-## v11.6.0 — 01 junio 2026
+## v11.6.2 — 02 junio 2026
+### 🔧 Mejoras
+- Incorporado filtro por hotel y fecha para imprimir pedidos.
 
+## v11.6.0 — 01 junio 2026
 ### 🐛 Fix crítico
 - Corregido: el aviso de nueva versión **no aparecía** cuando el usuario tenía la sesión ya abierta y recargaba la página (flujo de restauración de sesión no iniciaba el polling ni capturaba la versión base).
 - Corregido: al hacer login, si había versión nueva se guardaba el hash antiguo como referencia, haciendo que el polling nunca detectara cambios posteriores.
