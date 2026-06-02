@@ -1,6 +1,59 @@
+# ── Python ────────────────────────────────────────────────────────────────────
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.pyw
+
+# ── Entornos virtuales ────────────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+.python-version
+
+# ── Variables de entorno ──────────────────────────────────────────────────────
 .env
+.env.*
+!.env.example
+
+# ── Base de datos local (restos SQLite si los hubiera) ────────────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Logs ──────────────────────────────────────────────────────────────────────
 *.log
+logs/
+
+# ── Exports generados localmente ─────────────────────────────────────────────
+*.xlsx
+*.xls
+*.csv
+
+# ── Tests y cobertura ─────────────────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# ── Builds y distribución ─────────────────────────────────────────────────────
+dist/
+build/
+*.egg-info/
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# ── Sistema operativo ─────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Miscelánea ────────────────────────────────────────────────────────────────
+*.bak
+*.tmp
+instance/
