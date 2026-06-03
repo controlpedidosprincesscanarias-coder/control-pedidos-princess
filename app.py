@@ -6824,8 +6824,25 @@ def get_integridad():
     Usado por el panel de admin para mostrar el badge de aviso y el detalle de problemas.
     GET /api/admin/integridad
     """
-    resultado = _validar_integridad_operativa()
-    return jsonify(resultado)
+    try:
+        resultado = _validar_integridad_operativa()
+        return jsonify(resultado)
+    except Exception as exc:
+        log.error("[INTEGRIDAD] Error inesperado en endpoint /api/admin/integridad: %s", exc, exc_info=True)
+        return jsonify({
+            "ok": False,
+            "error": str(exc),
+            "timestamp": _dt.utcnow().isoformat(),
+            "problemas": {
+                "hoteles_sin_comprador": [],
+                "compradores_sin_hoteles": [],
+                "compradores_sin_telegram": [],
+                "compradores_sin_email": [],
+                "admins_sin_email": [],
+                "hoteles_duplicados": [],
+            },
+            "resumen": {"total_hoteles_activos": 0, "total_compradores": 0, "total_problemas": -1},
+        }), 500
 
 
 @app.route("/api/admin/test-health", methods=["POST"])
