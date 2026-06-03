@@ -1,3 +1,7 @@
+## v11.6.4 — 03 junio 2026
+### 🔧 Mejoras
+- Incorporado fechas en las entregas parciales y totales.
+
 ## v11.6.2 — 02 junio 2026
 ### 🔧 Mejoras
 - Incorporado filtro por hotel y fecha para imprimir pedidos.

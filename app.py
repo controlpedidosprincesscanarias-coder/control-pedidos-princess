@@ -367,6 +367,28 @@ def row_to_dict(row):
 def rows_to_list(rows):
     return [dict(r) for r in rows]
 
+def format_albaran_display(albaran_str):
+    """
+    Convierte el string de albarán almacenado al formato legible para Excel/emails.
+    Formato almacenado: "NUM1::FECHA1 | NUM2::FECHA2"
+    Formato legible:   "NUM1 (FECHA1) | NUM2 (FECHA2)"
+    Retrocompatible con el formato antiguo "NUM1 | NUM2".
+    """
+    if not albaran_str:
+        return albaran_str
+    partes = []
+    for entry in albaran_str.split('|'):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if '::' in entry:
+            num, fecha = entry.split('::', 1)
+            num, fecha = num.strip(), fecha.strip()
+            partes.append(f"{num} ({fecha})" if fecha else num)
+        else:
+            partes.append(entry)
+    return ' | '.join(partes) if partes else albaran_str
+
 # ── Autenticación ──────────────────────────────────────────────────────────────
 
 def login_required(f):
@@ -5675,7 +5697,7 @@ def exportar_backup_previo():
         HEADERS = [
             "Nº ORDEN", "HOTEL", "DEPARTAMENTO", "FECHA SOLICITUD",
             "FECHA ENVÍO Vº Bº", "PEDIDO Nº", "FECHA TRAMITACIÓN",
-            "Nº PRESUPUESTO", "ESTADO", "Nº ENTRADA ALBARÁN",
+            "Nº PRESUPUESTO", "ESTADO", "Nº ENTRADA DALI / SAP",
             "COMUNICADO A&B", "COMUNICADO JEFE DEP.",
             "PARTE ROTURA", "PARTE AMPLIACIÓN",
             "PROVEEDOR", "EMAIL PROVEEDOR", "TELÉFONO", "CONTACTO",
@@ -5700,7 +5722,7 @@ def exportar_backup_previo():
                 strip_tz(p.get("fecha_solicitud")), strip_tz(p.get("fecha_envio_visto_bueno")),
                 p.get("pedido_num"), strip_tz(p.get("fecha_tramitacion")),
                 p.get("presupuesto_num"), p.get("estado"),
-                p.get("entrada_albaran_num"),
+                format_albaran_display(p.get("entrada_albaran_num")),
                 "SÍ" if p.get("comunicado_ab") else "NO",
                 "SÍ" if p.get("comunicado_jefe_dep") else "NO",
                 "SÍ" if p.get("parte_rotura") else "NO",
@@ -5845,7 +5867,7 @@ def reset_e_importar():
                 "fecha_tra": parse_date(col_raw(row, "FECHA TRAMITACIÓN")),
                 "pedido_num":  col(row, "PEDIDO Nº"),
                 "presup_num":  col(row, "Nº PRESUPUESTO"),
-                "albaran_num": col(row, "Nº ENTRADA ALBARÁN"),
+                "albaran_num": col(row, "Nº ENTRADA DALI / SAP"),
                 "estado":    estado,
                 "com_ab":    bool_val(col(row, "COMUNICADO A&B")),
                 "com_jefe":  bool_val(col(row, "COMUNICADO JEFE DEP.")),
@@ -6007,7 +6029,7 @@ def importar_excel():
                 "fecha_tra": parse_date(col_raw(row, "FECHA TRAMITACIÓN")),
                 "pedido_num": col(row, "PEDIDO Nº"),
                 "presup_num": col(row, "Nº PRESUPUESTO"),
-                "albaran_num": col(row, "Nº ENTRADA ALBARÁN"),
+                "albaran_num": col(row, "Nº ENTRADA DALI / SAP"),
                 "estado": estado,
                 "com_ab": bool_val(col(row, "COMUNICADO A&B")),
                 "com_jefe": bool_val(col(row, "COMUNICADO JEFE DEP.")),
@@ -6082,7 +6104,7 @@ def exportar_excel():
         HEADERS = [
             "Nº ORDEN", "HOTEL", "DEPARTAMENTO", "FECHA SOLICITUD",
             "FECHA ENVÍO Vº Bº", "PEDIDO Nº", "FECHA TRAMITACIÓN",
-            "Nº PRESUPUESTO", "ESTADO", "Nº ENTRADA ALBARÁN",
+            "Nº PRESUPUESTO", "ESTADO", "Nº ENTRADA DALI / SAP",
             "COMUNICADO A&B", "COMUNICADO JEFE DEP.",
             "PARTE ROTURA", "PARTE AMPLIACIÓN",
             "PROVEEDOR", "EMAIL PROVEEDOR", "TELÉFONO", "CONTACTO",
@@ -6117,7 +6139,7 @@ def exportar_excel():
                 strip_tz(p.get("fecha_solicitud")), strip_tz(p.get("fecha_envio_visto_bueno")),
                 p.get("pedido_num"), strip_tz(p.get("fecha_tramitacion")),
                 p.get("presupuesto_num"), p.get("estado"),
-                p.get("entrada_albaran_num"),
+                format_albaran_display(p.get("entrada_albaran_num")),
                 "SÍ" if p.get("comunicado_ab") else "NO",
                 "SÍ" if p.get("comunicado_jefe_dep") else "NO",
                 "SÍ" if p.get("parte_rotura") else "NO",
