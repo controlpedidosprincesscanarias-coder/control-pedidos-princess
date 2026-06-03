@@ -4,7 +4,7 @@ Despliegue: Render.com  |  BD: Supabase  |  Email: Resend
 """
 
 import os, json, logging, secrets, atexit, hashlib
-from datetime import datetime, timedelta, date as _date
+from datetime import datetime, timedelta, date as _date, datetime as _dt
 from functools import wraps
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -6369,12 +6369,15 @@ def _validar_integridad_operativa() -> dict:
     """
 
     problemas: dict = {
-        "hoteles_sin_comprador":    [],
-        "compradores_sin_hoteles":  [],
-        "compradores_sin_telegram": [],
-        "compradores_sin_email":    [],
-        "admins_sin_email":         [],
-        "hoteles_duplicados":       [],
+        "hoteles_sin_comprador":      [],
+        "compradores_sin_hoteles":    [],
+        "compradores_sin_telegram":   [],
+        "compradores_sin_movil":      [],
+        "compradores_sin_email":      [],
+        "admins_sin_email":           [],
+        "hoteles_duplicados":         [],
+        "proveedores_sin_contacto":   [],
+        "proveedores_sin_email":      [],
     }
 
     try:
@@ -6422,6 +6425,15 @@ def _validar_integridad_operativa() -> dict:
                     "nombre":     comp["nombre"],
                 })
 
+        # ── Compradores sin móvil ─────────────────────────────────────────────
+        for comp in compradores:
+            if not (comp.get("movil") or "").strip():
+                problemas["compradores_sin_movil"].append({
+                    "usuario_id": comp["id"],
+                    "username":   comp["username"],
+                    "nombre":     comp["nombre"],
+                })
+
         # ── Compradores sin email ─────────────────────────────────────────────
         for comp in compradores:
             if not (comp.get("email") or "").strip():
@@ -6460,6 +6472,34 @@ def _validar_integridad_operativa() -> dict:
                 "n_compradores":  d["n_compradores"],
             })
 
+        # ── Proveedores activos sin ningún contacto con email ─────────────────
+        # Un proveedor sin email no puede recibir el pedido por correo.
+        proveedores_activos = rows_to_list(query(
+            "SELECT id, nombre, codigo FROM proveedores WHERE activo=1 ORDER BY nombre"
+        ))
+        for prov in proveedores_activos:
+            contactos = rows_to_list(query(
+                "SELECT id FROM proveedor_contactos WHERE proveedor_id=%s",
+                (prov["id"],)
+            ))
+            if not contactos:
+                problemas["proveedores_sin_contacto"].append({
+                    "proveedor_id":     prov["id"],
+                    "proveedor_nombre": prov["nombre"],
+                    "proveedor_codigo": prov.get("codigo") or "",
+                })
+                continue
+            emails = rows_to_list(query(
+                "SELECT id FROM proveedor_contactos WHERE proveedor_id=%s AND email IS NOT NULL AND TRIM(email)!=''",
+                (prov["id"],)
+            ))
+            if not emails:
+                problemas["proveedores_sin_email"].append({
+                    "proveedor_id":     prov["id"],
+                    "proveedor_nombre": prov["nombre"],
+                    "proveedor_codigo": prov.get("codigo") or "",
+                })
+
     except Exception as exc:
         log.error("[INTEGRIDAD] Error validando integridad: %s", exc)
         return {
@@ -6476,9 +6516,10 @@ def _validar_integridad_operativa() -> dict:
         "timestamp": _dt.utcnow().isoformat(),
         "problemas": problemas,
         "resumen": {
-            "total_hoteles_activos": len(hoteles_activos),
-            "total_compradores":     len(compradores),
-            "total_problemas":       total_problemas,
+            "total_hoteles_activos":   len(hoteles_activos),
+            "total_compradores":       len(compradores),
+            "total_proveedores":       len(proveedores_activos),
+            "total_problemas":         total_problemas,
         },
     }
 

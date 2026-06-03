@@ -5059,7 +5059,7 @@ async function loadIntegridad() {
 
   // Resumen
   const resumen = document.getElementById('integridad-resumen');
-  const { total_hoteles_activos, total_compradores, total_problemas } = data.resumen;
+  const { total_hoteles_activos, total_compradores, total_proveedores, total_problemas } = data.resumen;
   resumen.innerHTML = `
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:130px">
       <div style="font-size:24px;font-weight:700;color:var(--primary)">${total_hoteles_activos}</div>
@@ -5068,6 +5068,10 @@ async function loadIntegridad() {
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:130px">
       <div style="font-size:24px;font-weight:700;color:var(--primary)">${total_compradores}</div>
       <div style="font-size:11px;color:var(--text-secondary)">Compradores activos</div>
+    </div>
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:130px">
+      <div style="font-size:24px;font-weight:700;color:var(--primary)">${total_proveedores ?? '—'}</div>
+      <div style="font-size:11px;color:var(--text-secondary)">Proveedores activos</div>
     </div>
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:130px;border-color:${total_problemas>0?'#dc3545':'#28a745'}">
       <div style="font-size:24px;font-weight:700;color:${total_problemas>0?'#dc3545':'#28a745'}">${total_problemas}</div>
@@ -5127,6 +5131,30 @@ async function loadIntegridad() {
       desc: 'Anómalo — el índice uq_comprador_hotel debería impedirlo.',
       renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.hotel_codigo}</td><td style="padding:6px 10px">${u.hotel_nombre}</td><td style="padding:6px 10px;color:#dc3545;font-weight:700">${u.n_compradores}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Código</th><th style="padding:6px 10px;text-align:left">Hotel</th><th style="padding:6px 10px;text-align:left">Nº compradores</th></tr>',
+    },
+    {
+      key: 'compradores_sin_movil',
+      titulo: '⚠️ Compradores sin móvil',
+      gravedad: 'aviso',
+      desc: 'El comprador no tiene número de móvil — no podrá recibir avisos por WhatsApp ni SMS.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
+    },
+    {
+      key: 'proveedores_sin_contacto',
+      titulo: '❌ Proveedores sin ningún contacto',
+      gravedad: 'critico',
+      desc: 'Crítico — este proveedor no tiene ningún contacto registrado. Los pedidos no podrán enviarse.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.proveedor_codigo || '—'}</td><td style="padding:6px 10px">${u.proveedor_nombre}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Código</th><th style="padding:6px 10px;text-align:left">Proveedor</th></tr>',
+    },
+    {
+      key: 'proveedores_sin_email',
+      titulo: '⚠️ Proveedores sin email en ningún contacto',
+      gravedad: 'aviso',
+      desc: 'Ninguno de sus contactos tiene email — los pedidos no podrán enviarse por correo.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.proveedor_codigo || '—'}</td><td style="padding:6px 10px">${u.proveedor_nombre}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Código</th><th style="padding:6px 10px;text-align:left">Proveedor</th></tr>',
     },
   ];
 
