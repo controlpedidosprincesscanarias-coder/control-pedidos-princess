@@ -2199,14 +2199,16 @@ def _job_alertas_techo_mensual_inner() -> None:
             f"• {f}" for f in sorted({p["familia_nombre"] for p in pedidos if p.get("familia_nombre")})
         ) or "—"
 
+        _techo_mes     = get_config()["techo_max_mes"]
+        _techo_pedidos = get_config()["techo_max_pedidos"]
         texto = (
             f"{emoji} *{nivel_txt}*\n"
             f"\n"
             f"🏨 Hotel: *{hotel_codigo}* — {hotel_nombre}\n"
             f"\n"
             f"💰 Acumulado actual: *{acumulado:,.2f} €*\n"
-            f"📊 Límite configurado: {get_config()["techo_max_mes"]:,.0f} €\n"
-            f"📦 Pedidos sujetos: {num_pedidos} / {get_config()["techo_max_pedidos"]}\n"
+            f"📊 Límite configurado: {_techo_mes:,.0f} €\n"
+            f"📦 Pedidos sujetos: {num_pedidos} / {_techo_pedidos}\n"
             f"\n"
             f"📂 Familias:\n{familias_lista}\n"
             f"\n"
@@ -4633,10 +4635,9 @@ def importar_proveedores_reset():
 
 
 # ── Validación techo de gastos ─────────────────────────────────────────────────
-
-get_config()["techo_max_pedido"]   = 3000.00   # €  por pedido individual
-get_config()["techo_max_mes"]      = 6000.00   # €  acumulado mensual por hotel
-get_config()["techo_max_pedidos"]  = 2         # nº máximo de pedidos sujetos al techo por hotel/mes
+# Nota: los valores de techo (techo_max_pedido, techo_max_mes, techo_max_pedidos)
+# se leen siempre desde get_config() → BD. No se asignan aquí para no llamar
+# a get_config() fuera de contexto Flask (rompe el arranque en Render).
 
 def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None):
     """
@@ -4646,10 +4647,13 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
 
     Devuelve lista de strings con los errores detectados (vacía = OK).
     """
+    cfg     = get_config()
     errores = []
-    if importe and float(importe) > get_config()["techo_max_pedido"]:
+
+    if importe and float(importe) > cfg["techo_max_pedido"]:
+        lim = cfg["techo_max_pedido"]
         errores.append(
-            f"⚠️ El importe {float(importe):,.2f} € supera el límite individual de {get_config()["techo_max_pedido"]:,.0f} € por pedido."
+            f"⚠️ El importe {float(importe):,.2f} € supera el límite individual de {lim:,.0f} € por pedido."
         )
 
     if not familia_id:
@@ -4662,44 +4666,47 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
 
     # Pedidos sujetos al techo en este hotel/mes
     base_args = (hotel_id, year, month) + excl_args
-    pedidos_mes = rows_to_list(query(f"""
-        SELECT p.id, p.familia_id, f.nombre as familia_nombre,
-               COALESCE(p.importe, 0) as importe
-        FROM pedidos p
-        LEFT JOIN familias f ON p.familia_id = f.id
-        WHERE p.hotel_id = %s
-          AND p.sujeto_techo = 1
-          AND p.estado NOT IN ('CANCELADO')
-          AND EXTRACT(YEAR  FROM p.creado_en) = %s
-          AND EXTRACT(MONTH FROM p.creado_en) = %s
-          {excl_clause}
-    """, base_args))
+    sql = (
+        "SELECT p.id, p.familia_id, f.nombre as familia_nombre, "
+        "COALESCE(p.importe, 0) as importe "
+        "FROM pedidos p "
+        "LEFT JOIN familias f ON p.familia_id = f.id "
+        "WHERE p.hotel_id = %s "
+        "  AND p.sujeto_techo = 1 "
+        "  AND p.estado NOT IN ('CANCELADO') "
+        "  AND EXTRACT(YEAR  FROM p.creado_en) = %s "
+        "  AND EXTRACT(MONTH FROM p.creado_en) = %s "
+        + ("  " + excl_clause if excl_clause else "")
+    )
+    pedidos_mes = rows_to_list(query(sql, base_args))
 
-    # Regla 1: máximo 2 pedidos sujetos al techo por hotel/mes
-    if len(pedidos_mes) >= get_config()["techo_max_pedidos"]:
+    # Regla 1: máximo N pedidos sujetos al techo por hotel/mes
+    max_pedidos = cfg["techo_max_pedidos"]
+    if len(pedidos_mes) >= max_pedidos:
         errores.append(
             f"🚫 Ya hay {len(pedidos_mes)} pedido(s) sujeto(s) al techo este mes para este hotel "
-            f"(máximo {get_config()["techo_max_pedidos"]})."
+            f"(máximo {max_pedidos})."
         )
 
     # Regla 2: no puede repetirse la familia en el mismo hotel/mes
     familias_usadas = [p["familia_id"] for p in pedidos_mes]
     if int(familia_id) in familias_usadas:
         familia_row = query("SELECT nombre FROM familias WHERE id=%s", (familia_id,), one=True)
-        fname = familia_row["nombre"] if familia_row else f"ID {familia_id}"
+        fname = familia_row["nombre"] if familia_row else "ID {}".format(familia_id)
         errores.append(
-            f"🚫 Ya existe un pedido de la familia «{fname}» este mes para este hotel. "
+            f"🚫 Ya existe un pedido de la familia \u00ab{fname}\u00bb este mes para este hotel. "
             f"Cada familia solo puede usarse una vez al mes por hotel."
         )
 
-    # Regla 3: acumulado mensual no puede superar 6.000 €
-    acumulado = sum(float(p["importe"]) for p in pedidos_mes)
+    # Regla 3: acumulado mensual no puede superar el techo mensual
+    techo_mes     = cfg["techo_max_mes"]
+    acumulado     = sum(float(p["importe"]) for p in pedidos_mes)
     nuevo_importe = float(importe) if importe else 0.0
-    if acumulado + nuevo_importe > get_config()["techo_max_mes"]:
+    if acumulado + nuevo_importe > techo_mes:
         errores.append(
             f"⚠️ El acumulado del mes sería {acumulado + nuevo_importe:,.2f} € "
             f"(actual {acumulado:,.2f} € + nuevo {nuevo_importe:,.2f} €), "
-            f"superando el techo mensual de {get_config()["techo_max_mes"]:,.0f} €."
+            f"superando el techo mensual de {techo_mes:,.0f} €."
         )
 
     return errores

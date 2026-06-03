@@ -2581,7 +2581,7 @@ function showView(view, el) {
 
   if (view==='dashboard')   loadStats();
   if (view==='pedidos')     loadPedidos();
-  if (view==='alertas')     loadAlertas(); loadTechoAlertas();
+  if (view==='alertas')     { loadAlertas(); loadTechoAlertas(); }
   if (view==='proveedores') { loadProveedores(); _refreshProvAdminControls(); }
   if (view==='eliminados')  loadEliminados();
   if (view==='techo')       loadTecho();
@@ -2674,10 +2674,10 @@ function poblarSelectProveedores() {
 async function loadStats() {
   // Cargar stats y techo en paralelo para que el badge y el card del dashboard
   // siempre reflejen ambas fuentes de alerta, sin depender de la cache.
-  const [d, techo] = await Promise.all([
-    api('/api/stats'),
-    api('/api/techo/resumen').catch(() => null)
-  ]);
+  const techoPromise = (G.rol === 'hotel')
+    ? Promise.resolve(null)
+    : api('/api/techo/resumen').catch(() => null);
+  const [d, techo] = await Promise.all([api('/api/stats'), techoPromise]);
   if (techo) _techoCache = techo;
 
   const nTecho = (G.rol === 'hotel') ? 0 :
@@ -4658,6 +4658,7 @@ function checkTechoPreview() {
 }
 
 async function loadTecho() {
+  if (G.rol === 'hotel') return;   // sin acceso para rol hotel
   const grid  = document.getElementById('techo-resumen-grid');
   const empty = document.getElementById('techo-empty');
   grid.innerHTML = '<div style="padding:20px;color:#999;text-align:center">Cargando…</div>';
@@ -4731,6 +4732,7 @@ async function loadTecho() {
 let _techoCache = null;
 
 async function loadTechoAlertas() {
+  if (G.rol === 'hotel') return;   // el endpoint devuelve 403 para hotel
   try {
     const d = await api('/api/techo/resumen');
     _techoCache = d;
@@ -4802,11 +4804,11 @@ function irATechoHotel(hotelCodigo) {
 
 async function updateAlertBadge() {
   try {
-    const [stats, techo] = await Promise.all([
-      api('/api/stats'),
-      api('/api/techo/resumen')
-    ]);
-    _techoCache = techo;
+    const techoPromise = (G.rol === 'hotel')
+      ? Promise.resolve(null)
+      : api('/api/techo/resumen').catch(() => null);
+    const [stats, techo] = await Promise.all([api('/api/stats'), techoPromise]);
+    if (techo) _techoCache = techo;
 
     const nPedidos = stats.num_alertas || 0;
     const nTecho   = (G.rol === 'hotel') ? 0 :
