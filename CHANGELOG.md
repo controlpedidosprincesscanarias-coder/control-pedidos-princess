@@ -1,7 +1,3 @@
-## v11.6.6 — 03 junio 2026
-### 🐛 Correcciones
-- Pantalla Integridad de admin no cargaba correctamente.
-
 ## v11.6.4 — 03 junio 2026
 ### 🔧 Mejoras
 - Incorporado fechas en las entregas parciales y totales.
