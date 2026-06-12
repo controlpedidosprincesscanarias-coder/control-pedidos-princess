@@ -57,3 +57,14 @@ desktop.ini
 *.bak
 *.tmp
 instance/
+
+# Releases
+releases/
+*.zip
+
+# Instaladores
+*.exe
+*.msi
+
+# PyInstaller
+*.spec
