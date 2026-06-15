@@ -257,6 +257,10 @@ def _auto_migrate():
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_solicitudes_token ON solicitudes_acceso(token)"
             )
+            # Migración v11.6.7: columna movil en solicitudes_acceso
+            cur.execute(
+                "ALTER TABLE solicitudes_acceso ADD COLUMN IF NOT EXISTS movil TEXT"
+            )
             # ── Tabla cola de notificaciones para el bridge agenda (v10.7.7) ──────
             # Cada fila es un aviso pendiente de entregar a un usuario concreto.
             # El bridge lo consume con GET /api/bridge/notificaciones y marca leído.
@@ -2989,10 +2993,10 @@ def solicitar_usuario_fase1():
     with db.cursor() as cur:
         cur.execute("""
             INSERT INTO solicitudes_acceso
-                (nombre, apellidos, email, hoteles, estado, ip_solicitante)
-            VALUES (%s, %s, %s, %s, 'fase1_pendiente', %s)
+                (nombre, apellidos, email, hoteles, movil, estado, ip_solicitante)
+            VALUES (%s, %s, %s, %s, %s, 'fase1_pendiente', %s)
             RETURNING id
-        """, (nombre, apellidos, email_sol, hoteles, ip_cliente))
+        """, (nombre, apellidos, email_sol, hoteles, movil_sol, ip_cliente))
         sol_id = cur.fetchone()["id"]
     db.commit()
 
@@ -3500,10 +3504,10 @@ def admin_aprobar_solicitud(sol_id):
     nombre_c = f"{sol['nombre']} {sol['apellidos']}"
     db = get_db()
 
-    # Crear usuario
+    # Crear usuario (v11.6.7: se incluye movil de la solicitud y rol 'compras' por defecto)
     cur = execute(
-        "INSERT INTO usuarios (username, nombre, email, password, rol, activo) VALUES (%s,%s,%s,%s,'user',1) RETURNING id",
-        (username, nombre_c, sol["email"], password_temp)
+        "INSERT INTO usuarios (username, nombre, email, password, movil, rol, activo) VALUES (%s,%s,%s,%s,%s,'compras',1) RETURNING id",
+        (username, nombre_c, sol["email"], password_temp, sol.get("movil") or None)
     )
     new_uid = cur.fetchone()["id"]
 
@@ -3657,6 +3661,7 @@ def admin_aprobar_solicitud(sol_id):
         "hoteles_asignados":      hotel_ids_asignados,
         "hoteles_no_encontrados": hoteles_no_encontrados,
         "email_enviado":          res_u.get("ok", False),
+        "abrir_edicion":          True,
         "msg": f"Cuenta creada para {nombre_c} ({username}). Email de bienvenida enviado a {sol['email']}."
     })
 
