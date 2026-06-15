@@ -6492,7 +6492,7 @@ def _validar_integridad_operativa() -> dict:
         log.error("[INTEGRIDAD] Error validando integridad: %s", exc)
         return {
             "ok": False,
-            "timestamp": _dt.utcnow().isoformat(),
+            "timestamp": datetime.utcnow().isoformat(),
             "error": str(exc),
             "problemas": problemas,
             "resumen": {"total_hoteles_activos": 0, "total_compradores": 0, "total_problemas": -1},
@@ -6501,7 +6501,7 @@ def _validar_integridad_operativa() -> dict:
     total_problemas = sum(len(v) for v in problemas.values())
     return {
         "ok": total_problemas == 0,
-        "timestamp": _dt.utcnow().isoformat(),
+        "timestamp": datetime.utcnow().isoformat(),
         "problemas": problemas,
         "resumen": {
             "total_hoteles_activos": int(total_hoteles_activos),
