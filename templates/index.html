@@ -1039,7 +1039,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.6.8
+          V 11.7.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2938,18 +2938,41 @@ function _applyHotelRolePedidoModal(isEdit) {
   if (isHotel) {
     // Ocultar el título "Estado del pedido" y select de estado para hotel
     // pero dejar la sección de albarán siempre visible
-    // Estrategia: ocultar todo el form excepto albaran-section y estado
+    // Estrategia: ocultar todo el form excepto albaran-section, estado y pedido DALI/SAP
     const modal = document.getElementById('modal-pedido');
-    // Hacer todos los form-group ocultos salvo los de albarán
+    // Hacer todos los form-group ocultos salvo los de albarán, estado y pedido DALI/SAP
     modal.querySelectorAll('.form-group').forEach(el => {
-      const hasAlbaran = el.id === 'albaran-section' || el.querySelector('#albaran-section');
-      const hasEstado  = el.querySelector('#p-estado');
-      if (!hasAlbaran && !hasEstado) el.style.display = 'none';
+      const hasAlbaran   = el.id === 'albaran-section' || el.querySelector('#albaran-section');
+      const hasEstado    = el.querySelector('#p-estado');
+      const hasPedidoNum = el.querySelector('#p-pedido-num');
+      if (!hasAlbaran && !hasEstado && !hasPedidoNum) el.style.display = 'none';
     });
-    // Ocultar form-section headers
-    modal.querySelectorAll('.form-section').forEach(el => el.style.display = 'none');
-    // Ocultar sección adjuntos
-    modal.querySelectorAll('.adj-section, [id^="adj-"], .adj-fecha-section').forEach(el => el.style.display = 'none');
+    // Ocultar form-section headers excepto el de Referencias DALI / SAP
+    modal.querySelectorAll('.form-section').forEach(el => {
+      if (el.textContent.trim() !== 'Referencias DALI / SAP') el.style.display = 'none';
+    });
+    // Poner p-pedido-num en solo lectura
+    const pedidoNumInput = document.getElementById('p-pedido-num');
+    if (pedidoNumInput) {
+      pedidoNumInput.readOnly = true;
+      pedidoNumInput.style.background = '#f5f5f5';
+      pedidoNumInput.style.color = '#555';
+    }
+    // Ocultar sección adjuntos (excepto los del pedido DALI/SAP)
+    modal.querySelectorAll('.adj-section, .adj-fecha-section').forEach(el => el.style.display = 'none');
+    modal.querySelectorAll('[id^="adj-"]').forEach(el => {
+      // Mantener visible solo la lista de adjuntos del pedido DALI/SAP
+      if (el.id !== 'adj-pedido-list') el.style.display = 'none';
+    });
+    // En adj-pedido-list: ocultar botones de eliminar (solo lectura)
+    const adjPedidoList = document.getElementById('adj-pedido-list');
+    if (adjPedidoList) {
+      adjPedidoList.style.display = '';
+      adjPedidoList.querySelectorAll('.adj-del').forEach(btn => btn.style.display = 'none');
+    }
+    // Ocultar el botón de subir adjunto del pedido DALI/SAP
+    const lblPedidoDoc = document.getElementById('lbl-pedido-doc');
+    if (lblPedidoDoc) lblPedidoDoc.style.display = 'none';
     // Ocultar techo-fields
     const tf = document.getElementById('techo-fields');
     if (tf) tf.style.display = 'none';
@@ -2978,6 +3001,13 @@ function _applyHotelRolePedidoModal(isEdit) {
     const modal = document.getElementById('modal-pedido');
     modal.querySelectorAll('.form-group').forEach(el => el.style.display = '');
     modal.querySelectorAll('.form-section').forEach(el => el.style.display = '');
+    // Restaurar p-pedido-num
+    const pedidoNumInput = document.getElementById('p-pedido-num');
+    if (pedidoNumInput) {
+      pedidoNumInput.readOnly = false;
+      pedidoNumInput.style.background = '';
+      pedidoNumInput.style.color = '';
+    }
     const chkCancelado = document.getElementById('chk-cancelado');
     if (chkCancelado) {
       chkCancelado.disabled = false;
@@ -3007,6 +3037,13 @@ async function cargarAdjuntos(pedidoId) {
   renderAdjuntosFecha('solicitud', solicitudDoc);
   renderAdjuntosFecha('vb', vbEml);
   renderAdjuntosFecha('tramit', tramitEml);
+  // Para rol hotel: ocultar botones eliminar en la lista de pedido DALI/SAP
+  if (G.rol === 'hotel') {
+    const adjPedidoList = document.getElementById('adj-pedido-list');
+    if (adjPedidoList) {
+      adjPedidoList.querySelectorAll('.adj-del').forEach(btn => btn.style.display = 'none');
+    }
+  }
 }
 
 function renderAdjuntosPdf(prefijo, lista) {

@@ -1,3 +1,50 @@
+## v11.7.0 — 15 junio 2026
+
+### 🔧 Mejoras — Visibilidad de pedidos y adjuntos para rol Hotel
+
+#### Pedidos DALI / SAP visibles para Hotel
+
+* Modificada la función `_applyHotelRolePedidoModal()` para que los usuarios con rol **hotel** puedan visualizar el campo **Nº Pedido (DALI/SAP)** dentro del modal de pedidos.
+* El grupo que contiene `#p-pedido-num` deja de ocultarse durante la adaptación de la interfaz para este rol.
+
+#### Sección "Referencias DALI / SAP" visible
+
+* Ajustada la lógica de ocultación de `.form-section`.
+* Ahora se mantiene visible la sección **"Referencias DALI / SAP"** para usuarios de hotel, ocultándose únicamente el resto de secciones no permitidas.
+
+#### Campo Nº Pedido protegido
+
+* El campo `#p-pedido-num` pasa a mostrarse en modo **solo lectura (`readOnly`)** para evitar modificaciones por parte del usuario de hotel.
+* Se aplica estilo visual con fondo gris para indicar claramente que el dato es informativo.
+
+#### Adjuntos del pedido visibles
+
+* El contenedor `#adj-pedido-list` deja de ocultarse para el rol hotel.
+* Los usuarios pueden consultar los documentos asociados al pedido DALI/SAP.
+* Se oculta el botón **📎 Adjuntar doc. / correo** (`lbl-pedido-doc`) para impedir nuevas cargas.
+
+#### Protección de documentos
+
+* Tras renderizar los adjuntos mediante `cargarAdjuntos()`, se ocultan los botones `.adj-del` correspondientes a los documentos del pedido.
+* El usuario hotel puede visualizar los archivos, pero no eliminarlos.
+
+#### Restauración para el resto de roles
+
+* En el bloque `else` de `_applyHotelRolePedidoModal()` se restauran las propiedades originales del campo:
+
+  * `readOnly = false`
+  * color de fondo original
+  * color de texto original
+
+### ✅ Resultado
+
+Los usuarios con rol **Hotel** pueden ahora consultar:
+
+* Número de pedido DALI/SAP.
+* Documentación adjunta al pedido.
+
+Manteniendo las restricciones de edición, carga y eliminación de documentos.
+
 ## v11.6.8 — 15 junio 2026
 ### 🐛 Fix — Flujo alta de usuario (Fase 1 / Fase 2)
 - **Fix: `movil` no se guardaba en `solicitudes_acceso`**: el campo `movil` recogido en Fase 1 no se insertaba en la tabla (faltaba en el `INSERT`). Añadida migración `ALTER TABLE solicitudes_acceso ADD COLUMN IF NOT EXISTS movil TEXT` y corregido el `INSERT`.
