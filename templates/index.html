@@ -1087,7 +1087,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.7.2
+          V 11.7.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -5140,10 +5140,23 @@ async function loadIntegridad() {
   const content = document.getElementById('integridad-content');
   const badge   = document.getElementById('integridad-estado-badge');
   loading.style.display = 'block';
+  loading.textContent = 'Analizando sistema…';
   content.style.display = 'none';
 
-  const data = await api('/api/admin/integridad');
-  if (!data) { loading.textContent = 'Error al cargar.'; return; }
+  let data;
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 20000); // 20s timeout
+    const r = await fetch('/api/admin/integridad', { credentials: 'same-origin', signal: controller.signal });
+    clearTimeout(timer);
+    data = await r.json();
+    if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
+  } catch (err) {
+    loading.textContent = err.name === 'AbortError'
+      ? '⏱ Tiempo de espera agotado — la BD tardó demasiado. Inténtalo de nuevo.'
+      : `❌ Error al cargar: ${err.message}`;
+    return;
+  }
 
   loading.style.display = 'none';
   content.style.display = 'block';
@@ -5167,6 +5180,7 @@ async function loadIntegridad() {
   // Resumen
   const resumen = document.getElementById('integridad-resumen');
   const { total_hoteles_activos, total_compradores, total_problemas } = data.resumen;
+  const ts = data.timestamp ? new Date(data.timestamp + 'Z').toLocaleTimeString('es-ES') : '';
   resumen.innerHTML = `
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:130px">
       <div style="font-size:24px;font-weight:700;color:var(--primary)">${total_hoteles_activos}</div>
@@ -5180,6 +5194,7 @@ async function loadIntegridad() {
       <div style="font-size:24px;font-weight:700;color:${total_problemas>0?'#dc3545':'#28a745'}">${total_problemas}</div>
       <div style="font-size:11px;color:var(--text-secondary)">Problemas detectados</div>
     </div>
+    ${ts ? `<div style="margin-left:auto;align-self:flex-end;font-size:11px;color:var(--text-secondary)">Analizado a las ${ts}</div>` : ''}
   `;
 
   // Bloques de problemas
@@ -5207,7 +5222,15 @@ async function loadIntegridad() {
       key: 'compradores_sin_telegram',
       titulo: '⚠️ Compradores sin Telegram Chat ID',
       gravedad: 'aviso',
-      desc: 'Las alertas automáticas no llegarán a este comprador.',
+      desc: 'Las alertas automáticas de Telegram no llegarán a este comprador.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
+    },
+    {
+      key: 'compradores_sin_movil',
+      titulo: '⚠️ Compradores sin teléfono móvil',
+      gravedad: 'aviso',
+      desc: 'Sin móvil no se pueden enviar notificaciones WhatsApp a este comprador.',
       renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
     },

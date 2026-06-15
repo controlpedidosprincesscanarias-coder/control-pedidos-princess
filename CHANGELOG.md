@@ -1,3 +1,77 @@
+## v11.7.4 — 15 junio 2026
+
+### 🐛 Corrección crítica — Bloqueos en Análisis de Integridad
+
+#### Diagnóstico del problema
+
+* Se identificó un cuello de botella en `_validar_integridad_operativa()`.
+* La validación utilizaba un patrón **N+1 Queries**, ejecutando:
+
+  * Una consulta adicional por cada hotel para localizar su comprador asignado.
+  * Una consulta adicional por cada comprador para localizar sus hoteles asociados.
+* En entornos con numerosos hoteles o compradores, o durante periodos de latencia elevada de la base de datos, la acumulación de consultas podía provocar tiempos de respuesta extremadamente largos.
+* El frontend no disponía de timeout para la petición, por lo que permanecía indefinidamente mostrando el mensaje:
+
+  > "Analizando sistema..."
+
+### 🔧 Optimización Backend (`app.py`)
+
+#### Eliminación de consultas N+1
+
+* Reescrita la lógica de validación para utilizar únicamente consultas agregadas mediante `EXISTS` y `GROUP BY`.
+* El proceso completo pasa a ejecutarse mediante **7 consultas fijas**, independientemente del número de hoteles o compradores existentes.
+* Se elimina el crecimiento lineal del número de consultas y se mejora significativamente el rendimiento.
+
+#### Protección frente a bloqueos de base de datos
+
+* Añadido:
+
+  ```sql
+  SET LOCAL statement_timeout = '15s'
+  ```
+* Si alguna consulta supera los 15 segundos de ejecución, PostgreSQL cancela automáticamente la operación.
+* El sistema devuelve un error controlado en lugar de quedar bloqueado indefinidamente.
+
+#### Nuevo control de integridad
+
+* Incorporada la validación:
+
+  * **`compradores_sin_movil`**
+* Detecta compradores que no tienen número de teléfono móvil registrado en el sistema.
+
+### 🎨 Mejoras Frontend (`templates/index.html`)
+
+#### Timeout de comunicación
+
+* `loadIntegridad()` incorpora ahora `AbortController`.
+* Se establece un tiempo máximo de espera de 20 segundos para la llamada al backend.
+* Si el análisis no finaliza en ese periodo, se muestra:
+
+  > "⏱ Tiempo de espera agotado"
+* Se evita que la interfaz permanezca bloqueada indefinidamente.
+
+#### Nuevos indicadores visuales
+
+* Añadido bloque específico para mostrar incidencias de:
+
+  * **Compradores sin móvil registrado**
+
+#### Información de auditoría
+
+* El resumen de integridad muestra ahora la hora exacta de ejecución del análisis.
+* Formato:
+
+  > "Analizado a las HH:MM:SS"
+
+### ✅ Resultado
+
+* Eliminados los bloqueos indefinidos durante el análisis de integridad.
+* Rendimiento estable independientemente del volumen de hoteles y compradores.
+* Protección frente a consultas lentas o bloqueadas.
+* Mejor visibilidad de incidencias relacionadas con teléfonos móviles de compradores.
+* Mejor experiencia de usuario gracias a los timeouts y mensajes informativos.
+
+
 ## v11.7.2 — 15 junio 2026
 
 ### 🔧 Mejora de UX — Navegación guiada por permisos

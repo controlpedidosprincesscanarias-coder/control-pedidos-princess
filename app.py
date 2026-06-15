@@ -6360,6 +6360,7 @@ def _validar_integridad_operativa() -> dict:
     """
     Analiza la configuración de usuarios, hoteles y compradores y detecta
     huecos que provocarían fallos silenciosos en alertas, Telegram y emails.
+    Usa queries agregadas (sin bucles N+1) para evitar cuelgues con BDs lentas.
     Devuelve:
       {
         "ok": bool,
@@ -6368,6 +6369,7 @@ def _validar_integridad_operativa() -> dict:
           "hoteles_sin_comprador":    [...],
           "compradores_sin_hoteles":  [...],
           "compradores_sin_telegram": [...],
+          "compradores_sin_movil":    [...],
           "compradores_sin_email":    [...],
           "admins_sin_email":         [...],
           "hoteles_duplicados":       [...],   # hoteles con > 1 comprador (violación uq)
@@ -6384,93 +6386,107 @@ def _validar_integridad_operativa() -> dict:
         "hoteles_sin_comprador":    [],
         "compradores_sin_hoteles":  [],
         "compradores_sin_telegram": [],
+        "compradores_sin_movil":    [],
         "compradores_sin_email":    [],
         "admins_sin_email":         [],
         "hoteles_duplicados":       [],
     }
 
     try:
-        # ── Hoteles activos sin ningún comprador asignado ────────────────────
-        hoteles_activos = rows_to_list(query(
-            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
-        ))
-        for hotel in hoteles_activos:
-            comp = rows_to_list(query(
-                """SELECT u.id FROM usuarios u
-                   JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
-                   WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'""",
-                (hotel["id"],)
-            ))
-            if not comp:
-                problemas["hoteles_sin_comprador"].append({
-                    "hotel_id":     hotel["id"],
-                    "hotel_codigo": hotel["codigo"],
-                    "hotel_nombre": hotel["nombre"],
-                })
+        db = get_db()
+        # Aplicar timeout de statement para evitar cuelgues indefinidos
+        with db.cursor() as _cur:
+            _cur.execute("SET LOCAL statement_timeout = '15s'")
 
-        # ── Compradores sin ningún hotel asignado ────────────────────────────
-        compradores = rows_to_list(query(
-            """SELECT id, username, nombre, email, movil, telegram_chat_id
-               FROM usuarios WHERE rol='compras' AND activo=1 ORDER BY nombre"""
+        # ── Totales para el resumen ──────────────────────────────────────────
+        total_hoteles_activos = (query(
+            "SELECT COUNT(*) AS n FROM hoteles WHERE activo=1", one=True
+        ) or {}).get("n", 0)
+
+        total_compradores = (query(
+            "SELECT COUNT(*) AS n FROM usuarios WHERE rol='compras' AND activo=1", one=True
+        ) or {}).get("n", 0)
+
+        # ── Hoteles activos sin ningún comprador activo asignado ─────────────
+        sin_comprador = rows_to_list(query(
+            """SELECT h.id AS hotel_id, h.codigo AS hotel_codigo, h.nombre AS hotel_nombre
+               FROM hoteles h
+               WHERE h.activo = 1
+                 AND NOT EXISTS (
+                     SELECT 1 FROM usuario_comprador_hoteles uch
+                     JOIN usuarios u ON u.id = uch.usuario_id
+                     WHERE uch.hotel_id = h.id AND u.activo = 1 AND u.rol = 'compras'
+                 )
+               ORDER BY h.codigo"""
         ))
-        for comp in compradores:
-            hoteles_comp = rows_to_list(query(
-                "SELECT hotel_id FROM usuario_comprador_hoteles WHERE usuario_id=%s",
-                (comp["id"],)
-            ))
-            if not hoteles_comp:
-                problemas["compradores_sin_hoteles"].append({
-                    "usuario_id":       comp["id"],
-                    "username":         comp["username"],
-                    "nombre":           comp["nombre"],
-                })
+        problemas["hoteles_sin_comprador"] = sin_comprador
+
+        # ── Compradores activos sin ningún hotel asignado ────────────────────
+        sin_hoteles = rows_to_list(query(
+            """SELECT u.id AS usuario_id, u.username, u.nombre
+               FROM usuarios u
+               WHERE u.rol = 'compras' AND u.activo = 1
+                 AND NOT EXISTS (
+                     SELECT 1 FROM usuario_comprador_hoteles uch
+                     WHERE uch.usuario_id = u.id
+                 )
+               ORDER BY u.nombre"""
+        ))
+        problemas["compradores_sin_hoteles"] = sin_hoteles
 
         # ── Compradores sin telegram_chat_id ─────────────────────────────────
-        for comp in compradores:
-            if not (comp.get("telegram_chat_id") or "").strip():
-                problemas["compradores_sin_telegram"].append({
-                    "usuario_id": comp["id"],
-                    "username":   comp["username"],
-                    "nombre":     comp["nombre"],
-                })
+        sin_telegram = rows_to_list(query(
+            """SELECT id AS usuario_id, username, nombre
+               FROM usuarios
+               WHERE rol = 'compras' AND activo = 1
+                 AND (telegram_chat_id IS NULL OR TRIM(telegram_chat_id) = '')
+               ORDER BY nombre"""
+        ))
+        problemas["compradores_sin_telegram"] = sin_telegram
+
+        # ── Compradores sin móvil ─────────────────────────────────────────────
+        sin_movil = rows_to_list(query(
+            """SELECT id AS usuario_id, username, nombre
+               FROM usuarios
+               WHERE rol = 'compras' AND activo = 1
+                 AND (movil IS NULL OR TRIM(movil) = '')
+               ORDER BY nombre"""
+        ))
+        problemas["compradores_sin_movil"] = sin_movil
 
         # ── Compradores sin email ─────────────────────────────────────────────
-        for comp in compradores:
-            if not (comp.get("email") or "").strip():
-                problemas["compradores_sin_email"].append({
-                    "usuario_id": comp["id"],
-                    "username":   comp["username"],
-                    "nombre":     comp["nombre"],
-                })
+        sin_email_comp = rows_to_list(query(
+            """SELECT id AS usuario_id, username, nombre
+               FROM usuarios
+               WHERE rol = 'compras' AND activo = 1
+                 AND (email IS NULL OR TRIM(email) = '')
+               ORDER BY nombre"""
+        ))
+        problemas["compradores_sin_email"] = sin_email_comp
 
         # ── Admins sin email ──────────────────────────────────────────────────
-        admins = rows_to_list(query(
-            "SELECT id, username, nombre, email FROM usuarios WHERE rol='admin' AND activo=1"
+        sin_email_admin = rows_to_list(query(
+            """SELECT id AS usuario_id, username, nombre
+               FROM usuarios
+               WHERE rol = 'admin' AND activo = 1
+                 AND (email IS NULL OR TRIM(email) = '')
+               ORDER BY nombre"""
         ))
-        for adm in admins:
-            if not (adm.get("email") or "").strip():
-                problemas["admins_sin_email"].append({
-                    "usuario_id": adm["id"],
-                    "username":   adm["username"],
-                    "nombre":     adm["nombre"],
-                })
+        problemas["admins_sin_email"] = sin_email_admin
 
-        # ── Hoteles con más de un comprador (no debería ocurrir por uq_comprador_hotel) ──
+        # ── Hoteles con más de un comprador activo (viola uq_comprador_hotel) ─
         duplicados = rows_to_list(query(
-            """SELECT h.codigo, h.nombre, COUNT(uch.usuario_id) as n_compradores
+            """SELECT h.codigo AS hotel_codigo, h.nombre AS hotel_nombre,
+                      COUNT(uch.usuario_id) AS n_compradores
                FROM hoteles h
                JOIN usuario_comprador_hoteles uch ON uch.hotel_id = h.id
-               JOIN usuarios u ON u.id = uch.usuario_id AND u.activo=1 AND u.rol='compras'
-               WHERE h.activo=1
+               JOIN usuarios u ON u.id = uch.usuario_id AND u.activo = 1 AND u.rol = 'compras'
+               WHERE h.activo = 1
                GROUP BY h.id, h.codigo, h.nombre
-               HAVING COUNT(uch.usuario_id) > 1"""
+               HAVING COUNT(uch.usuario_id) > 1
+               ORDER BY h.codigo"""
         ))
-        for d in duplicados:
-            problemas["hoteles_duplicados"].append({
-                "hotel_codigo":   d["codigo"],
-                "hotel_nombre":   d["nombre"],
-                "n_compradores":  d["n_compradores"],
-            })
+        problemas["hoteles_duplicados"] = duplicados
 
     except Exception as exc:
         log.error("[INTEGRIDAD] Error validando integridad: %s", exc)
@@ -6488,8 +6504,8 @@ def _validar_integridad_operativa() -> dict:
         "timestamp": _dt.utcnow().isoformat(),
         "problemas": problemas,
         "resumen": {
-            "total_hoteles_activos": len(hoteles_activos),
-            "total_compradores":     len(compradores),
+            "total_hoteles_activos": int(total_hoteles_activos),
+            "total_compradores":     int(total_compradores),
             "total_problemas":       total_problemas,
         },
     }
