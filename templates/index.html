@@ -519,6 +519,47 @@ tbody tr:last-child{border-bottom:none}
   gap: 10px;
   flex-shrink: 0;
 }
+/* ── Sidebar: items bloqueados según rol ─────────────────────────────────── */
+.sb-item.sb-locked {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.sb-item.sb-locked .sb-lock-icon {
+  margin-left: auto;
+  font-size: 11px;
+  opacity: 0.7;
+}
+/* Toast de acceso denegado */
+#sb-access-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(26,38,65,0.97);
+  color: #fff;
+  border-left: 4px solid #c9a84c;
+  border-radius: 10px;
+  padding: 14px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 9999;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.35);
+  max-width: 340px;
+  text-align: center;
+  display: none;
+  pointer-events: none;
+}
+#sb-access-toast .sb-toast-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #c9a84c;
+  margin-bottom: 4px;
+}
+#sb-access-toast .sb-toast-roles {
+  font-size: 12px;
+  color: rgba(255,255,255,0.65);
+  margin-top: 4px;
+}
 </style>
   <!-- EmailJS SDK — envío real desde Gmail sin servidor SMTP -->
   <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
@@ -981,6 +1022,13 @@ tbody tr:last-child{border-bottom:none}
 </div><!-- /modal-solicitar-usuario -->
 
 <!-- ── APP ────────────────────────────────────────────────────────────────── -->
+<!-- Toast acceso denegado sidebar -->
+<div id="sb-access-toast">
+  <div class="sb-toast-title">🔒 Acceso restringido</div>
+  <div id="sb-access-toast-msg"></div>
+  <div class="sb-toast-roles" id="sb-access-toast-roles"></div>
+</div>
+
 <div id="app" style="display:none">
   <!-- Sidebar -->
   <div id="sidebar">
@@ -995,40 +1043,40 @@ tbody tr:last-child{border-bottom:none}
     </div>
 
     <div class="sb-section">Principal</div>
-    <div class="sb-item active" data-view="dashboard" onclick="showView('dashboard',this)">
+    <div class="sb-item active" data-view="dashboard" data-roles="admin,compras,hotel" onclick="showViewGuarded('dashboard',this)">
       <span class="icon">📊</span> Dashboard
     </div>
-    <div class="sb-item" data-view="pedidos" onclick="showView('pedidos',this)">
+    <div class="sb-item" data-view="pedidos" data-roles="admin,compras,hotel" onclick="showViewGuarded('pedidos',this)">
       <span class="icon">📋</span> Pedidos
     </div>
-    <div class="sb-item no-hotel" data-view="alertas" onclick="showView('alertas',this)">
+    <div class="sb-item no-hotel" data-view="alertas" data-roles="admin,compras" onclick="showViewGuarded('alertas',this)">
       <span class="icon">⚠️</span> Alertas
       <span class="sb-badge" id="sb-alert-count" style="display:none">0</span>
     </div>
 
     <div class="sb-section">Gestión</div>
-    <div class="sb-item" data-view="proveedores" onclick="showView('proveedores',this)">
+    <div class="sb-item" data-view="proveedores" data-roles="admin,compras,hotel" onclick="showViewGuarded('proveedores',this)">
       <span class="icon">🏭</span> Proveedores
     </div>
-    <div class="sb-item compras-readonly" data-view="eliminados" onclick="showView('eliminados',this)" style="display:none">
+    <div class="sb-item compras-readonly" data-view="eliminados" data-roles="admin,compras" onclick="showViewGuarded('eliminados',this)">
       <span class="icon">🗑️</span> Pedidos eliminados
     </div>
-    <div class="sb-item no-hotel" data-view="techo" onclick="showView('techo',this)">
+    <div class="sb-item no-hotel" data-view="techo" data-roles="admin,compras" onclick="showViewGuarded('techo',this)">
       <span class="icon">📉</span> Techo de gastos
       <span class="sb-badge" id="sb-techo-count" style="display:none;background:#dc3545">!</span>
     </div>
-    <div class="sb-item admin-only" data-view="familias" onclick="showView('familias',this)" style="display:none">
+    <div class="sb-item admin-only" data-view="familias" data-roles="admin" onclick="showViewGuarded('familias',this)">
       <span class="icon">🏷️</span> Familias artículos
     </div>
-    <div class="sb-item admin-only" data-view="usuarios" onclick="showView('usuarios',this)" style="display:none">
+    <div class="sb-item admin-only" data-view="usuarios" data-roles="admin" onclick="showViewGuarded('usuarios',this)">
       <span class="icon">👥</span> Usuarios
     </div>
-    <div class="sb-item admin-only" data-view="integridad" onclick="showView('integridad',this)" style="display:none">
+    <div class="sb-item admin-only" data-view="integridad" data-roles="admin" onclick="showViewGuarded('integridad',this)">
       <span class="icon">🔍</span> Integridad
       <span class="sb-badge" id="sb-integridad-badge" style="display:none;background:#dc3545">!</span>
     </div>
 
-    <div class="sb-item admin-only" data-view="config-alertas" onclick="showView('config-alertas',this)" style="display:none">
+    <div class="sb-item admin-only" data-view="config-alertas" data-roles="admin" onclick="showViewGuarded('config-alertas',this)">
       <span class="icon">⚙️</span> Config alertas
     </div>
 
@@ -1039,7 +1087,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.7.0
+          V 11.7.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1970,18 +2018,8 @@ async function doLogin() {
     document.getElementById('login-screen').style.display='none';
     document.getElementById('app').style.display='flex';
     if (G.rol !== 'admin') document.getElementById('btn-delete-pedido').style.display='none';
-    // Mostrar elementos de menú solo para admin
-    document.querySelectorAll('.admin-only').forEach(el => {
-      el.style.display = G.rol === 'admin' ? '' : 'none';
-    });
-    // Ocultar elementos de menú no disponibles para rol hotel
-    document.querySelectorAll('.no-hotel').forEach(el => {
-      el.style.display = G.rol === 'hotel' ? 'none' : '';
-    });
-    // Mostrar elementos de solo consulta para compras (y admin)
-    document.querySelectorAll('.compras-readonly').forEach(el => {
-      el.style.display = (G.rol === 'admin' || G.rol === 'compras') ? '' : 'none';
-    });
+    // Actualizar aspecto visual del sidebar según rol (todos los items son siempre visibles)
+    _applySidebarRoleStyles();
     // Ocultar botón nuevo pedido para usuario hotel (solo lectura + albarán)
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
@@ -2572,6 +2610,68 @@ function toast(msg, type='') {
 /* ═══════════════════════════════════════════════════════════════════════════
    Vistas
 ═══════════════════════════════════════════════════════════════════════════ */
+/* ═══════════════════════════════════════════════════════════════════════════
+   Sidebar: control de acceso por rol
+═══════════════════════════════════════════════════════════════════════════ */
+
+const _viewLabels = {
+  dashboard:       'Dashboard',
+  pedidos:         'Pedidos',
+  alertas:         'Alertas',
+  proveedores:     'Proveedores',
+  eliminados:      'Pedidos eliminados',
+  techo:           'Techo de gastos',
+  familias:        'Familias artículos',
+  usuarios:        'Usuarios',
+  integridad:      'Integridad',
+  'config-alertas':'Config alertas',
+};
+
+const _rolLabels = { admin: '👑 Administrador', compras: '🛒 Compras', hotel: '🏨 Hotel' };
+
+let _sbToastTimer = null;
+function _showSbAccessToast(view, allowedRoles) {
+  const label   = _viewLabels[view] || view;
+  const allowed = allowedRoles.map(r => _rolLabels[r] || r).join(', ');
+  document.getElementById('sb-access-toast-msg').textContent   = `La sección "${label}" no está disponible para tu perfil.`;
+  document.getElementById('sb-access-toast-roles').textContent = `Acceso permitido a: ${allowed}`;
+  const t = document.getElementById('sb-access-toast');
+  t.style.display = 'block';
+  if (_sbToastTimer) clearTimeout(_sbToastTimer);
+  _sbToastTimer = setTimeout(() => { t.style.display = 'none'; }, 3500);
+}
+
+function showViewGuarded(view, el) {
+  const item = el || document.querySelector(`[data-view="${view}"]`);
+  const rolesAttr = item ? item.getAttribute('data-roles') : null;
+  const allowed   = rolesAttr ? rolesAttr.split(',') : ['admin'];
+  if (!G.rol || !allowed.includes(G.rol)) {
+    _showSbAccessToast(view, allowed);
+    return;
+  }
+  showView(view, el);
+}
+
+function _applySidebarRoleStyles() {
+  document.querySelectorAll('.sb-item[data-roles]').forEach(el => {
+    const allowed = el.getAttribute('data-roles').split(',');
+    const locked  = !G.rol || !allowed.includes(G.rol);
+    el.classList.toggle('sb-locked', locked);
+    // Añadir/quitar icono candado
+    let lockEl = el.querySelector('.sb-lock-icon');
+    if (locked) {
+      if (!lockEl) {
+        lockEl = document.createElement('span');
+        lockEl.className = 'sb-lock-icon';
+        lockEl.textContent = '🔒';
+        el.appendChild(lockEl);
+      }
+    } else {
+      if (lockEl) lockEl.remove();
+    }
+  });
+}
+
 function showView(view, el) {
   document.querySelectorAll('.sb-item').forEach(i=>i.classList.remove('active'));
   if(el) el.classList.add('active');
@@ -4330,17 +4430,7 @@ function calcDias(s) {
     document.getElementById('login-screen').style.display='none';
     document.getElementById('app').style.display='flex';
     if (G.rol !== 'admin') document.getElementById('btn-delete-pedido').style.display='none';
-    document.querySelectorAll('.admin-only').forEach(el => {
-      el.style.display = G.rol === 'admin' ? '' : 'none';
-    });
-    // Ocultar elementos de menú no disponibles para rol hotel
-    document.querySelectorAll('.no-hotel').forEach(el => {
-      el.style.display = G.rol === 'hotel' ? 'none' : '';
-    });
-    // Mostrar elementos de solo consulta para compras (y admin)
-    document.querySelectorAll('.compras-readonly').forEach(el => {
-      el.style.display = (G.rol === 'admin' || G.rol === 'compras') ? '' : 'none';
-    });
+    _applySidebarRoleStyles();
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
     await loadMaestros();

@@ -1,3 +1,70 @@
+## v11.7.2 — 15 junio 2026
+
+### 🔧 Mejora de UX — Navegación guiada por permisos
+
+#### Sidebar unificada para todos los usuarios
+
+* Todos los elementos del menú lateral pasan a ser visibles para cualquier usuario.
+* Eliminados los `style="display:none"` utilizados para ocultar opciones según el rol.
+* Cada elemento incorpora ahora un atributo `data-roles` que define explícitamente los perfiles autorizados.
+* Los accesos del menú utilizan `showViewGuarded()` en lugar de `showView()` para validar permisos antes de navegar.
+
+#### Indicadores visuales de acceso restringido
+
+* Añadida la clase CSS `.sb-item.sb-locked`.
+* Las secciones no disponibles para el usuario actual se muestran atenuadas (45% de opacidad) y con cursor `not-allowed`.
+* Se incorpora automáticamente el icono 🔒 para identificar visualmente los accesos restringidos.
+
+#### Nuevo sistema de aviso de acceso
+
+* Incorporado el componente flotante `#sb-access-toast`.
+* Cuando un usuario intenta acceder a una sección no autorizada, se muestra un aviso durante 3,5 segundos indicando los perfiles con acceso permitido.
+* El sistema evita la navegación y proporciona una explicación inmediata del motivo de la restricción.
+
+#### Nuevas funciones JavaScript
+
+* **`_applySidebarRoleStyles()`**
+
+  * Recorre todos los elementos del menú.
+  * Compara el rol del usuario con los permisos definidos en `data-roles`.
+  * Añade o elimina dinámicamente la clase `sb-locked` y el icono de bloqueo.
+
+* **`showViewGuarded(view, el)`**
+
+  * Intercepta los clics sobre el menú lateral.
+  * Si el usuario dispone de permisos, ejecuta `showView()`.
+  * Si no dispone de permisos, bloquea la navegación y muestra el aviso correspondiente.
+
+* **`_showSbAccessToast(view, allowedRoles)`**
+
+  * Genera mensajes informativos contextualizados.
+  * Ejemplo:
+
+    > "La sección Alertas no está disponible para tu perfil. Acceso permitido a: 👑 Administrador, 🛒 Compras."
+
+#### Matriz de permisos visible para el usuario
+
+| Sección            | Hotel | Compras | Admin |
+| ------------------ | :---: | :-----: | :---: |
+| Dashboard          |   ✅   |    ✅    |   ✅   |
+| Pedidos            |   ✅   |    ✅    |   ✅   |
+| Alertas            |   🔒  |    ✅    |   ✅   |
+| Proveedores        |   ✅   |    ✅    |   ✅   |
+| Pedidos eliminados |   🔒  |    ✅    |   ✅   |
+| Techo de gastos    |   🔒  |    ✅    |   ✅   |
+| Familias artículos |   🔒  |    🔒   |   ✅   |
+| Usuarios           |   🔒  |    🔒   |   ✅   |
+| Integridad         |   🔒  |    🔒   |   ✅   |
+| Config. alertas    |   🔒  |    🔒   |   ✅   |
+
+### ✅ Resultado
+
+* Los usuarios conocen todas las funcionalidades existentes en la plataforma, aunque no tengan acceso a ellas.
+* Se elimina la sensación de "menús desaparecidos" según el rol.
+* La navegación resulta más intuitiva y transparente.
+* Los permisos continúan aplicándose de forma segura en el frontend antes de acceder a cada sección.
+
+
 ## v11.7.0 — 15 junio 2026
 
 ### 🔧 Mejoras — Visibilidad de pedidos y adjuntos para rol Hotel
