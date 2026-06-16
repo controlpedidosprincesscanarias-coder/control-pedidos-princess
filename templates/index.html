@@ -1087,7 +1087,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.7.4
+          V 11.7.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2715,7 +2715,8 @@ async function refreshCurrentView() {
   } catch(_) { /* si falla la comprobación, continuar con refresco normal */ }
 
   // Sin cambios de versión → recargar datos de la vista actual + siempre el techo
-  _techoCache = null;  // invalidar caché del techo siempre
+  _invalidarStats();  // invalidar ambas cachés al refrescar manualmente
+  _invalidarTecho();
   const view = G.currentView || 'dashboard';
   if (view==='dashboard')   { loadStats(); }
   if (view==='pedidos')     loadPedidos();
@@ -2781,13 +2782,8 @@ function poblarSelectProveedores() {
    Dashboard / Stats
 ═══════════════════════════════════════════════════════════════════════════ */
 async function loadStats() {
-  // Cargar stats y techo en paralelo para que el badge y el card del dashboard
-  // siempre reflejen ambas fuentes de alerta, sin depender de la cache.
-  const techoPromise = (G.rol === 'hotel')
-    ? Promise.resolve(null)
-    : api('/api/techo/resumen').catch(() => null);
-  const [d, techo] = await Promise.all([api('/api/stats'), techoPromise]);
-  if (techo) _techoCache = techo;
+  // Ambas funciones usan caché interna: cero peticiones duplicadas en el mismo ciclo
+  const [d, techo] = await Promise.all([_fetchStats(), _fetchTecho()]);
 
   const nTecho = (G.rol === 'hotel') ? 0 :
     (_techoCache?.hoteles?.filter(h => h.semaforo === 'rojo' || h.semaforo === 'amarillo').length || 0);
@@ -3782,14 +3778,17 @@ async function savePedido() {
         : await api('/api/pedidos', 'POST', body);
     }
     if (r.error) { toast(r.error,'error'); return; }
+    // Invalidar ambas cachés: el pedido puede haber cambiado estado, importe o familia
+    _invalidarStats();
+    _invalidarTecho();
+    // Una sola petición a cada endpoint: _fetchStats(true) y _fetchTecho(true) fuerzan
+    // refresco; loadStats(), loadAlertas() y updateAlertBadge() reutilizan la caché.
+    await Promise.all([_fetchStats(true), loadTechoAlertas()]);
     if (G.currentView==='pedidos')   loadPedidos();
-    if (G.currentView==='dashboard') loadStats();
-    if (G.currentView==='alertas')   { loadAlertas(); loadTechoAlertas(); }
+    if (G.currentView==='dashboard') loadStats();       // reutiliza _statsCache ya fresca
+    if (G.currentView==='alertas')   { loadAlertas(); } // ídem
     if (G.currentView==='techo')     loadTecho();
-    // Siempre invalidar la caché del techo (puede haber cambiado familia/importe/sujeto_techo)
-    _techoCache = null;
-    loadTechoAlertas();
-    updateAlertBadge();
+    updateAlertBadge();                                  // reutiliza _statsCache y _techoCache
 
     if (!G.editingPedidoId && r.id) {
       toast('Pedido creado — ya puedes adjuntar archivos', 'success');
@@ -3837,6 +3836,7 @@ async function confirmarEliminarPedido() {
   toast(`Pedido eliminado. Registro conservado en historial.`, 'success');
   closeModal('modal-confirmar-eliminar');
   closeModal('modal-pedido');
+  _invalidarStats();
   loadPedidos(); loadStats();
 }
 
@@ -3844,7 +3844,7 @@ async function confirmarEliminarPedido() {
    Alertas
 ═══════════════════════════════════════════════════════════════════════════ */
 async function loadAlertas() {
-  const d = await api('/api/stats');
+  const d = await _fetchStats();
   const tbody = document.getElementById('alertas-tbody');
   const empty = document.getElementById('alertas-empty');
   if (!d.alertas.length) {
@@ -4735,6 +4735,7 @@ async function doImport(modo) {
       }
       res.innerHTML = msg;
       document.getElementById('btn-cancelar-import').textContent = 'Cerrar';
+      _invalidarStats();
       loadPedidos(); loadStats();
     } else {
       res.style.background = '#f8d7da';
@@ -4798,7 +4799,8 @@ async function loadTecho() {
   const grid  = document.getElementById('techo-resumen-grid');
   const empty = document.getElementById('techo-empty');
   grid.innerHTML = '<div style="padding:20px;color:#999;text-align:center">Cargando…</div>';
-  const d = await api('/api/techo/resumen');
+  // force=true porque el usuario ha navegado explícitamente a la vista Techo
+  const d = await _fetchTecho(true);
   document.getElementById('techo-mes-label').textContent = `Mes: ${d.mes}`;
 
   const hotelesCon = d.hoteles.filter(h => h.num_pedidos > 0 || true); // mostrar todos
@@ -4861,18 +4863,81 @@ async function loadTecho() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
+   CACHÉ DE /api/stats — fuente única de verdad para dashboard, alertas y badge
+═══════════════════════════════════════════════════════════════════════════ */
+
+// Cache del último resultado de /api/stats
+let _statsCache    = null;
+let _statsCacheTs  = 0;          // timestamp de la última petición completada
+let _statsInflight = null;       // Promise en vuelo (evita peticiones paralelas)
+const _STATS_TTL_MS = 30_000;   // 30 s — refresco mínimo entre peticiones reales
+
+/**
+ * Fuente única de verdad para /api/stats.
+ *   force=false → usa caché si tiene menos de 30 s
+ *   force=true  → ignora caché (llamar tras guardar/eliminar un pedido)
+ * Devuelve el objeto de stats o null si error de red.
+ */
+async function _fetchStats(force = false) {
+  if (!force && _statsCache && (Date.now() - _statsCacheTs) < _STATS_TTL_MS) {
+    return _statsCache;
+  }
+  // Si ya hay una petición en vuelo, reutilizarla en lugar de lanzar otra
+  if (_statsInflight) return _statsInflight;
+  _statsInflight = api('/api/stats')
+    .then(d => { _statsCache = d; _statsCacheTs = Date.now(); return d; })
+    .catch(e => { console.warn('_fetchStats error:', e); return null; })
+    .finally(() => { _statsInflight = null; });
+  return _statsInflight;
+}
+
+/** Invalida la caché (llamar cuando un pedido cambia estado o importes). */
+function _invalidarStats() {
+  _statsCache   = null;
+  _statsCacheTs = 0;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
    ALERTAS DE TECHO DE GASTOS — integradas en el panel Alertas
 ═══════════════════════════════════════════════════════════════════════════ */
 
 // Cache del último resumen de techo
 let _techoCache = null;
+let _techoCacheTs = 0;          // timestamp de la última petición completada
+let _techoInflight = null;      // Promise en vuelo (evita peticiones paralelas)
+const _TECHO_TTL_MS = 30_000;  // 30 s — refresco mínimo entre peticiones reales
+
+/**
+ * Fuente única de verdad para /api/techo/resumen.
+ *   force=false → usa caché si tiene menos de 30 s
+ *   force=true  → ignora caché (llamar tras guardar/eliminar un pedido)
+ * Devuelve el objeto de techo o null si rol=hotel o error de red.
+ */
+async function _fetchTecho(force = false) {
+  if (G.rol === 'hotel') return null;
+  if (!force && _techoCache && (Date.now() - _techoCacheTs) < _TECHO_TTL_MS) {
+    return _techoCache;
+  }
+  // Si ya hay una petición en vuelo, reutilizarla en lugar de lanzar otra
+  if (_techoInflight) return _techoInflight;
+  _techoInflight = api('/api/techo/resumen')
+    .then(d => { _techoCache = d; _techoCacheTs = Date.now(); return d; })
+    .catch(e => { console.warn('_fetchTecho error:', e); return null; })
+    .finally(() => { _techoInflight = null; });
+  return _techoInflight;
+}
+
+/** Invalida la caché (llamar cuando un pedido cambia datos de techo). */
+function _invalidarTecho() {
+  _techoCache = null;
+  _techoCacheTs = 0;
+}
 
 async function loadTechoAlertas() {
-  if (G.rol === 'hotel') return;   // el endpoint devuelve 403 para hotel
+  if (G.rol === 'hotel') return;
   try {
-    const d = await api('/api/techo/resumen');
-    _techoCache = d;
-    _renderTechoAlertas(d);
+    const d = await _fetchTecho();
+    if (d) _renderTechoAlertas(d);
   } catch(e) {
     console.warn('loadTechoAlertas error:', e);
   }
@@ -4940,11 +5005,8 @@ function irATechoHotel(hotelCodigo) {
 
 async function updateAlertBadge() {
   try {
-    const techoPromise = (G.rol === 'hotel')
-      ? Promise.resolve(null)
-      : api('/api/techo/resumen').catch(() => null);
-    const [stats, techo] = await Promise.all([api('/api/stats'), techoPromise]);
-    if (techo) _techoCache = techo;
+    // _fetchStats() y _fetchTecho() reutilizan caché: cero peticiones duplicadas.
+    const [stats, techo] = await Promise.all([_fetchStats(), _fetchTecho()]);
 
     const nPedidos = stats.num_alertas || 0;
     const nTecho   = (G.rol === 'hotel') ? 0 :
@@ -6724,7 +6786,7 @@ async function imprimirTecho(codigosSeleccionados) {
       var year    = selYear ? parseInt(selYear.value) : new Date().getFullYear();
       d = await api('/api/techo/resumen-historico?year=' + year + '&month=' + mes);
     } else {
-      d = await api('/api/techo/resumen');
+      d = await _fetchTecho();
     }
   } catch(e) { alert('Error cargando datos: ' + e.message); return; }
   var hoteles = d.hoteles || [];
@@ -6830,7 +6892,7 @@ async function imprimirTecho(codigosSeleccionados) {
 
 async function imprimirAlertas(codigosSeleccionados) {
   var d;
-  try { d = await api('/api/stats'); } catch(e) { alert('Error cargando datos: ' + e.message); return; }
+  try { d = await _fetchStats(); } catch(e) { alert('Error cargando datos: ' + e.message); return; }
   var alertas = d.alertas || [];
   if (Array.isArray(codigosSeleccionados) && codigosSeleccionados.length > 0) {
     alertas = alertas.filter(function(p){ return codigosSeleccionados.includes(p.hotel_codigo); });

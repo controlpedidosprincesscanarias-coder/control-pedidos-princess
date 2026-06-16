@@ -178,11 +178,23 @@ SQL_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_eliminados_pedido_id ON pedidos_eliminados(pedido_id)",
     "CREATE INDEX IF NOT EXISTS idx_eliminados_norden    ON pedidos_eliminados(norden)",
-    # ── Índices ───────────────────────────────────────────────────────────────
+    # ── Índices base ──────────────────────────────────────────────────────────
     "CREATE INDEX IF NOT EXISTS idx_pedidos_hotel     ON pedidos(hotel_id)",
     "CREATE INDEX IF NOT EXISTS idx_pedidos_estado    ON pedidos(estado)",
     "CREATE INDEX IF NOT EXISTS idx_pedidos_proveedor ON pedidos(proveedor_id)",
     "CREATE INDEX IF NOT EXISTS idx_historial_pedido  ON historial_estados(pedido_id)",
+    # ── /api/techo/resumen: hotel_id + mes con filtro parcial sujeto_techo=1 ─
+    "CREATE INDEX IF NOT EXISTS idx_pedidos_techo_mes  ON pedidos(hotel_id, creado_en) WHERE sujeto_techo = 1",
+    # ── /api/techo/resumen-historico: filtro parcial sujeto_techo+estado ─────
+    "CREATE INDEX IF NOT EXISTS idx_pedidos_techo_hist ON pedidos(hotel_id) WHERE sujeto_techo = 1 AND estado = 'ENVIADO AL PROVEEDOR'",
+    # ── historial_estados: subconsulta COALESCE por pedido_id + estado_nuevo ─
+    "CREATE INDEX IF NOT EXISTS idx_historial_estado_nuevo ON historial_estados(pedido_id, estado_nuevo, creado_en DESC)",
+    # ── /api/stats: estados activos con fecha_tramitacion (alertas) ───────────
+    "CREATE INDEX IF NOT EXISTS idx_pedidos_alertas ON pedidos(estado, fecha_tramitacion) WHERE estado IN ('ENVIADO AL PROVEEDOR','PENDIENTE FIRMA DIRECCION COMPRAS','PENDIENTE DE FIRMA DIRECCION HOTEL','ENTREGA PARCIAL','PENDIENTE COTIZACION')",
+    # ── /api/pedidos lista paginada: ORDER BY norden DESC (orden por defecto) ─
+    "CREATE INDEX IF NOT EXISTS idx_pedidos_norden ON pedidos(norden DESC)",
+    # ── /api/pedidos filtro por rango de fecha_solicitud (TEXT) ──────────────
+    "CREATE INDEX IF NOT EXISTS idx_pedidos_fecha_solicitud ON pedidos(fecha_solicitud)",
     # ── Datos maestros ────────────────────────────────────────────────────────
     """
     INSERT INTO hoteles (codigo, nombre) VALUES

@@ -1,3 +1,78 @@
+## v11.7.8 — 16 junio 2026
+
+### ⚡ Optimización de rendimiento — Estadísticas y Alertas
+
+#### Nueva capa de caché para estadísticas
+
+* Incorporado `_fetchStats(force)` siguiendo el mismo patrón utilizado en `_fetchTecho()`.
+* Añadido almacenamiento temporal en memoria con:
+
+  * TTL de 30 segundos.
+  * Reutilización de peticiones en curso (*inflight deduplication*).
+  * Función `_invalidarStats()` para forzar la actualización cuando los datos cambian.
+* Se evita la generación de múltiples peticiones simultáneas a `/api/stats`.
+
+#### Refactorización de consumo de estadísticas
+
+Las siguientes funciones dejan de realizar llamadas directas a:
+
+```javascript
+api('/api/stats')
+```
+
+y pasan a utilizar:
+
+```javascript
+_fetchStats()
+```
+
+* `loadStats()`
+* `updateAlertBadge()`
+* `loadAlertas()`
+* `imprimirAlertas()`
+
+#### Optimización del flujo de guardado
+
+* Tras crear o modificar un pedido se ejecuta:
+
+```javascript
+await Promise.all([
+    _fetchStats(true),
+    loadTechoAlertas()
+]);
+```
+
+* Las vistas posteriores reutilizan automáticamente la caché de estadísticas ya actualizada.
+* Eliminadas peticiones redundantes a la red durante:
+
+  * Guardado de pedidos.
+  * Eliminación de pedidos.
+  * Importaciones.
+  * `refreshCurrentView()`.
+
+#### Reducción de carga sobre `/api/stats`
+
+* Incorporado el nuevo selector `PEDIDO_SELECT_STATS`.
+* Esta versión elimina las 5 subconsultas relacionadas con `proveedor_contactos` que no son necesarias para cálculos de estadísticas y alertas.
+* Las consultas internas de `/api/stats` utilizan ahora este selector optimizado.
+
+#### Conservación de funcionalidad completa
+
+* `PEDIDO_SELECT` permanece sin cambios para:
+
+  * Modal de edición de pedidos.
+  * Listado paginado de pedidos.
+  * Pantallas donde sí es necesario mostrar información de contacto de proveedores.
+
+### ✅ Resultado
+
+* Menos peticiones HTTP duplicadas.
+* Menor carga sobre PostgreSQL.
+* Menor tiempo de respuesta en Dashboard, Alertas y Badges.
+* Actualización inmediata de estadísticas tras operaciones de creación, edición, eliminación e importación de pedidos.
+* Arquitectura de caché unificada para Techo de Gastos y Estadísticas.
+
+
 ## v11.7.4 — 15 junio 2026
 
 ### 🐛 Corrección crítica — Bloqueos en Análisis de Integridad

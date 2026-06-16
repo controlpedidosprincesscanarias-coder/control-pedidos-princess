@@ -4719,72 +4719,105 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
 @app.route("/api/techo/resumen")
 @login_required
 def techo_resumen():
-    """Devuelve el resumen del techo de gastos del mes actual por hotel."""
+    """Devuelve el resumen del techo de gastos del mes actual por hotel.
+
+    Versión optimizada: 2 queries fijas (hoteles + pedidos del mes en un solo
+    SELECT) en lugar del patrón N+1 anterior (1 query por hotel).
+    get_config() se lee una sola vez y sus valores se reutilizan para todos
+    los hoteles.
+    """
     if session.get("rol") == "hotel":
         return jsonify({"error": "Sin permisos"}), 403
     from datetime import date
-    hoy    = date.today()
-    year   = hoy.year
-    month  = hoy.month
+    hoy   = date.today()
+    year  = hoy.year
+    month = hoy.month
 
-    hoteles = rows_to_list(query("SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"))
+    # ── 1. Configuración: una sola lectura ───────────────────────────────────
+    cfg              = get_config()
+    techo_max_mes    = cfg["techo_max_mes"]
+    techo_max_pedido = cfg["techo_max_pedido"]
+    techo_max_ped_n  = cfg["techo_max_pedidos"]   # max numero de pedidos
+    pct_amarillo     = cfg["techo_pct_amarillo"]
+    umbral_amarillo  = techo_max_mes * pct_amarillo / 100
+
+    # ── 2. Hoteles activos: una query ────────────────────────────────────────
+    hoteles = rows_to_list(query(
+        "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+    ))
+    if not hoteles:
+        return jsonify({"mes": f"{year}-{month:02d}", "hoteles": []})
+
+    hotel_ids = [h["id"] for h in hoteles]
+    ph        = ",".join(["%s"] * len(hotel_ids))
+
+    # ── 3. Pedidos del mes: una sola query para todos los hoteles ────────────
+    pedidos_mes = rows_to_list(query(f"""
+        SELECT p.id, p.hotel_id, p.importe, p.familia_id,
+               f.nombre  AS familia_nombre,
+               p.pedido_num, p.estado, p.norden,
+               pr.nombre AS proveedor_nombre,
+               p.observaciones
+        FROM pedidos p
+        LEFT JOIN familias    f  ON p.familia_id    = f.id
+        LEFT JOIN proveedores pr ON p.proveedor_id  = pr.id
+        WHERE p.hotel_id IN ({ph})
+          AND p.sujeto_techo = 1
+          AND p.estado NOT IN ('CANCELADO')
+          AND EXTRACT(YEAR  FROM p.creado_en) = %s
+          AND EXTRACT(MONTH FROM p.creado_en) = %s
+        ORDER BY p.hotel_id, p.creado_en
+    """, hotel_ids + [year, month]))
+
+    # ── 4. Agrupar pedidos por hotel en memoria ──────────────────────────────
+    from collections import defaultdict
+    pedidos_por_hotel: dict = defaultdict(list)
+    for p in pedidos_mes:
+        pedidos_por_hotel[p["hotel_id"]].append(p)
+
+    # ── 5. Construir resultado ────────────────────────────────────────────────
     resultado = []
     for hotel in hoteles:
-        pedidos = rows_to_list(query("""
-            SELECT p.id, p.importe, p.familia_id, f.nombre as familia_nombre,
-                   p.pedido_num, p.estado, p.norden, pr.nombre as proveedor_nombre,
-                   p.observaciones
-            FROM pedidos p
-            LEFT JOIN familias f ON p.familia_id = f.id
-            LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
-            WHERE p.hotel_id = %s
-              AND p.sujeto_techo = 1
-              AND p.estado NOT IN ('CANCELADO')
-              AND EXTRACT(YEAR  FROM p.creado_en) = %s
-              AND EXTRACT(MONTH FROM p.creado_en) = %s
-            ORDER BY p.creado_en
-        """, (hotel["id"], year, month)))
-
-        acumulado     = sum(float(p["importe"] or 0) for p in pedidos)
-        num_pedidos   = len(pedidos)
+        pedidos         = pedidos_por_hotel[hotel["id"]]
+        acumulado       = sum(float(p["importe"] or 0) for p in pedidos)
+        num_pedidos     = len(pedidos)
         familias_usadas = [p["familia_nombre"] for p in pedidos if p["familia_nombre"]]
 
-        # Semáforo:
-        #   ROJO     → acumulado >= techo_max_mes  O  num_pedidos > techo_max_pedidos (superado)
-        #   AMARILLO → acumulado >= techo_max_mes * pct_amarillo/100  O  num_pedidos >= techo_max_pedidos (alcanzado)
-        umbral_amarillo_r = get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100
-        if acumulado >= get_config()["techo_max_mes"] or num_pedidos > get_config()["techo_max_pedidos"]:
+        # Semaforo:
+        #   ROJO     -> acumulado >= techo_max_mes  O  num_pedidos > techo_max_ped_n
+        #   AMARILLO -> acumulado >= umbral_amarillo O  num_pedidos >= techo_max_ped_n
+        if acumulado >= techo_max_mes or num_pedidos > techo_max_ped_n:
             semaforo = "rojo"
-        elif acumulado >= umbral_amarillo_r or num_pedidos >= get_config()["techo_max_pedidos"]:
+        elif acumulado >= umbral_amarillo or num_pedidos >= techo_max_ped_n:
             semaforo = "amarillo"
         else:
             semaforo = "verde"
 
         resultado.append({
-            "hotel_id":       hotel["id"],
-            "hotel_codigo":   hotel["codigo"],
-            "hotel_nombre":   hotel["nombre"],
-            "num_pedidos":    num_pedidos,
-            "max_pedidos":    get_config()["techo_max_pedidos"],
-            "acumulado":      acumulado,
-            "techo_mes":      get_config()["techo_max_mes"],
-            "techo_pedido":   get_config()["techo_max_pedido"],
+            "hotel_id":        hotel["id"],
+            "hotel_codigo":    hotel["codigo"],
+            "hotel_nombre":    hotel["nombre"],
+            "num_pedidos":     num_pedidos,
+            "max_pedidos":     techo_max_ped_n,
+            "acumulado":       acumulado,
+            "techo_mes":       techo_max_mes,
+            "techo_pedido":    techo_max_pedido,
             "familias_usadas": familias_usadas,
-            "semaforo":       semaforo,
-            "pedidos":        pedidos,
+            "semaforo":        semaforo,
+            "pedidos":         pedidos,
         })
 
     return jsonify({"mes": f"{year}-{month:02d}", "hoteles": resultado})
-
 
 @app.route("/api/techo/resumen-historico")
 @login_required
 def techo_resumen_historico():
     """Devuelve el techo de gastos de un mes/año concreto, solo pedidos ENVIADO AL PROVEEDOR.
-    
-    Usa la fecha en que el pedido cambió a 'ENVIADO AL PROVEEDOR' (historial_estados)
-    para asignar el pedido al mes correcto, independientemente de cuándo fue creado.
-    Si no hay historial, cae en fecha_tramitacion y por último en creado_en como fallback.
+
+    Versión optimizada: 2 queries fijas (hoteles + pedidos del mes en un solo
+    SELECT con COALESCE de fecha) en lugar del patrón N+1 anterior.
+    get_config() se lee una sola vez. El filtro de mes/año se aplica en SQL
+    con DATE_TRUNC, evitando traer todos los pedidos a Python para filtrar.
     """
     if session.get("rol") == "hotel":
         return jsonify({"error": "Sin permisos"}), 403
@@ -4797,57 +4830,76 @@ def techo_resumen_historico():
     except (TypeError, ValueError):
         return jsonify({"error": "Parámetros year/month inválidos"}), 400
 
-    hoteles = rows_to_list(query("SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"))
+    # ── 1. Configuración: una sola lectura ───────────────────────────────────
+    cfg              = get_config()
+    techo_max_mes    = cfg["techo_max_mes"]
+    techo_max_pedido = cfg["techo_max_pedido"]
+    techo_max_ped_n  = cfg["techo_max_pedidos"]
+    pct_amarillo     = cfg["techo_pct_amarillo"]
+    umbral_amarillo  = techo_max_mes * pct_amarillo / 100
+
+    # ── 2. Hoteles activos: una query ────────────────────────────────────────
+    hoteles = rows_to_list(query(
+        "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+    ))
+    if not hoteles:
+        return jsonify({"mes": f"{year}-{month:02d}", "hoteles": [], "historico": True})
+
+    hotel_ids = [h["id"] for h in hoteles]
+    ph        = ",".join(["%s"] * len(hotel_ids))
+
+    # ── 3. Pedidos del mes histórico: una sola query para todos los hoteles ──
+    # La fecha de referencia es cuándo pasó a ENVIADO AL PROVEEDOR (historial),
+    # con fallback a fecha_tramitacion y por último a creado_en.
+    # DATE_TRUNC filtra en BD; no se trae ningún pedido de otros meses a Python.
+    pedidos_mes = rows_to_list(query(f"""
+        SELECT p.id, p.hotel_id, p.importe, p.familia_id,
+               f.nombre  AS familia_nombre,
+               p.pedido_num, p.estado, p.norden,
+               pr.nombre AS proveedor_nombre,
+               p.observaciones,
+               COALESCE(
+                   (SELECT hs.creado_en FROM historial_estados hs
+                    WHERE hs.pedido_id = p.id
+                      AND hs.estado_nuevo = 'ENVIADO AL PROVEEDOR'
+                    ORDER BY hs.creado_en DESC LIMIT 1),
+                   p.fecha_tramitacion::timestamptz,
+                   p.creado_en
+               ) AS fecha_envio
+        FROM pedidos p
+        LEFT JOIN familias    f  ON p.familia_id   = f.id
+        LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
+        WHERE p.hotel_id IN ({ph})
+          AND p.sujeto_techo = 1
+          AND p.estado = 'ENVIADO AL PROVEEDOR'
+          AND DATE_TRUNC('month', COALESCE(
+                  (SELECT hs2.creado_en FROM historial_estados hs2
+                   WHERE hs2.pedido_id = p.id
+                     AND hs2.estado_nuevo = 'ENVIADO AL PROVEEDOR'
+                   ORDER BY hs2.creado_en DESC LIMIT 1),
+                  p.fecha_tramitacion::timestamptz,
+                  p.creado_en
+              )) = DATE_TRUNC('month', MAKE_DATE(%s, %s, 1)::timestamptz)
+        ORDER BY p.hotel_id, fecha_envio
+    """, hotel_ids + [year, month]))
+
+    # ── 4. Agrupar por hotel en memoria ──────────────────────────────────────
+    from collections import defaultdict
+    pedidos_por_hotel: dict = defaultdict(list)
+    for p in pedidos_mes:
+        pedidos_por_hotel[p["hotel_id"]].append(p)
+
+    # ── 5. Construir resultado ────────────────────────────────────────────────
     resultado = []
     for hotel in hoteles:
-        # Fecha de referencia: cuándo pasó a ENVIADO AL PROVEEDOR (historial),
-        # si no existe ese historial usamos fecha_tramitacion, y como último recurso creado_en.
-        pedidos = rows_to_list(query("""
-            SELECT p.id, p.importe, p.familia_id, f.nombre as familia_nombre,
-                   p.pedido_num, p.estado, p.norden, pr.nombre as proveedor_nombre,
-                   p.observaciones,
-                   COALESCE(
-                       (SELECT h.creado_en FROM historial_estados h
-                        WHERE h.pedido_id = p.id
-                          AND h.estado_nuevo = 'ENVIADO AL PROVEEDOR'
-                        ORDER BY h.creado_en DESC LIMIT 1),
-                       p.fecha_tramitacion::timestamptz,
-                       p.creado_en
-                   ) AS fecha_envio
-            FROM pedidos p
-            LEFT JOIN familias f ON p.familia_id = f.id
-            LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
-            WHERE p.hotel_id = %s
-              AND p.sujeto_techo = 1
-              AND p.estado = 'ENVIADO AL PROVEEDOR'
-            ORDER BY p.creado_en
-        """, (hotel["id"],)))
-
-        # Filtrar por mes/año usando fecha_envio
-        def en_mes(p):
-            fe = p.get("fecha_envio")
-            if fe is None:
-                return False
-            if hasattr(fe, "year"):
-                return fe.year == year and fe.month == month
-            # string ISO
-            try:
-                from datetime import datetime as _dtt
-                dt = _dtt.fromisoformat(str(fe)[:19])
-                return dt.year == year and dt.month == month
-            except Exception:
-                return False
-
-        pedidos = [p for p in pedidos if en_mes(p)]
-
-        acumulado   = sum(float(p["importe"] or 0) for p in pedidos)
-        num_pedidos = len(pedidos)
+        pedidos         = pedidos_por_hotel[hotel["id"]]
+        acumulado       = sum(float(p["importe"] or 0) for p in pedidos)
+        num_pedidos     = len(pedidos)
         familias_usadas = [p["familia_nombre"] for p in pedidos if p["familia_nombre"]]
 
-        umbral_amarillo_r = get_config()["techo_max_mes"] * get_config()["techo_pct_amarillo"] / 100
-        if acumulado >= get_config()["techo_max_mes"] or num_pedidos > get_config()["techo_max_pedidos"]:
+        if acumulado >= techo_max_mes or num_pedidos > techo_max_ped_n:
             semaforo = "rojo"
-        elif acumulado >= umbral_amarillo_r or num_pedidos >= get_config()["techo_max_pedidos"]:
+        elif acumulado >= umbral_amarillo or num_pedidos >= techo_max_ped_n:
             semaforo = "amarillo"
         else:
             semaforo = "verde"
@@ -4857,10 +4909,10 @@ def techo_resumen_historico():
             "hotel_codigo":    hotel["codigo"],
             "hotel_nombre":    hotel["nombre"],
             "num_pedidos":     num_pedidos,
-            "max_pedidos":     get_config()["techo_max_pedidos"],
+            "max_pedidos":     techo_max_ped_n,
             "acumulado":       acumulado,
-            "techo_mes":       get_config()["techo_max_mes"],
-            "techo_pedido":    get_config()["techo_max_pedido"],
+            "techo_mes":       techo_max_mes,
+            "techo_pedido":    techo_max_pedido,
             "familias_usadas": familias_usadas,
             "semaforo":        semaforo,
             "pedidos":         pedidos,
@@ -4870,6 +4922,29 @@ def techo_resumen_historico():
 
 
 # ── API Pedidos ────────────────────────────────────────────────────────────────
+
+# ── Selector reducido para /api/stats (alertas del dashboard) ────────────────
+# Solo los campos que loadAlertas() y updateAlertBadge() consumen.
+# Sin subconsultas a proveedor_contactos — esos datos solo hacen falta al
+# abrir el modal de email/telegram de una alerta concreta (usa PEDIDO_SELECT_ALERTA).
+PEDIDO_SELECT_STATS = """
+    SELECT p.id, p.norden, p.pedido_num, p.estado,
+           p.fecha_tramitacion, p.fecha_solicitud,
+           p.plazo_entrega_dias, p.observaciones, p.importe,
+           h.codigo  as hotel_codigo,
+           h.nombre  as hotel_nombre,
+           d.nombre  as departamento_nombre,
+           pr.nombre as proveedor_nombre,
+           f.nombre  as familia_nombre,
+           EXISTS (
+               SELECT 1 FROM pedido_adjuntos pa WHERE pa.pedido_id = p.id
+           ) AS has_adjuntos
+    FROM pedidos p
+    LEFT JOIN hoteles       h  ON p.hotel_id        = h.id
+    LEFT JOIN departamentos d  ON p.departamento_id = d.id
+    LEFT JOIN proveedores   pr ON p.proveedor_id    = pr.id
+    LEFT JOIN familias      f  ON p.familia_id      = f.id
+"""
 
 PEDIDO_SELECT = """
     SELECT p.*,
@@ -5275,7 +5350,7 @@ def get_stats():
             hoteles_ids))
         # Calcular alertas reales para los hoteles visibles del usuario hotel
         alertas_raw_h = rows_to_list(query(f"""
-            {PEDIDO_SELECT}
+            {PEDIDO_SELECT_STATS}
             WHERE p.estado IN (
                 'ENVIADO AL PROVEEDOR',
                 'PENDIENTE FIRMA DIRECCION COMPRAS',
@@ -5363,7 +5438,7 @@ def get_stats():
     #   ENTREGA PARCIAL                    → aviso c/10d
     #   ENTREGADO / CANCELADO              → sin alerta
     alertas_raw = rows_to_list(query(f"""
-        {PEDIDO_SELECT}
+        {PEDIDO_SELECT_STATS}
         WHERE p.estado IN (
             'ENVIADO AL PROVEEDOR',
             'PENDIENTE FIRMA DIRECCION COMPRAS',
