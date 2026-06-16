@@ -1,3 +1,113 @@
+## v11.8.0 — 16 junio 2026
+
+### ⚡ Refactorización y optimización del sistema de Alertas
+
+#### Unificación de la lógica de clasificación de alertas
+
+* Extraída la nueva función global:
+
+```python
+_clasificar_alertas(pedidos_raw, cfg_activar_plazo)
+```
+
+* Centraliza todo el proceso de clasificación de alertas, incluyendo:
+
+  * Estados de alerta.
+  * Cálculo de antigüedad.
+  * Validación de plazos de entrega.
+  * Aplicación de umbrales configurables.
+
+#### Parseo de fechas unificado
+
+* Incorporada la función:
+
+```python
+_dias_desde_alerta(fecha_str)
+```
+
+* Sustituye múltiples implementaciones locales que realizaban la misma tarea.
+* Se elimina código duplicado y se garantiza un comportamiento consistente en todos los módulos de alertas.
+
+#### Umbrales centralizados
+
+* Creado el diccionario único:
+
+```python
+_UMBRALES_ALERTAS
+```
+
+* Sustituye las estructuras duplicadas:
+
+  * `UMBRALES_H`
+  * `UMBRALES`
+  * `UMBRALES_BRIDGE`
+
+* Todas las reglas de clasificación utilizan ahora una única fuente de configuración.
+
+#### Simplificación de endpoints
+
+* Los distintos consumidores del sistema de alertas quedan reducidos a:
+
+  1. Consulta de datos.
+  2. Llamada a `_clasificar_alertas()`.
+
+* Cualquier modificación futura de reglas, umbrales o criterios de clasificación requiere cambios en un único punto del código.
+
+### 🔧 Unificación de Bridge Alertas
+
+#### Consistencia total entre endpoints
+
+* `bridge_alertas` pasa a utilizar:
+
+  * `_clasificar_alertas()`
+  * `PEDIDO_SELECT_STATS`
+
+* Eliminado el SQL específico que mantenía anteriormente.
+
+* Los tres endpoints relacionados con alertas comparten ahora:
+
+  * La misma lógica de clasificación.
+  * Los mismos criterios de cálculo.
+  * El mismo origen de datos.
+
+### ⚡ Optimización de `/api/stats`
+
+#### Eliminación de COUNT(*) redundante
+
+* En los perfiles Administrador y Compras se elimina la consulta adicional:
+
+```sql
+SELECT COUNT(*) FROM pedidos
+```
+
+* El total de pedidos se obtiene ahora directamente a partir de los resultados ya devueltos por:
+
+```sql
+GROUP BY estado
+```
+
+mediante:
+
+```python
+sum(r["total"] for r in by_estado)
+```
+
+#### Beneficios
+
+* Una consulta menos a la base de datos por cada llamada a `/api/stats`.
+* Menor latencia en Dashboard, Alertas y Badges.
+* Reducción de carga sobre PostgreSQL.
+
+### ✅ Resultado
+
+* Eliminada la duplicación de lógica de alertas existente en varios módulos.
+* Mantenimiento significativamente más sencillo.
+* Comportamiento homogéneo entre todos los endpoints de alertas.
+* Menor riesgo de inconsistencias futuras.
+* Reducción de consultas innecesarias a la base de datos.
+* Mejora adicional del rendimiento de estadísticas y paneles de control.
+
+
 ## v11.7.8 — 16 junio 2026
 
 ### ⚡ Optimización de rendimiento — Estadísticas y Alertas

@@ -4923,6 +4923,97 @@ def techo_resumen_historico():
 
 # ── API Pedidos ────────────────────────────────────────────────────────────────
 
+# ── Lógica de clasificación de alertas — fuente única de verdad ──────────────
+#
+# Tres consumidores usaban copias idénticas de esta lógica:
+#   • /api/stats        (bloque rol=hotel)
+#   • /api/stats        (bloque resto de roles)
+#   • /api/bridge/alertas
+#
+# Extraída aquí para que cualquier cambio de umbral o regla se aplique
+# en los tres sitios sin riesgo de desincronización.
+# ─────────────────────────────────────────────────────────────────────────────
+
+from datetime import date as _date_alerta, datetime as _dt_alerta
+
+
+def _dias_desde_alerta(fecha_str) -> int | None:
+    """Días transcurridos desde fecha_str hasta hoy. None si no parseable."""
+    if not fecha_str:
+        return None
+    try:
+        if hasattr(fecha_str, "date"):
+            f = fecha_str.date()
+        elif isinstance(fecha_str, _date_alerta):
+            f = fecha_str
+        else:
+            f = _dt_alerta.strptime(str(fecha_str)[:10], "%Y-%m-%d").date()
+        return (_date_alerta.today() - f).days
+    except Exception:
+        return None
+
+
+# Umbrales por estado (días desde fecha de referencia).
+# "primera": días mínimos para emitir aviso.
+# "urgente": días para escalar a urgente (None = nunca).
+# "ciclo":   cada cuántos días se reavisa (no usado en clasificación actual).
+# "fecha_ref": campo de fecha a usar (default "fecha_tramitacion").
+_UMBRALES_ALERTAS: dict = {
+    "ENVIADO AL PROVEEDOR":              {"primera": 15, "urgente": 25, "ciclo": 10},
+    "PENDIENTE FIRMA DIRECCION COMPRAS": {"primera": 8,  "urgente": None, "ciclo": 8},
+    "PENDIENTE DE FIRMA DIRECCION HOTEL":{"primera": 5,  "urgente": None, "ciclo": 5},
+    "ENTREGA PARCIAL":                   {"primera": 10, "urgente": None, "ciclo": 10},
+    "PENDIENTE COTIZACIÓN":              {"primera": 2,  "urgente": 3, "ciclo": None,
+                                          "fecha_ref": "fecha_solicitud"},
+}
+
+
+def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
+    """Clasifica una lista de pedidos y devuelve solo los que generan alerta.
+
+    Para cada pedido:
+      1. Si tiene plazo_entrega_dias y cfg_activar_plazo=True, aplica la
+         lógica de _alertas_plazo_entrega (fecha de entrega esperada).
+      2. Si no, aplica la lógica estándar de _UMBRALES_ALERTAS.
+
+    Añade a cada pedido:
+      • dias_tramitacion  (int)
+      • nivel_alerta      ("aviso" | "urgente")
+      • fecha_entrega_prevista (str ISO o None)
+
+    Devuelve la lista ordenada: urgentes primero, luego por días descendente.
+    """
+    alertas: list = []
+    for p in pedidos_raw:
+        # ── Lógica plazo de entrega ──────────────────────────────────────
+        info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
+        if info_plazo:
+            dias = _dias_desde_alerta(p.get("fecha_tramitacion")) or 0
+            p["dias_tramitacion"]      = dias
+            p["nivel_alerta"]          = info_plazo["nivel"]
+            fep = info_plazo["fecha_entrega_prevista"]
+            p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
+            alertas.append(p)
+            continue
+        # ── Lógica estándar ─────────────────────────────────────────────
+        cfg = _UMBRALES_ALERTAS.get(p["estado"])
+        if not cfg:
+            continue
+        fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
+        dias = _dias_desde_alerta(p.get(fecha_ref_campo))
+        if dias is None or dias < cfg["primera"]:
+            continue
+        nivel = "urgente" if (cfg["urgente"] and dias >= cfg["urgente"]) else "aviso"
+        p["dias_tramitacion"]      = dias
+        p["nivel_alerta"]          = nivel
+        p["fecha_entrega_prevista"] = None
+        alertas.append(p)
+
+    alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1,
+                                 -x["dias_tramitacion"]))
+    return alertas
+
+
 # ── Selector reducido para /api/stats (alertas del dashboard) ────────────────
 # Solo los campos que loadAlertas() y updateAlertBadge() consumen.
 # Sin subconsultas a proveedor_contactos — esos datos solo hacen falta al
@@ -5365,78 +5456,23 @@ def get_stats():
               )
             ORDER BY p.fecha_tramitacion ASC
         """, hoteles_ids))
-        from datetime import date as _date, datetime as _dt
-
-        def _dias_desde_h(fecha_str):
-            if not fecha_str:
-                return None
-            try:
-                if hasattr(fecha_str, 'date'):
-                    f = fecha_str.date()
-                elif isinstance(fecha_str, _date):
-                    f = fecha_str
-                else:
-                    s = str(fecha_str)[:10]
-                    f = _dt.strptime(s, "%Y-%m-%d").date()
-                return (_date.today() - f).days
-            except Exception:
-                return None
-
-        UMBRALES_H = {
-            "ENVIADO AL PROVEEDOR":              {"primera": 15, "urgente": 25, "ciclo": 10},
-            "PENDIENTE FIRMA DIRECCION COMPRAS": {"primera": 8,  "urgente": None, "ciclo": 8},
-            "PENDIENTE DE FIRMA DIRECCION HOTEL":{"primera": 5,  "urgente": None, "ciclo": 5},
-            "ENTREGA PARCIAL":                   {"primera": 10, "urgente": None, "ciclo": 10},
-            "PENDIENTE COTIZACIÓN":              {"primera": 2,  "urgente": 3, "ciclo": None, "fecha_ref": "fecha_solicitud"},
-        }
-        alertas_h = []
         cfg_activar_plazo_h = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
-        for p in alertas_raw_h:
-            # ── Lógica plazo de entrega ────────────────────────────────────
-            info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo_h)
-            if info_plazo:
-                dias = _dias_desde_h(p.get("fecha_tramitacion")) or 0
-                p["dias_tramitacion"] = dias
-                p["nivel_alerta"]     = info_plazo["nivel"]
-                fep = info_plazo["fecha_entrega_prevista"]
-                p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
-                alertas_h.append(p)
-                continue
-            # ── Lógica estándar ────────────────────────────────────────────
-            cfg = UMBRALES_H.get(p["estado"])
-            if not cfg:
-                continue
-            fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
-            dias = _dias_desde_h(p.get(fecha_ref_campo))
-            if dias is None or dias < cfg["primera"]:
-                continue
-            urgente = cfg["urgente"]
-            nivel = "urgente" if (urgente and dias >= urgente) else "aviso"
-            p["dias_tramitacion"] = dias
-            p["nivel_alerta"]     = nivel
-            p["fecha_entrega_prevista"] = None
-            alertas_h.append(p)
-        alertas_h.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1, -x["dias_tramitacion"]))
+        alertas_h = _clasificar_alertas(alertas_raw_h, cfg_activar_plazo_h)
         return jsonify({"total": total, "by_estado": by_estado,
                         "by_hotel": by_hotel, "alertas": alertas_h,
                         "num_alertas": len(alertas_h)})
     # ── Resto de roles ────────────────────────────────────────────────────────
-    total     = query("SELECT COUNT(*) as n FROM pedidos", one=True)["n"]
+    # total se deriva de by_estado: evita un COUNT(*) redundante sobre la tabla.
     by_estado = rows_to_list(query(
         "SELECT estado, COUNT(*) as total FROM pedidos GROUP BY estado ORDER BY total DESC"
     ))
+    total = sum(r["total"] for r in by_estado)
     by_hotel  = rows_to_list(query(
         """SELECT h.codigo, h.nombre, COUNT(p.id) as total
            FROM hoteles h LEFT JOIN pedidos p ON p.hotel_id=h.id
            GROUP BY h.id, h.codigo, h.nombre ORDER BY total DESC"""
     ))
-    # ── Alertas por estado cruzando fecha_tramitacion ─────────────────────────
-    # Umbrales (días desde fecha_tramitacion):
-    #   ENVIADO AL PROVEEDOR               → primera ≥15d; urgente ≥25d; luego c/10d
-    #   PENDIENTE FIRMA DIRECCIÓN COMPRAS  → aviso c/8d
-    #   PENDIENTE DE FIRMA DIRECCIÓN HOTEL → aviso c/5d
-    #   ENTREGA PARCIAL                    → aviso c/10d
-    #   ENTREGADO / CANCELADO              → sin alerta
+    # ── Alertas: clasificadas por _clasificar_alertas (fuente única) ──────────
     alertas_raw = rows_to_list(query(f"""
         {PEDIDO_SELECT_STATS}
         WHERE p.estado IN (
@@ -5452,79 +5488,8 @@ def get_stats():
           )
         ORDER BY p.fecha_tramitacion ASC
     """))
-
-    from datetime import date as _date, datetime as _dt
-
-    def _dias_desde(fecha_str):
-        if not fecha_str:
-            return None
-        try:
-            if hasattr(fecha_str, 'date'):
-                f = fecha_str.date()
-            elif isinstance(fecha_str, _date):
-                f = fecha_str
-            else:
-                s = str(fecha_str)[:10]
-                f = _dt.strptime(s, "%Y-%m-%d").date()
-            return (_date.today() - f).days
-        except Exception:
-            return None
-
-    UMBRALES = {
-        "ENVIADO AL PROVEEDOR": {
-            "primera": 15, "urgente": 25, "ciclo": 10,
-        },
-        "PENDIENTE FIRMA DIRECCION COMPRAS": {
-            "primera": 8, "urgente": None, "ciclo": 8,
-        },
-        "PENDIENTE DE FIRMA DIRECCION HOTEL": {
-            "primera": 5, "urgente": None, "ciclo": 5,
-        },
-        "ENTREGA PARCIAL": {
-            "primera": 10, "urgente": None, "ciclo": 10,
-        },
-        "PENDIENTE COTIZACIÓN": {
-            "primera": 2, "urgente": 3, "ciclo": None, "fecha_ref": "fecha_solicitud",
-        },
-    }
-
-    alertas = []
     cfg_activar_plazo = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
-    for p in alertas_raw:
-        # ── Lógica plazo de entrega ────────────────────────────────────────
-        info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
-        if info_plazo:
-            dias = _dias_desde(p.get("fecha_tramitacion")) or 0
-            p["dias_tramitacion"] = dias
-            p["nivel_alerta"]     = info_plazo["nivel"]
-            fep = info_plazo["fecha_entrega_prevista"]
-            p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
-            alertas.append(p)
-            continue
-        # ── Lógica estándar ────────────────────────────────────────────────
-        cfg = UMBRALES.get(p["estado"])
-        if not cfg:
-            continue
-        # Elegir la fecha de referencia según el estado
-        fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
-        dias = _dias_desde(p.get(fecha_ref_campo))
-        if dias is None:
-            continue
-
-        primera = cfg["primera"]
-        urgente = cfg["urgente"]
-
-        if dias < primera:
-            continue  # aún no toca avisar
-
-        nivel = "urgente" if (urgente and dias >= urgente) else "aviso"
-        p["dias_tramitacion"] = dias
-        p["nivel_alerta"]     = nivel
-        p["fecha_entrega_prevista"] = None
-        alertas.append(p)
-
-    # Urgentes primero, luego por días descendente
-    alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1, -x["dias_tramitacion"]))
+    alertas = _clasificar_alertas(alertas_raw, cfg_activar_plazo)
 
     return jsonify({
         "total": total, "by_estado": by_estado,
@@ -5589,17 +5554,10 @@ def bridge_alertas_usuario():
                         "usuario": session.get("username"), "rol": rol})
 
     # ── Consulta de pedidos en estados alertables ─────────────────────────────
-    sql = f"""
-        SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
-               p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
-               p.plazo_entrega_dias,
-               h.codigo as hotel_codigo, h.nombre as hotel_nombre,
-               d.nombre as departamento_nombre,
-               pr.nombre as proveedor_nombre
-        FROM pedidos p
-        LEFT JOIN hoteles       h  ON p.hotel_id        = h.id
-        LEFT JOIN departamentos d  ON p.departamento_id = d.id
-        LEFT JOIN proveedores   pr ON p.proveedor_id    = pr.id
+    # Usa PEDIDO_SELECT_STATS (sin subconsultas de proveedor_contactos) y
+    # _clasificar_alertas (fuente única de verdad para umbrales y niveles).
+    alertas_raw = rows_to_list(query(f"""
+        {PEDIDO_SELECT_STATS}
         WHERE p.estado IN (
             'ENVIADO AL PROVEEDOR',
             'PENDIENTE FIRMA DIRECCION COMPRAS',
@@ -5613,73 +5571,9 @@ def bridge_alertas_usuario():
           )
           {filtro_hotel_sql}
         ORDER BY p.fecha_tramitacion ASC
-    """
-    alertas_raw = rows_to_list(query(sql, filtro_args))
-
-    def _dias_desde(fecha_str):
-        if not fecha_str:
-            return None
-        try:
-            if hasattr(fecha_str, 'date'):
-                f = fecha_str.date()
-            elif isinstance(fecha_str, _date):
-                f = fecha_str
-            else:
-                s = str(fecha_str)[:10]
-                f = _dt.strptime(s, "%Y-%m-%d").date()
-            return (_date.today() - f).days
-        except Exception:
-            return None
-
-    UMBRALES_BRIDGE = {
-        "ENVIADO AL PROVEEDOR": {
-            "primera": 15, "urgente": 25, "ciclo": 10,
-        },
-        "PENDIENTE FIRMA DIRECCION COMPRAS": {
-            "primera": 8, "urgente": None, "ciclo": 8,
-        },
-        "PENDIENTE DE FIRMA DIRECCION HOTEL": {
-            "primera": 5, "urgente": None, "ciclo": 5,
-        },
-        "ENTREGA PARCIAL": {
-            "primera": 10, "urgente": None, "ciclo": 10,
-        },
-        "PENDIENTE COTIZACIÓN": {
-            "primera": 2, "urgente": 3, "ciclo": None, "fecha_ref": "fecha_solicitud",
-        },
-    }
-
-    alertas = []
+    """, filtro_args))
     cfg_activar_plazo_bridge = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
-    for p in alertas_raw:
-        # ── Lógica plazo de entrega ────────────────────────────────────────
-        info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo_bridge)
-        if info_plazo:
-            dias = _dias_desde(p.get("fecha_tramitacion")) or 0
-            p["dias_tramitacion"] = dias
-            p["nivel_alerta"]     = info_plazo["nivel"]
-            fep = info_plazo["fecha_entrega_prevista"]
-            p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
-            alertas.append(p)
-            continue
-        # ── Lógica estándar ────────────────────────────────────────────────
-        cfg = UMBRALES_BRIDGE.get(p["estado"])
-        if not cfg:
-            continue
-        fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
-        dias = _dias_desde(p.get(fecha_ref_campo))
-        if dias is None:
-            continue
-        if dias < cfg["primera"]:
-            continue
-        nivel = "urgente" if (cfg.get("urgente") and dias >= cfg["urgente"]) else "aviso"
-        p["dias_tramitacion"] = dias
-        p["nivel_alerta"]     = nivel
-        p["fecha_entrega_prevista"] = None
-        alertas.append(p)
-
-    alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1,
-                                 -x["dias_tramitacion"]))
+    alertas = _clasificar_alertas(alertas_raw, cfg_activar_plazo_bridge)
 
     return jsonify({
         "alertas":     alertas,
