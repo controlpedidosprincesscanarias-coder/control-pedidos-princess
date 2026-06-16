@@ -1,3 +1,75 @@
+## v11.8.2 — 16 junio 2026
+
+### ✅ Validación obligatoria para "ENVIADO AL PROVEEDOR"
+
+#### Nuevo control previo al envío
+
+* Incorporada una validación en `index.html` que se ejecuta únicamente cuando un pedido cambia al estado:
+
+```text
+ENVIADO AL PROVEEDOR
+```
+
+* El objetivo es garantizar que el pedido dispone de la información mínima necesaria antes de considerarse enviado.
+
+### 🔍 Validaciones realizadas
+
+Antes de permitir el cambio de estado, el sistema comprueba:
+
+#### Nº Pedido (DALI / SAP)
+
+* El campo **Nº Pedido (DALI / SAP)** debe contener un valor.
+* No se permite el envío de pedidos sin referencia de pedido registrada.
+
+#### Documento PDF adjunto
+
+* Debe existir al menos un documento adjunto asociado al pedido.
+* La validación utiliza los elementos ya renderizados en `#adj-pedido-list` mediante `cargarAdjuntos()`.
+
+### 🚫 Comportamiento cuando faltan datos
+
+Si alguno de los requisitos no se cumple:
+
+* Se muestra un mensaje de error mediante toast rojo durante 7 segundos.
+* El mensaje indica exactamente qué información falta.
+* El guardado se cancela automáticamente.
+* El modal permanece abierto para que el usuario complete los datos pendientes.
+
+#### Ayuda visual para el usuario
+
+Cuando falta el Nº Pedido:
+
+* El campo se resalta con borde rojo.
+* Recibe el foco automáticamente.
+* El resaltado desaparece en cuanto el usuario comienza a introducir información.
+
+### 🔄 Activación inteligente
+
+La validación solo se ejecuta cuando existe un cambio real hacia el estado **ENVIADO AL PROVEEDOR**.
+
+#### Casos validados
+
+✅ Pedido nuevo creado directamente como **ENVIADO AL PROVEEDOR**
+
+✅ Pedido que pasa de **PENDIENTE** a **ENVIADO AL PROVEEDOR**
+
+✅ Pedido cancelado que se reactiva y vuelve a **ENVIADO AL PROVEEDOR**
+
+#### Casos excluidos
+
+✅ Pedido que ya estaba en **ENVIADO AL PROVEEDOR** y se reabre para modificar otros datos
+
+* En este caso la validación no se ejecuta nuevamente.
+* El usuario puede guardar cambios sin bloqueos innecesarios.
+
+### 🎯 Resultado
+
+* Se evita el envío de pedidos sin número de referencia DALI/SAP.
+* Se garantiza la existencia de documentación asociada antes del envío.
+* Se reduce el riesgo de incidencias operativas y trazabilidad incompleta.
+* La validación actúa únicamente en el momento adecuado, sin interferir en posteriores ediciones del pedido.
+
+
 ## v11.8.0 — 16 junio 2026
 
 ### ⚡ Refactorización y optimización del sistema de Alertas

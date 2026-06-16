@@ -1087,7 +1087,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.8.0
+          V 11.8.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2598,13 +2598,13 @@ window.addEventListener('DOMContentLoaded', async function() {
 /* ═══════════════════════════════════════════════════════════════════════════
    Toast
 ═══════════════════════════════════════════════════════════════════════════ */
-function toast(msg, type='') {
+function toast(msg, type='', duracion=3500) {
   const c = document.getElementById('toast-container');
   const t = document.createElement('div');
   t.className = `toast ${type}`;
   t.textContent = (type==='success'?'✓ ':type==='error'?'✕ ':'')+msg;
   c.appendChild(t);
-  setTimeout(() => t.remove(), 3500);
+  setTimeout(() => t.remove(), duracion);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -3720,6 +3720,34 @@ async function savePedido() {
       return;
     }
   }
+
+  // ── Validación: ENVIADO AL PROVEEDOR requiere Nº Pedido DALI/SAP + PDF ──────
+  // Regla aplicada SOLO cuando se produce un cambio activo a este estado.
+  // Pedidos ya guardados en este estado no se bloquean si no se toca el estado.
+  const _estadoNuevoValidar  = val('p-estado');
+  const _estadoAnteriorBD    = G.currentPedidoData ? G.currentPedidoData.estado : null;
+  const _cambiandoAEnviado   = _estadoNuevoValidar === 'ENVIADO AL PROVEEDOR'
+                                && _estadoAnteriorBD !== 'ENVIADO AL PROVEEDOR';
+  if (_cambiandoAEnviado) {
+    const _pedidoNumVal = val('p-pedido-num').trim();
+    // Contar PDFs en adj-pedido-list (tipos: pedido_pdf, pedido_doc, pedido_word, pedido_eml)
+    const _adjPedidoList = document.getElementById('adj-pedido-list');
+    const _tienePdf = _adjPedidoList && _adjPedidoList.querySelectorAll('.adj-item').length > 0;
+    const _faltas = [];
+    if (!_pedidoNumVal)  _faltas.push('• Nº Pedido (DALI / SAP) — campo obligatorio');
+    if (!_tienePdf)      _faltas.push('• Documento PDF del pedido — adjunta al menos un archivo en "Adjuntar doc. / correo"');
+    if (_faltas.length) {
+      toast('Para ENVIADO AL PROVEEDOR falta:\n' + _faltas.join('\n'), 'error', 7000);
+      const _numInput = document.getElementById('p-pedido-num');
+      if (!_pedidoNumVal) {
+        _numInput.style.borderColor = '#dc3545';
+        _numInput.focus();
+        _numInput.addEventListener('input', () => _numInput.style.borderColor = '', { once: true });
+      }
+      return;
+    }
+  }
+  // ── Fin validación ENVIADO AL PROVEEDOR ──────────────────────────────────────
 
   const sujetoTecho = document.getElementById('p-sujeto-techo').checked;
   const familiaId   = sujetoTecho ? (val('p-familia') || null) : null;
