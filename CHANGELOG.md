@@ -1,3 +1,383 @@
+## v11.8.6 — 17 junio 2026
+
+### 🔄 Evolución del sistema de restauración — Arquitectura distribuida
+
+Esta versión sustituye el modelo inicial de restauración directa desde el servidor por una arquitectura basada en cola de trabajo y agente local, eliminando las limitaciones de acceso entre Render y la red corporativa.
+
+---
+
+### 🏗️ Nueva arquitectura de restauración
+
+#### Antes
+
+El servidor web intentaba acceder directamente a la carpeta de backups ubicada en la red local de la empresa.
+
+```text
+Render (Cloud)
+      ↓
+\\Servidor\Backups
+```
+
+Este enfoque presentaba limitaciones debido a que la infraestructura cloud no tiene acceso directo a recursos internos de red.
+
+---
+
+#### Ahora
+
+La restauración se realiza mediante una cola de trabajo centralizada en Supabase.
+
+```text
+Administrador
+      │
+      ▼
+Solicitud restauración
+      │
+      ▼
+restore_queue
+      ▲
+      │
+restore_agent.py
+      │
+      ▼
+Carpeta Backups
+```
+
+El panel web solicita la restauración y un agente local autorizado ejecuta físicamente el proceso.
+
+---
+
+### 🗄️ Nueva tabla de control
+
+#### `restore_queue`
+
+Se incorpora una cola persistente para gestionar solicitudes de restauración.
+
+Permite registrar:
+
+* Backup solicitado.
+* Tipo de restauración.
+* Usuario solicitante.
+* Fecha de solicitud.
+* Estado de ejecución.
+* Resultado final.
+* Errores producidos.
+
+La tabla se crea automáticamente mediante el sistema de auto-migración existente.
+
+---
+
+### 🔧 Cambios Backend (`app.py`)
+
+#### `/api/admin/backup/restaurar`
+
+Cambio de comportamiento:
+
+**Antes**
+
+* Ejecutaba directamente la restauración.
+
+**Ahora**
+
+* Inserta una solicitud en `restore_queue`.
+* Verifica que no exista otra restauración pendiente.
+* Devuelve el estado de la petición.
+
+---
+
+#### Nueva ruta `/api/admin/backup/estado`
+
+Permite consultar el estado de ejecución de una restauración.
+
+Estados soportados:
+
+```text
+Pendiente
+En proceso
+Completado
+Error
+```
+
+La información se utiliza para actualizar la interfaz en tiempo real.
+
+---
+
+### 🖥️ Mejoras Frontend (`templates/index.html`)
+
+#### Nuevo flujo "Solicitar restauración"
+
+El botón principal pasa a denominarse:
+
+```text
+🔄 Solicitar restauración
+```
+
+reflejando el nuevo funcionamiento basado en cola.
+
+---
+
+#### Información para el administrador
+
+El modal de confirmación informa ahora de que:
+
+* La restauración será ejecutada por el agente local autorizado.
+* El proceso suele completarse en menos de un minuto.
+* El usuario puede seguir el progreso en tiempo real.
+
+---
+
+#### Seguimiento automático
+
+Incorporado sistema de polling cada 5 segundos.
+
+La interfaz actualiza automáticamente el estado:
+
+```text
+Pendiente
+↓
+En proceso
+↓
+Completado
+```
+
+o
+
+```text
+Pendiente
+↓
+Error
+```
+
+sin necesidad de recargar la página.
+
+---
+
+#### Resumen de restauración
+
+Al finalizar correctamente se muestra información detallada:
+
+* Pedidos restaurados.
+* Adjuntos restaurados.
+* Historial recuperado.
+* Resultado final del proceso.
+
+---
+
+### 💻 Nuevo componente local
+
+#### `restore_agent.py`
+
+Nuevo agente de restauración ejecutado desde la red corporativa.
+
+Responsabilidades:
+
+* Consultar periódicamente `restore_queue`.
+* Detectar nuevas solicitudes.
+* Acceder a la carpeta de backups corporativa.
+* Restaurar información en Supabase.
+* Recuperar adjuntos.
+* Actualizar el estado de la operación.
+
+---
+
+#### `restore_agent.bat`
+
+Nuevo lanzador Windows para ejecutar el agente utilizando la misma configuración y conexión ya empleadas por el sistema de backup automático.
+
+---
+
+### 🛡️ Seguridad y fiabilidad
+
+#### Backup automático previo a la restauración
+
+Antes de iniciar cualquier restauración, el agente genera automáticamente una copia de seguridad del estado actual.
+
+Esto permite:
+
+```text
+Estado actual
+      ↓
+Backup de seguridad
+      ↓
+Restauración solicitada
+```
+
+facilitando la reversión en caso de incidencia.
+
+---
+
+#### Registro del backup de seguridad
+
+Cada restauración conserva la referencia del backup preventivo generado antes de ejecutar la operación.
+
+---
+
+#### Caducidad automática de solicitudes
+
+Las peticiones pendientes con más de 24 horas de antigüedad son invalidadas automáticamente para evitar ejecuciones accidentales o tareas obsoletas.
+
+---
+
+#### Auditoría ampliada
+
+Cada restauración registra:
+
+* Usuario solicitante.
+* Fecha de solicitud.
+* Fecha de inicio.
+* Fecha de finalización.
+* Resultado obtenido.
+* Mensajes de error.
+* Backup preventivo generado.
+
+---
+
+### 📖 Documentación
+
+#### `INSTRUCCIONES_RESTAURACION.md`
+
+Nuevo documento de configuración y puesta en marcha.
+
+Incluye:
+
+* Instalación del agente.
+* Configuración de la tarea programada.
+* Verificación del flujo completo.
+* Resolución de incidencias habituales.
+
+---
+
+### ✅ Resultado
+
+* Eliminada la dependencia entre Render y la red corporativa.
+* Restauraciones gestionadas desde la aplicación web.
+* Ejecución segura mediante agente autorizado.
+* Seguimiento en tiempo real del progreso.
+* Auditoría completa de todas las operaciones.
+* Backup automático previo a cualquier restauración.
+* Mayor robustez y capacidad de recuperación ante errores.
+* Arquitectura preparada para crecimiento y mantenimiento a largo plazo.
+
+
+## v11.8.4 — 16 junio 2026
+
+### 🔄 Nuevo sistema de restauración de backups
+
+#### Restauración completa desde la interfaz de administración
+
+* Incorporado un nuevo módulo de restauración accesible exclusivamente para usuarios con rol **Administrador**.
+* Permite consultar y restaurar copias de seguridad almacenadas en la carpeta de red configurada para backups.
+
+### 🗄️ Nuevas rutas Backend (`app.py`)
+
+#### `/api/admin/backup/listar`
+
+* Nueva ruta para consultar los backups disponibles.
+* Devuelve:
+
+  * Nombre del backup.
+  * Fecha y hora de creación.
+  * Tamaño de la copia.
+  * Número de adjuntos incluidos.
+
+#### `/api/admin/backup/restaurar`
+
+* Nueva ruta encargada de ejecutar el proceso de restauración.
+* Permite seleccionar entre dos modalidades de recuperación:
+
+  * **Solo pedidos**
+  * **Restauración completa**
+
+### 🖥️ Nuevo panel "Restaurar backup"
+
+#### Acceso desde el menú lateral
+
+* Añadido el botón:
+
+```text
+🔄 Restaurar backup
+```
+
+* Visible únicamente para usuarios Administrador.
+
+#### Exploración de copias disponibles
+
+* El sistema permite consultar automáticamente la ubicación de backups configurada.
+* Se muestran todas las copias disponibles con formato:
+
+```text
+backup_YYYYMMDD_HHMM
+```
+
+incluyendo:
+
+* Fecha.
+* Tamaño.
+* Información de contenido.
+
+### ⚠️ Restauración segura
+
+#### Modal de confirmación reforzada
+
+Antes de ejecutar cualquier restauración:
+
+* Se muestra una ventana de confirmación específica.
+* Se incluyen advertencias visibles sobre el impacto de la operación.
+* El administrador debe confirmar explícitamente la acción antes de continuar.
+
+### 🔧 Modos de restauración
+
+#### Solo pedidos (recomendado)
+
+* Restaura exclusivamente la información relacionada con pedidos.
+* Conserva:
+
+  * Usuarios.
+  * Roles.
+  * Proveedores.
+  * Configuración del sistema.
+
+Ideal para recuperar pedidos eliminados o revertir incidencias operativas sin afectar al resto de la aplicación.
+
+#### Restauración completa
+
+* Restaura todos los datos contenidos en la copia de seguridad.
+* Sustituye la información actual por la existente en el backup seleccionado.
+
+Indicada para escenarios de recuperación global del sistema.
+
+### 📎 Recuperación automática de adjuntos
+
+* Durante el proceso de restauración se recuperan también los documentos asociados.
+* Los adjuntos se vuelven a registrar automáticamente en la base de datos.
+* Se mantiene la vinculación entre pedidos y documentación restaurada.
+
+### ⚡ Funciones Frontend incorporadas
+
+Se añaden las funciones:
+
+```javascript
+restoreCargarLista()
+restoreSeleccionar()
+restoreCancelar()
+restoreEjecutar()
+```
+
+encargadas de:
+
+* Consultar los backups disponibles.
+* Gestionar la selección de copias.
+* Controlar el flujo de confirmación.
+* Ejecutar la restauración solicitada.
+
+### ✅ Resultado
+
+* Recuperación de datos completamente integrada en la aplicación.
+* Eliminada la necesidad de intervenciones manuales sobre la base de datos para restauraciones habituales.
+* Restauración segura mediante confirmación explícita.
+* Posibilidad de recuperar únicamente pedidos sin afectar a usuarios, proveedores o configuraciones.
+* Recuperación automática de la documentación asociada a cada pedido.
+
+
 ## v11.8.2 — 16 junio 2026
 
 ### ✅ Validación obligatoria para "ENVIADO AL PROVEEDOR"

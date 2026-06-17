@@ -1080,6 +1080,10 @@ tbody tr:last-child{border-bottom:none}
       <span class="icon">⚙️</span> Config alertas
     </div>
 
+    <div class="sb-item admin-only" data-view="restore" data-roles="admin" onclick="showViewGuarded('restore',this)">
+      <span class="icon">🔄</span> Restaurar backup
+    </div>
+
     <div class="sb-bottom">
       <div class="sb-version">
         <span class="sb-version-badge">
@@ -1087,7 +1091,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.8.2
+          V 11.8.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1356,6 +1360,129 @@ tbody tr:last-child{border-bottom:none}
           <div id="config-alertas-msg" style="display:none;margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600"></div>
           <div id="config-alertas-body" style="padding-bottom:24px">
             <div style="text-align:center;padding:32px;color:var(--text-secondary)">Cargando configuración…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Vista: Restaurar Backup (solo admin) ────────────────────────── -->
+      <div id="view-restore" class="section-hidden">
+        <div class="card">
+          <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <span class="card-title">🔄 Restaurar Copia de Seguridad</span>
+            <button onclick="restoreCargarLista()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Actualizar lista</button>
+          </div>
+
+          <div style="margin:16px;padding:12px 16px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;font-size:13px;color:#664d03">
+            ⚠️ <strong>Atención:</strong> Restaurar un backup <strong>reemplaza los datos actuales</strong> de forma irreversible.
+            Usa el modo <em>Solo pedidos</em> para restaurar únicamente pedidos y adjuntos manteniendo proveedores y usuarios intactos.
+          </div>
+
+          <div style="padding:0 16px 16px">
+            <div style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px">
+              <div style="flex:1;min-width:280px">
+                <label style="font-size:12px;font-weight:600;color:var(--text-secondary);display:block;margin-bottom:4px">Ruta de la carpeta de backups</label>
+                <input id="restore-ruta" type="text"
+                  value="G:\CARPETA COMPRADORES\COMPRADOR 1 - VICTOR MARTIN\04.PEDIDOS EXTERNOS CONTROL\Backups"
+                  style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-family:monospace;box-sizing:border-box;background:var(--surface);color:var(--text)"
+                  onkeydown="if(event.key==='Enter') restoreCargarLista()" />
+              </div>
+              <button onclick="restoreCargarLista()" style="padding:8px 18px;font-size:13px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:600;white-space:nowrap">
+                🔍 Buscar backups
+              </button>
+            </div>
+
+            <!-- Panel de estado de la cola (Opción C) -->
+            <div id="restore-estado-panel" style="display:none;margin-bottom:12px;padding:12px 16px;border-radius:8px;background:var(--surface-alt,#f5f5f5);border:1px solid var(--border);font-size:12px;color:var(--text-secondary)">
+              🖥️ Agente local: la restauración la ejecuta tu PC (tarea programada), no Render. Si tu equipo está apagado, la petición quedará en espera hasta que se encienda y el agente la recoja.
+            </div>
+
+            <div id="restore-msg" style="display:none;margin-bottom:12px;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600"></div>
+
+            <div id="restore-loading" style="display:none;text-align:center;padding:24px;color:var(--text-secondary);font-size:13px">
+              Leyendo carpeta de backups…
+            </div>
+
+            <div id="restore-lista" style="display:none">
+              <div style="font-size:12px;font-weight:700;color:var(--text-secondary);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">
+                Backups disponibles
+              </div>
+              <div id="restore-tabla-wrap" style="overflow-x:auto">
+                <table style="width:100%;border-collapse:collapse;font-size:13px">
+                  <thead>
+                    <tr style="background:var(--surface-alt,#f5f5f5)">
+                      <th style="padding:8px 12px;text-align:left;font-weight:600;border-bottom:1px solid var(--border)">Fecha y hora</th>
+                      <th style="padding:8px 12px;text-align:left;font-weight:600;border-bottom:1px solid var(--border)">Carpeta</th>
+                      <th style="padding:8px 12px;text-align:center;font-weight:600;border-bottom:1px solid var(--border)">Adjuntos</th>
+                      <th style="padding:8px 12px;text-align:center;font-weight:600;border-bottom:1px solid var(--border)">Tamaño</th>
+                      <th style="padding:8px 12px;text-align:center;font-weight:600;border-bottom:1px solid var(--border)">Estado</th>
+                      <th style="padding:8px 12px;text-align:center;font-weight:600;border-bottom:1px solid var(--border)">Acciones</th>
+                    </tr>
+                  </thead>
+                  <tbody id="restore-tbody"></tbody>
+                </table>
+              </div>
+              <div id="restore-empty" style="display:none;padding:24px;text-align:center;color:var(--text-secondary);font-size:13px">
+                No se encontraron carpetas de backup en la ruta indicada.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Modal: Ver log del backup ─────────────────────────────────────── -->
+      <div id="modal-backup-log" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9998;align-items:center;justify-content:center">
+        <div style="background:var(--surface,#fff);border-radius:12px;padding:0;max-width:680px;width:94%;max-height:85vh;display:flex;flex-direction:column;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+          <div style="display:flex;align-items:center;gap:10px;padding:18px 20px;border-bottom:1px solid var(--border)">
+            <span style="font-size:16px;font-weight:700">📋 Log del backup</span>
+            <span id="modal-log-titulo" style="font-size:12px;color:var(--text-secondary);font-family:monospace"></span>
+            <button onclick="document.getElementById('modal-backup-log').style.display='none'"
+              style="margin-left:auto;background:none;border:none;font-size:20px;cursor:pointer;color:var(--text-secondary);line-height:1">✕</button>
+          </div>
+          <div style="overflow-y:auto;padding:16px 20px;flex:1">
+            <div id="modal-log-loading" style="text-align:center;padding:32px;color:var(--text-secondary);font-size:13px">Cargando log…</div>
+            <pre id="modal-log-contenido" style="display:none;margin:0;font-size:12px;line-height:1.7;white-space:pre-wrap;word-break:break-word;font-family:'Consolas','Courier New',monospace;background:var(--surface-alt,#f8f9fa);padding:14px;border-radius:8px;border:1px solid var(--border);color:var(--text)"></pre>
+          </div>
+          <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;justify-content:flex-end">
+            <button onclick="document.getElementById('modal-backup-log').style.display='none'"
+              style="padding:7px 20px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface);font-size:13px">Cerrar</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Modal: Confirmar restauración ─────────────────────────────────── -->
+      <div id="modal-restore" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:9999;align-items:center;justify-content:center">
+        <div style="background:var(--surface,#fff);border-radius:12px;padding:28px;max-width:480px;width:90%;box-shadow:0 8px 32px rgba(0,0,0,.25)">
+          <div style="font-size:18px;font-weight:700;margin-bottom:8px;color:#dc3545">⚠️ Confirmar solicitud de restauración</div>
+          <div style="font-size:13px;color:var(--text-secondary);margin-bottom:16px" id="restore-confirm-desc"></div>
+          <div style="margin-bottom:16px;padding:10px 14px;background:#cfe2ff;border:1px solid #9ec5fe;border-radius:8px;font-size:12px;color:#0a3070">
+            ℹ️ La restauración no se ejecuta al instante: se registra una petición que el agente local de tu PC procesará automáticamente en menos de 1 minuto (debe estar encendido y con acceso a la carpeta de red).
+          </div>
+          <div style="margin-bottom:20px">
+            <label style="font-size:12px;font-weight:700;color:var(--text-secondary);display:block;margin-bottom:8px">MODO DE RESTAURACIÓN</label>
+            <label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:2px solid #1a73e8;border-radius:8px;cursor:pointer;margin-bottom:8px;background:rgba(26,115,232,.04)">
+              <input type="radio" name="restore-modo" value="pedidos" checked style="margin-top:2px;accent-color:#1a73e8">
+              <div>
+                <div style="font-weight:700;font-size:13px">📋 Solo pedidos (recomendado)</div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">Restaura pedidos, adjuntos e historial. Mantiene proveedores, usuarios, familias y hoteles intactos.</div>
+              </div>
+            </label>
+            <label style="display:flex;align-items:flex-start;gap:10px;padding:10px 12px;border:2px solid #dc3545;border-radius:8px;cursor:pointer;background:rgba(220,53,69,.04)">
+              <input type="radio" name="restore-modo" value="completo" style="margin-top:2px;accent-color:#dc3545">
+              <div>
+                <div style="font-weight:700;font-size:13px;color:#dc3545">🔄 Restauración completa</div>
+                <div style="font-size:12px;color:var(--text-secondary);margin-top:2px">Restaura TODO: pedidos, proveedores, familias, usuarios y hoteles. Tu cuenta de administrador se conserva.</div>
+              </div>
+            </label>
+          </div>
+          <div style="margin-bottom:20px;padding:10px 14px;background:#f8d7da;border:1px solid #f5c2c7;border-radius:8px;font-size:12px;color:#842029">
+            Una vez procesada por el agente local, esta acción <strong>no se puede deshacer</strong>. Los datos actuales se perderán permanentemente.
+          </div>
+          <div style="display:flex;gap:10px;justify-content:flex-end">
+            <button onclick="restoreCancelar()" style="padding:8px 20px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface);font-size:13px">Cancelar</button>
+            <button onclick="restoreEjecutar()" id="btn-restore-ejecutar"
+              style="padding:8px 20px;border:none;border-radius:6px;cursor:pointer;background:#dc3545;color:#fff;font-weight:700;font-size:13px">
+              🔄 Solicitar restauración
+            </button>
           </div>
         </div>
       </div>
@@ -2679,7 +2806,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Config Alertas'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Config Alertas',restore:'🔄 Restaurar Backup'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -2698,6 +2825,7 @@ function showView(view, el) {
   if (view==='usuarios')    { loadUsuarios(); adminCargarSolicitudes(); }
   if (view==='integridad')     loadIntegridad();
   if (view==='config-alertas') loadConfigAlertas();
+  if (view==='restore') { restoreCargarLista(); restoreComprobarAlEntrar(); }
 }
 
 async function refreshCurrentView() {
@@ -7245,6 +7373,321 @@ window._testModalVersion = function() {
   G._appVersion = 'test-forzado';
   _mostrarModalNuevaVersion().then(() => { G._appVersion = prev; });
 };
+
+// ── RESTAURACIÓN DE BACKUP ────────────────────────────────────────────────────
+
+let _restoreBackupSeleccionado = null;
+
+function restoreMostrarMsg(txt, tipo) {
+  const el = document.getElementById('restore-msg');
+  el.style.display    = 'block';
+  el.style.background = tipo === 'ok' ? '#d1e7dd' : tipo === 'error' ? '#f8d7da' : '#fff3cd';
+  el.style.color      = tipo === 'ok' ? '#0a3622' : tipo === 'error' ? '#842029' : '#664d03';
+  el.style.border     = `1px solid ${tipo === 'ok' ? '#a3cfbb' : tipo === 'error' ? '#f5c2c7' : '#ffc107'}`;
+  el.textContent = txt;
+}
+
+// Variante que permite HTML simple (negritas, <code>, saltos de línea) para
+// mensajes de resultado de restauración con varios datos formateados.
+function restoreMostrarMsgHTML(html, tipo) {
+  const el = document.getElementById('restore-msg');
+  el.style.display    = 'block';
+  el.style.background = tipo === 'ok' ? '#d1e7dd' : tipo === 'error' ? '#f8d7da' : '#fff3cd';
+  el.style.color      = tipo === 'ok' ? '#0a3622' : tipo === 'error' ? '#842029' : '#664d03';
+  el.style.border     = `1px solid ${tipo === 'ok' ? '#a3cfbb' : tipo === 'error' ? '#f5c2c7' : '#ffc107'}`;
+  el.innerHTML = html;
+}
+
+async function restoreCargarLista() {
+  const ruta = document.getElementById('restore-ruta').value.trim();
+  if (!ruta) { restoreMostrarMsg('Introduce la ruta de la carpeta de backups.', 'warn'); return; }
+
+  document.getElementById('restore-msg').style.display     = 'none';
+  document.getElementById('restore-loading').style.display = 'block';
+  document.getElementById('restore-lista').style.display   = 'none';
+
+  try {
+    const r = await fetch('/api/admin/backup/listar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify({ruta})
+    });
+    const d = await r.json();
+    document.getElementById('restore-loading').style.display = 'none';
+
+    if (!d.ok) { restoreMostrarMsg('❌ ' + d.error, 'error'); return; }
+
+    const tbody = document.getElementById('restore-tbody');
+    const empty = document.getElementById('restore-empty');
+    tbody.innerHTML = '';
+
+    if (!d.backups || d.backups.length === 0) {
+      empty.style.display = 'block';
+      document.getElementById('restore-lista').style.display = 'block';
+      return;
+    }
+    empty.style.display = 'none';
+
+    d.backups.forEach(b => {
+      const tr = document.createElement('tr');
+      tr.style.borderBottom = '1px solid var(--border)';
+      if (b.tipo === 'pre_restore') tr.style.background = 'rgba(255, 193, 7, .06)';
+
+      const estadoBadge = b.valido
+        ? '<span style="background:#d1e7dd;color:#0a3622;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">✅ OK</span>'
+        : '<span style="background:#f8d7da;color:#842029;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:700">⚠️ Incompleto</span>';
+
+      const tipoBadge = b.tipo === 'pre_restore'
+        ? '<span style="background:#fff3cd;color:#664d03;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700" title="Generado automáticamente antes de una restauración">🛟 Seguridad</span>'
+        : '<span style="background:#cfe2ff;color:#0a3070;padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700" title="Backup diario programado">📅 Diario</span>';
+
+      const btnLog = b.tiene_log
+        ? `<button onclick="restoreVerLog(${JSON.stringify(b.nombre).replace(/"/g,'&quot;')})"
+             title="Ver log de este backup"
+             style="padding:4px 10px;font-size:11px;border:1px solid var(--border);border-radius:5px;cursor:pointer;background:var(--surface);margin-right:4px">
+             📋 Log
+           </button>`
+        : `<span style="padding:4px 10px;font-size:11px;color:var(--text-secondary);margin-right:4px" title="Sin log disponible">📋 —</span>`;
+
+      const btnRestore = b.valido
+        ? `<button onclick="restoreSeleccionar(${JSON.stringify(b).replace(/"/g,'&quot;')})"
+             style="padding:4px 12px;font-size:11px;border:none;border-radius:5px;cursor:pointer;background:#dc3545;color:#fff;font-weight:700">
+             🔄 Restaurar
+           </button>`
+        : `<span style="color:var(--text-secondary);font-size:12px">No disponible</span>`;
+
+      tr.innerHTML = `
+        <td style="padding:10px 12px;font-weight:600">${b.fecha} ${tipoBadge}</td>
+        <td style="padding:10px 12px;font-family:monospace;font-size:11px;color:var(--text-secondary)">${b.nombre}</td>
+        <td style="padding:10px 12px;text-align:center">${b.adjuntos}</td>
+        <td style="padding:10px 12px;text-align:center">${b.mb} MB</td>
+        <td style="padding:10px 12px;text-align:center">${estadoBadge}</td>
+        <td style="padding:10px 12px;text-align:center;white-space:nowrap">${btnLog}${btnRestore}</td>`;
+
+      tbody.appendChild(tr);
+    });
+
+
+    document.getElementById('restore-lista').style.display = 'block';
+    restoreMostrarMsg(`✅ ${d.backups.length} backup(s) encontrado(s).`, 'ok');
+
+  } catch(e) {
+    document.getElementById('restore-loading').style.display = 'none';
+    restoreMostrarMsg('❌ Error de conexión: ' + e.message, 'error');
+  }
+}
+
+async function restoreVerLog(nombre) {
+  const ruta      = document.getElementById('restore-ruta').value.trim();
+  const modal     = document.getElementById('modal-backup-log');
+  const loading   = document.getElementById('modal-log-loading');
+  const contenido = document.getElementById('modal-log-contenido');
+  const titulo    = document.getElementById('modal-log-titulo');
+
+  titulo.textContent      = nombre;
+  loading.style.display   = 'block';
+  contenido.style.display = 'none';
+  modal.style.display     = 'flex';
+
+  try {
+    const r = await fetch('/api/admin/backup/log', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify({ruta, nombre})
+    });
+    const d = await r.json();
+    loading.style.display = 'none';
+
+    if (!d.ok) {
+      contenido.textContent   = '❌ ' + d.error;
+      contenido.style.display = 'block';
+      return;
+    }
+
+    // Colorear líneas clave del log
+    const html = d.log
+      .split('\n')
+      .map(linea => {
+        const l = linea.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+        if (l.includes('BACKUP COMPLETADO'))
+          return `<span style="color:#198754;font-weight:700">${l}</span>`;
+        if (l.includes('ERROR') || l.includes('AVISO'))
+          return `<span style="color:#dc3545">${l}</span>`;
+        if (l.includes('Adjuntos encontrados') || l.includes('→'))
+          return `<span style="color:#0d6efd">${l}</span>`;
+        if (l.includes('──') || l.includes('=='))
+          return `<span style="color:var(--text-secondary)">${l}</span>`;
+        return l;
+      })
+      .join('\n');
+
+    contenido.innerHTML     = html;
+    contenido.style.display = 'block';
+
+  } catch(e) {
+    loading.style.display   = 'none';
+    contenido.textContent   = '❌ Error de conexión: ' + e.message;
+    contenido.style.display = 'block';
+  }
+}
+
+function restoreSeleccionar(backup) {
+  _restoreBackupSeleccionado = backup;
+  document.getElementById('restore-confirm-desc').innerHTML =
+    `Vas a restaurar el backup del <strong>${backup.fecha}</strong><br>
+     Carpeta: <code style="font-size:12px">${backup.nombre}</code><br>
+     Adjuntos: <strong>${backup.adjuntos}</strong> ficheros &nbsp;|&nbsp; Tamaño: <strong>${backup.mb} MB</strong>`;
+  document.querySelector('input[name="restore-modo"][value="pedidos"]').checked = true;
+  document.getElementById('modal-restore').style.display = 'flex';
+}
+
+function restoreCancelar() {
+  document.getElementById('modal-restore').style.display = 'none';
+  _restoreBackupSeleccionado = null;
+}
+
+async function restoreEjecutar() {
+  if (!_restoreBackupSeleccionado) return;
+
+  const modo = document.querySelector('input[name="restore-modo"]:checked').value;
+  const ruta = document.getElementById('restore-ruta').value.trim();
+  const btn  = document.getElementById('btn-restore-ejecutar');
+
+  btn.disabled    = true;
+  btn.textContent = '⏳ Enviando…';
+
+  try {
+    const r = await fetch('/api/admin/backup/restaurar', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      credentials: 'same-origin',
+      body: JSON.stringify({ruta, nombre: _restoreBackupSeleccionado.nombre, modo})
+    });
+    const d = await r.json();
+
+    document.getElementById('modal-restore').style.display = 'none';
+    btn.disabled    = false;
+    btn.textContent = '🔄 Solicitar restauración';
+    _restoreBackupSeleccionado = null;
+
+    if (d.ok && d.encolado) {
+      restoreMostrarMsg(
+        `📨 Petición registrada (modo: ${modo}). El agente local la procesará en menos de 1 minuto…`,
+        'warn'
+      );
+      restoreIniciarPolling();
+    } else {
+      restoreMostrarMsg('❌ ' + (d.error || 'No se pudo registrar la petición'), 'error');
+    }
+
+  } catch(e) {
+    document.getElementById('modal-restore').style.display = 'none';
+    btn.disabled    = false;
+    btn.textContent = '🔄 Solicitar restauración';
+    restoreMostrarMsg('❌ Error de conexión: ' + e.message, 'error');
+  }
+}
+
+// ── POLLING DE ESTADO DE LA COLA (Opción C) ───────────────────────────────────
+
+let _restorePollingTimer = null;
+
+function restoreIniciarPolling() {
+  if (_restorePollingTimer) clearInterval(_restorePollingTimer);
+  restoreConsultarEstado();                                    // primera consulta inmediata
+  _restorePollingTimer = setInterval(restoreConsultarEstado, 5000);
+}
+
+function restoreDetenerPolling() {
+  if (_restorePollingTimer) { clearInterval(_restorePollingTimer); _restorePollingTimer = null; }
+}
+
+async function restoreConsultarEstado() {
+  try {
+    const r = await fetch('/api/admin/backup/estado', {credentials: 'same-origin'});
+    const d = await r.json();
+    if (!d.ok || !d.hay_peticion) { restoreDetenerPolling(); return; }
+
+    const panel = document.getElementById('restore-estado-panel');
+    if (panel) panel.style.display = 'block';
+
+    if (d.estado === 'pendiente') {
+      restoreMostrarMsg(
+        `⏳ Petición pendiente (backup: ${d.backup_nombre}). Esperando a que el agente local la recoja…`,
+        'warn'
+      );
+    } else if (d.estado === 'en_proceso') {
+      const fasePreRestore = !d.pre_restore_backup;
+      restoreMostrarMsg(
+        fasePreRestore
+          ? `⚙️ Generando backup de seguridad previo antes de restaurar ${d.backup_nombre}… No cierres esta pestaña.`
+          : `⚙️ Restaurando ${d.backup_nombre} (modo: ${d.modo})… No cierres esta pestaña.`,
+        'warn'
+      );
+    } else if (d.estado === 'completado') {
+      const res        = d.resumen || {};
+      const nErrores    = res.errores ?? 0;
+      const tipoMensaje = nErrores > 0 ? 'warn' : 'ok';
+      const iconoErr    = nErrores > 0 ? `⚠️ ${nErrores}` : '✅ 0';
+
+      restoreMostrarMsgHTML(
+        `✅ <strong>Restauración completada</strong> (${d.backup_nombre}, modo: ${d.modo}).<br>` +
+        `Pedidos: <strong>${res.pedidos ?? '—'}</strong> | ` +
+        `Adjuntos: <strong>${res.adjuntos ?? '—'}</strong> | ` +
+        `Historial: <strong>${res.historial ?? '—'}</strong> | ` +
+        `Errores: <strong>${iconoErr}</strong>` +
+        (d.pre_restore_backup
+          ? `<br><span style="font-size:11px">🛟 Backup de seguridad previo generado: ` +
+            `<code>${d.pre_restore_backup}</code> — si algo no es correcto, puedes restaurarlo desde esta misma lista.</span>`
+          : ''),
+        tipoMensaje
+      );
+      restoreDetenerPolling();
+      restoreCargarLista();  // refresca la tabla para que aparezca el pre_restore_* recién creado
+      if (typeof _invalidarStats === 'function') _invalidarStats();
+      if (G && G.currentView === 'pedidos') loadPedidos();
+    } else if (d.estado === 'error') {
+      restoreMostrarMsgHTML(
+        `❌ <strong>El agente local no pudo restaurar:</strong> ${d.error_msg || 'error desconocido'}` +
+        (d.pre_restore_backup
+          ? `<br><span style="font-size:11px">🛟 Se generó un backup de seguridad antes del fallo: <code>${d.pre_restore_backup}</code></span>`
+          : ''),
+        'error'
+      );
+      restoreDetenerPolling();
+    }
+
+  } catch(e) {
+    // Fallo de red puntual durante el polling: no detener, reintentar en el próximo ciclo
+  }
+}
+
+// Al entrar en la vista, comprobar si ya hay una petición en curso (p.ej. tras recargar la página)
+function restoreComprobarAlEntrar() {
+  restoreConsultarEstado().then(() => {
+    // Si la primera consulta encontró algo no finalizado, restoreConsultarEstado
+    // no arranca el intervalo por sí sola, así que lo hacemos aquí si procede.
+    fetch('/api/admin/backup/estado', {credentials:'same-origin'})
+      .then(r => r.json())
+      .then(d => {
+        if (d.ok && d.hay_peticion && (d.estado === 'pendiente' || d.estado === 'en_proceso')) {
+          restoreIniciarPolling();
+        }
+      })
+      .catch(()=>{});
+  });
+}
+
+// Cerrar modales con Escape
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    document.getElementById('modal-backup-log').style.display = 'none';
+    document.getElementById('modal-restore').style.display    = 'none';
+    _restoreBackupSeleccionado = null;
+  }
+});
 </script>
 </body>
 </html>

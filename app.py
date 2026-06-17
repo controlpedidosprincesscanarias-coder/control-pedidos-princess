@@ -297,6 +297,32 @@ def _auto_migrate():
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (clave) DO NOTHING
                 """, (_clave, _valor, _tipo, _label, _grupo, _orden))
+            # ── v11.9.0 — Cola de restauración de backups (Opción C) ──────────
+            # El panel web inserta filas aquí; un agente local (restore_agent.py)
+            # ejecutado en el PC con acceso a la carpeta de red las procesa.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS restore_queue (
+                    id                  SERIAL PRIMARY KEY,
+                    backup_nombre       TEXT NOT NULL,
+                    backup_ruta         TEXT NOT NULL,
+                    modo                TEXT NOT NULL DEFAULT 'pedidos',
+                    estado              TEXT NOT NULL DEFAULT 'pendiente',
+                    solicitado_por      TEXT,
+                    solicitado_en       TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    iniciado_en         TIMESTAMPTZ,
+                    completado_en       TIMESTAMPTZ,
+                    resumen             JSONB,
+                    error_msg           TEXT,
+                    pre_restore_backup  TEXT
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_restore_queue_estado ON restore_queue(estado)"
+            )
+            # Columna añadida en v11.9.1 — backups existentes de v11.9.0 la reciben aquí
+            cur.execute(
+                "ALTER TABLE restore_queue ADD COLUMN IF NOT EXISTS pre_restore_backup TEXT"
+            )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -6838,6 +6864,206 @@ def test_health_check():
     t.start()
     log.info("▶ [MANUAL] Job health-check lanzado manualmente por admin")
     return jsonify({"ok": True, "mensaje": "Health check ejecutándose — revisa Telegram en unos segundos."})
+
+
+# ── RESTAURACIÓN DE BACKUP ────────────────────────────────────────────────────
+
+@app.route("/api/admin/backup/listar", methods=["POST"])
+@admin_required
+def backup_listar():
+    """
+    Recibe la ruta de la carpeta de backups y devuelve la lista de
+    backups disponibles (subcarpetas con formato backup_YYYYMMDD_HHMM).
+    """
+    import re
+    from pathlib import Path
+
+    data = request.get_json(silent=True) or {}
+    ruta = data.get("ruta", "").strip()
+
+    if not ruta:
+        return jsonify({"ok": False, "error": "Ruta no especificada"}), 400
+
+    carpeta = Path(ruta)
+    if not carpeta.exists():
+        return jsonify({"ok": False, "error": f"La ruta no existe o no está accesible: {ruta}"}), 404
+
+    patron_diario      = re.compile(r"^backup_(\d{8})_(\d{4})$")
+    patron_pre_restore = re.compile(r"^pre_restore_(\d{8})_(\d{6})$")
+    backups = []
+
+    try:
+        for entry in sorted(carpeta.iterdir(), reverse=True):
+            if not entry.is_dir():
+                continue
+
+            m_diario = patron_diario.match(entry.name)
+            m_pre    = patron_pre_restore.match(entry.name)
+
+            if m_diario:
+                fecha_str, hora_str = m_diario.group(1), m_diario.group(2)
+                fecha_fmt = f"{fecha_str[6:8]}/{fecha_str[4:6]}/{fecha_str[:4]} {hora_str[:2]}:{hora_str[2:]}"
+                tipo = "diario"
+            elif m_pre:
+                fecha_str, hora_str = m_pre.group(1), m_pre.group(2)
+                fecha_fmt = f"{fecha_str[6:8]}/{fecha_str[4:6]}/{fecha_str[:4]} {hora_str[:2]}:{hora_str[2:4]}:{hora_str[4:6]}"
+                tipo = "pre_restore"
+            else:
+                continue
+
+            total_bytes = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+            mb          = total_bytes / (1024 * 1024)
+            adj_dir     = entry / "adjuntos"
+            n_adjuntos  = len(list(adj_dir.iterdir())) if adj_dir.exists() else 0
+
+            backups.append({
+                "nombre":    entry.name,
+                "fecha":     fecha_fmt,
+                "mb":        round(mb, 1),
+                "adjuntos":  n_adjuntos,
+                "tiene_log": (entry / "backup_log.txt").exists(),
+                "valido":    (entry / "datos.json").exists(),
+                "tipo":      tipo,
+            })
+
+    except PermissionError as e:
+        return jsonify({"ok": False, "error": f"Sin permisos para leer la carpeta: {e}"}), 403
+
+    return jsonify({"ok": True, "backups": backups})
+
+
+@app.route("/api/admin/backup/log", methods=["POST"])
+@admin_required
+def backup_ver_log():
+    """
+    Devuelve el contenido del backup_log.txt de un backup concreto.
+    POST /api/admin/backup/log
+    Body JSON: { "ruta": "...", "nombre": "backup_20260616_1700" }
+    """
+    from pathlib import Path
+
+    data   = request.get_json(silent=True) or {}
+    ruta   = data.get("ruta",   "").strip()
+    nombre = data.get("nombre", "").strip()
+
+    if not ruta or not nombre:
+        return jsonify({"ok": False, "error": "Faltan parámetros"}), 400
+
+    log_path = Path(ruta) / nombre / "backup_log.txt"
+
+    if not log_path.exists():
+        return jsonify({"ok": False, "error": "El fichero backup_log.txt no existe en este backup"}), 404
+
+    try:
+        contenido = log_path.read_text(encoding="utf-8")
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+    return jsonify({"ok": True, "log": contenido, "nombre": nombre})
+
+
+@app.route("/api/admin/backup/restaurar", methods=["POST"])
+@admin_required
+def backup_restaurar():
+    """
+    OPCIÓN C — Cola de restauración desacoplada.
+
+    Esta ruta NO restaura nada directamente (Render no tiene acceso a la
+    carpeta de red local). En su lugar, registra una petición en la tabla
+    `restore_queue`. Un agente local (restore_agent.py), ejecutado en el PC
+    con acceso a \\shtabaiba\... y a Supabase, sondea esta tabla cada minuto,
+    procesa la petición pendiente más antigua y marca el resultado.
+
+    POST /api/admin/backup/restaurar
+    Body JSON: { "ruta": "...", "nombre": "backup_20260616_1700", "modo": "pedidos" }
+    """
+    data   = request.get_json(silent=True) or {}
+    ruta   = data.get("ruta",   "").strip()
+    nombre = data.get("nombre", "").strip()
+    modo   = data.get("modo",   "pedidos")
+
+    if not ruta or not nombre:
+        return jsonify({"ok": False, "error": "Faltan parámetros: ruta y nombre son obligatorios"}), 400
+    if modo not in ("pedidos", "completo"):
+        return jsonify({"ok": False, "error": "Modo no válido. Usa 'pedidos' o 'completo'"}), 400
+
+    # Evitar encolar si ya hay una petición pendiente o en proceso
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute(
+            "SELECT id, backup_nombre, estado FROM restore_queue "
+            "WHERE estado IN ('pendiente','en_proceso') "
+            "ORDER BY solicitado_en DESC LIMIT 1"
+        )
+        existente = cur.fetchone()
+
+        if existente:
+            return jsonify({
+                "ok": False,
+                "error": f"Ya hay una restauración {existente['estado']} "
+                         f"({existente['backup_nombre']}). Espera a que finalice."
+            }), 409
+
+        usuario_nombre = session.get("nombre") or session.get("username") or "admin"
+
+        cur.execute("""
+            INSERT INTO restore_queue (backup_nombre, backup_ruta, modo, estado, solicitado_por)
+            VALUES (%s, %s, %s, 'pendiente', %s)
+            RETURNING id
+        """, (nombre, ruta, modo, usuario_nombre))
+        nueva_id = cur.fetchone()["id"]
+        db.commit()
+
+    log.info("[RESTORE-QUEUE] Petición #%s encolada. backup=%s modo=%s por=%s",
+              nueva_id, nombre, modo, usuario_nombre)
+
+    return jsonify({
+        "ok": True,
+        "encolado": True,
+        "queue_id": nueva_id,
+        "mensaje": "Petición registrada. El agente local la procesará en menos de 1 minuto."
+    })
+
+
+@app.route("/api/admin/backup/estado", methods=["GET"])
+@admin_required
+def backup_estado_cola():
+    """
+    Devuelve el estado de la última petición de restauración encolada,
+    para que el panel web haga polling y muestre el progreso en tiempo real.
+
+    GET /api/admin/backup/estado
+    """
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT id, backup_nombre, modo, estado, solicitado_por,
+                   solicitado_en, iniciado_en, completado_en, resumen, error_msg,
+                   pre_restore_backup
+            FROM restore_queue
+            ORDER BY solicitado_en DESC
+            LIMIT 1
+        """)
+        fila = cur.fetchone()
+
+    if not fila:
+        return jsonify({"ok": True, "hay_peticion": False})
+
+    return jsonify({
+        "ok": True,
+        "hay_peticion": True,
+        "id":                 fila["id"],
+        "backup_nombre":      fila["backup_nombre"],
+        "modo":               fila["modo"],
+        "estado":             fila["estado"],
+        "solicitado_por":     fila["solicitado_por"],
+        "solicitado_en":      fila["solicitado_en"].isoformat() if fila["solicitado_en"] else None,
+        "iniciado_en":        fila["iniciado_en"].isoformat()   if fila["iniciado_en"]   else None,
+        "completado_en":      fila["completado_en"].isoformat() if fila["completado_en"] else None,
+        "resumen":            fila["resumen"],
+        "error_msg":          fila["error_msg"],
+        "pre_restore_backup": fila["pre_restore_backup"],
+    })
 
 
 # ── Arranque ───────────────────────────────────────────────────────────────────
