@@ -1,3 +1,216 @@
+## v11.9.0 — 17 junio 2026
+
+### 📧 Mejora de comunicaciones con proveedores
+
+Se incorpora un aviso destacado en todos los correos enviados a proveedores para reducir el riesgo de respuestas dirigidas a destinatarios incorrectos y mejorar la trazabilidad de las comunicaciones.
+
+---
+
+### ✉️ Plantillas de correo actualizadas
+
+Se modifica el contenido de las siguientes plantillas:
+
+#### Reclamación de pedido sin confirmación de entrega
+
+```text
+_email_template_enviado_proveedor
+```
+
+---
+
+#### Reclamación de entrega parcial pendiente
+
+```text
+_email_template_entrega_parcial
+```
+
+---
+
+#### Recordatorio de cotización pendiente
+
+```text
+_email_template_pendiente_cotizacion
+```
+
+---
+
+#### Notificación de cambio de estado
+
+Generada desde:
+
+```text
+enviar_emails_estado()
+```
+
+---
+
+### 🟨 Nuevo aviso destacado
+
+En cada uno de los correos dirigidos a proveedores se incorpora el mismo mensaje informativo en dos ubicaciones:
+
+#### Inicio del mensaje
+
+* Aviso destacado en color amarillo.
+* Visible nada más abrir el correo.
+
+#### Zona de firma
+
+* Repetido junto a los datos del comprador.
+* Situado inmediatamente encima de la dirección de correo de contacto.
+
+Objetivo:
+
+* Evitar respuestas a direcciones incorrectas.
+* Facilitar la identificación del interlocutor responsable.
+* Mejorar la comunicación entre proveedor y comprador.
+
+---
+
+### ℹ️ Exclusión deliberada
+
+No se modifica:
+
+```text
+_email_template_pendiente_firma
+```
+
+ya que este correo se envía exclusivamente a destinatarios internos:
+
+* Dirección de Compras.
+* Dirección del Hotel.
+
+Por tanto, no existe riesgo de respuesta errónea por parte de proveedores externos.
+
+---
+
+## 🔍 Mejora de observabilidad y diagnóstico
+
+Se incorporan nuevos registros de trazabilidad (*logging*) en puntos críticos del sistema.
+
+Estas mejoras no modifican la lógica de negocio ni el comportamiento funcional de la aplicación.
+
+Su objetivo es facilitar el diagnóstico de incidencias en producción.
+
+---
+
+### 👥 Notificaciones a administradores
+
+Se añaden logs en:
+
+```text
+_get_admin_emails()
+_get_solo_admin_emails()
+_get_admins_telegram()
+```
+
+#### Utilidad
+
+Si aparecen mensajes asociados a estas funciones en los logs de Render:
+
+* Indican un fallo al consultar la tabla de usuarios.
+* Permiten distinguir entre:
+
+  * Problemas de base de datos.
+  * Problemas de envío de correo.
+  * Problemas de Telegram.
+
+---
+
+### ⚙️ Configuración del sistema
+
+Se añade trazabilidad en:
+
+```text
+get_config()
+```
+
+#### Utilidad
+
+Permite detectar cuándo la aplicación está utilizando los valores por defecto en lugar de la configuración almacenada desde el panel de administración.
+
+Ejemplos afectados:
+
+* Umbrales de alertas.
+* Días de seguimiento.
+* Techos de gasto.
+* Configuración operativa.
+
+---
+
+### 🚨 Alertas urgentes de techo de gasto
+
+Se añaden registros en:
+
+```text
+_ya_notificado_techo_urgente_hoy()
+_dias_desde_ultimo_techo_urgente_admin()
+```
+
+#### Utilidad
+
+Permiten detectar incidencias que podrían provocar:
+
+* Alertas urgentes duplicadas.
+* Reenvíos innecesarios a administradores.
+* Fallos de verificación de avisos previos.
+
+---
+
+### 📥 Importaciones Excel
+
+Se añade trazabilidad en:
+
+```text
+reset_e_importar()
+importar_excel()
+```
+
+#### Utilidad
+
+Se registran advertencias cuando una fecha importada:
+
+* No coincide con ninguno de los formatos esperados.
+* No puede convertirse correctamente.
+
+Estas incidencias:
+
+* No detienen la importación.
+* No generan errores para el usuario.
+* Facilitan la identificación de datos inconsistentes en los ficheros origen.
+
+---
+
+## 🛡️ Riesgo y compatibilidad
+
+### Compatibilidad total
+
+* No se modifican estructuras de base de datos.
+* No se alteran APIs existentes.
+* No cambian permisos ni roles.
+* No se modifica la lógica de negocio.
+
+### Riesgo de despliegue
+
+**Muy bajo.**
+
+Todos los cambios se limitan a:
+
+* Mejoras visuales en correos.
+* Incorporación de registros diagnósticos.
+* Incremento de visibilidad operativa para administración y soporte.
+
+---
+
+### ✅ Resultado
+
+* Comunicaciones más claras con proveedores.
+* Menor riesgo de respuestas enviadas al destinatario incorrecto.
+* Mayor trazabilidad en procesos críticos.
+* Diagnóstico mucho más rápido de incidencias en producción.
+* Visibilidad de problemas de configuración y datos importados.
+* Sin impacto funcional ni cambios de comportamiento para los usuarios.
+
+
 ## v11.8.8 — 17 junio 2026
 
 ### 🛡️ Validaciones reforzadas para "ENVIADO AL PROVEEDOR"

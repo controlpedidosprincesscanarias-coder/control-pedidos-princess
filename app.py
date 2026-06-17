@@ -551,6 +551,9 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             return
         _email_comprador_estado = _compradores_estado[0]["email"]
         body = f"""
+        <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
+          ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+        </p>
         <p>Estimado/a proveedor/a,</p>
         <p>Le informamos que el pedido que figura a continuación ha sido tramitado:</p>
         <p>
@@ -563,6 +566,9 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
            <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
            Princess Hotels &amp; Resorts<br>
            <a href="mailto:{_email_comprador_estado}">{_email_comprador_estado}</a></p>
+        <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
+          Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+        </p>
         """
         res = _send_email(pedido["proveedor_email"], subject, body)
         _log_email(db, pedido_id, "proveedor", pedido["proveedor_email"], subject,
@@ -622,7 +628,8 @@ def _get_admin_emails() -> list:
             "AND email IS NOT NULL AND TRIM(email) != ''"
         )) or []
         return [a["email"] for a in admins if a.get("email")]
-    except Exception:
+    except Exception as exc:
+        log.error("[_get_admin_emails] Error consultando emails admin/compras: %s", exc)
         return []
 
 
@@ -637,7 +644,8 @@ def _get_solo_admin_emails() -> list:
             "AND email IS NOT NULL AND TRIM(email) != ''"
         )) or []
         return [a["email"] for a in admins if a.get("email")]
-    except Exception:
+    except Exception as exc:
+        log.error("[_get_solo_admin_emails] Error consultando emails admin: %s", exc)
         return []
 
 
@@ -653,7 +661,8 @@ def _get_admins_telegram() -> list:
             "WHERE rol='admin' AND activo=1 AND telegram_chat_id IS NOT NULL "
             "AND TRIM(telegram_chat_id) != ''"
         )) or []
-    except Exception:
+    except Exception as exc:
+        log.error("[_get_admins_telegram] Error consultando admins con Telegram: %s", exc)
         admins = []
     return admins
 
@@ -1143,7 +1152,8 @@ def get_config() -> dict:
                 except (ValueError, TypeError):
                     pass
             cfg[r["clave"]] = v
-    except Exception:
+    except Exception as exc:
+        log.error("[get_config] Error leyendo config_alertas, usando defaults: %s", exc)
         cfg = {}
 
     defaults = {
@@ -1892,7 +1902,8 @@ def _ya_notificado_techo_urgente_hoy(hotel_codigo: str) -> bool:
             (f"%{hotel_codigo}%",), one=True
         )
         return (row["n"] if row else 0) > 0
-    except Exception:
+    except Exception as exc:
+        log.error("[_ya_notificado_techo_urgente_hoy] Error consultando log para hotel %s: %s", hotel_codigo, exc)
         return False
 
 
@@ -1916,7 +1927,8 @@ def _dias_desde_ultimo_techo_urgente_admin(hotel_codigo: str) -> int | None:
         from datetime import date as _d
         hoy = datetime.now(pytz.timezone("Atlantic/Canary")).date()
         return (hoy - row["ultima"]).days
-    except Exception:
+    except Exception as exc:
+        log.error("[_dias_desde_ultimo_techo_urgente_admin] Error consultando log para hotel %s: %s", hotel_codigo, exc)
         return None
 
 
@@ -2406,6 +2418,9 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
         <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+        <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
+          ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+        </p>
         <p>Estimado/a proveedor/a,</p>
         <p>Nos ponemos en contacto con usted en relación al pedido que figura a continuación,
            el cual fue tramitado hace <strong>{dias} días</strong> y aún no hemos recibido confirmación de entrega.</p>
@@ -2425,6 +2440,9 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
            <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
            Princess Hotels &amp; Resorts<br>
            <a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a></p>
+        <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
+          Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+        </p>
       </div>
     </div>
     """
@@ -2483,6 +2501,9 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
         <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+        <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
+          ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+        </p>
         <p>Estimado/a proveedor/a,</p>
         <p>Le contactamos en relación al pedido indicado, cuya entrega se registró de forma
            <strong>parcial</strong> hace <strong>{dias} días</strong> y aún está pendiente de completarse.</p>
@@ -2500,6 +2521,9 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
            <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
            Princess Hotels &amp; Resorts<br>
            <a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a></p>
+        <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
+          Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+        </p>
       </div>
     </div>
     """
@@ -2516,6 +2540,9 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
         <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
       </div>
       <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+        <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
+          ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+        </p>
         <p>Estimado/a proveedor/a,</p>
         <p>Le recordamos que hace <strong>{dias} días</strong> se le solicitó cotización
            para el siguiente pedido y aún estamos a la espera de su propuesta económica.</p>
@@ -2532,6 +2559,9 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
            <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
            Princess Hotels &amp; Resorts<br>
            <a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a></p>
+        <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
+          Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+        </p>
       </div>
     </div>
     """
@@ -5902,6 +5932,7 @@ def reset_e_importar():
                     return dt.strptime(str(val).strip(), fmt).strftime("%Y-%m-%d")
                 except Exception:
                     pass
+            log.warning("[reset_e_importar] Fecha no reconocida en Excel, valor descartado: %r", val)
             return None
 
         def bool_val(val):
@@ -6054,6 +6085,7 @@ def importar_excel():
                     return dt.strptime(str(val).strip(), fmt).strftime("%Y-%m-%d")
                 except Exception:
                     pass
+            log.warning("[importar_excel] Fecha no reconocida en Excel, valor descartado: %r", val)
             return None
 
         def bool_val(val):
