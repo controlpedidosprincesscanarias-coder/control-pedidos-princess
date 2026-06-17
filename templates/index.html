@@ -1399,7 +1399,7 @@ tbody tr:last-child{border-bottom:none}
             <div id="restore-msg" style="display:none;margin-bottom:12px;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600"></div>
 
             <div id="restore-loading" style="display:none;text-align:center;padding:24px;color:var(--text-secondary);font-size:13px">
-              Leyendo carpeta de backups…
+              Consultando lista de backups…
             </div>
 
             <div id="restore-lista" style="display:none">
@@ -7425,6 +7425,7 @@ async function restoreCargarLista() {
     if (!d.backups || d.backups.length === 0) {
       empty.style.display = 'block';
       document.getElementById('restore-lista').style.display = 'block';
+      if (d.aviso) restoreMostrarMsg('⚠️ ' + d.aviso, 'warn');
       return;
     }
     empty.style.display = 'none';
@@ -7470,7 +7471,15 @@ async function restoreCargarLista() {
 
 
     document.getElementById('restore-lista').style.display = 'block';
-    restoreMostrarMsg(`✅ ${d.backups.length} backup(s) encontrado(s).`, 'ok');
+
+    if (d.aviso) {
+      restoreMostrarMsg('⚠️ ' + d.aviso, 'warn');
+    } else {
+      const sync = (typeof d.ultimo_escaneo_minutos === 'number')
+        ? ` · agente sincronizado hace ${d.ultimo_escaneo_minutos} min`
+        : '';
+      restoreMostrarMsg(`✅ ${d.backups.length} backup(s) encontrado(s)${sync}.`, 'ok');
+    }
 
   } catch(e) {
     document.getElementById('restore-loading').style.display = 'none';

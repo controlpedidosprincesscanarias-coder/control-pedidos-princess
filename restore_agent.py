@@ -74,6 +74,15 @@ MIME_MAP = {
 
 PATRON_ADJUNTO = re.compile(r"^pedido_(\d+)_(.+?)_(.+)$")
 
+# ── Fix v11.8.6 — Caché de listado de backups (ver sincronizar_cache_backups) ──
+PATRON_BACKUP_DIARIO      = re.compile(r"^backup_(\d{8})_(\d{4})$")
+PATRON_BACKUP_PRE_RESTORE = re.compile(r"^pre_restore_(\d{8})_(\d{6})$")
+
+
+def normalizar_ruta_backup(ruta):
+    """Debe coincidir exactamente con _normalizar_ruta_backup() en app.py."""
+    return ruta.strip().rstrip("\\/").lower()
+
 
 def log(msg):
     ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -228,6 +237,168 @@ def caducar_pendientes_antiguas(conn):
     return len(caducadas)
 
 
+# ── Fix v11.8.6 — Caché de listado de backups ─────────────────────────────────
+#
+# El panel web (/api/admin/backup/listar) corre en Render y no tiene acceso
+# a la carpeta de red local, igual que ya pasaba con la restauración. Este
+# agente, que sí tiene acceso, escanea la carpeta en cada ciclo y sube el
+# resultado a la tabla `backups_cache` en Supabase; el panel web solo lee
+# esa tabla.
+
+def escanear_carpeta_backups(carpeta):
+    """
+    Escanea `carpeta` en busca de subcarpetas de backup (diario o
+    pre_restore) y devuelve una lista de dicts listos para subir a
+    `backups_cache`. Si la carpeta no existe o no hay permisos, la
+    excepción se propaga tal cual para que el llamante decida qué hacer
+    (no se toca la caché existente en ese caso).
+    """
+    resultado = []
+
+    for entry in sorted(carpeta.iterdir(), reverse=True):
+        if not entry.is_dir():
+            continue
+
+        m_diario = PATRON_BACKUP_DIARIO.match(entry.name)
+        m_pre    = PATRON_BACKUP_PRE_RESTORE.match(entry.name)
+
+        if m_diario:
+            fecha_str, hora_str = m_diario.group(1), m_diario.group(2)
+            fecha_fmt = f"{fecha_str[6:8]}/{fecha_str[4:6]}/{fecha_str[:4]} {hora_str[:2]}:{hora_str[2:]}"
+            fecha_raw = datetime.strptime(fecha_str + hora_str, "%Y%m%d%H%M")
+            tipo = "diario"
+        elif m_pre:
+            fecha_str, hora_str = m_pre.group(1), m_pre.group(2)
+            fecha_fmt = f"{fecha_str[6:8]}/{fecha_str[4:6]}/{fecha_str[:4]} {hora_str[:2]}:{hora_str[2:4]}:{hora_str[4:6]}"
+            fecha_raw = datetime.strptime(fecha_str + hora_str, "%Y%m%d%H%M%S")
+            tipo = "pre_restore"
+        else:
+            continue
+
+        total_bytes = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
+        mb          = total_bytes / (1024 * 1024)
+        adj_dir     = entry / "adjuntos"
+        n_adjuntos  = len(list(adj_dir.iterdir())) if adj_dir.exists() else 0
+
+        log_path   = entry / "backup_log.txt"
+        tiene_log  = log_path.exists()
+        log_texto  = None
+        if tiene_log:
+            try:
+                log_texto = log_path.read_text(encoding="utf-8", errors="replace")
+                if len(log_texto) > 300_000:
+                    log_texto = log_texto[:300_000] + "\n\n[... log truncado, demasiado largo para la caché ...]"
+            except Exception as e:
+                log_texto = f"[No se pudo leer backup_log.txt: {e}]"
+
+        resultado.append({
+            "nombre":        entry.name,
+            "fecha":         fecha_fmt,
+            "fecha_raw":     fecha_raw,
+            "mb":            round(mb, 1),
+            "adjuntos":      n_adjuntos,
+            "tiene_log":     tiene_log,
+            "log_contenido": log_texto,
+            "valido":        (entry / "datos.json").exists(),
+            "tipo":          tipo,
+        })
+
+    return resultado
+
+
+def sincronizar_cache_backups(conn, carpeta_str):
+    """
+    Escanea la carpeta de backups configurada y actualiza `backups_cache`
+    en Supabase. Si el escaneo falla (carpeta no accesible, PC sin red al
+    recurso, etc.) NO se borra la caché existente: se deja como estaba y
+    el panel web mostrará el aviso de "agente sin sincronizar" en cuanto
+    lleve unos minutos desactualizada, en vez de mostrar una lista vacía
+    o un error confuso.
+    """
+    carpeta   = Path(carpeta_str)
+    ruta_norm = normalizar_ruta_backup(carpeta_str)
+
+    # Tabla creada también desde app.py (_auto_migrate); se repite aquí por
+    # si el agente arranca antes de que la web haya hecho su primer arranque.
+    try:
+        with conn.cursor() as cur:
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS backups_cache (
+                    id                SERIAL PRIMARY KEY,
+                    ruta              TEXT NOT NULL,
+                    ruta_normalizada  TEXT NOT NULL,
+                    nombre            TEXT NOT NULL,
+                    fecha             TEXT NOT NULL,
+                    fecha_raw         TIMESTAMP,
+                    mb                NUMERIC NOT NULL DEFAULT 0,
+                    adjuntos          INTEGER NOT NULL DEFAULT 0,
+                    tiene_log         BOOLEAN NOT NULL DEFAULT FALSE,
+                    log_contenido     TEXT,
+                    valido            BOOLEAN NOT NULL DEFAULT FALSE,
+                    tipo              TEXT NOT NULL DEFAULT 'diario',
+                    actualizado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (ruta_normalizada, nombre)
+                )
+            """)
+        conn.commit()
+    except Exception as e:
+        conn.rollback()
+        log(f"  AVISO: no se pudo verificar/crear backups_cache: {e}")
+        return
+
+    scan_inicio = datetime.now(timezone.utc)
+
+    try:
+        backups = escanear_carpeta_backups(carpeta)
+    except Exception as e:
+        log(f"  AVISO: no se pudo escanear '{carpeta_str}' para la cache de backups: {e}")
+        return
+
+    try:
+        with conn.cursor() as cur:
+            for b in backups:
+                cur.execute("""
+                    INSERT INTO backups_cache
+                        (ruta, ruta_normalizada, nombre, fecha, fecha_raw,
+                         mb, adjuntos, tiene_log, log_contenido, valido, tipo, actualizado_en)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+                    ON CONFLICT (ruta_normalizada, nombre) DO UPDATE SET
+                        ruta           = EXCLUDED.ruta,
+                        fecha          = EXCLUDED.fecha,
+                        fecha_raw      = EXCLUDED.fecha_raw,
+                        mb             = EXCLUDED.mb,
+                        adjuntos       = EXCLUDED.adjuntos,
+                        tiene_log      = EXCLUDED.tiene_log,
+                        log_contenido  = EXCLUDED.log_contenido,
+                        valido         = EXCLUDED.valido,
+                        tipo           = EXCLUDED.tipo,
+                        actualizado_en = NOW()
+                """, (
+                    carpeta_str, ruta_norm, b["nombre"], b["fecha"], b["fecha_raw"],
+                    b["mb"], b["adjuntos"], b["tiene_log"], b["log_contenido"],
+                    b["valido"], b["tipo"],
+                ))
+
+            # Backups que ya no están en la carpeta (borrados manualmente,
+            # rotación antigua...) se retiran de la caché.
+            cur.execute("""
+                DELETE FROM backups_cache
+                WHERE ruta_normalizada = %s AND actualizado_en < %s
+            """, (ruta_norm, scan_inicio))
+            eliminados = cur.rowcount
+
+        conn.commit()
+
+        if eliminados:
+            log(f"  Cache de backups: {len(backups)} activo(s), {eliminados} retirado(s) (ya no existen)")
+        else:
+            log(f"  Cache de backups sincronizada: {len(backups)} backup(s) en '{carpeta_str}'")
+
+    except Exception as e:
+        conn.rollback()
+        log(f"  AVISO: fallo sincronizando backups_cache: {e}")
+
+
 def procesar_peticion(conn, peticion, carpeta_pre_restore_base):
     """Ejecuta la restauración real para una petición de la cola."""
     queue_id = peticion["id"]
@@ -379,6 +550,8 @@ def ejecutar_ciclo(carpeta_pre_restore_base):
         n_caducadas = caducar_pendientes_antiguas(conn)
         if n_caducadas:
             log(f"  {n_caducadas} peticion(es) caducada(s) por superar {CADUCIDAD_HORAS}h pendientes")
+
+        sincronizar_cache_backups(conn, str(carpeta_pre_restore_base))
 
         with conn.cursor() as cur:
             cur.execute("""

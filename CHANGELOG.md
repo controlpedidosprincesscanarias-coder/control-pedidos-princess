@@ -257,6 +257,46 @@ Incluye:
 * Mayor robustez y capacidad de recuperación ante errores.
 * Arquitectura preparada para crecimiento y mantenimiento a largo plazo.
 
+---
+
+### 🔍 Listado de backups también vía agente local
+
+La migración a la arquitectura distribuida se aplicó inicialmente solo a
+`/api/admin/backup/restaurar`. La consulta de backups disponibles
+(`/api/admin/backup/listar`, botón "Buscar backups" del panel) seguía
+intentando leer la carpeta de red directamente desde Render, con el mismo
+problema de fondo: la infraestructura cloud no tiene acceso a la red
+corporativa, sea cual sea el formato de la ruta (letra de unidad mapeada
+o ruta UNC `\\Servidor\...`).
+
+Se completa ahora la migración con el mismo patrón agente-local + Supabase:
+
+```text
+restore_agent.py (cada ciclo)
+      ↓
+Escanea carpeta de backups
+      ↓
+backups_cache (Supabase)
+      ↑
+/api/admin/backup/listar (Render) — solo lee esta tabla
+```
+
+* Nueva tabla `backups_cache`, creada automáticamente por el sistema de
+  auto-migración existente (igual que `restore_queue`).
+* `restore_agent.py` sincroniza esta tabla en cada ciclo (cada 1 minuto,
+  vía la misma tarea programada que ya procesa restauraciones), antes de
+  comprobar si hay peticiones pendientes.
+* Si el escaneo falla puntualmente (carpeta no accesible, PC sin red), la
+  caché anterior se conserva tal cual — nunca se vacía la lista por un
+  fallo transitorio.
+* El panel web muestra un aviso si la caché lleva más de 5 minutos sin
+  sincronizarse, o si nunca se ha sincronizado para la ruta indicada, en
+  vez del genérico "La ruta no existe o no está accesible".
+* `/api/admin/backup/log` (botón "📋 Log" de cada backup) tenía el mismo
+  problema — leía `backup_log.txt` directamente desde Render. Ahora el
+  agente local sube el contenido del log a `backups_cache` junto con el
+  resto de metadatos, y esta ruta solo lee de ahí.
+
 
 ## v11.8.4 — 16 junio 2026
 

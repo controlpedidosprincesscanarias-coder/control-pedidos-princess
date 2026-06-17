@@ -4,7 +4,7 @@ Despliegue: Render.com  |  BD: Supabase  |  Email: Resend
 """
 
 import os, json, logging, secrets, atexit, hashlib
-from datetime import datetime, timedelta, date as _date
+from datetime import datetime, timedelta, timezone, date as _date
 from functools import wraps
 
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -322,6 +322,34 @@ def _auto_migrate():
             # Columna añadida en v11.9.1 — backups existentes de v11.9.0 la reciben aquí
             cur.execute(
                 "ALTER TABLE restore_queue ADD COLUMN IF NOT EXISTS pre_restore_backup TEXT"
+            )
+            # ── Fix v11.8.6 — Listado de backups vía caché del agente local ───
+            # /api/admin/backup/listar intentaba leer Path(ruta) directamente
+            # en el servidor (Render), que no tiene acceso a la red local de
+            # la oficina — el mismo problema ya resuelto para /restaurar con
+            # la cola restore_queue. Ahora restore_agent.py escanea la carpeta
+            # de backups en cada ciclo y sincroniza el resultado aquí; el
+            # panel web solo lee esta tabla, nunca toca el filesystem.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS backups_cache (
+                    id                SERIAL PRIMARY KEY,
+                    ruta              TEXT NOT NULL,
+                    ruta_normalizada  TEXT NOT NULL,
+                    nombre            TEXT NOT NULL,
+                    fecha             TEXT NOT NULL,
+                    fecha_raw         TIMESTAMP,
+                    mb                NUMERIC NOT NULL DEFAULT 0,
+                    adjuntos          INTEGER NOT NULL DEFAULT 0,
+                    tiene_log         BOOLEAN NOT NULL DEFAULT FALSE,
+                    log_contenido     TEXT,
+                    valido            BOOLEAN NOT NULL DEFAULT FALSE,
+                    tipo              TEXT NOT NULL DEFAULT 'diario',
+                    actualizado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (ruta_normalizada, nombre)
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_backups_cache_ruta ON backups_cache(ruta_normalizada)"
             )
         db.close()
         log.info("Auto-migración OK")
@@ -6868,68 +6896,87 @@ def test_health_check():
 
 # ── RESTAURACIÓN DE BACKUP ────────────────────────────────────────────────────
 
+def _normalizar_ruta_backup(ruta):
+    """Normaliza una ruta de carpeta para comparaciones fiables: sin espacios
+    sobrantes, sin barra final y sin distinguir mayúsculas (Windows no
+    distingue mayúsculas/minúsculas en rutas). Debe coincidir exactamente
+    con la normalización que aplica restore_agent.py al escribir la caché."""
+    return ruta.strip().rstrip("\\/").lower()
+
+
 @app.route("/api/admin/backup/listar", methods=["POST"])
 @admin_required
 def backup_listar():
     """
-    Recibe la ruta de la carpeta de backups y devuelve la lista de
-    backups disponibles (subcarpetas con formato backup_YYYYMMDD_HHMM).
-    """
-    import re
-    from pathlib import Path
+    Devuelve la lista de backups disponibles para la ruta indicada.
 
+    Fix v11.8.6: esta ruta dejó de intentar leer Path(ruta) directamente en
+    el servidor — Render no tiene acceso a la red local de la oficina, el
+    mismo motivo por el que /api/admin/backup/restaurar ya pasó a usar una
+    cola (restore_queue) en vez de ejecutar acciones contra el filesystem.
+
+    Ahora lee de `backups_cache`, una tabla que `restore_agent.py` mantiene
+    sincronizada desde tu PC en cada ciclo (escanea BACKUP_DESTINO y sube el
+    resultado a Supabase). Esta ruta nunca toca disco.
+    """
     data = request.get_json(silent=True) or {}
     ruta = data.get("ruta", "").strip()
 
     if not ruta:
         return jsonify({"ok": False, "error": "Ruta no especificada"}), 400
 
-    carpeta = Path(ruta)
-    if not carpeta.exists():
-        return jsonify({"ok": False, "error": f"La ruta no existe o no está accesible: {ruta}"}), 404
+    ruta_norm = _normalizar_ruta_backup(ruta)
 
-    patron_diario      = re.compile(r"^backup_(\d{8})_(\d{4})$")
-    patron_pre_restore = re.compile(r"^pre_restore_(\d{8})_(\d{6})$")
-    backups = []
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT nombre, fecha, mb, adjuntos, tiene_log, valido, tipo, actualizado_en
+            FROM backups_cache
+            WHERE ruta_normalizada = %s
+            ORDER BY fecha_raw DESC NULLS LAST, nombre DESC
+        """, (ruta_norm,))
+        filas = cur.fetchall()
 
-    try:
-        for entry in sorted(carpeta.iterdir(), reverse=True):
-            if not entry.is_dir():
-                continue
+    if not filas:
+        return jsonify({
+            "ok": True,
+            "backups": [],
+            "aviso": (
+                "El agente local (restore_agent.py) todavía no ha reportado ningún "
+                "backup para esta ruta exacta. Comprueba que la tarea programada esté "
+                "activa en el PC y que la ruta coincide con BACKUP_DESTINO en "
+                "restore_agent.bat."
+            ),
+        })
 
-            m_diario = patron_diario.match(entry.name)
-            m_pre    = patron_pre_restore.match(entry.name)
+    ultimo_escaneo = max(f["actualizado_en"] for f in filas)
+    minutos = int((datetime.now(timezone.utc) - ultimo_escaneo).total_seconds() // 60)
 
-            if m_diario:
-                fecha_str, hora_str = m_diario.group(1), m_diario.group(2)
-                fecha_fmt = f"{fecha_str[6:8]}/{fecha_str[4:6]}/{fecha_str[:4]} {hora_str[:2]}:{hora_str[2:]}"
-                tipo = "diario"
-            elif m_pre:
-                fecha_str, hora_str = m_pre.group(1), m_pre.group(2)
-                fecha_fmt = f"{fecha_str[6:8]}/{fecha_str[4:6]}/{fecha_str[:4]} {hora_str[:2]}:{hora_str[2:4]}:{hora_str[4:6]}"
-                tipo = "pre_restore"
-            else:
-                continue
+    resp = {
+        "ok": True,
+        "backups": [
+            {
+                "nombre":    f["nombre"],
+                "fecha":     f["fecha"],
+                "mb":        float(f["mb"]),
+                "adjuntos":  f["adjuntos"],
+                "tiene_log": f["tiene_log"],
+                "valido":    f["valido"],
+                "tipo":      f["tipo"],
+            }
+            for f in filas
+        ],
+        "ultimo_escaneo_minutos": minutos,
+    }
 
-            total_bytes = sum(f.stat().st_size for f in entry.rglob("*") if f.is_file())
-            mb          = total_bytes / (1024 * 1024)
-            adj_dir     = entry / "adjuntos"
-            n_adjuntos  = len(list(adj_dir.iterdir())) if adj_dir.exists() else 0
+    if minutos > 5:
+        resp["aviso"] = (
+            f"El agente local lleva {minutos} minutos sin sincronizar la caché. "
+            "Si tu PC está apagado o la tarea programada está desactivada, esta "
+            "lista puede no reflejar los backups más recientes."
+        )
 
-            backups.append({
-                "nombre":    entry.name,
-                "fecha":     fecha_fmt,
-                "mb":        round(mb, 1),
-                "adjuntos":  n_adjuntos,
-                "tiene_log": (entry / "backup_log.txt").exists(),
-                "valido":    (entry / "datos.json").exists(),
-                "tipo":      tipo,
-            })
-
-    except PermissionError as e:
-        return jsonify({"ok": False, "error": f"Sin permisos para leer la carpeta: {e}"}), 403
-
-    return jsonify({"ok": True, "backups": backups})
+    return jsonify(resp)
 
 
 @app.route("/api/admin/backup/log", methods=["POST"])
@@ -6939,9 +6986,12 @@ def backup_ver_log():
     Devuelve el contenido del backup_log.txt de un backup concreto.
     POST /api/admin/backup/log
     Body JSON: { "ruta": "...", "nombre": "backup_20260616_1700" }
-    """
-    from pathlib import Path
 
+    Fix v11.8.6: igual que /api/admin/backup/listar, esta ruta dejó de leer
+    el fichero directamente desde el filesystem de Render (sin acceso a la
+    red local). El contenido se lee de `backups_cache`, donde lo deja
+    restore_agent.py al sincronizar la lista de backups.
+    """
     data   = request.get_json(silent=True) or {}
     ruta   = data.get("ruta",   "").strip()
     nombre = data.get("nombre", "").strip()
@@ -6949,17 +6999,28 @@ def backup_ver_log():
     if not ruta or not nombre:
         return jsonify({"ok": False, "error": "Faltan parámetros"}), 400
 
-    log_path = Path(ruta) / nombre / "backup_log.txt"
+    ruta_norm = _normalizar_ruta_backup(ruta)
 
-    if not log_path.exists():
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute("""
+            SELECT tiene_log, log_contenido
+            FROM backups_cache
+            WHERE ruta_normalizada = %s AND nombre = %s
+        """, (ruta_norm, nombre))
+        fila = cur.fetchone()
+
+    if not fila:
+        return jsonify({
+            "ok": False,
+            "error": "Este backup no aparece en la caché del agente local. "
+                     "Pulsa \"Actualizar lista\" para refrescarla."
+        }), 404
+
+    if not fila["tiene_log"] or not fila["log_contenido"]:
         return jsonify({"ok": False, "error": "El fichero backup_log.txt no existe en este backup"}), 404
 
-    try:
-        contenido = log_path.read_text(encoding="utf-8")
-    except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
-
-    return jsonify({"ok": True, "log": contenido, "nombre": nombre})
+    return jsonify({"ok": True, "log": fila["log_contenido"], "nombre": nombre})
 
 
 @app.route("/api/admin/backup/restaurar", methods=["POST"])

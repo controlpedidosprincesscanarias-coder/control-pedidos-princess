@@ -27,6 +27,13 @@ Render (donde corre la web) **no tiene acceso** a tu carpeta de red local,
 así que nunca ejecuta la restauración directamente. Solo encola la petición.
 Quien restaura de verdad es tu PC, a través de `restore_agent.py`.
 
+Por el mismo motivo, el listado de backups disponibles que ves en el panel
+(botón "Buscar backups") tampoco lee la carpeta directamente desde Render:
+`restore_agent.py` la escanea en cada ciclo y sube el resultado a la tabla
+`backups_cache` en Supabase, que es lo único que consulta el panel web.
+Si acabas de generar un backup nuevo, puede tardar hasta 1 minuto en
+aparecer en la lista (el tiempo del siguiente ciclo del agente).
+
 ---
 
 ## Archivos de este paquete relacionados con backup/restauración
@@ -34,8 +41,8 @@ Quien restaura de verdad es tu PC, a través de `restore_agent.py`.
 | Fichero | Dónde se ejecuta | Qué hace |
 |---|---|---|
 | `backup_pedidos.py` / `.bat` | Tu PC (tarea L-V 17:00) | Genera la copia de seguridad diaria |
-| `restore_agent.py` / `.bat` | Tu PC (tarea cada 1 min) | Procesa peticiones de restauración pendientes |
-| Panel web → "Restaurar backup" | Render (la nube) | Solo consulta/encola; nunca ejecuta directamente |
+| `restore_agent.py` / `.bat` | Tu PC (tarea cada 1 min) | Procesa restauraciones pendientes y sincroniza la lista de backups (`backups_cache`) |
+| Panel web → "Restaurar backup" | Render (la nube) | Solo consulta `backups_cache` / encola restauraciones; nunca toca la carpeta de red |
 
 ---
 
