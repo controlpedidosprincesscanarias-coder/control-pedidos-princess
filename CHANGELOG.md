@@ -1,3 +1,166 @@
+## v11.8.8 — 17 junio 2026
+
+### 🛡️ Validaciones reforzadas para "ENVIADO AL PROVEEDOR"
+
+Se endurecen los controles de calidad documental antes de permitir que un pedido pase al estado **ENVIADO AL PROVEEDOR**, garantizando que toda la documentación obligatoria esté correctamente registrada.
+
+---
+
+### ✅ Nuevas validaciones de cambio de estado
+
+Las comprobaciones se ejecutan únicamente cuando el pedido entra en el estado:
+
+```text
+ENVIADO AL PROVEEDOR
+```
+
+No afectan a posteriores ediciones de pedidos que ya se encuentren en dicho estado.
+
+---
+
+### 📄 Nº Pedido (DALI / SAP)
+
+Nuevo requisito obligatorio:
+
+* El campo **Nº Pedido (DALI / SAP)** debe contener un valor.
+* Si está vacío, se bloquea el cambio de estado.
+
+---
+
+### 📎 Documento de pedido (`pedido_doc`)
+
+Nuevas reglas obligatorias:
+
+* Debe existir **exactamente 1 adjunto** de tipo pedido.
+* El adjunto debe ser un documento válido:
+
+  * PDF
+  * Word
+
+No se admiten:
+
+* Correos electrónicos (`.eml`)
+* Correos Outlook (`.msg`)
+
+La validación genera error cuando:
+
+* No existe ningún adjunto.
+* Existen varios adjuntos de pedido.
+* El único adjunto disponible es un correo electrónico.
+
+---
+
+### 📑 Nº Presupuesto
+
+Nuevo requisito obligatorio:
+
+* El campo **Nº Presupuesto** debe contener un valor.
+* Si está vacío, se bloquea el cambio de estado.
+
+---
+
+### 📎 Documento de presupuesto (`presupuesto_doc`)
+
+Nuevas reglas obligatorias:
+
+* Debe existir al menos un documento válido:
+
+  * PDF
+  * Word
+
+Se permite la existencia adicional de correos electrónicos asociados.
+
+Sin embargo, la validación genera error cuando:
+
+* No existe ningún documento.
+* Solo existen correos electrónicos (`.eml` o `.msg`).
+
+---
+
+### 🔒 Protección adicional en la subida de adjuntos
+
+#### Adjuntos de pedido (`pedido_doc`)
+
+Se añaden restricciones preventivas en `upload_adjunto`.
+
+##### Correos electrónicos bloqueados
+
+No se permite subir:
+
+* `.eml`
+* `.msg`
+
+como documento de pedido.
+
+El sistema devuelve un mensaje explicativo indicando que únicamente se admiten documentos oficiales.
+
+##### Límite de un único documento
+
+Solo puede existir un adjunto de tipo:
+
+```text
+pedido_doc
+```
+
+Si ya existe uno registrado:
+
+* La subida se rechaza.
+* Se informa al usuario del motivo.
+
+Con ello se evita la acumulación accidental de múltiples versiones del mismo documento.
+
+---
+
+#### Adjuntos de presupuesto (`presupuesto_doc`)
+
+Sin cambios funcionales.
+
+Continúan permitiéndose:
+
+* Documentos PDF.
+* Documentos Word.
+* Correos electrónicos asociados.
+
+---
+
+### ⚠️ Respuesta de validación unificada
+
+Cuando alguna comprobación falla, la API devuelve:
+
+```http
+HTTP 422 Unprocessable Entity
+```
+
+con estructura:
+
+```json
+{
+  "ok": false,
+  "errores": [
+    "...",
+    "...",
+    "..."
+  ]
+}
+```
+
+Características:
+
+* Se devuelve un mensaje independiente por cada problema detectado.
+* El frontend puede mostrar todas las incidencias simultáneamente.
+* El usuario corrige todos los errores en una única revisión, evitando ciclos repetitivos de validación.
+
+---
+
+### ✅ Resultado
+
+* Se garantiza la existencia de documentación mínima obligatoria antes del envío al proveedor.
+* Se evita el uso de correos electrónicos como documento oficial de pedido.
+* Se asegura la existencia de referencias DALI/SAP y presupuestos asociados.
+* Se previene la duplicidad de documentos de pedido.
+* Se mejora la calidad documental y la trazabilidad del proceso de compras.
+* Se proporciona una experiencia de usuario más clara mediante validaciones agrupadas y mensajes detallados.
+
 ## v11.8.6 — 17 junio 2026
 
 ### 🔄 Evolución del sistema de restauración — Arquitectura distribuida

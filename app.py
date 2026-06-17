@@ -5344,6 +5344,51 @@ def update_pedido(pid):
         if errores:
             return jsonify({"ok": False, "techo_errores": errores}), 422
 
+    # ── Validación obligatoria para ENVIADO AL PROVEEDOR ─────────────────────
+    if estado_nuevo == "ENVIADO AL PROVEEDOR" and estado_antes != "ENVIADO AL PROVEEDOR":
+        errores_envio = []
+
+        # 1. Nº Pedido (DALI/SAP) obligatorio
+        pedido_num_val = data.get("pedido_num", pedido_actual.get("pedido_num") or "")
+        if not (pedido_num_val or "").strip():
+            errores_envio.append("El campo «Nº Pedido (DALI/SAP)» es obligatorio para pasar a ENVIADO AL PROVEEDOR.")
+
+        # 2. Adjunto pedido_doc: exactamente 1 y debe ser documento (no correo)
+        adjuntos_pedido = rows_to_list(query(
+            "SELECT id, nombre, mime_type FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
+            (pid,)
+        ))
+        docs_pedido   = [a for a in adjuntos_pedido if os.path.splitext(a["nombre"].lower())[1] not in EXT_CORREO]
+        correos_pedido = [a for a in adjuntos_pedido if os.path.splitext(a["nombre"].lower())[1] in EXT_CORREO]
+        if len(adjuntos_pedido) == 0:
+            errores_envio.append("Debe adjuntar exactamente un documento (PDF/Word) en la sección «Nº Pedido (DALI/SAP)».")
+        elif len(correos_pedido) > 0 and len(docs_pedido) == 0:
+            errores_envio.append("El adjunto de «Nº Pedido (DALI/SAP)» debe ser un documento (PDF/Word), no un correo electrónico.")
+        elif len(docs_pedido) > 1:
+            errores_envio.append("Solo se permite un documento adjunto en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(docs_pedido))
+        elif len(adjuntos_pedido) > 1:
+            errores_envio.append("Solo se permite un adjunto en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(adjuntos_pedido))
+
+        # 3. Nº Presupuesto obligatorio
+        presupuesto_num_val = data.get("presupuesto_num", pedido_actual.get("presupuesto_num") or "")
+        if not (presupuesto_num_val or "").strip():
+            errores_envio.append("El campo «Nº Presupuesto» es obligatorio para pasar a ENVIADO AL PROVEEDOR.")
+
+        # 4. Adjunto presupuesto_doc: mínimo 1 documento (puede haber también correos)
+        adjuntos_presupuesto = rows_to_list(query(
+            "SELECT id, nombre, mime_type FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='presupuesto_doc'",
+            (pid,)
+        ))
+        docs_presupuesto = [a for a in adjuntos_presupuesto if os.path.splitext(a["nombre"].lower())[1] not in EXT_CORREO]
+        if len(adjuntos_presupuesto) == 0:
+            errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en la sección «Nº Presupuesto».")
+        elif len(docs_presupuesto) == 0:
+            errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en «Nº Presupuesto» (solo correo electrónico no es suficiente).")
+
+        if errores_envio:
+            return jsonify({"ok": False, "error": " | ".join(errores_envio), "errores": errores_envio}), 422
+    # ── Fin validación ENVIADO AL PROVEEDOR ──────────────────────────────────
+
     ESTADOS_SIN_TRAMITAR = {
         "PENDIENTE FIRMA DIRECCION COMPRAS",
         "PENDIENTE DE FIRMA DIRECCION HOTEL",
@@ -6277,7 +6322,22 @@ def upload_adjunto(pid):
         if mime != "application/pdf":
             return jsonify({"ok": False, "error": "Solo se aceptan archivos PDF en este apartado"}), 400
 
-    elif tipo in ("pedido_doc", "presupuesto_doc"):
+    elif tipo == "pedido_doc":
+        if mime not in MIME_SOLICITUD_DOC:
+            return jsonify({"ok": False, "error": "Formato no permitido. Use PDF o Word"}), 400
+        if ext in EXT_CORREO:
+            return jsonify({"ok": False, "error": "No se aceptan correos electrónicos en «Nº Pedido (DALI/SAP)». Solo documentos PDF o Word."}), 400
+        if mime == "application/octet-stream" and ext not in EXT_DOC:
+            return jsonify({"ok": False, "error": "Extensión de archivo no reconocida. Use PDF o Word."}), 400
+        # Máximo 1 adjunto en pedido_doc
+        existentes = query(
+            "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
+            (pid,), one=True
+        )
+        if existentes and existentes["n"] >= 1:
+            return jsonify({"ok": False, "error": "Ya existe un documento adjunto en «Nº Pedido (DALI/SAP)». Elimínelo antes de subir uno nuevo."}), 400
+
+    elif tipo == "presupuesto_doc":
         if mime not in MIME_SOLICITUD_DOC:
             return jsonify({"ok": False, "error": "Formato no permitido. Use PDF, Word o correo (.eml/.msg)"}), 400
         if mime == "application/octet-stream" and ext not in EXT_CORREO | EXT_DOC:
