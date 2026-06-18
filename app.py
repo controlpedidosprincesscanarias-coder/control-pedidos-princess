@@ -351,6 +351,39 @@ def _auto_migrate():
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_backups_cache_ruta ON backups_cache(ruta_normalizada)"
             )
+
+            # ── v11.9.4 — Columna es_correo en pedido_adjuntos ──────────────
+            # Antes, distinguir un correo (.eml/.msg) de un documento normal
+            # se hacía mirando la extensión del nombre del archivo guardado
+            # (nombre ILIKE '%.eml'), tanto en las validaciones de subida como
+            # en las de cambio de estado. Funciona, pero es un acoplamiento
+            # frágil: si el nombre se llega a guardar de otra forma en algún
+            # punto futuro, la clasificación se rompe en silencio sin que
+            # salte ningún error. Pasamos a una columna explícita.
+            cur.execute(
+                "ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS es_correo BOOLEAN"
+            )
+            # Backfill: rellenar la columna para adjuntos ya existentes,
+            # usando la misma heurística de extensión que se usaba antes
+            # (es la única información disponible para datos ya guardados).
+            # A partir de aquí, todo adjunto nuevo se inserta con el valor
+            # ya calculado en el momento de la subida, sin volver a inferir.
+            cur.execute("""
+                UPDATE pedido_adjuntos
+                SET es_correo = (
+                    LOWER(nombre) LIKE '%.eml' OR LOWER(nombre) LIKE '%.msg'
+                )
+                WHERE es_correo IS NULL
+            """)
+            cur.execute(
+                "ALTER TABLE pedido_adjuntos ALTER COLUMN es_correo SET DEFAULT FALSE"
+            )
+            cur.execute(
+                "ALTER TABLE pedido_adjuntos ALTER COLUMN es_correo SET NOT NULL"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_adjuntos_tipo_correo ON pedido_adjuntos(pedido_id, tipo, es_correo)"
+            )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -525,6 +558,19 @@ def _log_email(db, pedido_id, tipo, destinatario, asunto, enviado, error=None):
         )
 
 def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str = None):
+    """
+    Construye los correos de notificación de cambio de estado (proveedor +
+    internos) y los registra en _log_email. Como el backend no tiene Resend
+    configurado en este entorno (EmailJS es el único canal real), no se
+    intenta el envío aquí: se devuelve una lista de correos pendientes para
+    que el caller (create_pedido / update_pedido) la incluya en su respuesta
+    JSON y el frontend los envíe vía EmailJS justo después de guardar.
+
+    Devuelve: list[dict] — cada dict trae lo necesario para emailjs.send:
+        {"tipo", "to_email", "bcc", "asunto", "body_text"}
+    """
+    pendientes = []
+
     pedido = row_to_dict(query(
         """SELECT p.*, h.nombre as hotel_nombre, h.codigo as hotel_codigo,
                   d.nombre as departamento_nombre,
@@ -539,46 +585,67 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
            WHERE p.id = %s""", (pedido_id,), one=True
     ))
     if not pedido:
-        return
+        return pendientes
 
     if estado_nuevo in ESTADOS_EMAIL_PROVEEDOR and pedido.get("proveedor_email"):
         subject = f"Pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
-        # Obtener email del comprador responsable del hotel
+        # Obtener email del/los comprador(es) responsable(s) del hotel —
+        # se usan como firma del correo y también como BCC del envío real,
+        # para que el comprador tenga constancia de la notificación enviada.
         _compradores_estado = _get_compradores_cc(pedido.get("hotel_codigo",""))
         if not (_compradores_estado and _compradores_estado[0].get("email")):
             log.warning("[EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email a proveedor omitido",
                         pedido_id, pedido.get("hotel_codigo",""))
-            return
-        _email_comprador_estado = _compradores_estado[0]["email"]
-        body = f"""
-        <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
-          ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
-        </p>
-        <p>Estimado/a proveedor/a,</p>
-        <p>Le informamos que el pedido que figura a continuación ha sido tramitado:</p>
-        <p>
-          <strong>Pedido Nº:</strong> {pedido.get('pedido_num','—')}<br>
-          <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
-          <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
-          <strong>Estado actual:</strong> {estado_nuevo}
-        </p>
-        <p>Atentamente,<br>
-           <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
-           Princess Hotels &amp; Resorts<br>
-           <a href="mailto:{_email_comprador_estado}">{_email_comprador_estado}</a></p>
-        <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
-          Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
-        </p>
-        """
-        res = _send_email(pedido["proveedor_email"], subject, body)
-        _log_email(db, pedido_id, "proveedor", pedido["proveedor_email"], subject,
-                   res["ok"], res.get("error"))
+        else:
+            _email_comprador_estado = _compradores_estado[0]["email"]
+            _bcc_compradores = [c["email"] for c in _compradores_estado if c.get("email")]
+            body_html = f"""
+            <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
+              ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+            </p>
+            <p>Estimado/a proveedor/a,</p>
+            <p>Le informamos que el pedido que figura a continuación ha sido tramitado:</p>
+            <p>
+              <strong>Pedido Nº:</strong> {pedido.get('pedido_num','—')}<br>
+              <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
+              <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
+              <strong>Estado actual:</strong> {estado_nuevo}
+            </p>
+            <p>Atentamente,<br>
+               <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
+               Princess Hotels &amp; Resorts<br>
+               <a href="mailto:{_email_comprador_estado}">{_email_comprador_estado}</a></p>
+            <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
+              Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+            </p>
+            """
+            body_text = (
+                f"Estimado/a proveedor/a,\n\n"
+                f"Le informamos que el pedido que figura a continuación ha sido tramitado:\n\n"
+                f"Pedido Nº: {pedido.get('pedido_num','—')}\n"
+                f"Hotel: {pedido.get('hotel_nombre','—')}\n"
+                f"Departamento: {pedido.get('departamento_nombre','—')}\n"
+                f"Estado actual: {estado_nuevo}\n\n"
+                f"Atentamente,\nDpto. Central de Compras Princess en Canarias\n"
+                f"Princess Hotels & Resorts\n{_email_comprador_estado}\n\n"
+                f"Este correo es exclusivo para notificaciones automáticas. "
+                f"Por favor, responda única y exclusivamente a la dirección que firma este comunicado."
+            )
+            _log_email(db, pedido_id, "proveedor", pedido["proveedor_email"], subject, False, "Pendiente de envío vía EmailJS")
+            pendientes.append({
+                "tipo":      "proveedor",
+                "to_email":  pedido["proveedor_email"],
+                "bcc":       _bcc_compradores,
+                "asunto":    subject,
+                "body_html": body_html,
+                "body_text": body_text,
+            })
 
     if estado_nuevo in ESTADOS_EMAIL_INTERNO:
         destinatarios_internos = _get_admin_emails()
         if destinatarios_internos:
             subject = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {estado_nuevo}"
-            body = f"""
+            body_html = f"""
         <p>Cambio de estado en el sistema de Control de Pedidos:</p>
         <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif">
           <tr><td><b>Hotel</b></td><td>{pedido.get('hotel_nombre','')}</td></tr>
@@ -589,10 +656,27 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
           <tr><td><b>Estado nuevo</b></td><td><b>{estado_nuevo}</b></td></tr>
         </table>
         """
+            body_text = (
+                f"Cambio de estado en el sistema de Control de Pedidos:\n\n"
+                f"Hotel: {pedido.get('hotel_nombre','')}\n"
+                f"Departamento: {pedido.get('departamento_nombre','')}\n"
+                f"Pedido Nº: {pedido.get('pedido_num','—')}\n"
+                f"Proveedor: {pedido.get('proveedor_nombre','—')}\n"
+                f"Estado anterior: {estado_antes or '—'}\n"
+                f"Estado nuevo: {estado_nuevo}"
+            )
             for dest in destinatarios_internos:
-                res = _send_email(dest, subject, body)
-                _log_email(db, pedido_id, "interno", dest, subject,
-                           res["ok"], res.get("error"))
+                _log_email(db, pedido_id, "interno", dest, subject, False, "Pendiente de envío vía EmailJS")
+            pendientes.append({
+                "tipo":      "interno",
+                "to_email":  destinatarios_internos[0],
+                "bcc":       destinatarios_internos[1:],
+                "asunto":    subject,
+                "body_html": body_html,
+                "body_text": body_text,
+            })
+
+    return pendientes
 
 # ── Helper norden ──────────────────────────────────────────────────────────────
 
@@ -1102,7 +1186,7 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
 
 
 def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str,
-                              usuario_nombre: str = "") -> None:
+                              usuario_nombre: str = "") -> list:
     """
     Centraliza todas las notificaciones de un cambio de estado manual.
 
@@ -1113,8 +1197,11 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
     Uso en update_pedido — tanto flujo normal como flujo hotel:
 
         if estado_nuevo != estado_antes:
-            _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
+            pendientes = _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
                                      usuario_nombre=session.get("nombre", ""))
+
+    Devuelve la lista de correos pendientes de envío vía EmailJS (ver
+    enviar_emails_estado), para que el caller la incluya en su respuesta JSON.
 
     Ventajas de centralizar aquí:
     - update_pedido no acumula lógica de negocio de notificaciones.
@@ -1124,10 +1211,11 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
     - es_cambio_manual=True queda encapsulado: el caller no necesita saber
       el detalle de la supresión de alertas contradictorias.
     """
-    enviar_emails_estado(db, pedido_id, estado_nuevo, estado_antes)
+    pendientes = enviar_emails_estado(db, pedido_id, estado_nuevo, estado_antes)
     _telegram_cambio_estado(db, pedido_id, estado_nuevo, estado_antes,
                              usuario_nombre=usuario_nombre,
                              es_cambio_manual=True)
+    return pendientes
 
 
 # ── Job diario: alertas por fecha (independiente del usuario) ──────────────────
@@ -3705,7 +3793,7 @@ def admin_aprobar_solicitud(sol_id):
         f"Control Pedidos Princess Canarias"
     )
 
-    res_u = _send_email(sol["email"], asunto_u, body_html_u, body_text=body_text_u)
+    res_u = {"ok": False} if not RESEND_API_KEY else _send_email(sol["email"], asunto_u, body_html_u, body_text=body_text_u)
 
     # Email de confirmación a los admins
     asunto_a = f"[APROBADA] Alta usuario {username} — {nombre_c}"
@@ -3730,12 +3818,28 @@ def admin_aprobar_solicitud(sol_id):
       </div>
     </div>
     """
+    body_text_a = (
+        f"Cuenta creada automáticamente\n\n"
+        f"La solicitud #{sol_id} de {nombre_c} ha sido aprobada.\n\n"
+        f"Username: {username}\n"
+        f"Email   : {sol['email']}\n"
+        f"Hoteles : {hoteles_lista}\n"
+        + (f"⚠️ Hoteles sin asignar: {', '.join(hoteles_no_encontrados)}\n" if hoteles_no_encontrados else "")
+        + f"\nEl usuario ha recibido su email de bienvenida con credenciales."
+    )
     destinatarios = _get_solo_admin_emails()
-    for dest in destinatarios:
-        try:
-            _send_email(dest, asunto_a, body_html_a)
-        except Exception as exc:
-            log.warning("[SOL_APROBAR] Error email admin a %s: %s", dest, exc)
+    admins_email_enviado = True
+    if RESEND_API_KEY:
+        for dest in destinatarios:
+            try:
+                res_a = _send_email(dest, asunto_a, body_html_a)
+                if not res_a.get("ok"):
+                    admins_email_enviado = False
+            except Exception as exc:
+                log.warning("[SOL_APROBAR] Error email admin a %s: %s", dest, exc)
+                admins_email_enviado = False
+    else:
+        admins_email_enviado = False
 
     return jsonify({
         "ok":       True,
@@ -3745,8 +3849,20 @@ def admin_aprobar_solicitud(sol_id):
         "hoteles_asignados":      hotel_ids_asignados,
         "hoteles_no_encontrados": hoteles_no_encontrados,
         "email_enviado":          res_u.get("ok", False),
+        # Datos para que el frontend envíe vía EmailJS cuando el backend
+        # no pudo entregar el correo (RESEND_API_KEY no configurada o falló).
+        "email_usuario_pendiente": (not res_u.get("ok", False)) and {
+            "to_email":  sol["email"],
+            "asunto":    asunto_u,
+            "body_text": body_text_u,
+        } or None,
+        "email_admins_pendiente": (not admins_email_enviado and destinatarios) and {
+            "destinatarios": destinatarios,
+            "asunto":        asunto_a,
+            "body_text":     body_text_a,
+        } or None,
         "abrir_edicion":          True,
-        "msg": f"Cuenta creada para {nombre_c} ({username}). Email de bienvenida enviado a {sol['email']}."
+        "msg": f"Cuenta creada para {nombre_c} ({username})."
     })
 
 
@@ -5297,7 +5413,7 @@ def create_pedido():
     )
     db.commit()
 
-    enviar_emails_estado(db, pedido_id, estado)
+    _pendientes_email = enviar_emails_estado(db, pedido_id, estado)
 
     # ── Telegram inmediato si el pedido está sujeto al techo de gastos ────────
     if sujeto_techo:
@@ -5309,7 +5425,7 @@ def create_pedido():
         hotel_cod = hotel_codigo["codigo"] if hotel_codigo else ""
         _telegram_alerta_techo(pedido_id, hotel_cod, float(importe or 0), nombre_familia or "—")
 
-    return jsonify({"ok": True, "id": pedido_id, "norden": norden}), 201
+    return jsonify({"ok": True, "id": pedido_id, "norden": norden, "emails_pendientes": _pendientes_email}), 201
 
 @app.route("/api/pedidos/<int:pid>", methods=["PUT"])
 @login_required
@@ -5346,15 +5462,16 @@ def update_pedido(pid):
                 (pid, estado_antes, estado_solicitado, uid, session.get("nombre"), data.get("nota_historial", ""))
             )
         db.commit()
+        _pendientes_email = []
         if estado_solicitado != estado_antes:
-            _notificar_cambio_estado(
+            _pendientes_email = _notificar_cambio_estado(
                 db,
                 pid,
                 estado_solicitado,
                 estado_antes,
                 usuario_nombre=session.get("nombre", ""),
             )
-        return jsonify({"ok": True, "id": pid})
+        return jsonify({"ok": True, "id": pid, "emails_pendientes": _pendientes_email})
     # ── Fin restricción hotel ──────────────────────────────────────────────────
 
     estado_antes = pedido_actual["estado"]
@@ -5383,21 +5500,20 @@ def update_pedido(pid):
         if not (pedido_num_val or "").strip():
             errores_envio.append("El campo «Nº Pedido (DALI/SAP)» es obligatorio para pasar a ENVIADO AL PROVEEDOR.")
 
-        # 2. Adjunto pedido_doc: exactamente 1 y debe ser documento (no correo)
+        # 2. Adjunto pedido_doc: máximo 1 documento (PDF/Word, obligatorio)
+        #    y máximo 1 correo electrónico (opcional) — pueden coexistir ambos.
         adjuntos_pedido = rows_to_list(query(
-            "SELECT id, nombre, mime_type FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
+            "SELECT id, nombre, es_correo FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
             (pid,)
         ))
-        docs_pedido   = [a for a in adjuntos_pedido if os.path.splitext(a["nombre"].lower())[1] not in EXT_CORREO]
-        correos_pedido = [a for a in adjuntos_pedido if os.path.splitext(a["nombre"].lower())[1] in EXT_CORREO]
-        if len(adjuntos_pedido) == 0:
-            errores_envio.append("Debe adjuntar exactamente un documento (PDF/Word) en la sección «Nº Pedido (DALI/SAP)».")
-        elif len(correos_pedido) > 0 and len(docs_pedido) == 0:
-            errores_envio.append("El adjunto de «Nº Pedido (DALI/SAP)» debe ser un documento (PDF/Word), no un correo electrónico.")
+        docs_pedido    = [a for a in adjuntos_pedido if not a["es_correo"]]
+        correos_pedido = [a for a in adjuntos_pedido if a["es_correo"]]
+        if len(docs_pedido) == 0:
+            errores_envio.append("Debe adjuntar un documento (PDF/Word) en la sección «Nº Pedido (DALI/SAP)».")
         elif len(docs_pedido) > 1:
-            errores_envio.append("Solo se permite un documento adjunto en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(docs_pedido))
-        elif len(adjuntos_pedido) > 1:
-            errores_envio.append("Solo se permite un adjunto en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(adjuntos_pedido))
+            errores_envio.append("Solo se permite un documento (PDF/Word) en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(docs_pedido))
+        if len(correos_pedido) > 1:
+            errores_envio.append("Solo se permite un correo electrónico en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(correos_pedido))
 
         # 3. Nº Presupuesto obligatorio
         presupuesto_num_val = data.get("presupuesto_num", pedido_actual.get("presupuesto_num") or "")
@@ -5406,10 +5522,10 @@ def update_pedido(pid):
 
         # 4. Adjunto presupuesto_doc: mínimo 1 documento (puede haber también correos)
         adjuntos_presupuesto = rows_to_list(query(
-            "SELECT id, nombre, mime_type FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='presupuesto_doc'",
+            "SELECT id, nombre, es_correo FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='presupuesto_doc'",
             (pid,)
         ))
-        docs_presupuesto = [a for a in adjuntos_presupuesto if os.path.splitext(a["nombre"].lower())[1] not in EXT_CORREO]
+        docs_presupuesto = [a for a in adjuntos_presupuesto if not a["es_correo"]]
         if len(adjuntos_presupuesto) == 0:
             errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en la sección «Nº Presupuesto».")
         elif len(docs_presupuesto) == 0:
@@ -5475,11 +5591,12 @@ def update_pedido(pid):
 
     db.commit()
 
+    _pendientes_email = []
     if estado_nuevo != estado_antes:
-        _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
+        _pendientes_email = _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
                                  usuario_nombre=session.get("nombre", ""))
 
-    return jsonify({"ok": True})
+    return jsonify({"ok": True, "emails_pendientes": _pendientes_email})
 
 @app.route("/api/pedidos/<int:pid>", methods=["DELETE"])
 @admin_required
@@ -6312,13 +6429,27 @@ MIME_SOLICITUD_DOC = {
     "message/rfc822", "application/vnd.ms-outlook", "application/octet-stream",
 }
 MIME_CORREO = {"message/rfc822", "application/vnd.ms-outlook", "application/octet-stream"}
-MAX_ADJUNTO_BYTES = 20 * 1024 * 1024  # 20 MB por archivo
+MAX_ADJUNTO_BYTES = 20 * 1024 * 1024  # 20 MB por archivo (límite absoluto de respaldo)
+
+# ── Límites de peso ajustados por tipo de contenido ──────────────────────────
+# Los PDF/Word de gestión normal (albaranes, presupuestos, solicitudes) no
+# deberían pesar más que un escaneado de pocas páginas. Los correos .eml/.msg
+# llevan adjuntos incrustados, por lo que su límite es algo mayor pero sigue
+# acotado para no arrastrar archivos grandes dentro del correo.
+MAX_BYTES_DOCUMENTO = 5 * 1024 * 1024   # 5 MB — PDF / Word / Excel
+MAX_BYTES_CORREO    = 3 * 1024 * 1024   # 3 MB — .eml / .msg
+MAX_BYTES_IMAGEN    = 2 * 1024 * 1024   # 2 MB — imagen_articulo
+
+# ── Límites de cantidad por apartado ──────────────────────────────────────────
+# En los apartados que aceptan documento + correo, se cuentan por separado.
+MAX_DOCUMENTOS_POR_APARTADO = 3
+MAX_CORREOS_POR_APARTADO    = 1
 
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
 @login_required
 def get_adjuntos(pid):
     rows = query(
-        "SELECT id, tipo, nombre, mime_type, creado_en FROM pedido_adjuntos WHERE pedido_id=%s ORDER BY tipo, creado_en",
+        "SELECT id, tipo, nombre, mime_type, es_correo, creado_en FROM pedido_adjuntos WHERE pedido_id=%s ORDER BY tipo, creado_en",
         (pid,)
     )
     return jsonify({"ok": True, "adjuntos": rows_to_list(rows)})
@@ -6349,43 +6480,81 @@ def upload_adjunto(pid):
 
     mime = archivo.mimetype or "application/octet-stream"
     ext  = os.path.splitext(archivo.filename.lower())[1]  # ej. ".eml", ".xlsx"
+    es_correo = ext in EXT_CORREO or mime in MIME_CORREO
 
     if tipo in ("presupuesto_pdf", "pedido_pdf"):
         if mime != "application/pdf":
             return jsonify({"ok": False, "error": "Solo se aceptan archivos PDF en este apartado"}), 400
+        if len(datos) > MAX_BYTES_DOCUMENTO:
+            return jsonify({"ok": False, "error": f"El PDF supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB para este apartado"}), 400
+
+    elif tipo == "imagen_articulo":
+        if len(datos) > MAX_BYTES_IMAGEN:
+            return jsonify({"ok": False, "error": f"La imagen supera el límite de {MAX_BYTES_IMAGEN // (1024*1024)} MB para este apartado"}), 400
 
     elif tipo == "pedido_doc":
         if mime not in MIME_SOLICITUD_DOC:
-            return jsonify({"ok": False, "error": "Formato no permitido. Use PDF o Word"}), 400
-        if ext in EXT_CORREO:
-            return jsonify({"ok": False, "error": "No se aceptan correos electrónicos en «Nº Pedido (DALI/SAP)». Solo documentos PDF o Word."}), 400
-        if mime == "application/octet-stream" and ext not in EXT_DOC:
-            return jsonify({"ok": False, "error": "Extensión de archivo no reconocida. Use PDF o Word."}), 400
-        # Máximo 1 adjunto en pedido_doc
-        existentes = query(
-            "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
-            (pid,), one=True
-        )
-        if existentes and existentes["n"] >= 1:
-            return jsonify({"ok": False, "error": "Ya existe un documento adjunto en «Nº Pedido (DALI/SAP)». Elimínelo antes de subir uno nuevo."}), 400
-
-    elif tipo == "presupuesto_doc":
-        if mime not in MIME_SOLICITUD_DOC:
             return jsonify({"ok": False, "error": "Formato no permitido. Use PDF, Word o correo (.eml/.msg)"}), 400
+        if mime == "application/octet-stream" and ext not in EXT_CORREO | EXT_DOC:
+            return jsonify({"ok": False, "error": "Extensión de archivo no reconocida. Use PDF, Word o correo (.eml/.msg)"}), 400
+        if len(datos) > MAX_BYTES_DOCUMENTO:
+            return jsonify({"ok": False, "error": f"El documento supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB para este apartado"}), 400
+
+        # Máximo 1 documento (PDF/Word) y máximo 1 correo en esta sección;
+        # pueden coexistir un documento y un correo a la vez.
+        existentes = rows_to_list(query(
+            "SELECT es_correo FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
+            (pid,)
+        ))
+        n_docs_existentes    = sum(1 for a in existentes if not a["es_correo"])
+        n_correos_existentes = sum(1 for a in existentes if a["es_correo"])
+
+        if es_correo:
+            if n_correos_existentes >= 1:
+                return jsonify({"ok": False, "error": "Ya existe un correo adjunto en «Nº Pedido (DALI/SAP)». Elimínelo antes de subir uno nuevo."}), 400
+        else:
+            if n_docs_existentes >= 1:
+                return jsonify({"ok": False, "error": "Ya existe un documento adjunto en «Nº Pedido (DALI/SAP)». Elimínelo antes de subir uno nuevo."}), 400
+
+    elif tipo in ("presupuesto_doc", "solicitud_doc"):
+        etiqueta = "PDF, Word o correo (.eml/.msg)" if tipo == "presupuesto_doc" else "Excel, Word, PDF o correo (.eml/.msg)"
+        if mime not in MIME_SOLICITUD_DOC:
+            return jsonify({"ok": False, "error": f"Formato no permitido. Use {etiqueta}"}), 400
         if mime == "application/octet-stream" and ext not in EXT_CORREO | EXT_DOC:
             return jsonify({"ok": False, "error": "Extensión de archivo no reconocida"}), 400
 
-    elif tipo == "solicitud_doc":
-        if mime not in MIME_SOLICITUD_DOC:
-            return jsonify({"ok": False, "error": "Formato no permitido. Use Excel, Word, PDF o correo (.eml/.msg)"}), 400
-        if mime == "application/octet-stream" and ext not in EXT_CORREO | EXT_DOC:
-            return jsonify({"ok": False, "error": "Extension de archivo no reconocida"}), 400
+        if es_correo:
+            if len(datos) > MAX_BYTES_CORREO:
+                return jsonify({"ok": False, "error": f"El correo supera el límite de {MAX_BYTES_CORREO // (1024*1024)} MB para este apartado"}), 400
+            n_correos = query(
+                "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo=%s AND es_correo",
+                (pid, tipo), one=True
+            )
+            if n_correos and n_correos["n"] >= MAX_CORREOS_POR_APARTADO:
+                return jsonify({"ok": False, "error": f"Ya existe un correo adjunto en este apartado. Máximo {MAX_CORREOS_POR_APARTADO}. Elimínelo antes de subir uno nuevo."}), 400
+        else:
+            if len(datos) > MAX_BYTES_DOCUMENTO:
+                return jsonify({"ok": False, "error": f"El documento supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB para este apartado"}), 400
+            n_docs = query(
+                "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo=%s AND NOT es_correo",
+                (pid, tipo), one=True
+            )
+            if n_docs and n_docs["n"] >= MAX_DOCUMENTOS_POR_APARTADO:
+                return jsonify({"ok": False, "error": f"Máximo {MAX_DOCUMENTOS_POR_APARTADO} documentos en este apartado. Elimine alguno antes de subir uno nuevo."}), 400
 
     elif tipo in ("vb_eml", "tramit_eml"):
         if mime not in MIME_CORREO:
             return jsonify({"ok": False, "error": "Solo se aceptan correos electronicos (.eml, .msg)"}), 400
         if mime == "application/octet-stream" and ext not in EXT_CORREO:
             return jsonify({"ok": False, "error": "Solo se aceptan archivos .eml o .msg"}), 400
+        if len(datos) > MAX_BYTES_CORREO:
+            return jsonify({"ok": False, "error": f"El correo supera el límite de {MAX_BYTES_CORREO // (1024*1024)} MB para este apartado"}), 400
+        existentes = query(
+            "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo=%s",
+            (pid, tipo), one=True
+        )
+        if existentes and existentes["n"] >= MAX_CORREOS_POR_APARTADO:
+            return jsonify({"ok": False, "error": f"Ya existe un correo adjunto en este apartado. Máximo {MAX_CORREOS_POR_APARTADO}. Elimínelo antes de subir uno nuevo."}), 400
 
     else:
         if mime not in MIME_PERMITIDOS:
@@ -6394,8 +6563,8 @@ def upload_adjunto(pid):
     uid = current_user_id()
     db  = get_db()
     cur = execute(
-        "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, subido_por_id) VALUES (%s,%s,%s,%s,%s,%s) RETURNING id",
-        (pid, tipo, archivo.filename, mime, psycopg2.Binary(datos), uid)
+        "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+        (pid, tipo, archivo.filename, mime, psycopg2.Binary(datos), es_correo, uid)
     )
     adjunto_id = cur.fetchone()["id"]
     db.commit()
@@ -6406,14 +6575,13 @@ def upload_adjunto(pid):
 @login_required
 def download_adjunto(aid):
     from flask import Response
-    row = query("SELECT nombre, mime_type, datos FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
+    row = query("SELECT nombre, mime_type, datos, es_correo FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
     if not row:
         return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
     # Los correos (.eml/.msg) se sirven como attachment para que el SO
     # los abra con el gestor de correo predeterminado.
     # El resto (PDF, imagenes, Word) se sirven inline para previsualizacion.
-    ext = os.path.splitext(row["nombre"].lower())[1]
-    disposition = "attachment" if ext in {".eml", ".msg"} else "inline"
+    disposition = "attachment" if row["es_correo"] else "inline"
     return Response(
         bytes(row["datos"]),
         mimetype=row["mime_type"],

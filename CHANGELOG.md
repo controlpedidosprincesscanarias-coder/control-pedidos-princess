@@ -1,3 +1,358 @@
+## v11.9.6 — 18 junio 2026
+
+### 📧 Finalización de la migración operativa a EmailJS
+
+Esta versión completa la migración de los flujos críticos de correo electrónico hacia **EmailJS + Gmail**, eliminando la dependencia funcional de Resend en los procesos de negocio más importantes de la aplicación.
+
+El backend deja de intentar enviar correos directamente en estos flujos y pasa a delegar el envío al frontend mediante EmailJS, siguiendo la misma arquitectura ya utilizada en recuperación de contraseña.
+
+---
+
+## 👤 Aprobación de usuarios
+
+### Situación anterior
+
+Al aprobar un usuario:
+
+```text id="oldflow1"
+Administrador
+      ↓
+Backend (Resend)
+      ↓
+Error silencioso
+      ↓
+Aviso manual al administrador
+```
+
+Las credenciales se generaban correctamente, pero el correo de bienvenida no llegaba automáticamente al usuario cuando Resend no estaba operativo.
+
+---
+
+### Nuevo funcionamiento
+
+Al aprobar un usuario:
+
+```text id="newflow1"
+Administrador
+      ↓
+Backend genera credenciales
+      ↓
+Frontend recibe datos pendientes
+      ↓
+EmailJS envía correo
+      ↓
+Usuario recibe acceso
+```
+
+---
+
+### Mejoras incorporadas
+
+* Eliminada la dependencia funcional de Resend para el correo de bienvenida.
+* El backend devuelve la información necesaria para el envío.
+* El frontend realiza el envío mediante EmailJS.
+* Se mantiene el mecanismo de respaldo manual en caso de fallo de EmailJS.
+* La experiencia de aprobación vuelve a estar completamente automatizada.
+
+---
+
+## 🔔 Avisos internos a administradores
+
+### Situación anterior
+
+Las notificaciones internas asociadas a nuevas aprobaciones seguían dependiendo de la infraestructura antigua de correo.
+
+En entornos sin Resend operativo:
+
+```text id="oldflow2"
+Notificación admin
+      ↓
+No enviada
+```
+
+---
+
+### Nuevo funcionamiento
+
+Las notificaciones se generan dentro del mismo flujo EmailJS utilizado para la aprobación.
+
+Resultado:
+
+* Avisos automáticos.
+* Sin dependencia de Resend.
+* Comportamiento consistente con el resto de la aplicación.
+
+---
+
+## 📦 Correos de cambio de estado de pedidos
+
+### Refactorización completa de `enviar_emails_estado()`
+
+Se sustituye el envío directo desde backend por un modelo de correos pendientes.
+
+---
+
+### Situación anterior
+
+```text id="oldflow3"
+Cambio de estado
+      ↓
+enviar_emails_estado()
+      ↓
+Resend
+      ↓
+Correo no enviado
+```
+
+En instalaciones sin Resend operativo, proveedores y destinatarios internos no recibían las notificaciones.
+
+---
+
+### Nuevo funcionamiento
+
+```text id="newflow3"
+Cambio de estado
+      ↓
+Backend construye correos
+      ↓
+emails_pendientes
+      ↓
+Frontend
+      ↓
+EmailJS
+      ↓
+Destinatarios finales
+```
+
+---
+
+### Correos afectados
+
+#### Externos
+
+* Proveedores.
+* Seguimiento operativo asociado al pedido.
+
+#### Internos
+
+* Compradores.
+* Administradores.
+* Destinatarios definidos por el flujo de estado.
+
+---
+
+## 👥 Comprador asignado en copia oculta (BCC)
+
+Nueva mejora en las notificaciones enviadas a proveedores.
+
+El comprador asignado al hotel se incorpora automáticamente como:
+
+```text id="bcc1"
+BCC
+```
+
+Beneficios:
+
+* Seguimiento completo de las comunicaciones.
+* Visibilidad del comprador responsable.
+* Sin exponer direcciones internas al proveedor.
+
+---
+
+## 🔄 Integración en todos los flujos de guardado
+
+Se incorpora soporte para correos pendientes en:
+
+### Creación de pedido
+
+```text id="cp1"
+create_pedido()
+```
+
+---
+
+### Actualización estándar
+
+```text id="up1"
+update_pedido()
+```
+
+---
+
+### Actualización desde perfil Hotel
+
+```text id="up2"
+update_pedido() - flujo Hotel
+```
+
+---
+
+## 📨 Nueva función frontend
+
+### `_enviarEmailsPendientesEstado()`
+
+Nueva función responsable de:
+
+* Procesar los correos devueltos por el backend.
+* Ejecutar el envío mediante EmailJS.
+* Gestionar errores de envío.
+* Mantener coherencia con el resto de comunicaciones de la aplicación.
+
+---
+
+## 🛡️ Estrategia de resiliencia
+
+Se mantiene un mecanismo de respaldo para evitar bloqueos operativos.
+
+Si EmailJS no pudiera enviar un correo:
+
+* El guardado del pedido continúa.
+* El usuario recibe información del fallo.
+* Se conserva la posibilidad de comunicación manual.
+
+La aplicación nunca pierde datos ni interrumpe el flujo principal de trabajo.
+
+---
+
+## 🧹 Preparación para eliminación definitiva de Resend
+
+Esta versión deja la infraestructura antigua de correo en estado de compatibilidad temporal.
+
+Actualmente:
+
+```text id="prep1"
+Resend
+```
+
+permanece presente únicamente como código legado pendiente de retirada.
+
+Las funcionalidades migradas ya no dependen de:
+
+* `RESEND_API_KEY`
+* `_send_email()`
+* `api.resend.com`
+
+para su funcionamiento operativo.
+
+---
+
+## 📋 Próxima fase prevista
+
+La siguiente iteración permitirá eliminar definitivamente:
+
+```text id="prep2"
+RESEND_API_KEY
+EMAIL_FROM
+_send_email()
+Integraciones api.resend.com
+Código heredado asociado
+```
+
+una vez validados los flujos en producción.
+
+---
+
+## ✅ Resultado
+
+* Migración práctica completada hacia EmailJS + Gmail.
+* Correos de bienvenida nuevamente automáticos.
+* Notificaciones de cambio de estado restauradas.
+* Compradores incluidos automáticamente en copia oculta.
+* Eliminada la dependencia funcional de Resend en procesos críticos.
+* Arquitectura de correo unificada y coherente.
+* Preparación para retirada definitiva del código legado de envío.
+
+## v11.9.4 — 17 junio 2026
+
+### 🗄️ Columna dedicada `es_correo` en adjuntos
+
+#### Motivo del cambio
+
+* La distinción entre un correo (`.eml`/`.msg`) y un documento normal (PDF, Word, Excel) se calculaba en varios puntos del código mirando la extensión guardada en el nombre del archivo.
+* Este enfoque funcionaba, pero dependía de que el nombre se siguiera guardando siempre de la misma forma. Cualquier cambio futuro en ese punto podría romper la clasificación sin que saltara ningún error visible.
+
+#### Cambio de esquema
+
+* Añadida la columna:
+
+```sql
+es_correo BOOLEAN NOT NULL DEFAULT FALSE
+```
+
+a la tabla `pedido_adjuntos`.
+
+* Migración segura sobre datos ya existentes:
+
+  1. Columna añadida primero como *nullable*.
+  2. Backfill de los registros existentes, aplicando la misma heurística de extensión usada anteriormente.
+  3. Una vez completado el backfill, se fija el valor por defecto y se marca la columna como `NOT NULL`.
+
+* Nuevo índice:
+
+```sql
+idx_adjuntos_tipo_correo (pedido_id, tipo, es_correo)
+```
+
+para acelerar los recuentos por tipo y apartado introducidos en la versión anterior.
+
+#### Uso consistente en todo el backend
+
+* `upload_adjunto`: el valor de `es_correo` se calcula una sola vez en el momento de la subida y se guarda directamente, sin volver a inferirlo en cada lectura posterior.
+* Los recuentos de documentos y correos por apartado (`presupuesto_doc`, `solicitud_doc`) pasan a filtrar por la columna (`AND es_correo` / `AND NOT es_correo`) en lugar de por patrones de nombre.
+* `download_adjunto`: la cabecera `Content-Disposition` (`inline` para previsualización, `attachment` para correos) se decide ahora también a partir de esta columna, unificando el criterio en todo el archivo.
+* Los listados de adjuntos de pedido y presupuesto separan documentos y correos usando el mismo campo.
+
+#### Cambio de comportamiento en `pedido_doc`
+
+* Antes: el apartado **Nº Pedido (DALI/SAP)** admitía un único adjunto en total, fuera documento o correo.
+* Ahora: admite **1 documento y 1 correo de forma simultánea**, en línea con el criterio ya aplicado en `presupuesto_doc` y `solicitud_doc`.
+
+---
+
+### ✅ Resultado
+
+* Una única fuente de verdad para distinguir correos de documentos en toda la aplicación.
+* Eliminado el riesgo de que un cambio futuro en el formato del nombre de archivo rompa silenciosamente los recuentos o la previsualización.
+* Migración aplicada de forma segura sobre los adjuntos ya existentes, sin pérdida de clasificación.
+* Mayor flexibilidad en el apartado de pedido, permitiendo documento y correo a la vez.
+
+
+## v11.9.2 — 17 junio 2026
+
+### 📎 Límites de tamaño y cantidad en adjuntos
+
+#### Motivo del cambio
+
+* Los adjuntos (PDF, Word, Excel, correos `.eml`/`.msg`, imágenes) se almacenan directamente en la base de datos PostgreSQL de Supabase.
+* Sin límites específicos por tipo de contenido, el ritmo de crecimiento medido ponía en riesgo el límite de espacio del plan gratuito en pocos meses.
+
+#### Nuevos límites de peso por tipo de contenido
+
+* **Documentos** (PDF / Word / Excel): máximo **5 MB** por archivo.
+* **Correos** (`.eml` / `.msg`): máximo **3 MB** por archivo.
+* **Imágenes** (`imagen_articulo`): máximo **2 MB** por archivo.
+
+Sustituyen al límite genérico anterior de 20 MB para todos los tipos, que se mantiene únicamente como tope absoluto de respaldo.
+
+#### Nuevos límites de cantidad por apartado
+
+* **`pedido_doc`**: máximo 1 adjunto.
+* **`presupuesto_doc`** y **`solicitud_doc`**: máximo **3 documentos** + **1 correo**, contados de forma independiente.
+* **`vb_eml`** y **`tramit_eml`**: máximo 1 correo cada uno.
+
+#### Alcance del cambio
+
+* Los nuevos límites afectan únicamente a las subidas realizadas a partir de esta versión.
+* Los adjuntos ya existentes en base de datos no se ven afectados ni se eliminan.
+
+---
+
+### ✅ Resultado
+
+* Reducción del ritmo de crecimiento del espacio ocupado en Supabase.
+* Mensajes de error específicos indicando el límite exacto cuando un archivo lo supera.
+* Mayor previsibilidad sobre el tamaño máximo de la base de datos a medio plazo.
+
 ## v11.9.0 — 17 junio 2026
 
 ### 📧 Mejora de comunicaciones con proveedores

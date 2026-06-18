@@ -109,11 +109,13 @@ SQL_STATEMENTS = [
         nombre       TEXT NOT NULL,
         mime_type    TEXT NOT NULL,
         datos        BYTEA NOT NULL,
+        es_correo    BOOLEAN NOT NULL DEFAULT FALSE,
         subido_por_id INTEGER REFERENCES usuarios(id),
         creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_adjuntos_pedido ON pedido_adjuntos(pedido_id)",
+    "CREATE INDEX IF NOT EXISTS idx_adjuntos_tipo_correo ON pedido_adjuntos(pedido_id, tipo, es_correo)",
     # ── Historial de estados ──────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS historial_estados (
