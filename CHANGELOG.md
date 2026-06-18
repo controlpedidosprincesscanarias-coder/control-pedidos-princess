@@ -1,3 +1,245 @@
+## v12.0.0 — 18 junio 2026
+
+### ⭐ Gestión avanzada de contactos principales de proveedor
+
+Esta versión introduce una mejora importante en la gestión de contactos de proveedores, permitiendo definir múltiples destinatarios prioritarios para las comunicaciones automáticas del sistema.
+
+El objetivo es adaptar el envío de notificaciones a la realidad operativa de muchos proveedores, donde intervienen varios departamentos (compras, administración, logística, dirección comercial, etc.).
+
+---
+
+## ⭐ Múltiples contactos principales
+
+### Situación anterior
+
+Cada proveedor solo podía tener un único contacto marcado como principal.
+
+La selección funcionaba de forma exclusiva:
+
+```text
+Contacto A  ⭐ Principal
+Contacto B
+Contacto C
+```
+
+Al marcar un nuevo contacto, el anterior perdía automáticamente dicha condición.
+
+---
+
+### Nuevo funcionamiento
+
+Ahora es posible marcar varios contactos simultáneamente como principales.
+
+Ejemplo:
+
+```text
+Contacto Compras       ⭐ PRINCIPAL
+Contacto Logística     ⭐ PRINCIPAL
+Contacto Administración ⭐ PRINCIPAL
+```
+
+Todos los contactos seleccionados mantienen visible el distintivo:
+
+```text
+PRINCIPAL
+```
+
+de forma simultánea.
+
+---
+
+## 📧 Nuevo sistema centralizado de destinatarios
+
+### Nueva función backend
+
+Se incorpora:
+
+```python
+_get_proveedor_emails_principales()
+```
+
+como punto único para obtener los correos electrónicos principales de un proveedor.
+
+---
+
+### Beneficios
+
+Antes existían múltiples consultas independientes con lógica similar:
+
+```sql
+LIMIT 1
+```
+
+repartidas por distintas zonas del sistema.
+
+Ahora:
+
+* La lógica queda centralizada.
+* Se elimina duplicidad de código.
+* Se simplifica el mantenimiento futuro.
+* Se garantiza un comportamiento uniforme.
+
+---
+
+## 📨 Correos automáticos de cambio de estado
+
+### Integración en `enviar_emails_estado()`
+
+Los correos automáticos asociados a cambios de estado utilizan ahora:
+
+```python
+_get_proveedor_emails_principales()
+```
+
+como fuente oficial de destinatarios.
+
+---
+
+### Nuevo comportamiento
+
+Si existen varios contactos principales:
+
+```text
+compras@proveedor.com
+logistica@proveedor.com
+administracion@proveedor.com
+```
+
+todos se incorporan directamente al campo:
+
+```text
+Para:
+```
+
+como destinatarios principales.
+
+---
+
+## 🚨 Modal "Enviar email de alerta"
+
+### Integración completa
+
+El envío manual desde:
+
+```text
+Enviar email de alerta
+```
+
+utiliza exactamente la misma lógica.
+
+---
+
+### Resultado
+
+Las alertas se envían simultáneamente a todos los contactos marcados como principales.
+
+Esto garantiza que las incidencias importantes lleguen a todos los interlocutores relevantes del proveedor.
+
+---
+
+## 🔄 Consistencia entre comunicaciones
+
+A partir de esta versión:
+
+### Correos automáticos
+
+* Cambios de estado.
+* Notificaciones operativas.
+
+### Correos manuales
+
+* Alertas enviadas desde la aplicación.
+
+utilizan exactamente el mismo conjunto de destinatarios.
+
+---
+
+## 📊 Ámbitos no modificados
+
+Por decisión de diseño, esta versión no altera los procesos donde el correo del proveedor se utiliza únicamente como dato informativo.
+
+Entre ellos:
+
+* Exportaciones Excel.
+* Auditoría de pedidos eliminados.
+* Informes históricos.
+* Consultas de visualización.
+
+En estos casos se mantiene el comportamiento existente para evitar cambios innecesarios en formatos y reportes ya consolidados.
+
+---
+
+## ⚠️ Consideración operativa
+
+Con el nuevo modelo pueden existir tres escenarios:
+
+### Caso 1
+
+```text
+1 contacto principal
+```
+
+Comportamiento idéntico al anterior.
+
+---
+
+### Caso 2
+
+```text
+Varios contactos principales
+```
+
+Todos reciben la comunicación simultáneamente.
+
+---
+
+### Caso 3
+
+```text
+Ningún contacto principal
+```
+
+La función:
+
+```python
+_get_proveedor_emails_principales()
+```
+
+devuelve una lista vacía.
+
+En consecuencia:
+
+* No se generan destinatarios.
+* No se envía correo al proveedor.
+* No se produce error de aplicación.
+
+Este comportamiento queda pendiente de validación operativa para decidir si en futuras versiones debe existir un mecanismo de respaldo automático.
+
+---
+
+## 🎯 Objetivo de la mejora
+
+La funcionalidad responde a una necesidad operativa habitual:
+
+* Compras quiere recibir las reclamaciones.
+* Logística necesita conocer incidencias de entrega.
+* Administración debe disponer de determinadas comunicaciones.
+* Dirección comercial puede requerir visibilidad sobre pedidos estratégicos.
+
+Ahora el administrador puede definir exactamente qué contactos participan en las notificaciones simplemente marcándolos como principales desde la ficha del proveedor.
+
+---
+
+## ✅ Resultado
+
+* Soporte para múltiples contactos principales por proveedor.
+* Eliminación de consultas duplicadas basadas en `LIMIT 1`.
+* Centralización de la lógica de destinatarios.
+* Correos automáticos enviados a todos los responsables relevantes.
+* Correos manuales alineados con la misma configuración.
+* Mayor flexibilidad operativa para la gestión de proveedores.
+* Preparación para futuras ampliaciones de notificaciones multidestinatario.
+
 ## v11.9.6 — 18 junio 2026
 
 ### 📧 Finalización de la migración operativa a EmailJS

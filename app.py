@@ -587,7 +587,8 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     if not pedido:
         return pendientes
 
-    if estado_nuevo in ESTADOS_EMAIL_PROVEEDOR and pedido.get("proveedor_email"):
+    _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"))
+    if estado_nuevo in ESTADOS_EMAIL_PROVEEDOR and _proveedor_emails:
         subject = f"Pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
         # Obtener email del/los comprador(es) responsable(s) del hotel —
         # se usan como firma del correo y también como BCC del envío real,
@@ -631,10 +632,13 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 f"Este correo es exclusivo para notificaciones automáticas. "
                 f"Por favor, responda única y exclusivamente a la dirección que firma este comunicado."
             )
-            _log_email(db, pedido_id, "proveedor", pedido["proveedor_email"], subject, False, "Pendiente de envío vía EmailJS")
+            # Todos los contactos marcados como principales reciben el correo
+            # como destinatario directo ("Para:"), no en copia.
+            _destino_proveedor = ", ".join(_proveedor_emails)
+            _log_email(db, pedido_id, "proveedor", _destino_proveedor, subject, False, "Pendiente de envío vía EmailJS")
             pendientes.append({
                 "tipo":      "proveedor",
-                "to_email":  pedido["proveedor_email"],
+                "to_email":  _destino_proveedor,
                 "bcc":       _bcc_compradores,
                 "asunto":    subject,
                 "body_html": body_html,
@@ -2488,6 +2492,24 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
         log.error("[TECHO] Error enviando telegram techo pedido %s: %s", pedido_id, exc)
 
 
+def _get_proveedor_emails_principales(proveedor_id) -> list:
+    """Devuelve la lista de emails de TODOS los contactos marcados como
+    principales (es_principal=1) para un proveedor, en el orden definido
+    por `orden`. Un proveedor puede tener varios contactos marcados a la
+    vez con la estrella dorada — todos reciben las notificaciones como
+    destinatario directo ("Para:"), no en copia."""
+    if not proveedor_id:
+        return []
+    rows = query(
+        """SELECT email FROM proveedor_contactos
+           WHERE proveedor_id=%s AND es_principal=1
+             AND email IS NOT NULL AND email != ''
+           ORDER BY orden, id""",
+        (proveedor_id,)
+    ) or []
+    return [r["email"] for r in rows]
+
+
 def _get_compradores_cc(hotel_codigo: str):
     """Devuelve lista de dicts {email, nombre, movil} de los compradores responsables del hotel.
     Usa _get_compradores_hotel() para obtener los compradores dinámicamente desde BD."""
@@ -2717,6 +2739,7 @@ def _log_whatsapp(db, pedido_id, tipo, destinatario, mensaje, enviado, error=Non
 PEDIDO_SELECT_ALERTA = """
     SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
+           p.proveedor_id,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
@@ -2753,7 +2776,8 @@ def alerta_email_preview(pedido_id):
 
     # Destinatario principal
     if es_proveedor:
-        to_email   = pedido.get("proveedor_email") or ""
+        _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"))
+        to_email   = ", ".join(_proveedor_emails)
         to_nombre  = pedido.get("proveedor_nombre") or ""
     else:
         # Email interno: comprador responsable como destinatario
