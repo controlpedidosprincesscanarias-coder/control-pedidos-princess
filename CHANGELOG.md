@@ -240,6 +240,158 @@ Ahora el administrador puede definir exactamente qué contactos participan en la
 * Mayor flexibilidad operativa para la gestión de proveedores.
 * Preparación para futuras ampliaciones de notificaciones multidestinatario.
 
+## v11.9.8 — 18 junio 2026
+
+### 📧 Corrección de destinatarios en correos internos de cambio de estado
+
+Se corrige un problema en la generación de correos internos asociados a determinados cambios de estado de pedido.
+
+---
+
+## 🐛 Problema detectado
+
+Cuando un pedido cambiaba a alguno de los estados:
+
+```text
+ENTREGADO
+CANCELADO
+ENTREGA PARCIAL
+```
+
+el correo interno reutilizaba una variable procedente de otro bloque de código diseñado originalmente para los correos enviados al proveedor.
+
+Como consecuencia, los destinatarios podían no corresponder exactamente con los responsables del hotel asociado al pedido.
+
+---
+
+## 🔍 Causa raíz
+
+La lógica utilizaba:
+
+```python
+_get_admin_emails()
+```
+
+para determinar los destinatarios internos.
+
+Esta función está diseñada para otros procesos globales del sistema y devuelve usuarios con perfil:
+
+* Administrador
+* Compras
+
+sin filtrar por hotel.
+
+De hecho, su propio propósito es servir para notificaciones generales de pedidos y tareas administrativas.
+
+---
+
+## ✅ Solución aplicada
+
+Se sustituye la obtención de destinatarios por:
+
+```python
+_get_compradores_cc(pedido.get("hotel_codigo",""))
+```
+
+que ya era la función utilizada en los correos enviados al proveedor para determinar los responsables del hotel correspondiente.
+
+---
+
+## 🔄 Unificación de la lógica de destinatarios
+
+A partir de esta versión:
+
+### Correo al proveedor
+
+Utiliza:
+
+```python
+_get_compradores_cc()
+```
+
+para calcular las copias de seguimiento.
+
+---
+
+### Correo interno
+
+Utiliza exactamente la misma función:
+
+```python
+_get_compradores_cc()
+```
+
+como fuente de verdad única para determinar los compradores responsables.
+
+---
+
+## 🏨 Filtrado correcto por hotel
+
+Los correos internos quedan ahora correctamente limitados al hotel asociado al pedido.
+
+Ejemplo:
+
+```text
+Pedido Hotel IT
+      ↓
+Compradores asignados Hotel IT
+      ↓
+Correo interno
+```
+
+Sin incluir compradores de otros hoteles.
+
+---
+
+## 👥 Soporte para múltiples compradores
+
+La corrección mantiene el comportamiento multiusuario ya existente.
+
+Si un hotel tiene varios compradores asignados:
+
+```text
+Comprador A
+Comprador B
+Comprador C
+```
+
+el sistema distribuye los destinatarios siguiendo el patrón estándar:
+
+* Primer destinatario → Para
+* Resto → BCC
+
+garantizando la recepción por todos los responsables del hotel.
+
+---
+
+## 📦 Estados afectados
+
+La corrección aplica específicamente a los estados:
+
+```text
+ENTREGADO
+CANCELADO
+ENTREGA PARCIAL
+```
+
+que utilizan el flujo de correo interno y no pasan por el bloque de notificaciones al proveedor.
+
+---
+
+## 🛡️ Impacto
+
+* Eliminado el riesgo de notificaciones cruzadas entre hoteles.
+* Destinatarios alineados con la asignación real de compradores.
+* Unificación de la lógica de cálculo de responsables.
+* Reducción de duplicidad de criterios de envío.
+* Mayor coherencia entre correos internos y externos.
+
+---
+
+## ✅ Resultado
+
+Las notificaciones internas de cierre, cancelación o entrega parcial llegan únicamente a los compradores responsables del hotel asociado al pedido, utilizando la misma fuente de verdad que el resto de comunicaciones del sistema.
+
 ## v11.9.6 — 18 junio 2026
 
 ### 📧 Finalización de la migración operativa a EmailJS

@@ -646,7 +646,11 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             })
 
     if estado_nuevo in ESTADOS_EMAIL_INTERNO:
-        destinatarios_internos = _get_admin_emails()
+        # Solo el/los comprador(es) asignado(s) a este hotel — NO todos los
+        # admins/compras de la organización. Antes usaba _get_admin_emails(),
+        # que devuelve los compradores de los 10 hoteles a la vez.
+        _compradores_internos = _get_compradores_cc(pedido.get("hotel_codigo",""))
+        destinatarios_internos = [c["email"] for c in _compradores_internos if c.get("email")]
         if destinatarios_internos:
             subject = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {estado_nuevo}"
             body_html = f"""
