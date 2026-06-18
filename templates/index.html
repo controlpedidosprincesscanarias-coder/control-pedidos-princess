@@ -1091,7 +1091,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 11.9.6
+          V 11.9.2
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2649,13 +2649,49 @@ async function adminAprobarSolicitud(solId) {
   try {
     const r = await api(`/api/admin/solicitudes-acceso/${solId}/aprobar`, 'POST');
 
+    // ── Envío vía EmailJS de lo que el backend no pudo entregar ──────────────
+    // El backend no tiene Resend configurado (entorno actual), así que
+    // devuelve los datos del correo pendiente para que el frontend lo
+    // envíe realmente desde la cuenta de Gmail vía EmailJS.
+    let usuarioEmailOk = !r.email_usuario_pendiente;  // si no hay pendiente, ya se envió por backend
+    if (r.email_usuario_pendiente) {
+      try {
+        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+          to_email: r.email_usuario_pendiente.to_email,
+          subject:  r.email_usuario_pendiente.asunto,
+          message:  r.email_usuario_pendiente.body_text,
+          bcc:      '',
+          email:    r.email_usuario_pendiente.to_email,
+        });
+        usuarioEmailOk = true;
+      } catch (ejsErr) {
+        console.warn('[EmailJS] fallo email bienvenida usuario:', ejsErr);
+      }
+    }
+
+    if (r.email_admins_pendiente && r.email_admins_pendiente.destinatarios?.length) {
+      try {
+        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+          to_email: r.email_admins_pendiente.destinatarios[0],
+          subject:  r.email_admins_pendiente.asunto,
+          message:  r.email_admins_pendiente.body_text,
+          bcc:      r.email_admins_pendiente.destinatarios.slice(1).join(',') || '',
+          email:    r.email_admins_pendiente.destinatarios[0],
+        });
+      } catch (ejsErr) {
+        console.warn('[EmailJS] fallo email aviso admins:', ejsErr);
+      }
+    }
+
     // Construir mensaje de resultado
     let msg = `✅ Cuenta creada: ${r.username}`;
     if (r.hoteles_no_encontrados && r.hoteles_no_encontrados.length > 0) {
       msg += `\n⚠️ Hoteles sin asignar automáticamente: ${r.hoteles_no_encontrados.join(', ')}. Asígnalos manualmente desde Gestión de Usuarios.`;
     }
-    if (!r.email_enviado) {
-      msg += `\n📋 El email no pudo enviarse. Comunica las credenciales manualmente:\nUsuario: ${r.username}`;
+    if (!usuarioEmailOk) {
+      msg += `\n📋 El email no pudo enviarse. Comunica las credenciales manualmente:\nUsuario: ${r.username}\nContraseña: ${r.password}`;
+    } else {
+      msg += `\n📧 Email de bienvenida enviado.`;
     }
 
     // Si hay hoteles no asignados, mostrar alerta más prominente
@@ -3805,6 +3841,30 @@ function actualizarFechaEntregaPrevista() {
   }
 }
 
+// ── _enviarEmailsPendientesEstado ─────────────────────────────────────────────
+// Envía vía EmailJS los correos de cambio de estado (proveedor / internos)
+// que el backend no pudo entregar por Resend (entorno actual sin clave).
+// Cada correo se intenta de forma independiente: el fallo de uno no impide
+// que se intenten los demás. Los fallos solo se registran en consola — el
+// pedido ya quedó guardado correctamente en BD, así que no se bloquea al
+// usuario por un problema de envío de correo.
+async function _enviarEmailsPendientesEstado(pendientes) {
+  if (!pendientes || !pendientes.length) return;
+  for (const p of pendientes) {
+    try {
+      await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+        to_email: p.to_email,
+        subject:  p.asunto,
+        message:  p.body_text,
+        bcc:      (p.bcc || []).join(',') || '',
+        email:    p.to_email,
+      });
+    } catch (ejsErr) {
+      console.warn(`[EmailJS] fallo email "${p.tipo}" a ${p.to_email}:`, ejsErr);
+    }
+  }
+}
+
 async function savePedido() {
   // ── Modo Hotel: solo guardar albarán ─────────────────────────────────
   if (G.rol === 'hotel') {
@@ -3823,6 +3883,7 @@ async function savePedido() {
     const r = await api(`/api/pedidos/${id}`, 'PUT', body);
     btn.disabled = false;
     if (r && r.error) { toast(r.error, 'error'); return; }
+    await _enviarEmailsPendientesEstado(r.emails_pendientes);
     toast('Código DALI / SAP actualizado', 'success');
     closeModal('modal-pedido');
     loadPedidos();
@@ -3934,6 +3995,7 @@ async function savePedido() {
         : await api('/api/pedidos', 'POST', body);
     }
     if (r.error) { toast(r.error,'error'); return; }
+    await _enviarEmailsPendientesEstado(r.emails_pendientes);
     // Invalidar ambas cachés: el pedido puede haber cambiado estado, importe o familia
     _invalidarStats();
     _invalidarTecho();
