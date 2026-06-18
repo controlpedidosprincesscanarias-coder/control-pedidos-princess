@@ -1,6 +1,6 @@
-## v12.0.0 — 18 junio 2026
+# v12.0.0 — 18 junio 2026
 
-### ⭐ Gestión avanzada de contactos principales de proveedor
+## ⭐ Gestión avanzada de contactos principales de proveedor
 
 Esta versión introduce una mejora importante en la gestión de contactos de proveedores, permitiendo definir múltiples destinatarios prioritarios para las comunicaciones automáticas del sistema.
 
@@ -33,8 +33,8 @@ Ahora es posible marcar varios contactos simultáneamente como principales.
 Ejemplo:
 
 ```text
-Contacto Compras       ⭐ PRINCIPAL
-Contacto Logística     ⭐ PRINCIPAL
+Contacto Compras        ⭐ PRINCIPAL
+Contacto Logística      ⭐ PRINCIPAL
 Contacto Administración ⭐ PRINCIPAL
 ```
 
@@ -230,7 +230,67 @@ Ahora el administrador puede definir exactamente qué contactos participan en la
 
 ---
 
+## 🛠️ Corrección de ruta de backups corporativos
+
+### Problema detectado
+
+Durante las validaciones posteriores a la implantación del nuevo sistema distribuido de restauración de copias de seguridad se detectó que parte de la configuración seguía apuntando a una ruta local basada en unidad mapeada.
+
+Ruta incorrecta detectada:
+
+```text
+G:\CARPETA COMPRADORES\COMPRADOR 1 - VICTOR MARTIN\04.PEDIDOS EXTERNOS CONTROL\Backups
+```
+
+Este enfoque dependía de configuraciones específicas de Windows y podía provocar comportamientos distintos según el equipo donde se ejecutara el agente de restauración.
+
+---
+
+### Ruta corregida
+
+Se establece como ubicación oficial de trabajo la ruta UNC corporativa:
+
+```text
+\\shtabaiba\direccioncomprascanarias$\CARPETA COMPRADORES\COMPRADOR 1 - VICTOR MARTIN\04.PEDIDOS EXTERNOS CONTROL\Backups
+```
+
+---
+
+### Beneficios
+
+* Eliminada la dependencia de unidades mapeadas (`G:`).
+* Compatibilidad entre todos los equipos autorizados.
+* Mayor fiabilidad para tareas programadas de Windows.
+* Acceso uniforme para backup y restauración.
+* Menor riesgo de incidencias por diferencias de configuración local.
+
+---
+
+### Componentes afectados
+
+La corrección aplica a:
+
+* `restore_agent.py`
+* Sincronización de `backups_cache`
+* Listado de backups desde el panel de administración
+* Lectura de logs asociados a backups
+* Procesos de restauración ejecutados desde la aplicación
+
+---
+
+### Riesgo
+
+**Muy bajo.**
+
+No se modifica la lógica de restauración ni la estructura de base de datos.
+
+Únicamente se corrige la ubicación física utilizada para acceder a las copias de seguridad corporativas.
+
+---
+
 ## ✅ Resultado
+
+### Gestión de proveedores
 
 * Soporte para múltiples contactos principales por proveedor.
 * Eliminación de consultas duplicadas basadas en `LIMIT 1`.
@@ -238,6 +298,20 @@ Ahora el administrador puede definir exactamente qué contactos participan en la
 * Correos automáticos enviados a todos los responsables relevantes.
 * Correos manuales alineados con la misma configuración.
 * Mayor flexibilidad operativa para la gestión de proveedores.
+
+### Sistema de backups
+
+* Restauraciones utilizando la ruta corporativa oficial.
+* Eliminada la dependencia de unidades mapeadas.
+* Mayor fiabilidad en procesos de backup y recuperación.
+* Consistencia entre todos los equipos autorizados.
+
+### Resultado global
+
+* Arquitectura más robusta.
+* Menor duplicidad de código.
+* Mayor mantenibilidad.
+* Mejor alineación con la operativa real de Compras.
 * Preparación para futuras ampliaciones de notificaciones multidestinatario.
 
 ## v11.9.8 — 18 junio 2026
