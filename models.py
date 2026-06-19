@@ -82,6 +82,7 @@ SQL_STATEMENTS = [
         pedido_num              TEXT,
         presupuesto_num         TEXT,
         entrada_albaran_num     TEXT,
+        tarifa_acordada         BOOLEAN NOT NULL DEFAULT FALSE,
         estado                  TEXT NOT NULL DEFAULT 'PENDIENTE FIRMA DIRECCION COMPRAS',
         comunicado_ab           INTEGER NOT NULL DEFAULT 0,
         comunicado_jefe_dep     INTEGER NOT NULL DEFAULT 0,

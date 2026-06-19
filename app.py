@@ -384,6 +384,13 @@ def _auto_migrate():
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_adjuntos_tipo_correo ON pedido_adjuntos(pedido_id, tipo, es_correo)"
             )
+            # ── v12.0.5 — Tarifa acordada (pedido sin presupuesto) ──────────
+            # Permite marcar un pedido como "tarifa acordada" para eximirlo
+            # de la obligatoriedad de Nº Presupuesto + documento adjunto al
+            # pasar a ENVIADO AL PROVEEDOR. Por defecto siempre desmarcado.
+            cur.execute(
+                "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tarifa_acordada BOOLEAN NOT NULL DEFAULT FALSE"
+            )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -5450,6 +5457,7 @@ def create_pedido():
             norden, hotel_id, departamento_id,
             fecha_solicitud, fecha_envio_visto_bueno, fecha_tramitacion,
             pedido_num, presupuesto_num, entrada_albaran_num,
+            tarifa_acordada,
             estado, comunicado_ab, comunicado_jefe_dep,
             parte_rotura, parte_ampliacion,
             proveedor_id, observaciones,
@@ -5457,7 +5465,7 @@ def create_pedido():
             plazo_entrega_dias,
             creado_por_id, modificado_por_id,
             creado_por_nombre, modificado_por_nombre
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         RETURNING id
     """, (
         norden,
@@ -5466,6 +5474,7 @@ def create_pedido():
         data.get("fecha_tramitacion"),
         data.get("pedido_num"), data.get("presupuesto_num"),
         data.get("entrada_albaran_num"),
+        1 if data.get("tarifa_acordada") else 0,
         estado,
         1 if data.get("comunicado_ab") else 0,
         1 if data.get("comunicado_jefe_dep") else 0,
@@ -5610,21 +5619,24 @@ def update_pedido(pid):
         if len(correos_pedido) > 1:
             errores_envio.append("Solo se permite un correo electrónico en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(correos_pedido))
 
-        # 3. Nº Presupuesto obligatorio
-        presupuesto_num_val = data.get("presupuesto_num", pedido_actual.get("presupuesto_num") or "")
-        if not (presupuesto_num_val or "").strip():
-            errores_envio.append("El campo «Nº Presupuesto» es obligatorio para pasar a ENVIADO AL PROVEEDOR.")
+        # 3. Nº Presupuesto obligatorio (salvo pedidos con tarifa acordada,
+        #    que por definición no requieren presupuesto)
+        tarifa_acordada_val = data.get("tarifa_acordada", pedido_actual.get("tarifa_acordada", False))
+        if not tarifa_acordada_val:
+            presupuesto_num_val = data.get("presupuesto_num", pedido_actual.get("presupuesto_num") or "")
+            if not (presupuesto_num_val or "").strip():
+                errores_envio.append("El campo «Nº Presupuesto» es obligatorio para pasar a ENVIADO AL PROVEEDOR.")
 
-        # 4. Adjunto presupuesto_doc: mínimo 1 documento (puede haber también correos)
-        adjuntos_presupuesto = rows_to_list(query(
-            "SELECT id, nombre, es_correo FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='presupuesto_doc'",
-            (pid,)
-        ))
-        docs_presupuesto = [a for a in adjuntos_presupuesto if not a["es_correo"]]
-        if len(adjuntos_presupuesto) == 0:
-            errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en la sección «Nº Presupuesto».")
-        elif len(docs_presupuesto) == 0:
-            errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en «Nº Presupuesto» (solo correo electrónico no es suficiente).")
+            # 4. Adjunto presupuesto_doc: mínimo 1 documento (puede haber también correos)
+            adjuntos_presupuesto = rows_to_list(query(
+                "SELECT id, nombre, es_correo FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='presupuesto_doc'",
+                (pid,)
+            ))
+            docs_presupuesto = [a for a in adjuntos_presupuesto if not a["es_correo"]]
+            if len(adjuntos_presupuesto) == 0:
+                errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en la sección «Nº Presupuesto».")
+            elif len(docs_presupuesto) == 0:
+                errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en «Nº Presupuesto» (solo correo electrónico no es suficiente).")
 
         if errores_envio:
             return jsonify({"ok": False, "error": " | ".join(errores_envio), "errores": errores_envio}), 422
@@ -5649,6 +5661,7 @@ def update_pedido(pid):
             hotel_id=%s, departamento_id=%s,
             fecha_solicitud=%s, fecha_envio_visto_bueno=%s, fecha_tramitacion=%s,
             pedido_num=%s, presupuesto_num=%s, entrada_albaran_num=%s,
+            tarifa_acordada=%s,
             estado=%s,
             comunicado_ab=%s, comunicado_jefe_dep=%s,
             parte_rotura=%s, parte_ampliacion=%s,
@@ -5666,6 +5679,7 @@ def update_pedido(pid):
         data.get("pedido_num",           pedido_actual["pedido_num"]),
         data.get("presupuesto_num",      pedido_actual["presupuesto_num"]),
         data.get("entrada_albaran_num",  pedido_actual["entrada_albaran_num"]),
+        1 if data.get("tarifa_acordada", pedido_actual.get("tarifa_acordada", False)) else 0,
         estado_nuevo,
         1 if data.get("comunicado_ab",       pedido_actual["comunicado_ab"]) else 0,
         1 if data.get("comunicado_jefe_dep", pedido_actual["comunicado_jefe_dep"]) else 0,

@@ -1,3 +1,16 @@
+# v12.0.6 — 19 junio 2026
+
+## 🏷️ Tarifa acordada (pedidos sin presupuesto)
+
+Se añade una casilla **"🏷️ Tarifa acordada (pedido sin presupuesto)"** en el apartado de presupuesto del formulario de pedido.
+
+- Por defecto está **siempre desmarcada**: el usuario debe poder introducir el Nº Presupuesto y adjuntar su documento normalmente.
+- Si se **marca**, el campo Nº Presupuesto y el botón de adjuntar documento se deshabilitan visualmente y dejan de ser obligatorios.
+- Al pasar el pedido a `ENVIADO AL PROVEEDOR`, si la casilla está marcada, el backend **omite** la validación de Nº Presupuesto obligatorio y de documento adjunto, permitiendo guardar el pedido sin ese requisito.
+- Nueva columna `tarifa_acordada` (booleano, por defecto `FALSE`) en la tabla `pedidos`, migrada automáticamente al arrancar la app.
+
+---
+
 # v12.0.4 — 19 junio 2026
 
 ## 🛡️ Validación obligatoria de proveedor antes de "ENVIADO AL PROVEEDOR"

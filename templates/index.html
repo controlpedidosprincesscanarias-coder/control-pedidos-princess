@@ -1091,7 +1091,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.0.4
+          V 12.0.6
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -1747,6 +1747,10 @@ tbody tr:last-child{border-bottom:none}
         </div>
         <div class="form-group">
           <label class="form-label">Nº Presupuesto</label>
+          <label class="checkbox-item" style="font-size:12px;font-weight:500;color:var(--navy2);margin-bottom:6px">
+            <input type="checkbox" id="chk-tarifa-acordada" onchange="onTarifaAcordadaChange()">
+            <span style="margin-left:4px">🏷️ Tarifa acordada (pedido sin presupuesto)</span>
+          </label>
           <input class="form-control monospace" id="p-presup">
           <label class="adj-fecha-btn" id="lbl-presup-doc" title="Adjuntar documento o correo al presupuesto" style="margin-top:6px">
             <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
@@ -3135,6 +3139,8 @@ async function openPedidoModal(id=null) {
     actualizarFechaEntregaPrevista();
     setVal('p-pedido-num', p.pedido_num);
     setVal('p-presup', p.presupuesto_num);
+    document.getElementById('chk-tarifa-acordada').checked = !!p.tarifa_acordada;
+    onTarifaAcordadaChange();
     setVal('p-estado', p.estado);
     initAlbaranSection(p.entrada_albaran_num || '', p.estado);
     onEstadoChange();
@@ -3189,7 +3195,7 @@ function _applyHotelRolePedidoModal(isEdit) {
   const hideIds = [
     'p-hotel','p-depto',                          // hotel y departamento
     'p-f-solicitud','p-f-vb','p-f-tramit','p-plazo-entrega',        // fechas
-    'p-pedido-num','p-presup',                    // números SAP/presupuesto
+    'p-pedido-num','p-presup','chk-tarifa-acordada',  // números SAP/presupuesto
     'p-proveedor-input',                          // proveedor
     'p-observaciones',                            // observaciones
     'p-ab','p-jefe','p-rotura','p-ampliacion',    // checkboxes comunicados
@@ -3815,6 +3821,10 @@ function clearPedidoForm() {
   ['p-hotel','p-depto','p-pedido-num','p-presup','p-observaciones','p-nota','p-plazo-entrega'].forEach(id=>setVal(id,''));
   ['p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
   document.getElementById('p-fecha-entrega-prevista-info').style.display = 'none';
+  // Resetear checkbox "tarifa acordada" — siempre desmarcado por defecto
+  const chkTarifa = document.getElementById('chk-tarifa-acordada');
+  if (chkTarifa) chkTarifa.checked = false;
+  onTarifaAcordadaChange();
   // Resetear checkbox cancelado y desbloquear formulario
   const chkCanc = document.getElementById('chk-cancelado');
   if (chkCanc) chkCanc.checked = false;
@@ -3847,6 +3857,22 @@ function actualizarFechaEntregaPrevista() {
   } else {
     info.style.display = 'none';
   }
+}
+
+// ── Tarifa acordada (pedido sin presupuesto) ──────────────────────────────
+// Al marcar la casilla, el Nº Presupuesto y su adjunto dejan de ser
+// obligatorios (tanto en frontend como en backend) y se deshabilitan visualmente
+// para evitar que el usuario los rellene sin necesidad.
+function onTarifaAcordadaChange() {
+  const marcado    = document.getElementById('chk-tarifa-acordada').checked;
+  const inputPresup = document.getElementById('p-presup');
+  const lblAdjunto   = document.getElementById('lbl-presup-doc');
+  inputPresup.disabled = marcado;
+  inputPresup.style.opacity = marcado ? '0.5' : '';
+  inputPresup.style.borderColor = '';
+  if (marcado) inputPresup.value = '';
+  lblAdjunto.style.opacity = marcado ? '0.5' : '';
+  lblAdjunto.style.pointerEvents = marcado ? 'none' : '';
 }
 
 // ── _enviarEmailsPendientesEstado ─────────────────────────────────────────────
@@ -3991,6 +4017,7 @@ Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva 
     fecha_tramitacion:    val('p-f-tramit'),
     pedido_num:           val('p-pedido-num'),
     presupuesto_num:      val('p-presup'),
+    tarifa_acordada:      document.getElementById('chk-tarifa-acordada').checked,
     entrada_albaran_num:  getAlbaranCombined(),
     estado:               val('p-estado'),
     comunicado_ab:        document.getElementById('p-ab').checked,
