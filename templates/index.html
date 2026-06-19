@@ -1094,7 +1094,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.1.0
+          V 12.0.8
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2267,7 +2267,7 @@ async function enviarSolicitudReset() {
     document.getElementById('reset-paso1').style.display = 'none';
 
     if (r.sin_email && r.link) {
-      // Backend sin RESEND — intentar enviar con EmailJS desde el navegador
+      // Backend devuelve sin_email: true — enviar con EmailJS desde el navegador
       if (r.email) {
         try {
           await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
@@ -2299,7 +2299,7 @@ Control de Pedidos · Princess Canarias`,
         document.getElementById('reset-paso2b').style.display = '';
       }
     } else {
-      // Resend funcionó en el backend
+      // El backend siempre devuelve sin_email — esta rama ya no se alcanza
       document.getElementById('reset-paso2').style.display = '';
     }
   } catch(err) {
@@ -2617,7 +2617,7 @@ async function adminEnviarFase2(solId) {
   try {
     const r = await api(`/api/admin/solicitudes-acceso/${solId}/enviar-fase2`, 'POST');
 
-    // Si el backend no tiene RESEND configurado, usa EmailJS como fallback (igual que reset de contraseña)
+    // El backend devuelve sin_email: true — enviar con EmailJS desde el navegador
     if (r.sin_email && r.url_token && r.destinatarios && r.destinatarios[0]) {
       const toEmail = r.destinatarios[0];
       try {
@@ -2665,9 +2665,8 @@ async function adminAprobarSolicitud(solId) {
     const r = await api(`/api/admin/solicitudes-acceso/${solId}/aprobar`, 'POST');
 
     // ── Envío vía EmailJS de lo que el backend no pudo entregar ──────────────
-    // El backend no tiene Resend configurado (entorno actual), así que
-    // devuelve los datos del correo pendiente para que el frontend lo
-    // envíe realmente desde la cuenta de Gmail vía EmailJS.
+    // El backend devuelve los datos del correo pendiente para que el frontend
+    // lo envíe vía EmailJS.
     let usuarioEmailOk = !r.email_usuario_pendiente;  // si no hay pendiente, ya se envió por backend
     if (r.email_usuario_pendiente) {
       try {
@@ -3886,7 +3885,7 @@ function onTarifaAcordadaChange() {
 
 // ── _enviarEmailsPendientesEstado ─────────────────────────────────────────────
 // Envía vía EmailJS los correos de cambio de estado (proveedor / internos)
-// que el backend no pudo entregar por Resend (entorno actual sin clave).
+// que el backend prepara para que el frontend envíe vía EmailJS.
 // Cada correo se intenta de forma independiente: el fallo de uno no impide
 // que se intenten los demás. Los fallos solo se registran en consola — el
 // pedido ya quedó guardado correctamente en BD, así que no se bloquea al
