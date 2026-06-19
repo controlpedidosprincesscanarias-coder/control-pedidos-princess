@@ -1,3 +1,55 @@
+# v12.1.0 — 19 junio 2026
+
+## 🗑️ Eliminación definitiva de Resend
+
+Resend queda completamente eliminado del proyecto. Todo el envío de email pasa a gestionarse desde el frontend vía EmailJS, de forma consistente con lo que ya ocurría desde la v11.9.6 para cambios de estado, notificaciones a proveedores y aprobación de usuarios.
+
+### Contexto: inconsistencia del changelog anterior
+
+El changelog desde v11.9.6 declaraba "Eliminada la dependencia funcional de Resend", lo cual era cierto para:
+- ✅ Cambios de estado
+- ✅ Notificaciones automáticas a proveedor
+- ✅ Aprobación de usuario (con fallback EmailJS)
+
+Pero no lo era para:
+- ❌ Envío manual de alertas (`/api/alertas/<id>/enviar-email`)
+- ❌ Recuperación de contraseña (`/api/password-reset/solicitar`)
+- ❌ Solicitud de acceso Fase 2 (`/api/admin/solicitudes-acceso/<id>/enviar-fase2`)
+
+Esta versión cierra esas tres excepciones.
+
+### Cambios (por fases)
+
+**Fase 1 — `/api/alertas/<id>/enviar-email`**
+- Eliminada la llamada a `_send_email()`.
+- El endpoint registra el email en `emails_log` con estado `Pendiente de envío vía EmailJS`.
+- El JSON de respuesta incluye `email_pendiente` con `to_email`, `cc_emails`, `subject`, `body_html` y `body_text` para que el frontend lo envíe vía EmailJS.
+
+**Fase 2 — `/api/password-reset/solicitar`**
+- Eliminadas las llamadas a `_send_email()` (al usuario y al admin como fallback).
+- El endpoint devuelve siempre `sin_email: true` con `link`, `email`, `nombre`, `subject` y `body_html`.
+- El frontend ya manejaba este caso; ahora es el único camino.
+
+**Fase 3 — `/api/admin/solicitudes-acceso/<id>/enviar-fase2`** y **`/api/solicitar-usuario/completar-fase2`**
+- Eliminadas todas las llamadas a `_send_email()` (email al usuario solicitante y emails a admins).
+- Ambos endpoints devuelven siempre los datos pendientes para EmailJS.
+- El frontend ya tenía la lógica de envío; ahora se activa siempre.
+
+**Fase 4 — Limpieza de backend**
+- Eliminada la función `_send_email()`.
+- Eliminadas las constantes `RESEND_API_KEY` y `EMAIL_FROM`.
+- Eliminadas las variables de entorno SMTP (nunca llegaron a usarse en producción).
+- Actualizado el docstring del módulo.
+
+**Fase 5 — Limpieza de infraestructura**
+- Eliminado `render.yaml` (contenía referencias a `RESEND_API_KEY` y `EMAIL_FROM`).
+
+**Fase 6 — Documentación**
+- Actualizada `GUIA_DESPLIEGUE.md`: eliminadas todas las referencias a Resend; el Paso 2 ahora describe la configuración de EmailJS en el frontend.
+- Corregida la inconsistencia del changelog: la declaración "Eliminada la dependencia funcional de Resend" es ahora completamente cierta.
+
+---
+
 # v12.0.8 — 19 junio 2026
 
 ## 🔔 Telegram de cambio de estado alineado con el correo interno

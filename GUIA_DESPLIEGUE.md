@@ -1,5 +1,5 @@
 # Guía de despliegue — Control Pedidos Princess
-## Stack: Render (Flask) + Supabase (PostgreSQL) + Resend (email) + UptimeRobot (anti-sleep)
+## Stack: Render (Flask) + Supabase (PostgreSQL) + EmailJS (email, frontend) + UptimeRobot (anti-sleep)
 
 > **v9.2.0** — Contactos múltiples por proveedor. Los campos `telefono` y `movil` se han
 > unificado en una única columna `telefono` dentro de la tabla `proveedor_contactos`.
@@ -30,9 +30,9 @@
 
 ---
 
-## PASO 2 — Resend: servicio de email gratuito
+## PASO 2 — EmailJS: envío de email desde el frontend
 
-1. Regístrate en https://resend.com (plan gratuito: 3.000 emails/mes)
+1. El email se gestiona íntegramente desde el frontend vía EmailJS (sin configuración en el servidor).
 2. Ve a **API Keys → Create API Key**
    - Nombre: `princess-pedidos`
    - Permisos: Full access
@@ -40,8 +40,7 @@
 
 **Opcional — dominio propio:**
 Si quieres que los emails salgan desde `compras@princess.es` en lugar de
-`onboarding@resend.dev`, ve a **Domains** y sigue las instrucciones DNS.
-Para empezar puedes usar el dominio de prueba de Resend.
+Configura tu Service ID y Template ID en EmailJS y actualiza las constantes en el frontend.
 
 ---
 
@@ -61,8 +60,7 @@ Para empezar puedes usar el dominio de prueba de Resend.
    |---|---|
    | `DATABASE_URL` | La URI de Supabase del Paso 1 |
    | `SECRET_KEY` | Una cadena aleatoria larga |
-   | `RESEND_API_KEY` | La clave de Resend del Paso 2 |
-   | `EMAIL_FROM` | `compras@princess.es` (o el que uses en Resend) |
+   | *(sin variables de email)* | El email se gestiona en el frontend vía EmailJS |
    | `EMAILS_INTERNOS` | `victor.martin@princess.es,jesus.curbelo@princess.es` |
 
 5. Haz clic en **Create Web Service** y espera el primer deploy (~2 min).
@@ -150,7 +148,7 @@ Cuando necesites subir documentos PDF a los pedidos:
 |---|---|---|
 | Render | Free | 0 € |
 | Supabase | Free (500 MB BD, 1 GB Storage) | 0 € |
-| Resend | Free (3.000 emails/mes) | 0 € |
+| EmailJS | Free tier | 0 € |
 | UptimeRobot | Free (50 monitores) | 0 € |
 | **TOTAL** | | **0 €/mes** |
 
@@ -160,7 +158,7 @@ Cuando necesites subir documentos PDF a los pedidos:
 
 | Archivo | Cambio |
 |---|---|
-| `app.py` | SQLite → psycopg2; `?` → `%s`; `datetime('now')` → `NOW()`; email via Resend; endpoint `/ping` |
+| `app.py` | SQLite → psycopg2; `?` → `%s`; `datetime('now')` → `NOW()`; email via EmailJS (frontend); endpoint `/ping` |
 | `models.py` | `SQL_STATEMENTS` como lista; `AUTOINCREMENT` → `SERIAL`; `LIKE` → `ILIKE` disponible |
 | `requirements.txt` | Añadido `psycopg2-binary`, `gunicorn`; eliminado lo innecesario |
 | `migrate_sqlite_to_pg.py` | Nuevo — migración de datos existentes |

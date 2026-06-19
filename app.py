@@ -1,6 +1,6 @@
 """
-Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase) + Resend
-Despliegue: Render.com  |  BD: Supabase  |  Email: Resend
+Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase)
+Despliegue: Render.com  |  BD: Supabase  |  Email: EmailJS (frontend)
 """
 
 import os, json, logging, secrets, atexit, hashlib
@@ -20,16 +20,8 @@ from models import SQL_STATEMENTS, ESTADOS_VALIDOS, ESTADOS_EMAIL_PROVEEDOR, EST
 DATABASE_URL = os.environ.get("DATABASE_URL", "")          # Supabase → Settings → Database → URI
 SECRET_KEY = os.environ["SECRET_KEY"]
 
-# Email — Resend (preferido) o SMTP como fallback
-RESEND_API_KEY   = os.environ.get("RESEND_API_KEY", "")
-EMAIL_FROM       = os.environ.get("EMAIL_FROM", "centralcomprascanarias.princess@gmail.com")
+# Email — gestionado enteramente por EmailJS en el frontend
 # EMAILS_INTERNOS eliminado: los destinatarios internos se leen siempre de la BD (rol admin/compras)
-
-# SMTP fallback (solo si no hay RESEND_API_KEY)
-SMTP_HOST     = os.environ.get("SMTP_HOST", "")
-SMTP_PORT     = int(os.environ.get("SMTP_PORT", "587"))
-SMTP_USER     = os.environ.get("SMTP_USER", "")
-SMTP_PASSWORD = os.environ.get("SMTP_PASSWORD", "")
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
@@ -510,53 +502,6 @@ def admin_required(f):
 def current_user_id():
     return session.get("user_id")
 
-# ── Email (Resend preferido, SMTP como fallback) ───────────────────────────────
-
-def _send_email(to: str, subject: str, body_html: str,
-                bcc: list = None, body_text: str = None) -> dict:
-    """
-    Envía un email usando Resend API (único método fiable en Render Free).
-    SMTP de Gmail está bloqueado en Render Free — no se usa.
-
-    Devuelve dict: { ok: bool, error: str|None, mode: str }
-    """
-    import urllib.request, urllib.error
-
-    to_list  = [t.strip() for t in to.split(",") if t.strip()] if to else []
-    bcc_list = [b.strip() for b in (bcc or []) if b.strip()]
-
-    # ── Resend API ─────────────────────────────────────────────────────────────
-    if RESEND_API_KEY:
-        try:
-            payload = {"from": EMAIL_FROM, "to": to_list, "subject": subject, "html": body_html}
-            if bcc_list:
-                payload["bcc"] = bcc_list
-            if body_text:
-                payload["text"] = body_text
-
-            req = urllib.request.Request(
-                "https://api.resend.com/emails",
-                data=json.dumps(payload).encode(),
-                headers={"Authorization": f"Bearer {RESEND_API_KEY}", "Content-Type": "application/json"},
-                method="POST",
-            )
-            with urllib.request.urlopen(req, timeout=15) as resp:
-                ok = resp.status in (200, 201, 202)
-                return {"ok": ok, "error": None if ok else f"Resend HTTP {resp.status}", "mode": "resend"}
-        except urllib.error.HTTPError as e:
-            body = e.read().decode(errors="replace")
-            log.error("Resend HTTP %s para %s: %s", e.code, to, body)
-            return {"ok": False, "error": f"Resend HTTP {e.code}: {body[:200]}", "mode": "resend"}
-        except Exception as e:
-            log.error("Resend error para %s: %s", to, e)
-            return {"ok": False, "error": str(e), "mode": "resend"}
-
-    # ── Sin proveedor configurado ──────────────────────────────────────────────
-    # NOTA: Gmail SMTP no es viable en Render Free (puerto 465/587 bloqueado).
-    # Configura RESEND_API_KEY en las variables de entorno de Render.
-    log.warning("Email no enviado — RESEND_API_KEY no configurada. Destino: %s", to)
-    return {"ok": False, "error": "RESEND_API_KEY no configurada en el servidor", "mode": "none"}
-
 def _log_email(db, pedido_id, tipo, destinatario, asunto, enviado, error=None):
     with db.cursor() as cur:
         cur.execute(
@@ -567,9 +512,9 @@ def _log_email(db, pedido_id, tipo, destinatario, asunto, enviado, error=None):
 def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str = None):
     """
     Construye los correos de notificación de cambio de estado (proveedor +
-    internos) y los registra en _log_email. Como el backend no tiene Resend
-    configurado en este entorno (EmailJS es el único canal real), no se
-    intenta el envío aquí: se devuelve una lista de correos pendientes para
+    internos) y los registra en _log_email. El envío lo hace el frontend
+    vía EmailJS (único canal de email), por lo que no se intenta envío aquí:
+    se devuelve una lista de correos pendientes para
     que el caller (create_pedido / update_pedido) la incluya en su respuesta
     JSON y el frontend los envíe vía EmailJS justo después de guardar.
 
@@ -2963,11 +2908,10 @@ def alerta_enviar_email(pedido_id):
     db = get_db()
     resultados = []
 
-    # Envío único: TO principal + BCC compradores en una sola llamada a Resend
+    # Registro en log — el envío real lo hace el frontend vía EmailJS
     tipo_log = "alerta_proveedor" if es_proveedor else "alerta_interno"
-    res = _send_email(to_email, subject, body_html, bcc=cc_emails, body_text=body_text)
-    _log_email(db, pedido_id, tipo_log, to_email, subject, res["ok"], res.get("error"))
-    resultados.append({"email": to_email, "ok": res["ok"], "error": res.get("error"), "mode": res.get("mode")})
+    _log_email(db, pedido_id, tipo_log, to_email, subject, False, "Pendiente de envío vía EmailJS")
+    resultados.append({"email": to_email, "ok": True, "error": None, "mode": "emailjs_pending"})
 
     # ── Telegram automático — se dispara siempre al enviar la alerta ──────────
     # pedido_data ya fue cargado arriba para calcular los CC
@@ -2990,6 +2934,14 @@ def alerta_enviar_email(pedido_id):
         "resultados": resultados,
         "error": primer_error,
         "telegram": telegram_resultados,
+        # Datos para que el frontend envíe vía EmailJS
+        "email_pendiente": {
+            "to_email":  to_email,
+            "cc_emails": cc_emails,
+            "subject":   subject,
+            "body_html": body_html,
+            "body_text": body_text,
+        },
     })
 
 @app.route("/api/alertas/<int:pedido_id>/log-whatsapp", methods=["POST"])
@@ -3167,37 +3119,18 @@ def solicitar_reset_password():
     log.info("PASSWORD RESET solicitado por '%s' (id=%s) — enlace: %s",
              user["username"], user["id"], link)
 
-    res_email = _send_email(user["email"], subject, body_html)
-    email_enviado = res_email["ok"]
-
-    # Fallback: si falla el envío al usuario, notificar a los admins activos en BD
-    if not email_enviado:
-        admins_email = _get_solo_admin_emails()
-        if admins_email:
-            admin_body = f"""
-        <p><strong>Solicitud de reset de contraseña</strong></p>
-        <p>El usuario <strong>{user['nombre']}</strong> ({user['username']}) solicitó
-        restablecer su contraseña pero el envío directo falló.</p>
-        <p>Enlace (válido 2h): <a href="{link}">{link}</a></p>
-        <p style="color:#666;font-size:12px;">Reenvía este enlace manualmente al usuario.</p>
-        """
-            for adm in admins_email:
-                _send_email(adm, f"[RESET] Contraseña usuario {user['username']}", admin_body)  # best-effort
-
-    # Si no hay email configurado en absoluto, devolver el enlace + datos del usuario
-    # para que el frontend lo envíe via EmailJS
-    email_configurado = bool(RESEND_API_KEY)
-    if not email_configurado:
-        return jsonify({
-            "ok":       True,
-            "sin_email": True,
-            "link":     link,
-            "email":    user.get("email", ""),
-            "nombre":   user.get("nombre", user.get("username", "")),
-            "msg":      "Email no configurado en el servidor."
-        })
-
-    return jsonify({"ok": True, "msg": "Si el usuario existe, recibirás un correo."})
+    # El envío real lo hace el frontend vía EmailJS
+    log.info("PASSWORD RESET — datos pendientes de envío vía EmailJS a '%s' (%s)", user["username"], user.get("email"))
+    return jsonify({
+        "ok":        True,
+        "sin_email": True,
+        "link":      link,
+        "email":     user.get("email", ""),
+        "nombre":    user.get("nombre", user.get("username", "")),
+        "subject":   subject,
+        "body_html": body_html,
+        "msg":       "Email pendiente de envío vía EmailJS.",
+    })
 
 
 @app.route("/api/password-reset/validar/<token>", methods=["GET"])
@@ -3579,26 +3512,17 @@ def admin_enviar_fase2(sol_id):
         f"El enlace caduca en 72 horas.\n\nControl Pedidos Princess Canarias"
     )
 
-    if not RESEND_API_KEY:
-        return jsonify({
-            "ok": True, "sin_email": True,
-            "destinatarios": [sol["email"]],
-            "asunto": asunto, "body_text": body_text,
-            "url_token": url_token,
-        })
-
-    res = _send_email(sol["email"], asunto, body_html, body_text=body_text)
-    if not res.get("ok"):
-        log.warning("[SOL_FASE2] Error email a %s: %s", sol["email"], res.get("error"))
-        return jsonify({
-            "ok": True, "sin_email": True,
-            "destinatarios": [sol["email"]],
-            "asunto": asunto, "body_text": body_text,
-            "url_token": url_token,
-        })
-
-    return jsonify({"ok": True,
-                    "msg": f"Email de verificación (Fase 2) enviado a {sol['email']}"})
+    # El envío real lo hace el frontend vía EmailJS
+    log.info("[SOL_FASE2] Email pendiente de envío vía EmailJS a %s", sol["email"])
+    return jsonify({
+        "ok":           True,
+        "sin_email":    True,
+        "destinatarios": [sol["email"]],
+        "asunto":       asunto,
+        "body_html":    body_html,
+        "body_text":    body_text,
+        "url_token":    url_token,
+    })
 
 
 # ─── FASE 2: el usuario llega con token + wu, completa la solicitud ───────────
@@ -3922,7 +3846,8 @@ def admin_aprobar_solicitud(sol_id):
         f"Control Pedidos Princess Canarias"
     )
 
-    res_u = {"ok": False} if not RESEND_API_KEY else _send_email(sol["email"], asunto_u, body_html_u, body_text=body_text_u)
+    # El envío real lo hace el frontend vía EmailJS — siempre pendiente
+    res_u = {"ok": False}
 
     # Email de confirmación a los admins
     asunto_a = f"[APROBADA] Alta usuario {username} — {nombre_c}"
@@ -3957,18 +3882,8 @@ def admin_aprobar_solicitud(sol_id):
         + f"\nEl usuario ha recibido su email de bienvenida con credenciales."
     )
     destinatarios = _get_solo_admin_emails()
-    admins_email_enviado = True
-    if RESEND_API_KEY:
-        for dest in destinatarios:
-            try:
-                res_a = _send_email(dest, asunto_a, body_html_a)
-                if not res_a.get("ok"):
-                    admins_email_enviado = False
-            except Exception as exc:
-                log.warning("[SOL_APROBAR] Error email admin a %s: %s", dest, exc)
-                admins_email_enviado = False
-    else:
-        admins_email_enviado = False
+    # Los emails a admins también se envían desde el frontend vía EmailJS
+    admins_email_enviado = False
 
     return jsonify({
         "ok":       True,
@@ -3978,8 +3893,7 @@ def admin_aprobar_solicitud(sol_id):
         "hoteles_asignados":      hotel_ids_asignados,
         "hoteles_no_encontrados": hoteles_no_encontrados,
         "email_enviado":          res_u.get("ok", False),
-        # Datos para que el frontend envíe vía EmailJS cuando el backend
-        # no pudo entregar el correo (RESEND_API_KEY no configurada o falló).
+        # Datos para que el frontend envíe vía EmailJS:
         "email_usuario_pendiente": (not res_u.get("ok", False)) and {
             "to_email":  sol["email"],
             "asunto":    asunto_u,
