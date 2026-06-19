@@ -1,3 +1,16 @@
+# v12.0.8 — 19 junio 2026
+
+## 🔔 Telegram de cambio de estado alineado con el correo interno
+
+El Telegram inmediato de cambio de estado (`_telegram_cambio_estado`) pasa a comportarse igual que el correo interno, con la única excepción de que **nunca se envía Telegram al proveedor**:
+
+- **Filtro de estados:** ahora solo se dispara para los mismos estados que el correo interno (`ESTADOS_EMAIL_INTERNO`: `ENVIADO AL PROVEEDOR`, `ENTREGA PARCIAL`, `ENTREGADO`, `CANCELADO`). Antes se enviaba en cualquier cambio de estado, incluidos los `PENDIENTE...`.
+- **Destinatarios ampliados:** además de los compradores del hotel, ahora también reciben Telegram los usuarios con rol "hotel" asignados a ese hotel (igual conjunto de destinatarios que el BCC del correo interno), siempre que tengan `telegram_chat_id` configurado.
+- **Comportamiento ante falta de chat_id:** si un usuario hotel no tiene `telegram_chat_id`, simplemente no recibe Telegram, pero el comprador (si lo tiene) lo recibe igualmente — y viceversa. No es necesario que ambos lo tengan.
+- Nueva función `_get_usuarios_hotel_rol_telegram()` para obtener los usuarios rol "hotel" de un hotel junto con su `telegram_chat_id`.
+
+---
+
 # v12.0.6 — 19 junio 2026
 
 ## 🏷️ Tarifa acordada (pedidos sin presupuesto)

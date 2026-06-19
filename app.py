@@ -868,6 +868,35 @@ def _get_compradores_hotel(hotel_codigo: str) -> list:
     ))
     return rows
 
+def _get_usuarios_hotel_rol_telegram(hotel_codigo: str) -> list:
+    """
+    Devuelve lista de dicts {username, nombre, email, movil, telegram_chat_id}
+    de los usuarios con rol 'hotel' asignados al hotel indicado (tabla
+    usuario_hoteles), SIN filtrar por si tienen o no telegram_chat_id —
+    eso se comprueba en el momento de enviar (igual que con los compradores).
+
+    Equivalente, para el canal Telegram, a la parte "hotel_users" de
+    _get_todos_usuarios_hotel() (que se usa para los correos). Se mantiene
+    como función independiente porque el correo filtra por email NOT NULL
+    y aquí no aplica ese filtro (lo relevante es el telegram_chat_id).
+    """
+    if not hotel_codigo:
+        return []
+    hotel_codigo = hotel_codigo.upper()
+    hotel_row = query("SELECT id FROM hoteles WHERE codigo=%s AND activo=1", (hotel_codigo,), one=True)
+    if not hotel_row:
+        return []
+    hotel_id = hotel_row["id"]
+    rows = rows_to_list(query(
+        """SELECT u.id, u.username, u.nombre, u.email, u.movil, u.telegram_chat_id
+           FROM usuarios u
+           JOIN usuario_hoteles uh ON uh.usuario_id = u.id
+           WHERE uh.hotel_id = %s AND u.activo = 1 AND u.rol = 'hotel'
+           ORDER BY u.nombre""",
+        (hotel_id,)
+    ))
+    return rows
+
 def _send_telegram(chat_id: str, text: str) -> dict:
     """Envía un mensaje de Telegram al chat_id indicado. Devuelve {ok, error}."""
     import urllib.request, urllib.error
@@ -1089,12 +1118,23 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
                              usuario_nombre: str = "",
                              es_cambio_manual: bool = True) -> None:
     """
-    Envía Telegram inmediato en CADA cambio de estado (PUT /api/pedidos/<pid>).
+    Envía Telegram inmediato en cambio de estado (PUT /api/pedidos/<pid>),
+    alineado con la misma lógica que el correo interno (enviar_emails_estado):
 
-    Comportamiento:
-    - Dispara SIEMPRE que estado_nuevo != estado_antes, sin filtro de estados.
-    - El mensaje base incluye: pedido, hotel, proveedor, usuario que editó,
-      estado anterior → nuevo estado.
+    - Solo se dispara para los estados establecidos en ESTADOS_EMAIL_INTERNO
+      ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL", "ENTREGADO", "CANCELADO").
+      Para el resto de estados (PENDIENTE...) no se envía nada, igual que
+      ocurre con el correo.
+    - Nunca se envía Telegram al proveedor (a diferencia del correo, que sí
+      le escribe en ENVIADO AL PROVEEDOR) — el Telegram es exclusivamente
+      un canal interno.
+    - Destinatarios internos: compradores del hotel + usuarios con rol
+      "hotel" asignados a ese hotel (igual conjunto que el BCC del correo
+      interno). Se comprueba individualmente quién tiene telegram_chat_id
+      configurado: si un usuario hotel no lo tiene, simplemente no recibe
+      Telegram, pero el comprador (si tiene chat_id) lo recibe igualmente.
+      Si, en cambio, el usuario hotel SÍ tiene chat_id configurado, también
+      recibe la comunicación, igual que el comprador.
     - Si el nuevo estado genera una condición de alerta (UMBRALES_ALERTAS)
       Y es_cambio_manual=False, se añade al mensaje: nivel y motivo (días).
     - Con es_cambio_manual=True (default para cambios desde update_pedido):
@@ -1107,6 +1147,11 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
     - Registra en whatsapp_log con tipo='telegram_estado' para trazabilidad
       separada del job automático.
     """
+    # ── Filtro de estados: igual conjunto que el correo interno ──────────────
+    if estado_nuevo not in ESTADOS_EMAIL_INTERNO:
+        log.debug("[ESTADO] Estado %s fuera de ESTADOS_EMAIL_INTERNO — sin Telegram", estado_nuevo)
+        return
+
     try:
         pedido = row_to_dict(query(f"{PEDIDO_SELECT_ALERTA} WHERE p.id=%s", (pedido_id,), one=True))
         if not pedido:
@@ -1114,9 +1159,14 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
             return
 
         hotel_cod   = (pedido.get("hotel_codigo") or "").upper()
-        compradores = _get_compradores_hotel(hotel_cod)
-        if not compradores:
-            log.warning("[ESTADO] Sin compradores para hotel %s", hotel_cod)
+        # ── Destinatarios internos: compradores + usuarios rol "hotel" ───────
+        # (mismo conjunto de personas que reciben el BCC del correo interno;
+        # aquí se comprueba uno por uno quién tiene telegram_chat_id).
+        compradores  = _get_compradores_hotel(hotel_cod)
+        usuarios_hot = _get_usuarios_hotel_rol_telegram(hotel_cod)
+        destinatarios = compradores + usuarios_hot
+        if not destinatarios:
+            log.warning("[ESTADO] Sin compradores ni usuarios hotel para %s", hotel_cod)
             return
 
         # ── Bloque base: siempre presente ─────────────────────────────────────
@@ -1151,9 +1201,9 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
         nivel_estado = info_alerta["nivel"] if info_alerta else "aviso"
         titulo_bridge = f"🔔 Cambio estado pedido #{pedido_id} · {pedido.get('hotel_codigo', '?')}"
 
-        # ── Envío ──────────────────────────────────────────────────────────────
+        # ── Envío: compradores + usuarios rol "hotel" con telegram_chat_id ────────
         resultados = []
-        for comp in compradores:
+        for comp in destinatarios:
             username = comp.get("username", "?")
             chat_id  = comp.get("telegram_chat_id")
             if not chat_id:
