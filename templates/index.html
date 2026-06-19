@@ -1094,7 +1094,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.0.8
+          V 12.1.0
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -2225,7 +2225,10 @@ async function api(url, method='GET', body=null) {
   // para que el caller los muestre tal cual, en vez de lanzarlos como
   // excepción genérica (lo que los enmascararía como "Error de conexión").
   const esValidacionDeNegocio = r.status === 422 && (data.techo_errores || data.errores || data.error);
-  if (!r.ok && !esValidacionDeNegocio) throw new Error(data.error || `Error ${r.status}`);
+  if (!r.ok && !esValidacionDeNegocio) {
+    const detalle = data.error || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
+    throw new Error(`[${r.status}] ${detalle || r.statusText}`);
+  }
   return data;
 }
 
@@ -4081,7 +4084,11 @@ Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva 
       toast('Pedido actualizado', 'success');
       closeModal('modal-pedido');
     }
-  } catch(e) { toast('Error de conexión','error'); }
+  } catch(e) {
+    const msg = e?.message || String(e) || 'Error desconocido';
+    console.error('[guardarPedido]', e);
+    toast('Error de conexión: ' + msg, 'error');
+  }
   finally { btn.disabled=false; btn.textContent='Guardar'; }
 }
 
