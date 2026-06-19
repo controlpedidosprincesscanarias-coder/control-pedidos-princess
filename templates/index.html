@@ -3932,10 +3932,7 @@ async function savePedido() {
     const _proveedorEmail  = document.getElementById('p-proveedor').dataset.email || '';
     if (!_proveedorId) {
       toast(
-        '⚠️ No se puede pasar a ENVIADO AL PROVEEDOR.
-
-El pedido no tiene proveedor asignado.
-Asigne un proveedor antes de cambiar el estado.',
+        '⚠️ No se puede pasar a ENVIADO AL PROVEEDOR. El pedido no tiene proveedor asignado. Asigne un proveedor antes de cambiar el estado.',
         'error', 8000
       );
       document.getElementById('p-proveedor-input').focus();
