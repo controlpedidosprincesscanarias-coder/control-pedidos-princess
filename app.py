@@ -588,18 +588,24 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         return pendientes
 
     _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"))
+    _usuarios_hotel   = _get_todos_usuarios_hotel(pedido.get("hotel_codigo",""))
+    _emails_compradores = [u["email"] for u in _usuarios_hotel["compradores"] if u.get("email")]
+    _emails_hotel_users = [u["email"] for u in _usuarios_hotel["hotel_users"]  if u.get("email")]
+    # Todos los internos del hotel (compradores + usuarios hotel) para BCC
+    _todos_internos = list(dict.fromkeys(_emails_compradores + _emails_hotel_users))  # sin duplicados
+
+    # ── Correo al proveedor (solo ENVIADO AL PROVEEDOR) ───────────────────────
+    # Para:  todos los contactos principales del proveedor
+    # BCC:   todos los usuarios del hotel (compradores + rol hotel)
+    # Nota:  NO se envía correo interno adicional para este estado —
+    #        el BCC ya cubre a todos los internos sin duplicar.
     if estado_nuevo in ESTADOS_EMAIL_PROVEEDOR and _proveedor_emails:
-        subject = f"Pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
-        # Obtener email del/los comprador(es) responsable(s) del hotel —
-        # se usan como firma del correo y también como BCC del envío real,
-        # para que el comprador tenga constancia de la notificación enviada.
-        _compradores_estado = _get_compradores_cc(pedido.get("hotel_codigo",""))
-        if not (_compradores_estado and _compradores_estado[0].get("email")):
+        _compradores_firma = _usuarios_hotel["compradores"]
+        if not (_compradores_firma and _compradores_firma[0].get("email")):
             log.warning("[EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email a proveedor omitido",
                         pedido_id, pedido.get("hotel_codigo",""))
         else:
-            _email_comprador_estado = _compradores_estado[0]["email"]
-            _bcc_compradores = [c["email"] for c in _compradores_estado if c.get("email")]
+            _email_comprador_firma = _compradores_firma[0]["email"]
             body_html = f"""
             <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
               ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
@@ -615,7 +621,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             <p>Atentamente,<br>
                <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
                Princess Hotels &amp; Resorts<br>
-               <a href="mailto:{_email_comprador_estado}">{_email_comprador_estado}</a></p>
+               <a href="mailto:{_email_comprador_firma}">{_email_comprador_firma}</a></p>
             <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
               Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
             </p>
@@ -628,32 +634,30 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 f"Departamento: {pedido.get('departamento_nombre','—')}\n"
                 f"Estado actual: {estado_nuevo}\n\n"
                 f"Atentamente,\nDpto. Central de Compras Princess en Canarias\n"
-                f"Princess Hotels & Resorts\n{_email_comprador_estado}\n\n"
+                f"Princess Hotels & Resorts\n{_email_comprador_firma}\n\n"
                 f"Este correo es exclusivo para notificaciones automáticas. "
                 f"Por favor, responda única y exclusivamente a la dirección que firma este comunicado."
             )
-            # Todos los contactos marcados como principales reciben el correo
-            # como destinatario directo ("Para:"), no en copia.
             _destino_proveedor = ", ".join(_proveedor_emails)
-            _log_email(db, pedido_id, "proveedor", _destino_proveedor, subject, False, "Pendiente de envío vía EmailJS")
+            _log_email(db, pedido_id, "proveedor", _destino_proveedor, subject := f"Pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts", False, "Pendiente de envío vía EmailJS")
             pendientes.append({
                 "tipo":      "proveedor",
                 "to_email":  _destino_proveedor,
-                "bcc":       _bcc_compradores,
+                "bcc":       _todos_internos,   # compradores + usuarios hotel en BCC
                 "asunto":    subject,
                 "body_html": body_html,
                 "body_text": body_text,
             })
 
-    if estado_nuevo in ESTADOS_EMAIL_INTERNO:
-        # Solo el/los comprador(es) asignado(s) a este hotel — NO todos los
-        # admins/compras de la organización. Antes usaba _get_admin_emails(),
-        # que devuelve los compradores de los 10 hoteles a la vez.
-        _compradores_internos = _get_compradores_cc(pedido.get("hotel_codigo",""))
-        destinatarios_internos = [c["email"] for c in _compradores_internos if c.get("email")]
-        if destinatarios_internos:
-            subject = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {estado_nuevo}"
-            body_html = f"""
+    # ── Correo interno (ENTREGA PARCIAL, ENTREGADO, CANCELADO) ───────────────
+    # Para:  primer comprador del hotel
+    # BCC:   resto de compradores + usuarios hotel del mismo hotel
+    # Nota:  ENVIADO AL PROVEEDOR queda excluido aquí — ya está cubierto
+    #        por el BCC del correo al proveedor enviado arriba.
+    ESTADOS_EMAIL_INTERNO_SIN_PROVEEDOR = ESTADOS_EMAIL_INTERNO - ESTADOS_EMAIL_PROVEEDOR
+    if estado_nuevo in ESTADOS_EMAIL_INTERNO_SIN_PROVEEDOR and _todos_internos:
+        subject_i = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {estado_nuevo}"
+        body_html_i = f"""
         <p>Cambio de estado en el sistema de Control de Pedidos:</p>
         <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif">
           <tr><td><b>Hotel</b></td><td>{pedido.get('hotel_nombre','')}</td></tr>
@@ -664,25 +668,25 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
           <tr><td><b>Estado nuevo</b></td><td><b>{estado_nuevo}</b></td></tr>
         </table>
         """
-            body_text = (
-                f"Cambio de estado en el sistema de Control de Pedidos:\n\n"
-                f"Hotel: {pedido.get('hotel_nombre','')}\n"
-                f"Departamento: {pedido.get('departamento_nombre','')}\n"
-                f"Pedido Nº: {pedido.get('pedido_num','—')}\n"
-                f"Proveedor: {pedido.get('proveedor_nombre','—')}\n"
-                f"Estado anterior: {estado_antes or '—'}\n"
-                f"Estado nuevo: {estado_nuevo}"
-            )
-            for dest in destinatarios_internos:
-                _log_email(db, pedido_id, "interno", dest, subject, False, "Pendiente de envío vía EmailJS")
-            pendientes.append({
-                "tipo":      "interno",
-                "to_email":  destinatarios_internos[0],
-                "bcc":       destinatarios_internos[1:],
-                "asunto":    subject,
-                "body_html": body_html,
-                "body_text": body_text,
-            })
+        body_text_i = (
+            f"Cambio de estado en el sistema de Control de Pedidos:\n\n"
+            f"Hotel: {pedido.get('hotel_nombre','')}\n"
+            f"Departamento: {pedido.get('departamento_nombre','')}\n"
+            f"Pedido Nº: {pedido.get('pedido_num','—')}\n"
+            f"Proveedor: {pedido.get('proveedor_nombre','—')}\n"
+            f"Estado anterior: {estado_antes or '—'}\n"
+            f"Estado nuevo: {estado_nuevo}"
+        )
+        for dest in _todos_internos:
+            _log_email(db, pedido_id, "interno", dest, subject_i, False, "Pendiente de envío vía EmailJS")
+        pendientes.append({
+            "tipo":      "interno",
+            "to_email":  _todos_internos[0],
+            "bcc":       _todos_internos[1:],
+            "asunto":    subject_i,
+            "body_html": body_html_i,
+            "body_text": body_text_i,
+        })
 
     return pendientes
 
@@ -2512,6 +2516,46 @@ def _get_proveedor_emails_principales(proveedor_id) -> list:
         (proveedor_id,)
     ) or []
     return [r["email"] for r in rows]
+
+
+def _get_todos_usuarios_hotel(hotel_codigo: str) -> dict:
+    """
+    Devuelve todos los usuarios activos asignados a un hotel, separados por rol:
+      - "compradores": rol='compras' en usuario_comprador_hoteles
+      - "hotel_users": rol='hotel'   en usuario_hoteles
+    Cada lista contiene dicts con {id, username, nombre, email}.
+    Uso: determinar destinatarios de correos internos de cambio de estado,
+    incluyendo tanto el comprador responsable como el usuario del hotel.
+    """
+    if not hotel_codigo:
+        return {"compradores": [], "hotel_users": []}
+    hotel_codigo = hotel_codigo.upper()
+    hotel_row = query("SELECT id FROM hoteles WHERE codigo=%s AND activo=1", (hotel_codigo,), one=True)
+    if not hotel_row:
+        return {"compradores": [], "hotel_users": []}
+    hotel_id = hotel_row["id"]
+
+    compradores = rows_to_list(query(
+        """SELECT u.id, u.username, u.nombre, u.email
+           FROM usuarios u
+           JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
+           WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'
+             AND u.email IS NOT NULL AND TRIM(u.email) != ''
+           ORDER BY u.nombre""",
+        (hotel_id,)
+    )) or []
+
+    hotel_users = rows_to_list(query(
+        """SELECT u.id, u.username, u.nombre, u.email
+           FROM usuarios u
+           JOIN usuario_hoteles uh ON uh.usuario_id = u.id
+           WHERE uh.hotel_id = %s AND u.activo = 1 AND u.rol = 'hotel'
+             AND u.email IS NOT NULL AND TRIM(u.email) != ''
+           ORDER BY u.nombre""",
+        (hotel_id,)
+    )) or []
+
+    return {"compradores": compradores, "hotel_users": hotel_users}
 
 
 def _get_compradores_cc(hotel_codigo: str):

@@ -1,3 +1,196 @@
+# v12.0.2 — 19 junio 2026
+
+## 📧 Unificación y optimización de destinatarios en correos de cambio de estado
+
+Esta versión simplifica y consolida la lógica de distribución de correos asociados a los cambios de estado de pedidos, eliminando duplicidades y garantizando que cada destinatario reciba únicamente las comunicaciones que realmente le corresponden.
+
+---
+
+## 🔄 Nuevo modelo de notificaciones para "ENVIADO AL PROVEEDOR"
+
+### Situación anterior
+
+Cuando un pedido pasaba a:
+
+```text
+ENVIADO AL PROVEEDOR
+```
+
+el sistema generaba:
+
+* Correo al proveedor.
+* Correo interno independiente para seguimiento.
+
+Esto podía provocar duplicidad de comunicaciones para los usuarios responsables del hotel.
+
+---
+
+### Nuevo funcionamiento
+
+A partir de esta versión se genera un único correo.
+
+#### Destinatarios principales
+
+Todos los contactos del proveedor marcados como:
+
+```text
+⭐ PRINCIPAL
+```
+
+reciben la comunicación en el campo:
+
+```text
+Para:
+```
+
+---
+
+### Seguimiento interno mediante BCC
+
+Los usuarios internos asociados al hotel reciben copia oculta:
+
+```text
+BCC
+```
+
+Incluye:
+
+* Compradores asignados al hotel.
+* Usuarios con rol Hotel asociados al mismo hotel.
+
+---
+
+### Beneficios
+
+* Eliminación de correos duplicados.
+* Menor volumen de notificaciones.
+* Seguimiento completo para todos los responsables internos.
+* Proveedor y equipo interno comparten exactamente la misma comunicación.
+
+---
+
+## 🏨 Correos internos de cierre y seguimiento
+
+### Estados afectados
+
+```text
+ENTREGA PARCIAL
+ENTREGADO
+CANCELADO
+```
+
+Estos estados continúan generando exclusivamente comunicaciones internas.
+
+El proveedor no recibe ningún correo asociado a estos cambios.
+
+---
+
+### Distribución de destinatarios
+
+El sistema utiliza ahora una lógica homogénea para todos estos estados.
+
+#### Campo "Para"
+
+Se asigna al primer comprador responsable del hotel.
+
+---
+
+#### Campo "BCC"
+
+Se incorporan:
+
+* Resto de compradores asignados al hotel.
+* Todos los usuarios con rol Hotel asociados al mismo hotel.
+
+---
+
+### Resultado
+
+Todos los responsables operativos reciben la información sin exponer entre sí las direcciones de correo.
+
+---
+
+## 🔒 Aislamiento completo por hotel
+
+Se refuerza el filtrado de destinatarios utilizando siempre:
+
+```python
+hotel_codigo
+```
+
+del pedido que origina la notificación.
+
+---
+
+### Garantía operativa
+
+Un cambio de estado en un pedido de:
+
+```text
+Hotel IT
+```
+
+solo podrá generar correos para:
+
+* Compradores del Hotel IT.
+* Usuarios Hotel del Hotel IT.
+
+---
+
+### Exclusiones automáticas
+
+No recibirán comunicaciones:
+
+* Compradores de otros hoteles.
+* Usuarios Hotel de otros hoteles.
+* Usuarios sin vinculación con el hotel del pedido.
+
+---
+
+## 🧹 Deduplicación automática de destinatarios
+
+Se añade protección frente a configuraciones donde un mismo usuario pueda aparecer por múltiples vías de asignación.
+
+Ejemplo:
+
+```text
+usuario_comprador_hoteles
+usuario_hoteles
+```
+
+---
+
+### Nuevo comportamiento
+
+La construcción final de destinatarios aplica:
+
+```python
+dict.fromkeys(...)
+```
+
+para eliminar repeticiones manteniendo el orden original.
+
+---
+
+### Beneficios
+
+* Un usuario nunca recibe el mismo correo dos veces.
+* Evita duplicidades provocadas por configuraciones cruzadas.
+* Mantiene la trazabilidad correcta de las comunicaciones.
+
+---
+
+## 🎯 Resultado
+
+* Eliminados correos internos duplicados en "ENVIADO AL PROVEEDOR".
+* Seguimiento interno integrado mediante BCC.
+* Correos internos unificados para ENTREGADO, CANCELADO y ENTREGA PARCIAL.
+* Filtrado estricto por hotel.
+* Protección frente a destinatarios duplicados.
+* Menor volumen de correo generado.
+* Mayor coherencia y mantenibilidad en la lógica de notificaciones.
+* Distribución más limpia y alineada con la estructura organizativa de cada hotel.
+
 # v12.0.0 — 18 junio 2026
 
 ## ⭐ Gestión avanzada de contactos principales de proveedor
