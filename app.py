@@ -5567,6 +5567,29 @@ def update_pedido(pid):
     if estado_nuevo == "ENVIADO AL PROVEEDOR" and estado_antes != "ENVIADO AL PROVEEDOR":
         errores_envio = []
 
+        # 0a. Proveedor asignado obligatorio
+        proveedor_id_val = data.get("proveedor_id", pedido_actual.get("proveedor_id"))
+        if not proveedor_id_val:
+            errores_envio.append(
+                "No se puede pasar a ENVIADO AL PROVEEDOR porque el pedido no tiene proveedor asignado. "
+                "Asigne un proveedor antes de cambiar el estado."
+            )
+        else:
+            # 0b. El proveedor debe tener al menos un contacto principal con email
+            emails_proveedor = _get_proveedor_emails_principales(proveedor_id_val)
+            if not emails_proveedor:
+                # Obtener el nombre del proveedor para dar un mensaje más claro
+                prov_row = query("SELECT nombre FROM proveedores WHERE id=%s", (proveedor_id_val,), one=True)
+                prov_nombre = (prov_row["nombre"] if prov_row else f"ID {proveedor_id_val}")
+                errores_envio.append(
+                    f"El proveedor «{prov_nombre}» no tiene ningún correo electrónico configurado en su ficha "
+                    f"(contacto principal con email). Acceda a la ficha del proveedor, añada un email al contacto "
+                    f"principal y vuelva a cambiar el estado."
+                )
+
+        if errores_envio:
+            return jsonify({"ok": False, "error": " | ".join(errores_envio), "errores": errores_envio}), 422
+
         # 1. Nº Pedido (DALI/SAP) obligatorio
         pedido_num_val = data.get("pedido_num", pedido_actual.get("pedido_num") or "")
         if not (pedido_num_val or "").strip():

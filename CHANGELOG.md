@@ -1,3 +1,312 @@
+# v12.0.4 — 19 junio 2026
+
+## 🛡️ Validación obligatoria de proveedor antes de "ENVIADO AL PROVEEDOR"
+
+Esta versión incorpora una nueva capa de protección para evitar que un pedido pueda cambiar al estado:
+
+```text
+ENVIADO AL PROVEEDOR
+```
+
+cuando no existe un proveedor válido o cuando el proveedor seleccionado no dispone de ninguna dirección de correo electrónico operativa para recibir la comunicación.
+
+El objetivo es garantizar que todo pedido marcado como enviado tenga realmente un destinatario disponible.
+
+---
+
+## 🚫 Problema detectado
+
+Hasta ahora era posible que un usuario cambiara un pedido a:
+
+```text
+ENVIADO AL PROVEEDOR
+```
+
+aunque ocurriera alguna de estas situaciones:
+
+### Caso 1
+
+```text
+Pedido sin proveedor asignado
+```
+
+---
+
+### Caso 2
+
+```text
+Proveedor asignado
+↓
+Sin email en contactos principales
+```
+
+---
+
+### Consecuencia
+
+El pedido quedaba registrado como enviado aunque posteriormente el sistema no tuviera ningún destinatario real al que enviar la comunicación.
+
+Esto podía generar:
+
+* Pedidos aparentemente enviados.
+* Ausencia de notificación al proveedor.
+* Incidencias de seguimiento.
+* Pérdida de trazabilidad operativa.
+
+---
+
+## 🔒 Doble barrera de validación
+
+La protección se implementa tanto en backend como en frontend.
+
+---
+
+## ⚙️ Backend (`app.py`)
+
+### Validación en `update_pedido()`
+
+Se añaden nuevas comprobaciones dentro del flujo:
+
+```python
+PUT /api/pedidos/<pid>
+```
+
+cuando el estado solicitado es:
+
+```text
+ENVIADO AL PROVEEDOR
+```
+
+---
+
+### Check 0a — Proveedor obligatorio
+
+Antes de ejecutar cualquier otra validación se verifica que exista un proveedor asociado.
+
+Si no existe:
+
+```text
+proveedor_id vacío
+```
+
+la API devuelve:
+
+```http
+HTTP 422
+```
+
+con el mensaje:
+
+```text
+Asigne un proveedor antes de cambiar el estado.
+```
+
+---
+
+### Check 0b — Email obligatorio
+
+Si existe proveedor, el sistema verifica que al menos uno de los contactos principales disponga de correo electrónico.
+
+La comprobación utiliza la función oficial:
+
+```python
+_get_proveedor_emails_principales()
+```
+
+---
+
+### Error devuelto
+
+Si no existe ningún email válido:
+
+```http
+HTTP 422
+```
+
+incluyendo:
+
+* Nombre del proveedor.
+* Descripción del problema.
+* Instrucción para corregirlo.
+
+Ejemplo:
+
+```text
+El proveedor no dispone de ningún email principal configurado.
+Acceda a la ficha del proveedor y añada un email al contacto principal.
+```
+
+---
+
+### Prioridad de ejecución
+
+Estas comprobaciones se ejecutan antes de:
+
+* Nº Pedido (DALI/SAP)
+* Nº Presupuesto
+* Adjuntos obligatorios
+* Cualquier otra validación documental
+
+para ofrecer al usuario un mensaje directo y sin información irrelevante.
+
+---
+
+## 🖥️ Frontend (`templates/index.html`)
+
+### Respuesta inmediata al usuario
+
+Se añade una validación preventiva antes de enviar la petición al servidor.
+
+---
+
+### Al seleccionar un proveedor
+
+La función:
+
+```javascript
+seleccionarProveedor()
+```
+
+almacena ahora también el correo principal en:
+
+```html
+data-email
+```
+
+del campo oculto:
+
+```html
+#p-proveedor
+```
+
+---
+
+### Al abrir un pedido existente
+
+Cuando se carga el modal:
+
+```javascript
+openPedido()
+```
+
+el sistema rellena automáticamente:
+
+```html
+data-email
+```
+
+utilizando:
+
+```javascript
+proveedor_email
+```
+
+recibido desde la API.
+
+---
+
+### Al limpiar el proveedor
+
+Si el usuario elimina el proveedor seleccionado:
+
+* Se limpia el identificador.
+* Se limpia el nombre.
+* Se limpia también `data-email`.
+
+evitando información residual.
+
+---
+
+## 🚨 Nuevas validaciones en `savePedido()`
+
+Antes de ejecutar cualquier otra comprobación de:
+
+```text
+ENVIADO AL PROVEEDOR
+```
+
+se verifican los nuevos requisitos.
+
+---
+
+### Sin proveedor
+
+El sistema:
+
+* Bloquea el guardado.
+* Muestra un toast descriptivo.
+* Sitúa el foco automáticamente en el campo proveedor.
+
+Duración:
+
+```text
+8 segundos
+```
+
+---
+
+### Sin email principal
+
+El sistema:
+
+* Bloquea el guardado.
+* Muestra el nombre del proveedor afectado.
+* Indica cómo resolver el problema desde la ficha del proveedor.
+
+Duración:
+
+```text
+10 segundos
+```
+
+---
+
+## 🎯 Beneficios operativos
+
+### Integridad del proceso
+
+Todo pedido marcado como:
+
+```text
+ENVIADO AL PROVEEDOR
+```
+
+dispone necesariamente de:
+
+* Proveedor asignado.
+* Destinatario válido.
+
+---
+
+### Mejor experiencia de usuario
+
+Los errores se detectan inmediatamente.
+
+El usuario recibe instrucciones claras para resolver el problema sin necesidad de revisar múltiples validaciones posteriores.
+
+---
+
+### Protección multicapa
+
+La validación existe en:
+
+* Frontend (experiencia de usuario).
+* Backend (seguridad definitiva).
+
+Aunque alguien manipule la interfaz o invoque la API directamente, las reglas continúan aplicándose.
+
+---
+
+## ✅ Resultado
+
+* Ya no es posible enviar pedidos sin proveedor.
+* Ya no es posible enviar pedidos a proveedores sin email configurado.
+* Validación coherente entre frontend y backend.
+* Mensajes de error más claros y accionables.
+* Mayor trazabilidad del proceso de compras.
+* Reducción de incidencias derivadas de configuraciones incompletas de proveedores.
+* Garantía de que todo pedido marcado como enviado tiene un destinatario real disponible.
+
 # v12.0.2 — 19 junio 2026
 
 ## 📧 Unificación y optimización de destinatarios en correos de cambio de estado

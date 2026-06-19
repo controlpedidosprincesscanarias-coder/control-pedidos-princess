@@ -1091,7 +1091,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.0.2
+          V 12.0.4
         </span>
         <div class="sb-firma">© VAMA 2026<br>Central Compras Princess Canarias</div>
       </div>
@@ -3140,6 +3140,7 @@ async function openPedidoModal(id=null) {
     onEstadoChange();
     document.getElementById('p-proveedor').value = p.proveedor_id || '';
     document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
+    document.getElementById('p-proveedor').dataset.email = p.proveedor_email || '';
     setVal('p-observaciones', p.observaciones);
     document.getElementById('p-ab').checked       = !!p.comunicado_ab;
     document.getElementById('p-jefe').checked     = !!p.comunicado_jefe_dep;
@@ -3827,6 +3828,7 @@ function clearPedidoForm() {
   // Reset sección albarán
   initAlbaranSection('', estadoPendiente);
   document.getElementById('p-proveedor').value = '';
+  document.getElementById('p-proveedor').dataset.email = '';
   document.getElementById('p-proveedor-input').value = '';
   document.getElementById('prov-dropdown').style.display = 'none';
   ['p-ab','p-jefe','p-rotura','p-ampliacion'].forEach(id=>document.getElementById(id).checked=false);
@@ -3916,7 +3918,7 @@ async function savePedido() {
     }
   }
 
-  // ── Validación: ENVIADO AL PROVEEDOR requiere Nº Pedido DALI/SAP + PDF ──────
+  // ── Validación: ENVIADO AL PROVEEDOR requiere proveedor, email del proveedor, Nº Pedido + PDF ──
   // Regla aplicada SOLO cuando se produce un cambio activo a este estado.
   // Pedidos ya guardados en este estado no se bloquean si no se toca el estado.
   const _estadoNuevoValidar  = val('p-estado');
@@ -3924,6 +3926,32 @@ async function savePedido() {
   const _cambiandoAEnviado   = _estadoNuevoValidar === 'ENVIADO AL PROVEEDOR'
                                 && _estadoAnteriorBD !== 'ENVIADO AL PROVEEDOR';
   if (_cambiandoAEnviado) {
+    // 0a. Comprobar que hay proveedor asignado
+    const _proveedorId    = document.getElementById('p-proveedor').value;
+    const _proveedorNombre = document.getElementById('p-proveedor-input').value.trim();
+    const _proveedorEmail  = document.getElementById('p-proveedor').dataset.email || '';
+    if (!_proveedorId) {
+      toast(
+        '⚠️ No se puede pasar a ENVIADO AL PROVEEDOR.
+
+El pedido no tiene proveedor asignado.
+Asigne un proveedor antes de cambiar el estado.',
+        'error', 8000
+      );
+      document.getElementById('p-proveedor-input').focus();
+      return;
+    }
+    // 0b. Comprobar que el proveedor tiene email en su ficha (contacto principal)
+    if (!_proveedorEmail) {
+      toast(
+        `⚠️ No se puede pasar a ENVIADO AL PROVEEDOR.
+
+El proveedor «${_proveedorNombre}» no tiene correo electrónico configurado en su ficha.
+Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva a intentarlo.`,
+        'error', 10000
+      );
+      return;
+    }
     const _pedidoNumVal = val('p-pedido-num').trim();
     // Contar PDFs en adj-pedido-list (tipos: pedido_pdf, pedido_doc, pedido_word, pedido_eml)
     const _adjPedidoList = document.getElementById('adj-pedido-list');
@@ -4500,7 +4528,7 @@ async function buscarProveedor(q) {
   clearTimeout(_provTimer);
   if (!q || q.length < 2) {
     drop.style.display = 'none';
-    if (!q) hidden.value = '';
+    if (!q) { hidden.value = ''; hidden.dataset.email = ''; }
     return;
   }
   _provTimer = setTimeout(async () => {
@@ -4514,7 +4542,7 @@ async function buscarProveedor(q) {
             padding:10px 16px;cursor:pointer;
             border-bottom:${i < Math.min(res.length,10)-1 ? '1px solid #f0f0f5' : 'none'};
             transition:background .12s;background:#fff"
-             onmousedown="seleccionarProveedor(${p.id}, '${esc(p.nombre)}')"
+             onmousedown="seleccionarProveedor(${p.id}, '${esc(p.nombre)}', '${esc(p.email || '')}')"
              onmouseover="this.style.background='#eef2ff';this.style.borderRadius='6px'"
              onmouseout="this.style.background='#fff';this.style.borderRadius='0'">
           <span style="font-weight:600;font-size:.9rem;color:#1e1b4b;letter-spacing:.01em">${p.nombre}</span>
@@ -4525,9 +4553,11 @@ async function buscarProveedor(q) {
   }, 200);
 }
 
-function seleccionarProveedor(id, nombre) {
+function seleccionarProveedor(id, nombre, email) {
   document.getElementById('p-proveedor').value = id;
   document.getElementById('p-proveedor-input').value = nombre;
+  // Almacenar el email del contacto principal para validación en savePedido
+  document.getElementById('p-proveedor').dataset.email = email || '';
   document.getElementById('prov-dropdown').style.display = 'none';
 }
 
