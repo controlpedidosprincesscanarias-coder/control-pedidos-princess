@@ -287,6 +287,9 @@ tbody tr:last-child{border-bottom:none}
 .checkbox-group{display:flex;flex-wrap:wrap;gap:12px}
 .checkbox-item{display:flex;align-items:center;gap:6px;cursor:pointer;font-size:13px}
 .checkbox-item input{width:15px;height:15px;accent-color:var(--navy2)}
+#presupuesto-fields-wrap.presup-sombreado{background:#eceef1;border-radius:8px;padding:8px;opacity:0.55;position:relative}
+#presupuesto-fields-wrap.presup-sombreado::after{content:'Tarifa acordada — apartado no aplicable';position:absolute;top:6px;right:8px;font-size:10px;color:#777;font-style:italic;pointer-events:none}
+#presupuesto-fields-wrap.presup-sombreado .adj-del{display:none !important}
 
 /* ── Historial ──────────────────────────────────────────────────────────── */
 .timeline{display:flex;flex-direction:column;gap:0}
@@ -1745,19 +1748,21 @@ tbody tr:last-child{border-bottom:none}
           </label>
           <div id="adj-pedido-list" class="adj-fecha-list"></div>
         </div>
-        <div class="form-group">
+        <div class="form-group" id="presupuesto-section">
           <label class="form-label">Nº Presupuesto</label>
           <label class="checkbox-item" style="font-size:12px;font-weight:500;color:var(--navy2);margin-bottom:6px">
             <input type="checkbox" id="chk-tarifa-acordada" onchange="onTarifaAcordadaChange()">
             <span style="margin-left:4px">🏷️ Tarifa acordada (pedido sin presupuesto)</span>
           </label>
-          <input class="form-control monospace" id="p-presup">
-          <label class="adj-fecha-btn" id="lbl-presup-doc" title="Adjuntar documento o correo al presupuesto" style="margin-top:6px">
-            <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'presupuesto_doc')">
-            📎 Adjuntar doc. / correo
-          </label>
-          <div id="adj-presupuesto-list" class="adj-fecha-list"></div>
+          <div id="presupuesto-fields-wrap">
+            <input class="form-control monospace" id="p-presup">
+            <label class="adj-fecha-btn" id="lbl-presup-doc" title="Adjuntar documento o correo al presupuesto" style="margin-top:6px">
+              <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
+                     onchange="subirAdjuntos(this,'presupuesto_doc')">
+              📎 Adjuntar doc. / correo
+            </label>
+            <div id="adj-presupuesto-list" class="adj-fecha-list"></div>
+          </div>
         </div>
 
         <!-- Nº Entrada DALI / SAP con checkboxes y lista dinámica -->
@@ -3317,6 +3322,9 @@ async function cargarAdjuntos(pedidoId) {
       adjPedidoList.querySelectorAll('.adj-del').forEach(btn => btn.style.display = 'none');
     }
   }
+  // Reaplicar sombreado de "tarifa acordada" (el render de la lista de
+  // adjuntos puede haber recreado los botones de eliminar)
+  onTarifaAcordadaChange();
 }
 
 function renderAdjuntosPdf(prefijo, lista) {
@@ -3860,19 +3868,20 @@ function actualizarFechaEntregaPrevista() {
 }
 
 // ── Tarifa acordada (pedido sin presupuesto) ──────────────────────────────
-// Al marcar la casilla, el Nº Presupuesto y su adjunto dejan de ser
-// obligatorios (tanto en frontend como en backend) y se deshabilitan visualmente
-// para evitar que el usuario los rellene sin necesidad.
+// Al marcar la casilla, el apartado de presupuesto (campo + adjuntos) se
+// sombrea y se desactiva la interacción para que no se use ni se exija,
+// pero SIN borrar el número introducido ni eliminar los archivos adjuntos
+// que ya hubiera. Al desmarcarla, el contenido vuelve a estar disponible
+// tal cual estaba.
 function onTarifaAcordadaChange() {
-  const marcado    = document.getElementById('chk-tarifa-acordada').checked;
-  const inputPresup = document.getElementById('p-presup');
-  const lblAdjunto   = document.getElementById('lbl-presup-doc');
-  inputPresup.disabled = marcado;
-  inputPresup.style.opacity = marcado ? '0.5' : '';
+  const marcado     = document.getElementById('chk-tarifa-acordada').checked;
+  const wrap         = document.getElementById('presupuesto-fields-wrap');
+  const inputPresup  = document.getElementById('p-presup');
+  const lblAdjunto    = document.getElementById('lbl-presup-doc');
+  wrap.classList.toggle('presup-sombreado', marcado);
+  inputPresup.disabled = marcado;          // deshabilita SIN borrar el valor
   inputPresup.style.borderColor = '';
-  if (marcado) inputPresup.value = '';
-  lblAdjunto.style.opacity = marcado ? '0.5' : '';
-  lblAdjunto.style.pointerEvents = marcado ? 'none' : '';
+  lblAdjunto.style.pointerEvents = marcado ? 'none' : '';  // bloquea nuevas subidas, sin tocar las existentes
 }
 
 // ── _enviarEmailsPendientesEstado ─────────────────────────────────────────────
