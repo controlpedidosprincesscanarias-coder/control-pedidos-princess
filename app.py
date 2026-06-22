@@ -563,28 +563,42 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
               ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
             </p>
             <p>Estimado/a proveedor/a,</p>
-            <p>Le informamos que el pedido que figura a continuación ha sido tramitado:</p>
             <p>
+              Recientemente habrá recibido, a través de nuestro sistema habitual de pedidos, el pedido que se detalla a continuación.
+              El presente correo tiene como finalidad <strong>confirmar su recepción</strong> y solicitarle que, a la mayor brevedad posible,
+              nos indique si ha recibido dicho pedido y nos facilite la <strong>fecha estimada de entrega en el hotel</strong>.
+            </p>
+            <p style="background:#f5f8ff;border-left:4px solid #1a3c6e;padding:12px 16px;border-radius:0 4px 4px 0;margin:18px 0">
               <strong>Pedido Nº:</strong> {pedido.get('pedido_num','—')}<br>
               <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
-              <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
-              <strong>Estado actual:</strong> {estado_nuevo}
+              <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}
             </p>
-            <p>Atentamente,<br>
+            <p>
+              Para confirmar la recepción del pedido y facilitar la fecha estimada de entrega, por favor responda
+              a la dirección de correo que figura en la firma de este mensaje:
+              <a href="mailto:{_email_comprador_firma}">{_email_comprador_firma}</a>
+            </p>
+            <p>Quedamos a su disposición para cualquier consulta.<br><br>
+               Atentamente,<br>
                <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
                Princess Hotels &amp; Resorts<br>
-               <a href="mailto:{_email_comprador_firma}">{_email_comprador_firma}</a></p>
+               <a href="mailto:{_email_comprador_firma}">{_email_comprador_firma}</a>
+            </p>
             <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
               Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
             </p>
             """
             body_text = (
                 f"Estimado/a proveedor/a,\n\n"
-                f"Le informamos que el pedido que figura a continuación ha sido tramitado:\n\n"
+                f"Recientemente habrá recibido, a través de nuestro sistema habitual de pedidos, el pedido que se detalla a continuación.\n"
+                f"El presente correo tiene como finalidad confirmar su recepción y solicitarle que, a la mayor brevedad posible,\n"
+                f"nos indique si ha recibido dicho pedido y nos facilite la fecha estimada de entrega en el hotel.\n\n"
                 f"Pedido Nº: {pedido.get('pedido_num','—')}\n"
                 f"Hotel: {pedido.get('hotel_nombre','—')}\n"
-                f"Departamento: {pedido.get('departamento_nombre','—')}\n"
-                f"Estado actual: {estado_nuevo}\n\n"
+                f"Departamento: {pedido.get('departamento_nombre','—')}\n\n"
+                f"Para confirmar la recepción del pedido y facilitar la fecha estimada de entrega, por favor responda\n"
+                f"a la dirección de correo que figura en la firma de este mensaje: {_email_comprador_firma}\n\n"
+                f"Quedamos a su disposición para cualquier consulta.\n\n"
                 f"Atentamente,\nDpto. Central de Compras Princess en Canarias\n"
                 f"Princess Hotels & Resorts\n{_email_comprador_firma}\n\n"
                 f"Este correo es exclusivo para notificaciones automáticas. "

@@ -1,3 +1,112 @@
+v12.1.2 — 22 junio 2026
+📧 Mejora de la comunicación con proveedores en pedidos enviados
+
+Se rediseña el contenido del correo enviado al proveedor cuando un pedido pasa al estado ENVIADO AL PROVEEDOR, con el objetivo de mejorar la comprensión del mensaje y aumentar la tasa de respuesta por parte del proveedor.
+
+🎯 Nuevo enfoque de comunicación
+Situación anterior
+
+El correo informaba únicamente de que el pedido había sido tramitado.
+
+Ejemplo conceptual:
+
+Su pedido ha sido tramitado.
+
+Aunque correcto desde el punto de vista técnico, el mensaje no explicaba claramente:
+
+Que el proveedor ya había recibido previamente el pedido.
+Qué acción concreta se esperaba de él.
+Cuál era el objetivo de la comunicación.
+✉️ Referencia explícita al pedido previamente enviado
+
+El nuevo texto contextualiza el mensaje indicando que el proveedor ya recibió el pedido a través del sistema habitual.
+
+Se incorpora una introducción similar a:
+
+Recientemente habrá recibido, a través de nuestro sistema habitual de pedidos,
+el pedido que se detalla a continuación.
+Beneficios
+Evita que el proveedor interprete el correo como un nuevo pedido.
+Refuerza la continuidad de la conversación comercial.
+Reduce posibles duplicidades o confusiones.
+📅 Solicitud clara de fecha estimada de entrega
+
+Se añade una explicación directa del motivo del correo.
+
+El mensaje indica expresamente que la finalidad es:
+
+Confirmar la correcta recepción del pedido.
+Solicitar la fecha prevista de entrega.
+
+Ejemplo conceptual:
+
+El presente correo tiene como finalidad confirmar su recepción y solicitarle
+la fecha estimada de entrega en el hotel.
+📨 Llamada a la acción mejorada
+
+Se incorpora un bloque específico solicitando una respuesta directa al comprador responsable.
+
+El proveedor recibe instrucciones claras para:
+
+Confirmar la recepción.
+Indicar la fecha estimada de entrega.
+Responder directamente al comprador asignado.
+Resultado
+
+El correo deja de ser meramente informativo y pasa a ser una solicitud operativa concreta.
+
+👤 Mayor visibilidad del comprador responsable
+
+El correo del comprador aparece ahora en dos ubicaciones:
+
+En la solicitud de respuesta
+
+Dentro del cuerpo principal del mensaje.
+
+En la firma
+
+Junto a los datos de contacto habituales.
+
+Beneficios
+Facilita la respuesta inmediata del proveedor.
+Reduce consultas innecesarias.
+Mejora la trazabilidad de las comunicaciones.
+🧹 Simplificación de información no relevante
+Eliminado "Estado actual"
+
+Se elimina del correo el bloque:
+
+Estado actual: ENVIADO AL PROVEEDOR
+
+al considerarse información interna que no aporta valor al destinatario externo.
+
+Beneficios
+Mensaje más limpio.
+Menor ruido visual.
+Mayor foco en la acción requerida.
+🎨 Nuevo bloque visual de identificación del pedido
+
+Se incorpora un panel destacado con borde corporativo Princess para agrupar la información principal del pedido.
+
+Información resaltada
+Número de pedido.
+Hotel.
+Proveedor.
+Referencias relevantes.
+Datos operativos asociados.
+Objetivo
+
+Permitir que el proveedor identifique rápidamente el pedido sin necesidad de leer todo el contenido del correo.
+
+✅ Resultado
+Comunicación más clara y orientada a la acción.
+Menor riesgo de que el proveedor ignore el correo.
+Solicitud explícita de confirmación y fecha de entrega.
+Mejor identificación del pedido.
+Mayor visibilidad del comprador responsable.
+Eliminación de información interna irrelevante.
+Diseño más profesional y alineado con la operativa real de seguimiento de pedidos.
+
 # v12.1.0 — 19 junio 2026
 
 ## 🗑️ Eliminación definitiva de Resend
