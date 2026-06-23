@@ -1094,7 +1094,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.1.4
+          V 12.1.6
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1228,6 +1228,32 @@ tbody tr:last-child{border-bottom:none}
             <span class="card-title">⚠️ Alertas de seguimiento de pedidos</span>
             <button onclick="abrirModalImpresion('alertas')" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:5px 14px;font-size:12px;font-weight:600;border:1px solid #e67e00;border-radius:6px;cursor:pointer;background:#fff;color:#e67e00" title="Imprimir informe de alertas">🖨️ Imprimir</button>
           </div>
+          <div class="filters" style="padding:0 16px 4px">
+            <input class="filter-input" id="af-q" placeholder="🔍 Buscar proveedor, pedido, hotel…" oninput="aplicarFiltrosAlertas()" style="width:220px">
+            <select class="filter-select" id="af-hotel" onchange="aplicarFiltrosAlertas()">
+              <option value="">Todos los hoteles</option>
+            </select>
+            <select class="filter-select" id="af-estado" onchange="aplicarFiltrosAlertas()">
+              <option value="">Todos los estados</option>
+              <option value="ENVIADO AL PROVEEDOR">ENVIADO AL PROVEEDOR</option>
+              <option value="PENDIENTE FIRMA DIRECCION COMPRAS">PENDIENTE FIRMA DIRECCION COMPRAS</option>
+              <option value="PENDIENTE DE FIRMA DIRECCION HOTEL">PENDIENTE DE FIRMA DIRECCION HOTEL</option>
+              <option value="ENTREGA PARCIAL">ENTREGA PARCIAL</option>
+              <option value="PENDIENTE COTIZACIÓN">PENDIENTE COTIZACIÓN</option>
+            </select>
+            <select class="filter-select" id="af-nivel" onchange="aplicarFiltrosAlertas()" style="min-width:130px">
+              <option value="">Todos los niveles</option>
+              <option value="urgente">🔴 Urgente</option>
+              <option value="aviso">⚠️ Aviso</option>
+            </select>
+            <select class="filter-select" id="af-notif" onchange="aplicarFiltrosAlertas()" style="min-width:150px">
+              <option value="">Notificadas o no</option>
+              <option value="si">✅ Notificadas</option>
+              <option value="no">⛔ Sin notificar</option>
+            </select>
+            <button class="btn btn-ghost btn-sm" onclick="clearFiltrosAlertas()">✕ Limpiar</button>
+            <span id="alertas-filtro-count" style="margin-left:auto;font-size:12px;color:var(--text-secondary)"></span>
+          </div>
           <div class="table-wrap">
             <table>
               <thead>
@@ -1238,7 +1264,7 @@ tbody tr:last-child{border-bottom:none}
           </div>
           <div id="alertas-empty" class="empty-state section-hidden">
             <div class="icon">✅</div>
-            <div>Sin alertas. ¡Todo al día!</div>
+            <div id="alertas-empty-msg">Sin alertas. ¡Todo al día!</div>
           </div>
         </div>
       </div>
@@ -4137,23 +4163,95 @@ async function confirmarEliminarPedido() {
 // Cache de "última notificación" por pedido_id (alimentada en loadAlertas),
 // usada para avisar en el modal de envío si la alerta ya fue notificada antes.
 let _alertasNotifCache = {};
+// Lista completa sin filtrar (la última recibida del servidor), para poder
+// aplicar los filtros del panel sin volver a pedir datos al backend.
+let _alertasRaw = [];
 
 async function loadAlertas() {
   const d = await _fetchStats();
+  _alertasRaw = d.alertas || [];
+
+  _alertasNotifCache = {};
+  _alertasRaw.forEach(p => { _alertasNotifCache[p.id] = p.ultima_notificacion || null; });
+
+  _poblarFiltroHotelAlertas();
+  aplicarFiltrosAlertas();
+}
+
+// Rellena el select de hoteles del filtro de Alertas con el maestro de hoteles
+// (igual que en Pedidos), conservando la selección actual si sigue siendo válida.
+function _poblarFiltroHotelAlertas() {
+  const sel = document.getElementById('af-hotel');
+  if (!sel || sel.dataset.poblado) return; // solo una vez; el maestro no cambia en caliente
+  const actual = sel.value;
+  (G.maestros?.hoteles || []).forEach(h => {
+    sel.innerHTML += `<option value="${h.codigo}">${h.codigo} – ${h.nombre}</option>`;
+  });
+  sel.value = actual;
+  sel.dataset.poblado = '1';
+}
+
+function _alertaCoincideFiltros(p) {
+  const q      = (document.getElementById('af-q')?.value || '').trim().toLowerCase();
+  const hotel  = document.getElementById('af-hotel')?.value || '';
+  const estado = document.getElementById('af-estado')?.value || '';
+  const nivel  = document.getElementById('af-nivel')?.value || '';
+  const notif  = document.getElementById('af-notif')?.value || '';
+
+  if (hotel  && p.hotel_codigo  !== hotel)  return false;
+  if (estado && p.estado        !== estado) return false;
+  if (nivel  && p.nivel_alerta  !== nivel)  return false;
+  if (notif) {
+    const tieneNotif = !!(p.ultima_notificacion && p.ultima_notificacion.fecha);
+    if (notif === 'si' && !tieneNotif) return false;
+    if (notif === 'no' &&  tieneNotif) return false;
+  }
+  if (q) {
+    const pajar = [p.proveedor_nombre, p.pedido_num, p.norden, p.hotel_codigo, p.hotel_nombre]
+      .filter(Boolean).join(' ').toLowerCase();
+    if (!pajar.includes(q)) return false;
+  }
+  return true;
+}
+
+function aplicarFiltrosAlertas() {
+  const filtradas = _alertasRaw.filter(_alertaCoincideFiltros);
+  _renderAlertasTabla(filtradas);
+
+  const contador = document.getElementById('alertas-filtro-count');
+  if (contador) {
+    contador.textContent = (filtradas.length === _alertasRaw.length)
+      ? `${_alertasRaw.length} alerta${_alertasRaw.length !== 1 ? 's' : ''}`
+      : `Mostrando ${filtradas.length} de ${_alertasRaw.length} alertas`;
+  }
+}
+
+function clearFiltrosAlertas() {
+  ['af-q','af-hotel','af-estado','af-nivel','af-notif'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) el.value = '';
+  });
+  aplicarFiltrosAlertas();
+}
+
+function _renderAlertasTabla(lista) {
   const tbody = document.getElementById('alertas-tbody');
   const empty = document.getElementById('alertas-empty');
-  if (!d.alertas.length) {
-    tbody.innerHTML=''; empty.classList.remove('section-hidden'); _alertasNotifCache = {}; return;
+  const emptyMsg = document.getElementById('alertas-empty-msg');
+
+  if (!lista.length) {
+    tbody.innerHTML = '';
+    empty.classList.remove('section-hidden');
+    if (emptyMsg) {
+      emptyMsg.textContent = _alertasRaw.length
+        ? 'Ninguna alerta coincide con el filtro seleccionado.'
+        : 'Sin alertas. ¡Todo al día!';
+    }
+    return;
   }
   empty.classList.add('section-hidden');
-  _alertasNotifCache = {};
-  d.alertas.forEach(p => { _alertasNotifCache[p.id] = p.ultima_notificacion || null; });
 
-  // Agrupamos por nivel para el resumen superior
-  const urgentes = d.alertas.filter(p => p.nivel_alerta === 'urgente');
-  const avisos   = d.alertas.filter(p => p.nivel_alerta === 'aviso');
-
-  tbody.innerHTML = d.alertas.map(p => {
+  tbody.innerHTML = lista.map(p => {
     const esUrgente = p.nivel_alerta === 'urgente';
     const rowClass  = esUrgente ? 'alert-row alert-row-urgente' : 'alert-row';
     const nivelBadge = esUrgente

@@ -1,3 +1,17 @@
+# v12.1.6 — 23 junio 2026
+
+🔍 Filtros en el panel de Alertas de seguimiento
+
+Hasta ahora, el panel de Alertas mostraba siempre el listado completo, sin poder acotarlo como sí se podía en Pedidos.
+
+Novedades
+
+Barra de filtros igual que en Pedidos, encima de la tabla de Alertas: buscador libre (proveedor, pedido, hotel), hotel, estado, nivel (Urgente/Aviso) y si ya fue notificada o no.
+Filtrado instantáneo: al elegir un filtro, la tabla se actualiza al momento sin recargar datos del servidor.
+Contador "Mostrando X de Y alertas" para saber de un vistazo cuántas hay tras aplicar el filtro.
+Botón "✕ Limpiar" para quitar todos los filtros de golpe.
+Mensaje claro cuando ningún resultado coincide con el filtro elegido.
+
 # v12.1.4 — 23 junio 2026
 
 🔔 Trazabilidad de notificaciones en el panel de Alertas de seguimiento
