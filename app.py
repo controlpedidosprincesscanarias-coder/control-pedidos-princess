@@ -479,6 +479,129 @@ def format_albaran_display(albaran_str):
             partes.append(entry)
     return ' | '.join(partes) if partes else albaran_str
 
+
+def _parse_albaran_entries(albaran_str):
+    """
+    Parsea el campo entrada_albaran_num ("NUM::FECHA | NUM::FECHA | NUM")
+    en una lista de entregas: [{"num": str, "fecha_iso": "YYYY-MM-DD"|None}, ...]
+    Retrocompatible con entradas antiguas sin fecha (solo "NUM").
+    Conserva el orden cronológico en que fueron registradas.
+    """
+    if not albaran_str:
+        return []
+    entradas = []
+    for entry in albaran_str.split('|'):
+        entry = entry.strip()
+        if not entry:
+            continue
+        if '::' in entry:
+            num, fecha = entry.split('::', 1)
+            num, fecha = num.strip(), fecha.strip()
+        else:
+            num, fecha = entry, ''
+        entradas.append({"num": num or '—', "fecha_iso": fecha or None})
+    return entradas
+
+
+def _fecha_es(fecha_val):
+    """Convierte una fecha 'YYYY-MM-DD' (o similar) en 'DD/MM/YYYY'. None si no hay valor."""
+    if not fecha_val:
+        return None
+    try:
+        return datetime.strptime(str(fecha_val)[:10], "%Y-%m-%d").strftime("%d/%m/%Y")
+    except Exception:
+        return str(fecha_val)
+
+
+def _resumen_entregas(pedido: dict, estado_nuevo: str = None) -> dict:
+    """
+    Construye un resumen de las entregas (albaranes) registradas en el pedido
+    a partir de entrada_albaran_num, listo para insertar en correos/Telegram
+    de cambio de estado.
+
+    Cuando el estado de referencia es ENTREGADO, la última entrada registrada
+    se marca como "es_final" (la entrega que cierra el pedido).
+
+    Devuelve:
+        {
+          "entregas":        [{"num","fecha_iso","fecha_es","es_final"}, ...],
+          "total":           int,
+          "ultima_fecha_es": str|None,   # fecha de la entrega más reciente registrada
+          "tiene_fechas":    bool,       # alguna entrega tiene fecha informada
+        }
+    """
+    entradas = _parse_albaran_entries(pedido.get("entrada_albaran_num"))
+    estado_ref = estado_nuevo or pedido.get("estado")
+    out = []
+    for idx, e in enumerate(entradas):
+        es_final = (estado_ref == "ENTREGADO" and idx == len(entradas) - 1)
+        out.append({
+            "num":       e["num"],
+            "fecha_iso": e["fecha_iso"],
+            "fecha_es":  _fecha_es(e["fecha_iso"]),
+            "es_final":  es_final,
+        })
+    fechas_validas = [e["fecha_es"] for e in out if e["fecha_es"]]
+    return {
+        "entregas":        out,
+        "total":           len(out),
+        "ultima_fecha_es": fechas_validas[-1] if fechas_validas else None,
+        "tiene_fechas":    bool(fechas_validas),
+    }
+
+
+def _html_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
+    """Tabla HTML con el histórico de entregas (albaranes + fechas) para el correo interno."""
+    if not resumen["entregas"]:
+        return ""
+    filas = []
+    for i, e in enumerate(resumen["entregas"], 1):
+        etiqueta = "Entrega final (TOTAL)" if e["es_final"] else f"Entrega parcial {i}"
+        fecha_txt = e["fecha_es"] or "fecha no indicada"
+        estilo = ' style="background:#e8f5e9;font-weight:600"' if e["es_final"] else ''
+        filas.append(
+            f'<tr{estilo}><td>{i}</td><td>{etiqueta}</td>'
+            f'<td>{e["num"]}</td><td>{fecha_txt}</td></tr>'
+        )
+    titulo = ("Histórico de entregas registradas" if estado_nuevo == "ENTREGADO"
+              else "Entregas parciales registradas hasta la fecha")
+    plural = "s" if resumen["total"] != 1 else ""
+    return (
+        f'<p style="margin:16px 0 6px"><b>{titulo}</b> ({resumen["total"]} entrada{plural}):</p>'
+        f'<table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'
+        f'<tr style="background:#f0f0f0"><th>#</th><th>Tipo</th><th>Nº Entrada DALI/SAP</th><th>Fecha</th></tr>'
+        + "".join(filas) + "</table>"
+    )
+
+
+def _text_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
+    """Bloque de texto plano con el histórico de entregas, para el correo interno (fallback texto)."""
+    if not resumen["entregas"]:
+        return ""
+    titulo = ("Histórico de entregas registradas" if estado_nuevo == "ENTREGADO"
+              else "Entregas parciales registradas hasta la fecha")
+    lineas = [f"{titulo} ({resumen['total']}):"]
+    for i, e in enumerate(resumen["entregas"], 1):
+        etiqueta = "ENTREGA FINAL (TOTAL)" if e["es_final"] else f"Entrega parcial {i}"
+        fecha_txt = e["fecha_es"] or "fecha no indicada"
+        lineas.append(f"  {i}. {etiqueta} — Nº {e['num']} — {fecha_txt}")
+    return "\n".join(lineas)
+
+
+def _telegram_bloque_entregas(resumen: dict, estado_nuevo: str) -> list:
+    """Líneas (para añadir a un mensaje Markdown de Telegram) con el histórico de entregas."""
+    if not resumen["entregas"]:
+        return []
+    titulo = ("📦 *Histórico de entregas*" if estado_nuevo == "ENTREGADO"
+              else "📦 *Entregas parciales hasta la fecha*")
+    lineas = ["", f"{titulo} ({resumen['total']}):"]
+    for i, e in enumerate(resumen["entregas"], 1):
+        marca = "✅" if e["es_final"] else "▫️"
+        etiqueta = "Entrega final (TOTAL)" if e["es_final"] else f"Parcial {i}"
+        fecha_txt = e["fecha_es"] or "sin fecha"
+        lineas.append(f"{marca} {etiqueta} — Nº {e['num']} — {fecha_txt}")
+    return lineas
+
 # ── Autenticación ──────────────────────────────────────────────────────────────
 
 def login_required(f):
@@ -622,27 +745,80 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     #        por el BCC del correo al proveedor enviado arriba.
     ESTADOS_EMAIL_INTERNO_SIN_PROVEEDOR = ESTADOS_EMAIL_INTERNO - ESTADOS_EMAIL_PROVEEDOR
     if estado_nuevo in ESTADOS_EMAIL_INTERNO_SIN_PROVEEDOR and _todos_internos:
+        _resumen_ent = _resumen_entregas(pedido, estado_nuevo)
+
+        # Días transcurridos desde la tramitación, para contexto de seguimiento
+        _dias_transcurridos = None
+        try:
+            if pedido.get("fecha_tramitacion"):
+                _ft = datetime.strptime(str(pedido["fecha_tramitacion"])[:10], "%Y-%m-%d").date()
+                _dias_transcurridos = (datetime.now(timezone.utc).date() - _ft).days
+        except Exception:
+            _dias_transcurridos = None
+
+        _importe_txt    = f"{pedido.get('importe'):.2f} €" if pedido.get('importe') is not None else '—'
+        _fecha_tram_txt = _fecha_es(pedido.get('fecha_tramitacion')) or '—'
+        _dias_txt       = f" ({_dias_transcurridos} día(s) desde tramitación)" if _dias_transcurridos is not None else ''
+
+        _INTRO_ESTADO = {
+            "ENTREGA PARCIAL": "Se ha registrado una <strong>entrega parcial</strong> en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
+            "ENTREGADO":        "El pedido ha sido marcado como <strong>ENTREGADO</strong> (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
+            "CANCELADO":        "El pedido ha sido <strong>CANCELADO</strong>.",
+        }
+        _intro_html = _INTRO_ESTADO.get(estado_nuevo, "")
+        _intro_html_block = f"<p>{_intro_html}</p>" if _intro_html else ""
+
         subject_i = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {estado_nuevo}"
+        if estado_nuevo == "ENTREGADO" and _resumen_ent["ultima_fecha_es"]:
+            subject_i += f" ({_resumen_ent['ultima_fecha_es']})"
+        elif estado_nuevo == "ENTREGA PARCIAL" and _resumen_ent["ultima_fecha_es"]:
+            subject_i += f" — última entrega {_resumen_ent['ultima_fecha_es']}"
+
         body_html_i = f"""
         <p>Cambio de estado en el sistema de Control de Pedidos:</p>
-        <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif">
-          <tr><td><b>Hotel</b></td><td>{pedido.get('hotel_nombre','')}</td></tr>
+        {_intro_html_block}
+        <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">
+          <tr><td><b>Hotel</b></td><td>{pedido.get('hotel_nombre','')} ({pedido.get('hotel_codigo','')})</td></tr>
           <tr><td><b>Departamento</b></td><td>{pedido.get('departamento_nombre','')}</td></tr>
           <tr><td><b>Pedido Nº</b></td><td>{pedido.get('pedido_num','—')}</td></tr>
+          <tr><td><b>Presupuesto Nº</b></td><td>{pedido.get('presupuesto_num') or '—'}</td></tr>
           <tr><td><b>Proveedor</b></td><td>{pedido.get('proveedor_nombre','—')}</td></tr>
+          <tr><td><b>Importe</b></td><td>{_importe_txt}</td></tr>
           <tr><td><b>Estado anterior</b></td><td>{estado_antes or '—'}</td></tr>
           <tr><td><b>Estado nuevo</b></td><td><b>{estado_nuevo}</b></td></tr>
+          <tr><td><b>Fecha tramitación</b></td><td>{_fecha_tram_txt}{_dias_txt}</td></tr>
         </table>
+        {_html_bloque_entregas(_resumen_ent, estado_nuevo)}
         """
+        if estado_nuevo == "CANCELADO" and pedido.get("observaciones"):
+            body_html_i += f'<p style="margin-top:14px"><b>Observaciones / motivo:</b><br>{pedido.get("observaciones")}</p>'
+
+        _INTRO_ESTADO_TXT = {
+            "ENTREGA PARCIAL": "Se ha registrado una entrega parcial en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
+            "ENTREGADO":        "El pedido ha sido marcado como ENTREGADO (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
+            "CANCELADO":        "El pedido ha sido CANCELADO.",
+        }
+        _intro_text = _INTRO_ESTADO_TXT.get(estado_nuevo, "")
+
         body_text_i = (
             f"Cambio de estado en el sistema de Control de Pedidos:\n\n"
-            f"Hotel: {pedido.get('hotel_nombre','')}\n"
-            f"Departamento: {pedido.get('departamento_nombre','')}\n"
-            f"Pedido Nº: {pedido.get('pedido_num','—')}\n"
-            f"Proveedor: {pedido.get('proveedor_nombre','—')}\n"
-            f"Estado anterior: {estado_antes or '—'}\n"
-            f"Estado nuevo: {estado_nuevo}"
+            + (f"{_intro_text}\n\n" if _intro_text else "")
+            + f"Hotel: {pedido.get('hotel_nombre','')} ({pedido.get('hotel_codigo','')})\n"
+            + f"Departamento: {pedido.get('departamento_nombre','')}\n"
+            + f"Pedido Nº: {pedido.get('pedido_num','—')}\n"
+            + f"Presupuesto Nº: {pedido.get('presupuesto_num') or '—'}\n"
+            + f"Proveedor: {pedido.get('proveedor_nombre','—')}\n"
+            + f"Importe: {_importe_txt}\n"
+            + f"Estado anterior: {estado_antes or '—'}\n"
+            + f"Estado nuevo: {estado_nuevo}\n"
+            + f"Fecha tramitación: {_fecha_tram_txt}{_dias_txt}"
         )
+        _bloque_text_ent = _text_bloque_entregas(_resumen_ent, estado_nuevo)
+        if _bloque_text_ent:
+            body_text_i += "\n\n" + _bloque_text_ent
+        if estado_nuevo == "CANCELADO" and pedido.get("observaciones"):
+            body_text_i += f"\n\nObservaciones / motivo:\n{pedido.get('observaciones')}"
+
         for dest in _todos_internos:
             _log_email(db, pedido_id, "interno", dest, subject_i, False, "Pendiente de envío vía EmailJS")
         pendientes.append({
@@ -1130,15 +1306,35 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
 
         # ── Bloque base: siempre presente ─────────────────────────────────────
         num_pedido = pedido.get("pedido_num") or f"Nº Orden {pedido.get('norden', '?')}"
+        _ICONO_ESTADO = {
+            "ENTREGA PARCIAL": "📦 Entrega parcial registrada.",
+            "ENTREGADO":        "✅ Pedido entregado en su totalidad.",
+            "CANCELADO":        "❌ Pedido cancelado.",
+        }
         lineas = [
             "🔔 *Cambio de estado*",
             f"Hotel: *{pedido.get('hotel_codigo', '?')}* — {pedido.get('hotel_nombre', '')}",
             f"Pedido: *{num_pedido}*",
-            f"Proveedor: {pedido.get('proveedor_nombre', '—')}",
-            f"Estado: {estado_antes or '—'}  →  *{estado_nuevo}*",
         ]
+        if pedido.get("presupuesto_num"):
+            lineas.append(f"Presupuesto: {pedido.get('presupuesto_num')}")
+        lineas.append(f"Proveedor: {pedido.get('proveedor_nombre', '—')}")
+        if pedido.get("importe") is not None:
+            lineas.append(f"Importe: {pedido.get('importe'):.2f} €")
+        lineas.append(f"Estado: {estado_antes or '—'}  →  *{estado_nuevo}*")
         if usuario_nombre:
             lineas.append(f"Modificado por: {usuario_nombre}")
+        _intro_tg = _ICONO_ESTADO.get(estado_nuevo)
+        if _intro_tg:
+            lineas += ["", _intro_tg]
+
+        # ── Histórico de entregas (albaranes + fechas), parciales y/o total ───
+        _resumen_ent_tg = _resumen_entregas(pedido, estado_nuevo)
+        lineas += _telegram_bloque_entregas(_resumen_ent_tg, estado_nuevo)
+
+        # ── Motivo de cancelación, si lo hay ──────────────────────────────────
+        if estado_nuevo == "CANCELADO" and pedido.get("observaciones"):
+            lineas += ["", f"📝 Motivo: {pedido.get('observaciones')}"]
 
         # ── Bloque de alerta: solo si el nuevo estado genera alerta ───────────
         # ignorar_si_modificacion_manual suprime alertas temporales contradictorias

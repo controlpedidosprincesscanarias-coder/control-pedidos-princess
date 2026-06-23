@@ -1,4 +1,23 @@
-v12.1.2 — 22 junio 2026
+# v12.1.4 — 23 junio 2026
+
+📬 Notificaciones de cambio de estado más claras y completas (correo y Telegram)
+
+Se enriquece el contenido de los avisos automáticos (correo interno y Telegram) que se generan al cambiar el estado de un pedido, para dar una visión completa y autoexplicativa del seguimiento de entregas sin tener que entrar al sistema.
+
+🎯 Qué cambia
+Situación anterior
+
+El aviso solo indicaba el hotel, departamento, pedido, proveedor y el cambio de estado (anterior → nuevo), sin ninguna referencia a las fechas de entrega.
+
+Novedades
+
+Histórico de entregas con fechas: en ENTREGA PARCIAL y ENTREGADO, el correo y el mensaje de Telegram incluyen ahora la lista completa de entregas (albaranes) registradas hasta la fecha, cada una con su número y su fecha. La entrega que cierra el pedido (ENTREGADO) se resalta como "Entrega final (TOTAL)".
+Mensaje introductorio según el estado: una frase de contexto aclara qué ha ocurrido (entrega parcial registrada, entrega total completada, o pedido cancelado), antes de entrar en el detalle.
+Más datos de control y seguimiento: se añade el número de presupuesto, el importe del pedido, la fecha de tramitación y los días transcurridos desde entonces — útil para detectar pedidos que se demoran.
+Motivo de cancelación visible: si el pedido se cancela y hay observaciones registradas, se muestran en el aviso.
+Asunto del correo más informativo: incluye la fecha de la última entrega registrada cuando aplica.
+
+
 📧 Mejora de la comunicación con proveedores en pedidos enviados
 
 Se rediseña el contenido del correo enviado al proveedor cuando un pedido pasa al estado ENVIADO AL PROVEEDOR, con el objetivo de mejorar la comprensión del mensaje y aumentar la tasa de respuesta por parte del proveedor.
