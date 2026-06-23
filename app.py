@@ -5421,6 +5421,46 @@ _UMBRALES_ALERTAS: dict = {
 }
 
 
+def _resumen_ultima_notificacion(p: dict) -> dict:
+    """
+    A partir de ultima_notif_email / ultima_notif_telegram (subconsultas de
+    PEDIDO_SELECT_STATS) calcula un resumen único para mostrar en el panel
+    de Alertas: cuándo se notificó por última vez esta alerta y por qué canal.
+
+    Devuelve:
+        {
+          "fecha":   str ISO o None,   # la más reciente entre email y Telegram
+          "canales": list[str],        # ["Email"], ["Telegram"] o ["Email","Telegram"]
+          "dias":    int|None,         # días transcurridos desde esa notificación
+        }
+    """
+    ultima_email = p.get("ultima_notif_email")
+    ultima_tg    = p.get("ultima_notif_telegram")
+    candidatas   = [v for v in (ultima_email, ultima_tg) if v]
+    if not candidatas:
+        return {"fecha": None, "canales": [], "dias": None}
+
+    fecha_max = max(candidatas)
+    canales = []
+    if ultima_email:
+        canales.append("Email")
+    if ultima_tg:
+        canales.append("Telegram")
+
+    try:
+        fecha_ref = fecha_max.date() if hasattr(fecha_max, "date") else fecha_max
+        dias = (_date_alerta.today() - fecha_ref).days
+    except Exception:
+        dias = None
+
+    try:
+        fecha_iso = fecha_max.isoformat()
+    except Exception:
+        fecha_iso = str(fecha_max)
+
+    return {"fecha": fecha_iso, "canales": canales, "dias": dias}
+
+
 def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
     """Clasifica una lista de pedidos y devuelve solo los que generan alerta.
 
@@ -5433,6 +5473,7 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
       • dias_tramitacion  (int)
       • nivel_alerta      ("aviso" | "urgente")
       • fecha_entrega_prevista (str ISO o None)
+      • ultima_notificacion    (dict — ver _resumen_ultima_notificacion)
 
     Devuelve la lista ordenada: urgentes primero, luego por días descendente.
     """
@@ -5446,6 +5487,7 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
             p["nivel_alerta"]          = info_plazo["nivel"]
             fep = info_plazo["fecha_entrega_prevista"]
             p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
+            p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
             alertas.append(p)
             continue
         # ── Lógica estándar ─────────────────────────────────────────────
@@ -5460,6 +5502,7 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
         p["dias_tramitacion"]      = dias
         p["nivel_alerta"]          = nivel
         p["fecha_entrega_prevista"] = None
+        p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
         alertas.append(p)
 
     alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1,
@@ -5482,7 +5525,13 @@ PEDIDO_SELECT_STATS = """
            f.nombre  as familia_nombre,
            EXISTS (
                SELECT 1 FROM pedido_adjuntos pa WHERE pa.pedido_id = p.id
-           ) AS has_adjuntos
+           ) AS has_adjuntos,
+           (SELECT MAX(el.creado_en) FROM emails_log el
+              WHERE el.pedido_id = p.id
+                AND el.tipo IN ('alerta_proveedor','alerta_interno')) AS ultima_notif_email,
+           (SELECT MAX(wl.creado_en) FROM whatsapp_log wl
+              WHERE wl.pedido_id = p.id
+                AND wl.tipo = 'telegram_auto' AND wl.enviado = 1) AS ultima_notif_telegram
     FROM pedidos p
     LEFT JOIN hoteles       h  ON p.hotel_id        = h.id
     LEFT JOIN departamentos d  ON p.departamento_id = d.id

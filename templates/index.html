@@ -1231,7 +1231,7 @@ tbody tr:last-child{border-bottom:none}
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Nº</th><th>Hotel</th><th>Pedido DALI / SAP</th><th>Estado</th><th>Proveedor</th><th>F. Tramitación</th><th>Días</th><th>Nivel</th><th></th></tr>
+                <tr><th>Nº</th><th>Hotel</th><th>Pedido DALI / SAP</th><th>Estado</th><th>Proveedor</th><th>F. Tramitación</th><th>Días</th><th>Nivel</th><th>Notificación</th><th></th></tr>
               </thead>
               <tbody id="alertas-tbody"></tbody>
             </table>
@@ -4134,14 +4134,20 @@ async function confirmarEliminarPedido() {
 /* ═══════════════════════════════════════════════════════════════════════════
    Alertas
 ═══════════════════════════════════════════════════════════════════════════ */
+// Cache de "última notificación" por pedido_id (alimentada en loadAlertas),
+// usada para avisar en el modal de envío si la alerta ya fue notificada antes.
+let _alertasNotifCache = {};
+
 async function loadAlertas() {
   const d = await _fetchStats();
   const tbody = document.getElementById('alertas-tbody');
   const empty = document.getElementById('alertas-empty');
   if (!d.alertas.length) {
-    tbody.innerHTML=''; empty.classList.remove('section-hidden'); return;
+    tbody.innerHTML=''; empty.classList.remove('section-hidden'); _alertasNotifCache = {}; return;
   }
   empty.classList.add('section-hidden');
+  _alertasNotifCache = {};
+  d.alertas.forEach(p => { _alertasNotifCache[p.id] = p.ultima_notificacion || null; });
 
   // Agrupamos por nivel para el resumen superior
   const urgentes = d.alertas.filter(p => p.nivel_alerta === 'urgente');
@@ -4161,6 +4167,22 @@ async function loadAlertas() {
     const entregaPrevLabel = p.fecha_entrega_prevista
       ? `<br><span style="font-size:10px;color:#1a73e8" title="Entrega prevista (plazo proveedor)">📅 ${fmtDate(p.fecha_entrega_prevista)}</span>`
       : '';
+
+    // ── Última notificación enviada para esta alerta (email y/o Telegram) ────
+    const notif = p.ultima_notificacion || { fecha: null, canales: [], dias: null };
+    let notifLabel;
+    if (notif.fecha) {
+      const canalTxt = notif.canales.join(' + ') || '—';
+      const diasTxt  = notif.dias === 0 ? 'hoy' : (notif.dias === 1 ? 'hace 1 día' : `hace ${notif.dias} días`);
+      notifLabel = `<span style="font-size:11px;color:#1a7a1a;font-weight:600" title="Última notificación: ${fmtDateTime(notif.fecha)} · Canal: ${canalTxt}">✅ Notificado ${diasTxt}</span><br><span style="font-size:10px;color:#888">${canalTxt} · ${fmtDate(notif.fecha)}</span>`;
+    } else {
+      notifLabel = `<span style="font-size:11px;color:#b00020;font-weight:600">⛔ Sin notificar</span>`;
+    }
+    const btnNotifLabel = notif.fecha ? '🔁 Re-notificar' : '✉ Notificar';
+    const btnNotifTitle = notif.fecha
+      ? `Última notificación: ${fmtDateTime(notif.fecha)} (${notif.canales.join(' + ')})`
+      : 'Aún no se ha notificado esta alerta';
+
     return `
     <tr class="${rowClass}">
       <td class="monospace">${p.norden||'—'}</td>
@@ -4171,9 +4193,10 @@ async function loadAlertas() {
       <td class="monospace" style="font-size:12px">${fechaLabel}${entregaPrevLabel}</td>
       <td>${diasLabel}</td>
       <td>${nivelBadge}</td>
+      <td>${notifLabel}</td>
       <td>
           <button class="btn btn-ghost btn-sm" onclick="openPedidoModal(${p.id})">✏ Editar</button>
-          <button class="btn btn-sm" style="background:#1a3a6b;color:#fff;margin-left:4px" onclick="abrirModalEmailAlerta(${p.id},${p.dias_tramitacion},'${p.nivel_alerta}')">✉ Notificar</button>
+          <button class="btn btn-sm" style="background:#1a3a6b;color:#fff;margin-left:4px" title="${btnNotifTitle}" onclick="abrirModalEmailAlerta(${p.id},${p.dias_tramitacion},'${p.nivel_alerta}')">${btnNotifLabel}</button>
       </td>
     </tr>`;
   }).join('');
@@ -6079,7 +6102,15 @@ async function abrirModalEmailAlerta(pedidoId, dias, nivel) {
     `Notificación de alerta — ${d.hotel_codigo} · Pedido ${d.pedido_num||'—'} [${nivelLabel}]`;
 
   // Info pedido
+  const notifPrevia = _alertasNotifCache[pedidoId];
+  const notifBanner = (notifPrevia && notifPrevia.fecha)
+    ? `<div style="background:#fff3cd;border:1px solid #f0c36d;color:#7a5b00;padding:8px 12px;border-radius:6px;font-size:12.5px;margin-bottom:8px">
+         ⚠️ Esta alerta ya fue notificada el <strong>${fmtDateTime(notifPrevia.fecha)}</strong> por ${esc(notifPrevia.canales.join(' + '))}.
+         Si vuelves a enviarla, el proveedor/comprador recibirá un segundo aviso.
+       </div>`
+    : '';
   document.getElementById('mea-pedido-info').innerHTML = `
+    ${notifBanner}
     <div><strong>Hotel:</strong> ${esc(d.hotel_nombre||'—')}</div>
     <div><strong>Proveedor:</strong> ${esc(d.proveedor_nombre||'—')}</div>
     <div><strong>Estado:</strong> ${esc(d.estado||'—')}</div>
@@ -7201,6 +7232,11 @@ async function imprimirAlertas(codigosSeleccionados) {
     var fechaRef   = p.estado === 'PENDIENTE COTIZACI\u00d3N' ? p.fecha_solicitud : p.fecha_tramitacion;
     var fmtFecha   = fechaRef ? new Date(fechaRef).toLocaleDateString('es-ES') : '\u2014';
     var estadoColor= estadoColors[p.estado] || '#495057';
+    var notif      = p.ultima_notificacion || { fecha: null, canales: [], dias: null };
+    var notifTxt   = notif.fecha
+      ? ('\u2705 ' + new Date(notif.fecha).toLocaleDateString('es-ES') + ' (' + notif.canales.join(' + ') + ')')
+      : '\u26D4 Sin notificar';
+    var notifColor = notif.fecha ? '#1a7a1a' : '#b00020';
     return '<tr style="background:' + bgRow + '">' +
       '<td style="padding:7px 8px;font-size:11px;font-weight:700;border-bottom:1px solid #eee">' + (p.norden || '\u2014') + '</td>' +
       '<td style="padding:7px 8px;font-size:11px;font-weight:700;border-bottom:1px solid #eee;color:#1a3a6b">' + (p.hotel_codigo || '\u2014') + '</td>' +
@@ -7210,13 +7246,14 @@ async function imprimirAlertas(codigosSeleccionados) {
       '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:center">' + fmtFecha + '</td>' +
       '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:center;font-weight:700;color:' + (esUrgente?'#dc3545':'#e67e00') + '">' + p.dias_tramitacion + ' d\u00edas</td>' +
       '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;font-weight:700;color:' + nivelColor + '">' + nivelText + '</td>' +
+      '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;font-weight:600;color:' + notifColor + '">' + notifTxt + '</td>' +
     '</tr>';
   }).join('');
 
   var tablaHtml = alertas.length
     ? '<table><thead><tr>' +
         '<th>N\u00ba Orden</th><th>Hotel</th><th>Pedido DALI/SAP</th><th>Estado</th>' +
-        '<th>Proveedor</th><th>Fecha Ref.</th><th>D\u00edas</th><th>Nivel</th>' +
+        '<th>Proveedor</th><th>Fecha Ref.</th><th>D\u00edas</th><th>Nivel</th><th>Notificaci\u00f3n</th>' +
       '</tr></thead><tbody>' + filas + '</tbody></table>'
     : '<p style="color:#999;font-style:italic">No hay alertas activas.</p>';
 

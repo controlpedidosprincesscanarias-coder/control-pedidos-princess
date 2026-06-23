@@ -1,5 +1,20 @@
 # v12.1.4 — 23 junio 2026
 
+🔔 Trazabilidad de notificaciones en el panel de Alertas de seguimiento
+
+Hasta ahora, al pulsar "Notificar" en una alerta de seguimiento no quedaba visible si esa alerta ya había sido avisada antes, con el riesgo de notificar varias veces sin saberlo al proveedor o al comprador.
+
+Novedades
+
+Nueva columna "Notificación" en la tabla de Alertas de seguimiento: muestra si la alerta ya se notificó, cuándo (fecha y hora) y por qué canal (Email, Telegram, o ambos). Si nunca se notificó, se indica claramente "⛔ Sin notificar".
+El botón cambia de "✉ Notificar" a "🔁 Re-notificar" cuando ya existe un envío previo, con un tooltip que muestra la fecha exacta de la última notificación.
+Aviso dentro del modal de envío: si la alerta ya fue notificada antes, aparece un banner de advertencia con la fecha y el canal, antes de confirmar un nuevo envío.
+El informe de impresión de Alertas incluye también esta información para mantener la trazabilidad sobre papel.
+
+La fecha de "última notificación" se calcula a partir del histórico ya registrado en el sistema (envíos de email de alerta y avisos de Telegram), sin necesidad de ninguna tabla ni configuración nueva.
+
+
+
 📬 Notificaciones de cambio de estado más claras y completas (correo y Telegram)
 
 Se enriquece el contenido de los avisos automáticos (correo interno y Telegram) que se generan al cambiar el estado de un pedido, para dar una visión completa y autoexplicativa del seguimiento de entregas sin tener que entrar al sistema.
