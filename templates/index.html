@@ -1052,7 +1052,7 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item" data-view="pedidos" data-roles="admin,compras,hotel" onclick="showViewGuarded('pedidos',this)">
       <span class="icon">📋</span> Pedidos
     </div>
-    <div class="sb-item no-hotel" data-view="alertas" data-roles="admin,compras" onclick="showViewGuarded('alertas',this)">
+    <div class="sb-item" data-view="alertas" data-roles="admin,compras,hotel" onclick="showViewGuarded('alertas',this)">
       <span class="icon">⚠️</span> Alertas
       <span class="sb-badge" id="sb-alert-count" style="display:none">0</span>
     </div>
@@ -1094,7 +1094,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.1.6
+          V 12.1.8
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -4280,6 +4280,8 @@ function _renderAlertasTabla(lista) {
     const btnNotifTitle = notif.fecha
       ? `Última notificación: ${fmtDateTime(notif.fecha)} (${notif.canales.join(' + ')})`
       : 'Aún no se ha notificado esta alerta';
+    const isHotelRol = G.rol === 'hotel';
+    const btnNotifHtml = isHotelRol ? '' : `<button class="btn btn-sm" style="background:#1a3a6b;color:#fff;margin-left:4px" title="${btnNotifTitle}" onclick="abrirModalEmailAlerta(${p.id},${p.dias_tramitacion},'${p.nivel_alerta}')">${btnNotifLabel}</button>`;
 
     return `
     <tr class="${rowClass}">
@@ -4294,7 +4296,7 @@ function _renderAlertasTabla(lista) {
       <td>${notifLabel}</td>
       <td>
           <button class="btn btn-ghost btn-sm" onclick="openPedidoModal(${p.id})">✏ Editar</button>
-          <button class="btn btn-sm" style="background:#1a3a6b;color:#fff;margin-left:4px" title="${btnNotifTitle}" onclick="abrirModalEmailAlerta(${p.id},${p.dias_tramitacion},'${p.nivel_alerta}')">${btnNotifLabel}</button>
+          ${btnNotifHtml}
       </td>
     </tr>`;
   }).join('');

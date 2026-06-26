@@ -6123,9 +6123,18 @@ def bridge_alertas_usuario():
         filtro_hotel_sql = f"AND p.hotel_id IN ({placeholders})"
         filtro_args      = hotel_ids
     elif rol == "hotel":
-        # Rol hotel: no accede a la vista de alertas
-        return jsonify({"alertas": [], "num_alertas": 0,
-                        "usuario": session.get("username"), "rol": rol})
+        # Hoteles asignados al usuario hotel en usuario_hoteles (lectura)
+        rows = rows_to_list(query(
+            "SELECT hotel_id FROM usuario_hoteles WHERE usuario_id=%s",
+            (user_id,)
+        ))
+        hotel_ids = [r["hotel_id"] for r in rows]
+        if not hotel_ids:
+            return jsonify({"alertas": [], "num_alertas": 0,
+                            "usuario": session.get("username"), "rol": rol})
+        placeholders = ",".join(["%s"] * len(hotel_ids))
+        filtro_hotel_sql = f"AND p.hotel_id IN ({placeholders})"
+        filtro_args      = hotel_ids
     else:
         # Rol desconocido: sin alertas
         return jsonify({"alertas": [], "num_alertas": 0,

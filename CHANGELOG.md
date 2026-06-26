@@ -1,3 +1,16 @@
+# v12.1.8 — 26 junio 2026
+
+🏨 El usuario Hotel ya puede ver el panel de Alertas (solo de sus hoteles)
+
+Hasta ahora la sección "Alertas" del menú estaba bloqueada para el rol Hotel, aunque el dashboard ya le mostraba el contador de avisos pendientes.
+
+Novedades
+
+El menú "Alertas" aparece ahora también para el rol Hotel.
+La tabla muestra únicamente las alertas de seguimiento de los hoteles que tiene asignados ese usuario (igual que ya ocurre en Pedidos y en el Dashboard).
+Sigue sin tener acceso a "Techo de gastos", que continúa reservado a Administrador y Compras.
+El botón "✉ Notificar / 🔁 Re-notificar" no se muestra para este rol, ya que el envío de avisos a proveedor/compras sigue siendo una acción exclusiva de Administrador y Compras; el botón "✏ Editar" se mantiene con las mismas restricciones de edición que ya tenía el rol Hotel en Pedidos.
+
 # v12.1.6 — 23 junio 2026
 
 🔍 Filtros en el panel de Alertas de seguimiento
