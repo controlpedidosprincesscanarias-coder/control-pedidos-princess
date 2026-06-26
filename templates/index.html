@@ -2621,10 +2621,17 @@ async function adminCargarSolicitudes() {
 }
 
 function _adminSolBotones(r) {
+  const btnBorrar = `<button class="btn btn-danger btn-sm" onclick="adminBorrarSolicitud(${r.id})" title="Eliminar esta solicitud del histórico">🗑</button>`;
   if (r.estado === 'aprobada')
-    return '<span style="font-size:12px;color:var(--muted);">Cuenta creada ✓</span>';
+    return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+    <span style="font-size:12px;color:var(--muted);">Cuenta creada ✓</span>
+    ${btnBorrar}
+  </div>`;
   if (r.estado === 'rechazada')
-    return '<span style="font-size:12px;color:var(--muted);">—</span>';
+    return `<div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+    <span style="font-size:12px;color:var(--muted);">—</span>
+    ${btnBorrar}
+  </div>`;
   if (r.estado === 'completada')
     return `<div style="display:flex;gap:6px;flex-wrap:wrap;">
     <button class="btn btn-gold btn-sm" onclick="adminAprobarSolicitud(${r.id})"
@@ -2633,12 +2640,24 @@ function _adminSolBotones(r) {
       ✅ Aprobar y crear cuenta
     </button>
     <button class="btn btn-danger btn-sm" onclick="adminRechazarSolicitud(${r.id})" title="Rechazar solicitud">✕</button>
+    ${btnBorrar}
   </div>`;
   return `<div style="display:flex;gap:6px;flex-wrap:wrap;">
     <button class="btn btn-gold btn-sm" onclick="adminEnviarFase2(${r.id})" title="Envía email con enlace al usuario">📧 Enviar Fase 2</button>
     <button class="btn btn-ghost btn-sm" onclick="adminDescargarBat(${r.id})" title="Descargar el .bat manualmente">💾 Descargar .bat</button>
     <button class="btn btn-danger btn-sm" onclick="adminRechazarSolicitud(${r.id})" title="Rechazar solicitud">✕</button>
+    ${btnBorrar}
   </div>`;
+}
+
+async function adminBorrarSolicitud(solId) {
+  if (!confirm('¿Eliminar esta solicitud del histórico?\n\nEsta acción no se puede deshacer. Si la solicitud estaba aprobada, la cuenta de usuario ya creada NO se verá afectada.')) return;
+  try {
+    const r = await api(`/api/admin/solicitudes-acceso/${solId}`, 'DELETE');
+    if (r && r.error) { toast(r.error, 'error'); return; }
+    toast('Solicitud eliminada', 'success');
+    adminCargarSolicitudes();
+  } catch(e) { toast('❌ ' + (e.message || 'Error'), 'error'); }
 }
 
 async function adminEnviarFase2(solId) {

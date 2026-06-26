@@ -11,6 +11,17 @@ La tabla muestra únicamente las alertas de seguimiento de los hoteles que tiene
 Sigue sin tener acceso a "Techo de gastos", que continúa reservado a Administrador y Compras.
 El botón "✉ Notificar / 🔁 Re-notificar" no se muestra para este rol, ya que el envío de avisos a proveedor/compras sigue siendo una acción exclusiva de Administrador y Compras; el botón "✏ Editar" se mantiene con las mismas restricciones de edición que ya tenía el rol Hotel en Pedidos.
 
+🗑️ Botón de borrado en Solicitudes de acceso (Admin)
+
+El listado de "Solicitudes de acceso" (dentro de Gestión de usuarios) ya permite eliminar una solicitud del histórico, igual que ya se podía hacer con los usuarios en la tabla de arriba.
+
+Novedades
+
+Nuevo botón 🗑 en cada fila de Solicitudes de acceso, sea cual sea su estado (pendiente, aprobada, rechazada).
+Pensado para limpiar el histórico de solicitudes ya tramitadas o duplicadas/erróneas (por ejemplo, la solicitud #7 rechazada del ejemplo de Pepe Martín).
+Pide confirmación antes de borrar, igual que el resto de acciones destructivas de la plataforma.
+Si la solicitud ya estaba aprobada, borrarla del histórico no afecta a la cuenta de usuario que ya se creó: solo desaparece el registro de la solicitud.
+
 # v12.1.6 — 23 junio 2026
 
 🔍 Filtros en el panel de Alertas de seguimiento

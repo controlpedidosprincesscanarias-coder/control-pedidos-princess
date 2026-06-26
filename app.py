@@ -4133,6 +4133,20 @@ def admin_rechazar_solicitud(sol_id):
     db.commit()
     return jsonify({"ok": True})
 
+@app.route("/api/admin/solicitudes-acceso/<int:sol_id>", methods=["DELETE"])
+def admin_borrar_solicitud(sol_id):
+    """Elimina una solicitud de acceso del histórico (solo admins).
+    No afecta a la cuenta de usuario ya creada, si la solicitud estaba aprobada."""
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Sin permisos"}), 403
+    sol = query("SELECT id FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
+    if not sol:
+        return jsonify({"error": "Solicitud no encontrada"}), 404
+    db = get_db()
+    execute("DELETE FROM solicitudes_acceso WHERE id=%s", (sol_id,))
+    db.commit()
+    return jsonify({"ok": True})
+
 @app.route("/api/me")
 def me():
     if "user_id" not in session:
