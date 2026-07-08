@@ -110,6 +110,8 @@ SQL_STATEMENTS = [
         nombre       TEXT NOT NULL,
         mime_type    TEXT NOT NULL,
         datos        BYTEA NOT NULL,
+        datos_thumb      BYTEA,
+        thumb_mime_type  TEXT,
         es_correo    BOOLEAN NOT NULL DEFAULT FALSE,
         subido_por_id INTEGER REFERENCES usuarios(id),
         creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()

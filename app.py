@@ -383,6 +383,19 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS tarifa_acordada BOOLEAN NOT NULL DEFAULT FALSE"
             )
+            # ── Fix egress — miniaturas para imagen_articulo (Jul 2026) ────
+            # Las imágenes de artículo (hasta 2 MB) se mostraban a tamaño
+            # completo como miniatura en la lista de adjuntos, disparando
+            # el egress mensual del proyecto. Ahora se guarda una versión
+            # reducida (datos_thumb) generada al subir el archivo; las ya
+            # existentes se generan la primera vez que se piden (lazy) y
+            # quedan cacheadas en esta misma columna para siempre.
+            cur.execute(
+                "ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS datos_thumb BYTEA"
+            )
+            cur.execute(
+                "ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS thumb_mime_type TEXT"
+            )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -6800,6 +6813,43 @@ MAX_BYTES_IMAGEN    = 2 * 1024 * 1024   # 2 MB — imagen_articulo
 MAX_DOCUMENTOS_POR_APARTADO = 3
 MAX_CORREOS_POR_APARTADO    = 1
 
+# ── Fix egress — miniaturas para imagen_articulo (Jul 2026) ─────────────────
+THUMB_MAX_ANCHO = 240   # px — de sobra para la miniatura de la lista de adjuntos
+THUMB_JPEG_CALIDAD = 70
+
+
+def _generar_thumbnail(datos_originales, mime_type):
+    """Genera una miniatura JPEG reducida a partir de los bytes de una imagen.
+
+    Devuelve (bytes_thumb, mime_thumb) o (None, None) si la imagen no se
+    puede procesar (por ejemplo, un formato no soportado por Pillow) — en
+    ese caso el llamador debe servir la imagen original como respaldo.
+    """
+    try:
+        from PIL import Image
+        import io as _io
+        img = Image.open(_io.BytesIO(datos_originales))
+        img.load()
+        # Aplanar transparencia (RGBA/P) sobre fondo blanco: el destino es
+        # JPEG, que no soporta canal alfa.
+        if img.mode in ("RGBA", "LA", "P"):
+            fondo = Image.new("RGB", img.size, (255, 255, 255))
+            img_rgba = img.convert("RGBA")
+            fondo.paste(img_rgba, mask=img_rgba.split()[-1])
+            img = fondo
+        elif img.mode != "RGB":
+            img = img.convert("RGB")
+        if img.width > THUMB_MAX_ANCHO:
+            ratio = THUMB_MAX_ANCHO / float(img.width)
+            nuevo_alto = max(1, int(img.height * ratio))
+            img = img.resize((THUMB_MAX_ANCHO, nuevo_alto), Image.LANCZOS)
+        buf = _io.BytesIO()
+        img.save(buf, format="JPEG", quality=THUMB_JPEG_CALIDAD, optimize=True)
+        return buf.getvalue(), "image/jpeg"
+    except Exception as e:
+        log.warning(f"No se pudo generar thumbnail: {e}")
+        return None, None
+
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
 @login_required
 def get_adjuntos(pid):
@@ -6917,9 +6967,16 @@ def upload_adjunto(pid):
 
     uid = current_user_id()
     db  = get_db()
+
+    thumb_datos, thumb_mime = (None, None)
+    if tipo == "imagen_articulo":
+        thumb_datos, thumb_mime = _generar_thumbnail(datos, mime)
+
     cur = execute(
-        "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-        (pid, tipo, archivo.filename, mime, psycopg2.Binary(datos), es_correo, uid)
+        "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id, datos_thumb, thumb_mime_type) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+        (pid, tipo, archivo.filename, mime, psycopg2.Binary(datos), es_correo, uid,
+         psycopg2.Binary(thumb_datos) if thumb_datos else None, thumb_mime)
     )
     adjunto_id = cur.fetchone()["id"]
     db.commit()
@@ -6937,11 +6994,78 @@ def download_adjunto(aid):
     # los abra con el gestor de correo predeterminado.
     # El resto (PDF, imagenes, Word) se sirven inline para previsualizacion.
     disposition = "attachment" if row["es_correo"] else "inline"
-    return Response(
+
+    # ── Fix egress — cabeceras de caché (Jul 2026) ──────────────────────
+    # Un adjunto es inmutable una vez subido (no hay ruta de edición, solo
+    # alta con id nuevo o borrado), así que puede cachearse indefinidamente
+    # sin riesgo de servir contenido obsoleto. Sin estas cabeceras el
+    # navegador re-descargaba el fichero completo cada vez que se abría
+    # un pedido (renderAdjuntosImg/Fecha regenera el <img>/<a> en cada
+    # carga), disparando el egress mensual del proyecto.
+    etag = f'"{aid}"'
+    if request.headers.get("If-None-Match") == etag:
+        return Response(status=304)
+
+    resp = Response(
         bytes(row["datos"]),
         mimetype=row["mime_type"],
         headers={"Content-Disposition": f'{disposition}; filename="{row["nombre"]}"'}
     )
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    resp.headers["ETag"] = etag
+    return resp
+
+
+@app.route("/api/adjuntos/<int:aid>/thumb", methods=["GET"])
+@login_required
+def download_adjunto_thumb(aid):
+    """Sirve una miniatura reducida de un adjunto de tipo imagen_articulo.
+
+    Si la miniatura ya está generada (subidas posteriores a Jul 2026), se
+    sirve directamente. Si no existe todavía (adjuntos subidos antes de
+    este fix), se genera una vez a partir de la imagen original, se guarda
+    en `datos_thumb` para no repetir el trabajo, y se sirve. Si por algún
+    motivo no se puede generar (formato no soportado), se cae de vuelta a
+    servir la imagen original — nunca se rompe la vista para el usuario.
+    """
+    row = query(
+        "SELECT nombre, mime_type, datos, datos_thumb, thumb_mime_type "
+        "FROM pedido_adjuntos WHERE id=%s",
+        (aid,), one=True
+    )
+    if not row:
+        return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
+
+    etag = f'"{aid}-thumb"'
+    if request.headers.get("If-None-Match") == etag:
+        return Response(status=304)
+
+    thumb_bytes = row["datos_thumb"]
+    thumb_mime  = row["thumb_mime_type"]
+
+    if thumb_bytes is None:
+        # Backfill perezoso — imagen subida antes de existir esta columna.
+        thumb_bytes, thumb_mime = _generar_thumbnail(bytes(row["datos"]), row["mime_type"])
+        if thumb_bytes is not None:
+            execute(
+                "UPDATE pedido_adjuntos SET datos_thumb=%s, thumb_mime_type=%s WHERE id=%s",
+                (psycopg2.Binary(thumb_bytes), thumb_mime, aid)
+            )
+            get_db().commit()
+
+    if thumb_bytes is None:
+        # No se pudo generar miniatura (formato no soportado por Pillow):
+        # servimos la original tal cual para no dejar la vista rota.
+        thumb_bytes, thumb_mime = bytes(row["datos"]), row["mime_type"]
+
+    resp = Response(
+        bytes(thumb_bytes),
+        mimetype=thumb_mime,
+        headers={"Content-Disposition": f'inline; filename="{row["nombre"]}"'}
+    )
+    resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
+    resp.headers["ETag"] = etag
+    return resp
 
 
 @app.route("/api/adjuntos/<int:aid>", methods=["DELETE"])

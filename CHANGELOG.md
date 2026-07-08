@@ -1,3 +1,17 @@
+# v12.2.0 — 8 julio 2026
+
+📉 Reducción de egress — caché de adjuntos + miniaturas de imágenes
+
+El proyecto de Supabase venía superando el límite mensual de egress del plan Free (5 GB), con restricciones activas en el dashboard. Investigando el consumo, se detectó que los adjuntos (PDF, imágenes, correos) se re-descargaban enteros cada vez que se abría un pedido, sin ningún tipo de caché.
+
+Novedades
+
+Los adjuntos ahora se sirven con cabecera Cache-Control de larga duración (son inmutables: nunca se editan, solo se suben nuevos o se borran), con soporte de ETag/304 como respaldo.
+Las imágenes de artículo (imagen_articulo) ya no se muestran a tamaño completo como miniatura: se genera una versión reducida (240px, JPEG) en el momento de subida y se sirve por una nueva ruta /api/adjuntos/<id>/thumb.
+Las imágenes subidas antes de este cambio generan su miniatura la primera vez que se piden (de forma transparente) y queda guardada para siempre — no requiere ninguna migración manual de datos.
+Al hacer clic en la miniatura se sigue abriendo la imagen original a tamaño completo, sin cambios para el usuario.
+Requiere añadir la dependencia Pillow (ya incluida en requirements.txt).
+
 # v12.1.8 — 26 junio 2026
 
 🏨 El usuario Hotel ya puede ver el panel de Alertas (solo de sus hoteles)

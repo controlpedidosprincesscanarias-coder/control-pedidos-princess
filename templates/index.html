@@ -1094,7 +1094,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.1.8
+          V 12.2.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3390,7 +3390,7 @@ function renderAdjuntosImg(lista) {
   if (!contenedor) return;
   contenedor.innerHTML = lista.map(a => `
     <div class="adj-img-wrap" id="adj-item-${a.id}">
-      <img class="adj-img-thumb" src="/api/adjuntos/${a.id}"
+      <img class="adj-img-thumb" src="/api/adjuntos/${a.id}/thumb"
            onclick="window.open('/api/adjuntos/${a.id}','_blank')"
            title="${a.nombre}" alt="${a.nombre}">
       <button class="adj-img-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
