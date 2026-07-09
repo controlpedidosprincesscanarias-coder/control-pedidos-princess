@@ -1,3 +1,16 @@
+# v12.2.0 — 9 julio 2026 (actualizado)
+
+📶 Añadida alerta automática de egress por Telegram
+
+Complementa el fix de reducción de egress de esta misma versión: ahora la app estima a diario cuánto egress lleva consumido en el ciclo de facturación actual de Supabase y avisa a los admins por Telegram si se acerca o supera el límite del plan Free.
+
+Novedades
+
+Nueva tabla egress_tracking: acumula por día los bytes de cada respuesta que sirve la app (hook interno, sin coste extra).
+Job diario a las 08:15 (hora Canarias): si el acumulado del ciclo actual (desde el día 23) supera el 80% del límite, envía Telegram a los admins con el % consumido. Aviso único al día.
+Nuevo botón "📶 Probar alerta egress" en el panel de Integridad, para forzar el aviso manualmente y confirmar que el canal funciona.
+Nota: es una estimación interna basada en lo que sirve la app, no el contador exacto de Supabase — para el dato oficial, revisar Supabase → Organization → Usage.
+
 # v12.2.0 — 8 julio 2026
 
 📉 Reducción de egress — caché de adjuntos + miniaturas de imágenes

@@ -396,6 +396,17 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS thumb_mime_type TEXT"
             )
+            # ── Alerta de egress a admins por Telegram (Jul 2026) ───────────
+            # Tabla de acumulado diario de bytes servidos por la app, usada
+            # para estimar cuánto egress llevamos consumido en el ciclo de
+            # facturación actual y avisar a los admins antes de volver a
+            # acercarnos al límite del plan Free de Supabase.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS egress_tracking (
+                    fecha  DATE PRIMARY KEY,
+                    bytes  BIGINT NOT NULL DEFAULT 0
+                )
+            """)
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -431,6 +442,32 @@ def close_db(e=None):
     db = g.pop("db", None)
     if db:
         db.close()
+
+@app.after_request
+def _track_egress(response):
+    """
+    Estimación interna de egress (Jul 2026) — acumula por día los bytes de
+    cada respuesta que sirve esta app. No es exactamente el mismo número
+    que el contador de Supabase (que también incluye overhead del propio
+    protocolo Postgres, conexiones, etc.), pero al ser esta app el origen
+    de prácticamente todo el tráfico del proyecto, sirve como aviso
+    temprano fiable de la tendencia día a día. Nunca debe romper una
+    respuesta real: cualquier fallo aquí se ignora en silencio.
+    """
+    try:
+        nbytes = response.content_length
+        if nbytes:
+            execute(
+                """INSERT INTO egress_tracking (fecha, bytes)
+                   VALUES ((NOW() AT TIME ZONE 'Atlantic/Canary')::date, %s)
+                   ON CONFLICT (fecha) DO UPDATE
+                   SET bytes = egress_tracking.bytes + EXCLUDED.bytes""",
+                (nbytes,)
+            )
+            get_db().commit()
+    except Exception as e:
+        log.debug(f"[EGRESS_TRACK] No se pudo registrar: {e}")
+    return response
 
 def init_db():
     """Ejecuta el esquema inicial en PostgreSQL. Llamar solo una vez."""
@@ -7273,6 +7310,107 @@ def _validar_integridad_operativa() -> dict:
     }
 
 
+# ── Alerta de egress a admins por Telegram (Jul 2026) ────────────────────────
+EGRESS_LIMITE_GB          = 5.0   # cuota del plan Free de Supabase (egress sin caché)
+EGRESS_UMBRAL_AVISO_PCT   = 80    # avisar al llegar a este % del límite
+EGRESS_CICLO_DIA_INICIO   = 23    # el ciclo de facturación de Supabase renueva el día 23 de cada mes
+
+
+def _egress_ciclo_actual_inicio() -> "_date":
+    """Fecha de inicio del ciclo de facturación actual de Supabase (día 23)."""
+    hoy = _date.today()
+    if hoy.day >= EGRESS_CICLO_DIA_INICIO:
+        return hoy.replace(day=EGRESS_CICLO_DIA_INICIO)
+    # Aún no llegamos al día 23 de este mes → el ciclo empezó el 23 del mes anterior
+    mes_ant = hoy.month - 1 or 12
+    anio_ant = hoy.year - 1 if hoy.month == 1 else hoy.year
+    return hoy.replace(year=anio_ant, month=mes_ant, day=EGRESS_CICLO_DIA_INICIO)
+
+
+def _egress_bytes_ciclo_actual() -> int:
+    inicio = _egress_ciclo_actual_inicio()
+    row = query(
+        "SELECT COALESCE(SUM(bytes),0) as total FROM egress_tracking WHERE fecha >= %s",
+        (inicio,), one=True
+    )
+    return int(row["total"]) if row else 0
+
+
+def _ya_alertado_egress_hoy() -> bool:
+    row = query(
+        """SELECT COUNT(*) as n FROM whatsapp_log
+           WHERE pedido_id IS NULL AND tipo='egress_alerta'
+             AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
+                 (NOW() AT TIME ZONE 'Atlantic/Canary')::date""",
+        one=True
+    )
+    return (row["n"] if row else 0) > 0
+
+
+def _job_alerta_egress(force: bool = False):
+    """
+    Job diario (08:15 hora Canarias): estima el egress consumido en el ciclo
+    de facturación actual de Supabase (según lo que ha servido esta app) y
+    avisa por Telegram a los admins si se acerca o supera el límite del plan
+    Free. Máximo un aviso al día. Si force=True, avisa siempre (para probar
+    el canal desde el botón de admin), aunque no se haya superado el umbral.
+    """
+    with app.app_context():
+        _job_alerta_egress_inner(force)
+
+
+def _job_alerta_egress_inner(force: bool = False):
+    log.info("▶ [EGRESS] Inicio job alerta de egress — %s", _date.today())
+    if not force and _ya_alertado_egress_hoy():
+        log.info("[EGRESS] Ya se avisó hoy — se omite.")
+        return
+
+    total_bytes = _egress_bytes_ciclo_actual()
+    total_gb = total_bytes / (1024 ** 3)
+    limite_gb = EGRESS_LIMITE_GB
+    pct = (total_gb / limite_gb * 100) if limite_gb else 0
+    inicio = _egress_ciclo_actual_inicio()
+
+    if not force and pct < EGRESS_UMBRAL_AVISO_PCT:
+        log.info("[EGRESS] %.2f GB / %.1f GB (%.0f%%) — por debajo del umbral, no se avisa.",
+                  total_gb, limite_gb, pct)
+        return
+
+    admins = _get_admins_telegram()
+    if not admins:
+        log.warning("[EGRESS] Umbral superado pero no hay admins con Telegram configurado.")
+        return
+
+    estado = "🔴 *LÍMITE SUPERADO*" if pct >= 100 else "🟠 *Acercándose al límite*"
+    texto = (
+        f"{estado} — Egress Supabase (control-pedidos-princess)\n\n"
+        f"Estimación interna desde el {inicio.strftime('%d/%m/%Y')}: "
+        f"*{total_gb:.2f} GB* de {limite_gb:.0f} GB ({pct:.0f}%)\n\n"
+        f"_Nota: esta cifra es una estimación basada en lo que sirve la app; "
+        f"puede no coincidir exactamente con el contador de Supabase, que "
+        f"también incluye tráfico interno del proyecto._\n\n"
+        f"Revisa Supabase → Organization → Usage para el dato oficial. "
+        f"El ciclo actual renueva el día {EGRESS_CICLO_DIA_INICIO}."
+    )
+    for adm in admins:
+        chat_id = adm.get("telegram_chat_id")
+        if chat_id:
+            res = _send_telegram(chat_id, texto)
+            log.info("[EGRESS] -> %s: %s", adm.get("username", "admin"), res)
+
+    # Registrar el aviso para no repetirlo hoy (reutiliza whatsapp_log,
+    # igual que el resto de dedupes de notificaciones de la app).
+    try:
+        execute(
+            "INSERT INTO whatsapp_log (pedido_id, tipo, destinatario, mensaje, enviado) "
+            "VALUES (NULL, 'egress_alerta', 'admins', %s, 1)",
+            (texto,)
+        )
+        get_db().commit()
+    except Exception as e:
+        log.error("[EGRESS] Error registrando dedupe: %s", e)
+
+
 def _job_health_check(force: bool = False):
     """
     Job diario (07:05 hora Canarias): valida integridad operativa y envía
@@ -7433,12 +7571,24 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=300,
     )
+    # Job de alerta de egress Supabase: una vez al día a las 08:15 hora Canarias
+    scheduler.add_job(
+        _job_alerta_egress,
+        trigger="cron",
+        hour="8",
+        minute="15",
+        second="0",
+        id="alerta_egress_diaria",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
     log.info("✅ Scheduler iniciado — alertas cada 60s en horario 07:00-16:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — techo URGENTE admins cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — alertas techo mensual diarias a las 08:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — familia/partida repetida cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
+    log.info("✅ Scheduler — alerta de egress Supabase diaria a las 08:15 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
@@ -7631,6 +7781,22 @@ def test_health_check():
     t.start()
     log.info("▶ [MANUAL] Job health-check lanzado manualmente por admin")
     return jsonify({"ok": True, "mensaje": "Health check ejecutándose — revisa Telegram en unos segundos."})
+
+
+@app.route("/api/admin/test-egress", methods=["POST"])
+@admin_required
+def test_egress_alerta():
+    """
+    Fuerza el job de alerta de egress inmediatamente (mismo que corre a las
+    08:15), ignorando el umbral y la deduplicación diaria — sirve para
+    confirmar que el canal de Telegram funciona.
+    POST /api/admin/test-egress
+    """
+    import threading
+    t = threading.Thread(target=lambda: _job_alerta_egress(force=True), daemon=True)
+    t.start()
+    log.info("▶ [MANUAL] Job alerta-egress lanzado manualmente por admin")
+    return jsonify({"ok": True, "mensaje": "Alerta de egress ejecutándose — revisa Telegram en unos segundos."})
 
 
 # ── RESTAURACIÓN DE BACKUP ────────────────────────────────────────────────────

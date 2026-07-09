@@ -1367,6 +1367,7 @@ tbody tr:last-child{border-bottom:none}
             <span id="integridad-estado-badge" style="display:none;font-size:12px;font-weight:700;padding:3px 10px;border-radius:12px"></span>
             <button onclick="loadIntegridad()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Actualizar</button>
             <button onclick="testHealthCheck()" style="padding:5px 14px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#8B0000;color:#fff">📤 Enviar Telegram admin</button>
+            <button onclick="testEgressAlerta()" style="padding:5px 14px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a5276;color:#fff">📶 Probar alerta egress</button>
           </div>
           <div id="integridad-loading" style="text-align:center;padding:32px;color:var(--text-secondary)">Analizando sistema…</div>
           <div id="integridad-content" style="display:none;padding:12px 0">
@@ -5822,6 +5823,12 @@ async function testHealthCheck() {
   const res = await api('/api/admin/test-health', 'POST');
   if (res && res.ok) showToast(res.mensaje || 'Health check ejecutándose — revisa Telegram.', 'success');
   else showToast('Error al ejecutar health check', 'error');
+}
+
+async function testEgressAlerta() {
+  const res = await api('/api/admin/test-egress', 'POST');
+  if (res && res.ok) showToast(res.mensaje || 'Alerta de egress ejecutándose — revisa Telegram.', 'success');
+  else showToast('Error al ejecutar la alerta de egress', 'error');
 }
 
 async function loadUsuarios() {

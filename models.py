@@ -222,6 +222,12 @@ SQL_STATEMENTS = [
         ('ANIMACION'), ('ADMINISTRACION'), ('DIRECCION'), ('RRHH')
     ON CONFLICT DO NOTHING
     """,
+    """
+    CREATE TABLE IF NOT EXISTS egress_tracking (
+        fecha  DATE PRIMARY KEY,
+        bytes  BIGINT NOT NULL DEFAULT 0
+    )
+    """,
 ]
 # Los usuarios se crean y gestionan exclusivamente desde el panel de administración.
 # No hay usuarios predefinidos en el código. Para el primer arranque usa seed_admin.py.
