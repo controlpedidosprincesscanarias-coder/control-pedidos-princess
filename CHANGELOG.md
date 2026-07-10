@@ -1,4 +1,9 @@
-# v12.2.2 — 10 julio 2026 (actualizado)
+# v12.2.4 — 10 julio 2026 (actualizado)
+
+Resumen de este último cambio:
+
+Bug encontrado: dos temporizadores de comprobación de versión corriendo en paralelo desde que se abre la app (uno cada 30s durante 15 min, otro cada 60s desde el principio) — coincidían cada minuto y duplicaban la llamada a /api/version. El impacto en bytes es pequeño (27 bytes por llamada), pero es una duplicación real de tráfico innecesaria, y con varios ordenadores de oficina abiertos a la vez, suma.
+Arreglado: el temporizador de 60s ahora solo arranca cuando termina la fase rápida de 15 minutos — nunca hay dos activos simultáneamente.
 
 📶 Añadida alerta automática de egress por Telegram
 

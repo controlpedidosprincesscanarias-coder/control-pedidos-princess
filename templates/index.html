@@ -1094,7 +1094,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.2.2
+          V 12.2.4
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -7514,14 +7514,22 @@ function _startVersionPolling() {
 
   // Durante los primeros 15 minutos, poll cada 30 s para capturar
   // despliegues recientes en Render antes de que pase el primer minuto.
+  //
+  // FIX (Jul 2026): antes este timer "rápido" y el normal de 60s se
+  // ejecutaban en PARALELO desde el primer instante, así que cada minuto
+  // ambos coincidían y `/api/version` se llamaba dos veces seguidas
+  // (se veía en los logs de Render como pares de peticiones con el
+  // mismo timestamp). Ahora el timer de 60s no arranca hasta que el
+  // rápido termina — nunca hay dos activos al mismo tiempo.
   let fastPollCount = 0;
   const fastTimer = setInterval(function() {
     fastPollCount++;
-    if (fastPollCount >= 30) { clearInterval(fastTimer); return; } // 30x30s = 15 min
     _pollVersion();
+    if (fastPollCount >= 30) {                     // 30x30s = 15 min
+      clearInterval(fastTimer);
+      _versionPollTimer = setInterval(_pollVersion, INTERVAL_MS);
+    }
   }, 30 * 1000);
-
-  _versionPollTimer = setInterval(_pollVersion, INTERVAL_MS);
 }
 
 async function _pollVersion() {
