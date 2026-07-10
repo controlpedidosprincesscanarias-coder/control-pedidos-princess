@@ -1,4 +1,4 @@
-# v12.2.0 — 9 julio 2026 (actualizado)
+# v12.2.2 — 10 julio 2026 (actualizado)
 
 📶 Añadida alerta automática de egress por Telegram
 

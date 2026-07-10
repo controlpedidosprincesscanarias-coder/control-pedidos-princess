@@ -7362,8 +7362,9 @@ def _ya_alertado_egress_hoy() -> bool:
 
 def _job_alerta_egress(force: bool = False):
     """
-    Job diario (08:15 hora Canarias): estima el egress consumido en el ciclo
-    de facturación actual de Supabase (según lo que ha servido esta app) y
+    Job diario (20:30 hora Canarias, al final de la jornada): estima el
+    egress consumido en el ciclo de facturación actual de Supabase (según
+    lo que ha servido esta app) y
     avisa por Telegram a los admins si se acerca o supera el límite del plan
     Free. Máximo un aviso al día. Si force=True, avisa siempre (para probar
     el canal desde el botón de admin), aunque no se haya superado el umbral.
@@ -7584,12 +7585,18 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=300,
     )
-    # Job de alerta de egress Supabase: una vez al día a las 08:15 hora Canarias
+    # Job de alerta de egress Supabase: una vez al día a las 20:30 hora
+    # Canarias — deliberadamente al FINAL de la jornada (el horario de
+    # oficina llega hasta las 16:59), no a primera hora, para que la
+    # comprobación del acumulado ya incluya todo el tráfico generado ese
+    # día. Comprobarlo a las 08:15 (como estaba antes) evaluaba el umbral
+    # justo cuando el día apenas había empezado, con lo que un cruce del
+    # 80% a media tarde no se habría avisado hasta el día siguiente.
     scheduler.add_job(
         _job_alerta_egress,
         trigger="cron",
-        hour="8",
-        minute="15",
+        hour="20",
+        minute="30",
         second="0",
         id="alerta_egress_diaria",
         replace_existing=True,
@@ -7601,7 +7608,7 @@ def _iniciar_scheduler():
     log.info("✅ Scheduler — alertas techo mensual diarias a las 08:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — familia/partida repetida cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
-    log.info("✅ Scheduler — alerta de egress Supabase diaria a las 08:15 (Atlantic/Canary)")
+    log.info("✅ Scheduler — alerta de egress Supabase diaria a las 20:30 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
@@ -7801,7 +7808,7 @@ def test_health_check():
 def test_egress_alerta():
     """
     Fuerza el job de alerta de egress inmediatamente (mismo que corre a las
-    08:15), ignorando el umbral y la deduplicación diaria — sirve para
+    20:30), ignorando el umbral y la deduplicación diaria — sirve para
     confirmar que el canal de Telegram funciona.
     POST /api/admin/test-egress
     """
