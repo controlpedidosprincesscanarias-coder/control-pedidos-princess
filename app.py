@@ -7065,8 +7065,14 @@ def download_adjunto_thumb(aid):
     motivo no se puede generar (formato no soportado), se cae de vuelta a
     servir la imagen original — nunca se rompe la vista para el usuario.
     """
+    # Paso 1: consulta ligera — NO trae la columna `datos` (imagen original,
+    # hasta 2MB). Antes se traía siempre, aunque la miniatura ya existiera,
+    # lo cual generaba tráfico innecesario entre Render y Supabase en CADA
+    # vista (esto cuenta como egress de base de datos, aparte del tráfico
+    # HTTP hacia el navegador, y era la causa real de que el egress
+    # siguiera alto pese a que las miniaturas sí se estaban sirviendo).
     row = query(
-        "SELECT nombre, mime_type, datos, datos_thumb, thumb_mime_type "
+        "SELECT nombre, mime_type, datos_thumb, thumb_mime_type "
         "FROM pedido_adjuntos WHERE id=%s",
         (aid,), one=True
     )
@@ -7082,18 +7088,24 @@ def download_adjunto_thumb(aid):
 
     if thumb_bytes is None:
         # Backfill perezoso — imagen subida antes de existir esta columna.
-        thumb_bytes, thumb_mime = _generar_thumbnail(bytes(row["datos"]), row["mime_type"])
+        # Solo aquí (la primera vez que se pide esta imagen concreta) se
+        # trae la columna `datos` completa; en peticiones posteriores el
+        # SELECT de arriba ya la evita por completo.
+        original = query(
+            "SELECT datos, mime_type FROM pedido_adjuntos WHERE id=%s",
+            (aid,), one=True
+        )
+        thumb_bytes, thumb_mime = _generar_thumbnail(bytes(original["datos"]), original["mime_type"])
         if thumb_bytes is not None:
             execute(
                 "UPDATE pedido_adjuntos SET datos_thumb=%s, thumb_mime_type=%s WHERE id=%s",
                 (psycopg2.Binary(thumb_bytes), thumb_mime, aid)
             )
             get_db().commit()
-
-    if thumb_bytes is None:
-        # No se pudo generar miniatura (formato no soportado por Pillow):
-        # servimos la original tal cual para no dejar la vista rota.
-        thumb_bytes, thumb_mime = bytes(row["datos"]), row["mime_type"]
+        else:
+            # No se pudo generar miniatura (formato no soportado por Pillow):
+            # servimos la original tal cual para no dejar la vista rota.
+            thumb_bytes, thumb_mime = bytes(original["datos"]), original["mime_type"]
 
     resp = Response(
         bytes(thumb_bytes),
