@@ -7056,6 +7056,7 @@ def download_adjunto(aid):
 @app.route("/api/adjuntos/<int:aid>/thumb", methods=["GET"])
 @login_required
 def download_adjunto_thumb(aid):
+    from flask import Response
     """Sirve una miniatura reducida de un adjunto de tipo imagen_articulo.
 
     Si la miniatura ya está generada (subidas posteriores a Jul 2026), se
