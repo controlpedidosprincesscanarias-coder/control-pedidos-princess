@@ -34,6 +34,7 @@ def _auto_migrate():
         db = psycopg2.connect(
             DATABASE_URL, cursor_factory=RealDictCursor,
             connect_timeout=20,
+            application_name="control_pedidos_web_migracion",
         )
         db.autocommit = True
         with db.cursor() as cur:
@@ -407,6 +408,27 @@ def _auto_migrate():
                     bytes  BIGINT NOT NULL DEFAULT 0
                 )
             """)
+            # ── Seguridad de sesión: caducidad diaria + verificación por
+            # email tras varios días de inactividad (Jul 2026) ─────────────
+            # Los usuarios suelen dejar la app abierta todo el día en el
+            # ordenador de la oficina, así que la sesión de Flask nunca
+            # llegaba a expirar de forma natural. Ahora se obliga a volver
+            # a introducir la contraseña cada vez que cambia el día, y si
+            # han pasado varios días sin actividad, además se exige un
+            # código enviado al email antes de completar el login.
+            cur.execute(
+                "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultimo_login TIMESTAMPTZ"
+            )
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS login_verification_codes (
+                    id          SERIAL PRIMARY KEY,
+                    usuario_id  INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                    codigo      TEXT NOT NULL,
+                    expira_en   TIMESTAMPTZ NOT NULL,
+                    usado       INTEGER NOT NULL DEFAULT 0,
+                    creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -433,6 +455,11 @@ def get_db():
             keepalives_idle=30,
             keepalives_interval=10,
             keepalives_count=3,
+            # Identifica esta conexión en pg_stat_activity / Postgres Logs de
+            # Supabase, para poder distinguirla de un vistazo de cualquier
+            # otro proceso que se conecte a la misma base de datos (ej.
+            # restore_agent.py, que usa su propio application_name).
+            application_name="control_pedidos_web",
         )
         g.db.autocommit = False
     return g.db
@@ -654,11 +681,22 @@ def _telegram_bloque_entregas(resumen: dict, estado_nuevo: str) -> list:
 
 # ── Autenticación ──────────────────────────────────────────────────────────────
 
+def _hoy_canarias():
+    import pytz
+    return datetime.now(pytz.timezone("Atlantic/Canary")).date()
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
         if "user_id" not in session:
             return jsonify({"error": "No autenticado"}), 401
+        # Caducidad diaria: si la sesión se creó un día distinto de hoy
+        # (hora Canarias), se invalida y se obliga a volver a iniciar
+        # sesión — evita que una pestaña olvidada abierta en la oficina
+        # se quede autenticada indefinidamente.
+        if session.get("login_date") != _hoy_canarias().isoformat():
+            session.clear()
+            return jsonify({"error": "Tu sesión ha caducado, vuelve a iniciar sesión", "sesion_caducada": True}), 401
         return f(*args, **kwargs)
     return decorated
 
@@ -667,6 +705,9 @@ def admin_required(f):
     def decorated(*args, **kwargs):
         if "user_id" not in session:
             return jsonify({"error": "No autenticado"}), 401
+        if session.get("login_date") != _hoy_canarias().isoformat():
+            session.clear()
+            return jsonify({"error": "Tu sesión ha caducado, vuelve a iniciar sesión", "sesion_caducada": True}), 401
         if session.get("rol") != "admin":
             return jsonify({"error": "Solo administradores"}), 403
         return f(*args, **kwargs)
@@ -3298,6 +3339,8 @@ def static_files(filename):
 
 # ── API Auth ───────────────────────────────────────────────────────────────────
 
+DIAS_VERIFICACION_EMAIL = 3  # a partir de cuántos días sin login se exige código por email
+
 @app.route("/api/login", methods=["POST"])
 def login():
     body     = request.get_json(silent=True) or {}
@@ -3311,19 +3354,107 @@ def login():
     if not user:
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
+    # ── Verificación por email tras varios días de inactividad ──────────────
+    # No afecta al uso diario normal (la sesión ya caduca cada día y exige
+    # contraseña de nuevo); esto es una capa extra solo para el caso de
+    # cuentas que llevan tiempo sin usarse (vacaciones, bajas, etc.).
+    import pytz
+    dias_inactivo = None
+    if user.get("ultimo_login"):
+        dias_inactivo = (_hoy_canarias() - user["ultimo_login"].astimezone(
+            pytz.timezone("Atlantic/Canary")).date()).days
+
+    requiere_verificacion = (dias_inactivo is None) or (dias_inactivo >= DIAS_VERIFICACION_EMAIL)
+
+    if requiere_verificacion and user.get("email"):
+        import secrets
+        codigo = f"{secrets.randbelow(1_000_000):06d}"
+        expira = datetime.utcnow() + timedelta(minutes=10)
+        db = get_db()
+        execute("UPDATE login_verification_codes SET usado=1 WHERE usuario_id=%s AND usado=0", (user["id"],))
+        execute(
+            "INSERT INTO login_verification_codes (usuario_id, codigo, expira_en) VALUES (%s,%s,%s)",
+            (user["id"], codigo, expira)
+        )
+        db.commit()
+        log.info("LOGIN — verificación por email requerida para '%s' (código no logueado)", username)
+
+        subject = "Código de verificación – Control de Pedidos"
+        mensaje = (
+            f"Hola {user['nombre']},\n\n"
+            f"Detectamos que hace tiempo que no accedes a Control de Pedidos. "
+            f"Por seguridad, confirma que eres tú introduciendo este código:\n\n"
+            f"    {codigo}\n\n"
+            f"Válido durante 10 minutos.\n"
+            f"Si no has sido tú, ignora este mensaje y avisa al administrador.\n\n"
+            f"Control de Pedidos · Princess Canarias"
+        )
+        return jsonify({
+            "ok": True,
+            "requiere_verificacion": True,
+            "username": user["username"],
+            "email":    user.get("email", ""),
+            "nombre":   user.get("nombre", user.get("username", "")),
+            "subject":  subject,
+            "message":  mensaje,
+        })
+
+    if requiere_verificacion and not user.get("email"):
+        # Sin email registrado no podemos verificar — dejamos entrar
+        # directamente para no bloquear al usuario, pero queda logueado.
+        log.warning("LOGIN — '%s' requeriría verificación por email pero no tiene email registrado", username)
+
+    return _completar_login(user)
+
+
+def _completar_login(user):
+    """Fija la sesión y actualiza ultimo_login. Compartido entre el login
+    normal y la confirmación de código de verificación."""
+    hoy = _hoy_canarias()
     session.clear()
-    session["user_id"]  = user["id"]
-    session["username"] = user["username"]
-    session["nombre"]   = user["nombre"]
-    session["rol"]      = user["rol"]
-    # Para usuario hotel: cargar sus hoteles asignados
+    session["user_id"]    = user["id"]
+    session["username"]   = user["username"]
+    session["nombre"]     = user["nombre"]
+    session["rol"]        = user["rol"]
+    session["login_date"] = hoy.isoformat()
     hoteles_ids = []
     if user["rol"] == "hotel":
         rows = query("SELECT hotel_id FROM usuario_hoteles WHERE usuario_id=%s", (user["id"],))
         hoteles_ids = [r["hotel_id"] for r in rows]
     session["hoteles_ids"] = hoteles_ids
+
+    db = get_db()
+    execute("UPDATE usuarios SET ultimo_login=NOW() WHERE id=%s", (user["id"],))
+    db.commit()
+
     return jsonify({"ok": True, "id": user["id"], "username": user["username"],
                     "nombre": user["nombre"], "rol": user["rol"], "hoteles_ids": hoteles_ids})
+
+
+@app.route("/api/login/verificar-codigo", methods=["POST"])
+def verificar_codigo_login():
+    body     = request.get_json(silent=True) or {}
+    username = body.get("username", "").strip().lower()
+    codigo   = (body.get("codigo") or "").strip()
+
+    user = query("SELECT * FROM usuarios WHERE username=%s AND activo=1", (username,), one=True)
+    if not user:
+        return jsonify({"error": "Usuario no válido"}), 401
+
+    row = query(
+        """SELECT * FROM login_verification_codes
+           WHERE usuario_id=%s AND codigo=%s AND usado=0 AND expira_en > NOW()
+           ORDER BY id DESC LIMIT 1""",
+        (user["id"], codigo), one=True
+    )
+    if not row:
+        return jsonify({"error": "Código incorrecto o caducado"}), 401
+
+    db = get_db()
+    execute("UPDATE login_verification_codes SET usado=1 WHERE id=%s", (row["id"],))
+    db.commit()
+
+    return _completar_login(user)
 
 @app.route("/api/logout", methods=["POST"])
 def logout():
@@ -4201,6 +4332,9 @@ def admin_borrar_solicitud(sol_id):
 def me():
     if "user_id" not in session:
         return jsonify({"logged": False})
+    if session.get("login_date") != _hoy_canarias().isoformat():
+        session.clear()
+        return jsonify({"logged": False, "sesion_caducada": True})
     return jsonify({"logged": True, "id": session["user_id"], "username": session["username"],
                     "nombre": session["nombre"], "rol": session["rol"],
                     "hoteles_ids": session.get("hoteles_ids", [])})

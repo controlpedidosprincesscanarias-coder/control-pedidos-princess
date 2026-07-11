@@ -23,7 +23,8 @@ if not DATABASE_URL:
 
 print("🔌 Conectando a la base de datos...")
 try:
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor,
+                             application_name="control_pedidos_web_init")
     conn.autocommit = False
 except Exception as e:
     print(f"❌ No se pudo conectar: {e}")

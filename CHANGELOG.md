@@ -1,3 +1,16 @@
+# v12.2.5 — 11 julio 2026
+
+🔐 Seguridad de sesión: caducidad diaria + verificación por email
+
+Los usuarios suelen dejar la aplicación abierta todo el día en el ordenador de la oficina, así que la sesión nunca llegaba a expirar de forma natural.
+
+Novedades
+
+La sesión ahora caduca automáticamente al cambiar de día (hora Canarias): la primera acción del día siguiente pide contraseña de nuevo, aunque la pestaña llevara abierta desde el día anterior.
+Si han pasado 3 días o más desde el último login de una cuenta, además de la contraseña se exige un código de 6 dígitos enviado al email registrado del usuario, válido 10 minutos. El uso diario normal no se ve afectado por este paso adicional.
+Nueva tabla login_verification_codes y columna usuarios.ultimo_login.
+Si un usuario no tiene email registrado, este paso se omite automáticamente para no bloquearlo.
+
 # v12.2.4 — 10 julio 2026 (actualizado)
 
 Resumen de este último cambio:
