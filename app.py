@@ -1157,7 +1157,8 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
 
     Parámetros:
         usuario   – username del destinatario (igual que en la tabla usuarios)
-        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'supervision'
+        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'supervision' |
+                    'solicitud_acceso' | 'egress' | 'health_check'
         titulo    – línea resumen (se mostrará como título del popup)
         mensaje   – cuerpo completo del aviso
         nivel     – 'aviso' | 'urgente'
@@ -7564,11 +7565,25 @@ def _job_alerta_egress_inner(force: bool = False):
         f"Revisa Supabase → Organization → Usage para el dato oficial. "
         f"El ciclo actual renueva el día {EGRESS_CICLO_DIA_INICIO}."
     )
+    nivel_egress = "urgente" if pct >= 100 else "aviso"
+    icono_egress = "🔴" if pct >= 100 else "🟠"
+
     for adm in admins:
-        chat_id = adm.get("telegram_chat_id")
+        username = adm.get("username", "admin")
+        chat_id  = adm.get("telegram_chat_id")
         if chat_id:
             res = _send_telegram(chat_id, texto)
-            log.info("[EGRESS] -> %s: %s", adm.get("username", "admin"), res)
+            log.info("[EGRESS] -> %s: %s", username, res)
+        # ── Encolar en bridge agenda para que el admin también lo vea como
+        #    popup en main_agenda (paridad total con Telegram) ──────────────
+        _encolar_bridge_notificacion(
+            usuario=username,
+            tipo="egress",
+            titulo=f"{icono_egress} Egress Supabase — {pct:.0f}% del límite",
+            mensaje=texto.replace("*", "").replace("_", ""),
+            nivel=nivel_egress,
+            pedido_id=None,
+        )
 
     # Registrar el aviso para no repetirlo hoy (reutiliza whatsapp_log,
     # igual que el resto de dedupes de notificaciones de la app).
@@ -7602,12 +7617,23 @@ def _job_health_check_inner(force: bool = False):
     # El campo telegram_chat_id se gestiona exclusivamente desde el panel de administración.
     admins_bd = _get_admins_telegram()
 
-    def _enviar_a_admins(texto_msg):
+    def _enviar_a_admins(texto_msg, titulo_bridge=None, nivel_bridge="aviso"):
         for adm in admins_bd:
+            username = adm["username"]
             res = _send_telegram(adm["telegram_chat_id"], texto_msg)
             log.info("[HEALTH] Telegram → %s (%s): %s",
-                     adm["username"], adm["telegram_chat_id"],
+                     username, adm["telegram_chat_id"],
                      "OK" if res.get("ok") else res.get("error"))
+            # ── Encolar en bridge agenda para que el admin también lo vea
+            #    como popup en main_agenda (paridad total con Telegram) ──────
+            _encolar_bridge_notificacion(
+                usuario=username,
+                tipo="health_check",
+                titulo=titulo_bridge or "🚨 ALERTA DE CONFIGURACIÓN — Control Pedidos",
+                mensaje=texto_msg.replace("*", ""),
+                nivel=nivel_bridge,
+                pedido_id=None,
+            )
 
     if resultado.get("ok"):
         log.info("✅ [HEALTH] Integridad OK — sin problemas detectados")
@@ -7616,7 +7642,9 @@ def _job_health_check_inner(force: bool = False):
                 "✅ *Control Pedidos — Integridad OK*\n\n"
                 f"Sistema en buen estado — ningún problema detectado.\n"
                 f"🏨 Hoteles activos: {resultado['resumen']['total_hoteles_activos']}\n"
-                f"🛒 Compradores activos: {resultado['resumen']['total_compradores']}"
+                f"🛒 Compradores activos: {resultado['resumen']['total_compradores']}",
+                titulo_bridge="✅ Control Pedidos — Integridad OK",
+                nivel_bridge="aviso",
             )
         elif force:
             log.warning("[HEALTH] Sin admins con Telegram configurado — no se envió confirmación")
@@ -7663,7 +7691,11 @@ def _job_health_check_inner(force: bool = False):
 
     # Enviar a todos los admins con Telegram configurado
     if admins_bd:
-        _enviar_a_admins(texto)
+        _enviar_a_admins(
+            texto,
+            titulo_bridge="🚨 ALERTA DE CONFIGURACIÓN — Control Pedidos",
+            nivel_bridge="urgente",
+        )
     else:
         log.warning("[HEALTH] Sin admins con Telegram configurado — alerta solo en log")
 
