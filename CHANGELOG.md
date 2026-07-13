@@ -1,4 +1,16 @@
-# v12.2.5 — 11 julio 2026
+# v12.2.6 — 13 julio 2026
+
+🔔 Paridad Telegram ↔ popups de main_agenda + login dedicado para el bridge
+
+Auditoría completa de los 12 puntos donde la app envía Telegram, para garantizar que main_agenda recibe el mismo aviso como popup, solo para el usuario correspondiente según su rol y sus pedidos.
+
+Novedades
+
+Corregido: los avisos rutinarios a compradores (nivel "aviso") ya no se replicaban también en la Agenda de todos los admins — ahora los admins solo reciben popup para solicitudes de acceso y eventos marcados como urgentes, igual que en el resto de la app.
+Nueva ruta /api/bridge/login: login dedicado para cuentas de servicio (como el bridge de main_agenda) que se salta el paso de verificación por email tras varios días de inactividad — imprescindible porque ese proceso corre desatendido y nunca podría introducir el código. Las credenciales validadas son las mismas de siempre.
+Confirmado tras la auditoría: el resto de los 10 puntos que envían Telegram ya encolaban correctamente el popup equivalente para el destinatario exacto (comprador, hotel o admin, según corresponda).
+
+# v12.2.5 — 10 julio 2026
 
 🔐 Seguridad de sesión: caducidad diaria + verificación por email
 

@@ -1258,29 +1258,17 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
             pedido_id=pid_pedido,
         )
 
-    # ── Encolar en bridge agenda para ADMINS (paridad total con compradores) ─────
-    # Los admins reciben en su Agenda exactamente los mismos avisos que el comprador,
-    # independientemente del nivel (aviso o urgente), para poder supervisar el estado
-    # real de los pedidos sin depender únicamente del polling de 15 min.
-    for adm in _get_admins_telegram():
-        adm_username = adm.get("username", "admin")
-        _encolar_bridge_notificacion(
-            usuario=adm_username,
-            tipo="supervision",
-            titulo=titulo_bridge,
-            mensaje=texto.replace("*", ""),
-            nivel=nivel,
-            pedido_id=pid_pedido,
-        )
-
-    # ── Copia Telegram de supervisión a admins (solo alertas urgentes) ───────────
-    # El Telegram de supervisión solo se envía para urgentes (evitar saturación).
-    # El aviso en Agenda ya lo cubre el bloque anterior para todos los niveles.
+    # ── Encolar en bridge agenda para ADMINS — SOLO eventos urgentes ─────────
+    # Los admins solo deben recibir popup en su Agenda para: solicitudes de
+    # acceso y eventos marcados como urgentes (misma regla que el resto de
+    # notificaciones de la app — ver TIPOS_SUPERVISION_ADMIN). Los avisos de
+    # nivel normal del comprador NO se replican al admin, para no saturar su
+    # Agenda con el día a día rutinario de cada comprador.
     _enviar_supervision_admins(
         texto, nivel,
         titulo_bridge=titulo_bridge,
         pedido_id_bridge=pid_pedido,
-    )  # nivel="urgente" → copia Telegram; "aviso" → omite Telegram (Agenda ya encolada arriba)
+    )  # nivel="urgente" → copia Telegram + Agenda; "aviso" → se omite (ver TIPOS_SUPERVISION_ADMIN)
 
     return resultados
 
@@ -3453,6 +3441,42 @@ def verificar_codigo_login():
     db = get_db()
     execute("UPDATE login_verification_codes SET usado=1 WHERE id=%s", (row["id"],))
     db.commit()
+
+    return _completar_login(user)
+
+
+@app.route("/api/bridge/login", methods=["POST"])
+def bridge_login():
+    """
+    Login específico para el bridge de main_agenda (cuenta de servicio en
+    segundo plano, sin ninguna persona delante de la pantalla en el momento
+    exacto de conectar).
+
+    Usa las mismas credenciales que /api/login (usuario/contraseña reales
+    de la tabla `usuarios` — NO hay debilitamiento de la autenticación en
+    sí), pero se salta a propósito el paso de verificación por email tras
+    varios días de inactividad: ese paso pide un código de un solo uso que
+    nadie va a poder introducir en un proceso desatendido, así que sin este
+    endpoint separado el bridge quedaría atrapado en un bucle de login
+    fallido cada vez que le tocara esa verificación (algo que iba a pasar
+    con toda seguridad, dado que el bridge sondea automáticamente día a
+    día sin depender de que nadie escriba la contraseña a mano).
+
+    La caducidad diaria de sesión SÍ se aplica igual que a cualquier otra
+    cuenta — el bridge ya vuelve a llamar a este endpoint solo, de forma
+    automática, en cuanto recibe un 401 (ver _get() en pedidos_agenda_bridge.py),
+    así que no hace falta ninguna excepción para eso.
+    """
+    body     = request.get_json(silent=True) or {}
+    username = body.get("username", "").strip().lower()
+    password = body.get("password", "").strip()
+
+    user = query(
+        "SELECT * FROM usuarios WHERE username=%s AND password=%s AND activo=1",
+        (username, password), one=True
+    )
+    if not user:
+        return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
     return _completar_login(user)
 
