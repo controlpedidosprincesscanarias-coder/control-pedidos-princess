@@ -877,18 +877,18 @@ tbody tr:last-child{border-bottom:none}
       <div style="font-size:52px;margin-bottom:16px;">📬</div>
       <h3 style="margin:0 0 10px;color:#c9a84c;font-size:17px;">¡Solicitud recibida!</h3>
       <p style="color:rgba(255,255,255,.6);font-size:14px;line-height:1.6;margin:0 0 20px;">
-        Los administradores han recibido tu solicitud y la están revisando.<br>
-        <strong style="color:rgba(255,255,255,.85);">Recibirás un correo electrónico</strong>
-        con un archivo que deberás ejecutar para completar el proceso.
+        Tu solicitud ha sido registrada.<br>
+        <strong style="color:rgba(255,255,255,.85);">En unos segundos recibirás un correo electrónico</strong>
+        con un enlace que deberás abrir para completar el proceso.
       </p>
       <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.25);
                   border-radius:8px;padding:14px 16px;font-size:13px;
                   color:rgba(255,255,255,.7);text-align:left;margin-bottom:20px;line-height:1.9;">
         <strong style="color:#c9a84c;">¿Qué pasará a continuación?</strong><br>
-        1️⃣ &nbsp;El admin revisará tu solicitud.<br>
-        2️⃣ &nbsp;Recibirás un email con un archivo <code style="color:#c9a84c;">.bat</code> adjunto.<br>
-        3️⃣ &nbsp;Ejecuta el archivo con doble clic (tarda 2 segundos).<br>
-        4️⃣ &nbsp;Tu usuario Windows se detecta automáticamente.<br>
+        1️⃣ &nbsp;Recibirás un email con un enlace de verificación.<br>
+        2️⃣ &nbsp;Descarga y ejecuta el archivo <code style="color:#c9a84c;">.bat</code> (doble clic).<br>
+        3️⃣ &nbsp;Tu usuario Windows se detecta automáticamente.<br>
+        4️⃣ &nbsp;Confirma la verificación desde esta misma app.<br>
         5️⃣ &nbsp;El admin crea tu cuenta y podrás entrar al sistema.
       </div>
       <button class="login-btn" onclick="cerrarSolicitudUsuario()" style="width:100%;">
@@ -1123,7 +1123,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.3.0
+          V 12.3.2
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2564,16 +2564,25 @@ async function sol_enviarFase1(btn) {
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
   try {
     const r = await api('/api/solicitar-usuario', 'POST', { nombre, apellidos, email, movil, hoteles });
-    if (r.sin_email && r.destinatarios && r.destinatarios.length) {
-      try {
-        for (const dest of r.destinatarios) {
+    // Envía, vía EmailJS, todos los correos que el backend preparó: el de
+    // Fase 2 al propio usuario (automático) y el aviso informativo a los
+    // admins. Se intentan todos aunque alguno falle.
+    const gruposEmail = r.emails && r.emails.length
+      ? r.emails
+      : (r.sin_email && r.destinatarios && r.destinatarios.length
+          ? [{ destinatarios: r.destinatarios, asunto: r.asunto, body_text: r.body_text, reply_to: r.reply_to }]
+          : []);
+    for (const grupo of gruposEmail) {
+      if (!grupo.destinatarios || !grupo.destinatarios.length) continue;
+      for (const dest of grupo.destinatarios) {
+        try {
           await emailjs.send(
             typeof EMAILJS_SERVICE_ID !== 'undefined' ? EMAILJS_SERVICE_ID : '',
             typeof EMAILJS_TEMPLATE_ID !== 'undefined' ? EMAILJS_TEMPLATE_ID : '',
-            { to_email: dest, subject: r.asunto, message: r.body_text }
+            { to_email: dest, subject: grupo.asunto, message: grupo.body_text, reply_to: grupo.reply_to || '' }
           );
-        }
-      } catch(e) { console.warn('[SOL_F1] EmailJS fallback falló', e); }
+        } catch(e) { console.warn('[SOL_F1] EmailJS fallback falló', dest, e); }
+      }
     }
     _sol_resetPaneles();
     document.getElementById('sol-panel-fase1-ok').style.display = '';
@@ -2778,7 +2787,7 @@ function _adminSolBotones(r) {
     ${btnBorrar}
   </div>`;
   return `<div style="display:flex;gap:6px;flex-wrap:wrap;">
-    <button class="btn btn-gold btn-sm" onclick="adminEnviarFase2(${r.id})" title="Envía email con enlace al usuario">📧 Enviar Fase 2</button>
+    <button class="btn btn-gold btn-sm" onclick="adminEnviarFase2(${r.id})" title="El email de Fase 2 ya se envió automáticamente; usa esto solo si el usuario no lo recibió o el enlace caducó">🔁 Reenviar Fase 2</button>
     <button class="btn btn-ghost btn-sm" onclick="adminDescargarBat(${r.id})" title="Descargar el .bat manualmente">💾 Descargar .bat</button>
     <button class="btn btn-danger btn-sm" onclick="adminRechazarSolicitud(${r.id})" title="Rechazar solicitud">✕</button>
     ${btnBorrar}
@@ -2796,7 +2805,7 @@ async function adminBorrarSolicitud(solId) {
 }
 
 async function adminEnviarFase2(solId) {
-  if (!confirm('¿Enviar el email de Fase 2 al usuario? Se generará un enlace seguro con caducidad de 72 horas.')) return;
+  if (!confirm('El email de Fase 2 ya se envió automáticamente al usuario.\n\n¿Reenviarlo? Se generará un nuevo enlace con caducidad de 72 horas (el anterior quedará invalidado).')) return;
   try {
     const r = await api(`/api/admin/solicitudes-acceso/${solId}/enviar-fase2`, 'POST');
 

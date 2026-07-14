@@ -3681,8 +3681,10 @@ def detectar_usuario_windows():
 def solicitar_usuario_fase1():
     """
     FASE 1 — El usuario rellena nombre, apellidos, email y hotel(es).
-    Se guarda la solicitud con estado 'fase1_pendiente' y se notifica
-    a los admins. No se requiere usuario Windows todavía.
+    Se guarda la solicitud, se genera el token de verificación y se pasa
+    directo a 'fase2_pendiente': el email de Fase 2 se envía al usuario de
+    forma automática (ver _construir_email_fase2), sin intervención del
+    admin. Los admins solo reciben un aviso informativo (Telegram + email).
     """
     import re as _re
 
@@ -3709,16 +3711,27 @@ def solicitar_usuario_fase1():
     nombre_completo = f"{nombre} {apellidos}"
     ip_cliente = request.remote_addr or ""
 
+    # Desde v12.4: se genera el token de verificación y se pasa directo a
+    # 'fase2_pendiente' en el mismo alta, para que el email de Fase 2 se
+    # envíe automáticamente sin que el admin tenga que intervenir.
+    import secrets as _sec
+    token     = _sec.token_urlsafe(32)
+    expira_en = datetime.utcnow() + timedelta(hours=72)
+
     db = get_db()
     with db.cursor() as cur:
         cur.execute("""
             INSERT INTO solicitudes_acceso
-                (nombre, apellidos, email, hoteles, movil, estado, ip_solicitante)
-            VALUES (%s, %s, %s, %s, %s, 'fase1_pendiente', %s)
+                (nombre, apellidos, email, hoteles, movil, estado, ip_solicitante,
+                 token, token_expira)
+            VALUES (%s, %s, %s, %s, %s, 'fase2_pendiente', %s, %s, %s)
             RETURNING id
-        """, (nombre, apellidos, email_sol, hoteles, movil_sol, ip_cliente))
+        """, (nombre, apellidos, email_sol, hoteles, movil_sol, ip_cliente, token, expira_en))
         sol_id = cur.fetchone()["id"]
     db.commit()
+
+    sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
+    email_fase2 = _construir_email_fase2(sol)
 
     app_url   = os.environ.get("APP_URL", "").rstrip("/")
     url_admin = f"{app_url}/admin/solicitudes#{sol_id}" if app_url else ""
@@ -3738,10 +3751,11 @@ def solicitar_usuario_fase1():
       </div>
       <div style="padding:24px 28px;">
         <p style="margin:0 0 16px;font-size:14px;color:#333;">
-          Se ha recibido una nueva solicitud. El usuario
-          <strong>aún no ha verificado su usuario Windows</strong>.
-          Revisad los datos y, si son correctos, usad el panel de administración
-          para enviarle el archivo de verificación (Fase 2).
+          Se ha recibido una nueva solicitud. El sistema ya le ha enviado
+          automáticamente al usuario el email con el archivo de verificación
+          (Fase 2) — <strong>no requiere ninguna acción por vuestra parte</strong>.
+          En cuanto complete la verificación, recibiréis un segundo aviso
+          para crear la cuenta.
         </p>
         <table border="0" cellpadding="0" cellspacing="0"
                style="width:100%;font-size:14px;border-collapse:collapse;">
@@ -3768,7 +3782,7 @@ def solicitar_usuario_fase1():
             <td style="padding:10px 0;font-family:monospace;">#{sol_id}</td>
           </tr>
         </table>
-        {f'<div style="margin-top:24px;text-align:center;"><a href="{url_admin}" style="display:inline-block;padding:12px 28px;background:#c9a84c;color:#0f2044;border-radius:7px;text-decoration:none;font-weight:700;font-size:14px;">➜ Ver solicitud y enviar Fase 2</a></div>' if url_admin else ''}
+        {f'<div style="margin-top:24px;text-align:center;"><a href="{url_admin}" style="display:inline-block;padding:12px 28px;background:#c9a84c;color:#0f2044;border-radius:7px;text-decoration:none;font-weight:700;font-size:14px;">➜ Ver solicitud</a></div>' if url_admin else ''}
       </div>
       <div style="padding:14px 28px;background:#f0f0f0;font-size:11px;color:#aaa;">
         Mensaje automático · Control Pedidos Princess Canarias
@@ -3785,33 +3799,44 @@ def solicitar_usuario_fase1():
         f"Hotel(es)     : {hoteles}\n"
         f"ID solicitud  : #{sol_id}\n"
         f"{'='*44}\n"
-        f"Accede al panel de administración para revisar y enviar el archivo de verificación (Fase 2)."
+        f"El email de verificación (Fase 2) ya se ha enviado automáticamente al usuario. "
+        f"No se requiere ninguna acción — se os avisará cuando complete la verificación."
     )
 
-    destinatarios = _get_solo_admin_emails()
-
-    if not destinatarios:
-        log.warning("[SOL_FASE1] Sin emails admin. Sol #%s", sol_id)
-        return jsonify({"ok": True, "sol_id": sol_id,
-                        "msg": "Solicitud registrada (sin email de admin configurado)"})
+    destinatarios_admin = _get_solo_admin_emails()
 
     # Telegram SIEMPRE, antes de devolver la respuesta al frontend
     _notify_solicitud_telegram(
-        f"\U0001F514 *[FASE 1] Nueva solicitud de acceso*\n\n"
+        f"\U0001F514 *[Nueva solicitud de acceso]*\n\n"
         f"\U0001F464 *{nombre} {apellidos}*\n"
         f"\U0001F4E7 {email_sol}\n"
         f"\U0001F3E8 {hoteles}\n"
         f"\U0001F4CB Solicitud `#{sol_id}`\n\n"
-        f"Accede al panel para enviarle el archivo de verificaci\u00f3n (Fase 2)."
+        f"Email de verificaci\u00f3n (Fase 2) enviado autom\u00e1ticamente. Sin acci\u00f3n pendiente."
         + (f"\n\U0001F517 {url_admin}" if url_admin else "")
     )
 
-    # Email via EmailJS en el frontend (sin_email=True siempre)
+    # Correos a enviar desde el frontend vía EmailJS: primero el de Fase 2
+    # al propio usuario (automático), y luego el aviso a los admins
+    # (informativo, sin botones de acción).
+    emails = [{
+        "destinatarios": email_fase2["destinatarios"],
+        "asunto":        email_fase2["asunto"],
+        "body_text":     email_fase2["body_text"],
+    }]
+    if destinatarios_admin:
+        emails.append({
+            "destinatarios": destinatarios_admin,
+            "asunto":        asunto,
+            "body_text":     body_text,
+            "reply_to":      email_sol,
+        })
+    else:
+        log.warning("[SOL_FASE1] Sin emails admin configurados. Sol #%s", sol_id)
+
     return jsonify({
         "ok": True, "sol_id": sol_id, "sin_email": True,
-        "destinatarios": destinatarios,
-        "asunto": asunto, "body_text": body_text,
-        "reply_to": email_sol,
+        "emails": emails,
     })
 
 
@@ -3847,21 +3872,27 @@ def admin_generar_bat(sol_id):
     sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
     if not sol:
         return jsonify({"error": "Solicitud no encontrada"}), 404
-    if sol["estado"] not in ("fase1_pendiente",):
-        return jsonify({"error": f"La solicitud ya está en estado '{sol['estado']}'"}), 409
+    if sol["estado"] not in ("fase1_pendiente", "fase2_pendiente"):
+        return jsonify({"error": f"La solicitud ya está en estado '{sol['estado']}' — no se puede regenerar el .bat."}), 409
 
-    import secrets as _sec
-    token     = _sec.token_urlsafe(32)
-    expira_en = datetime.utcnow() + timedelta(hours=72)
-
-    db = get_db()
-    with db.cursor() as cur:
-        cur.execute("""
-            UPDATE solicitudes_acceso
-            SET token=%(token)s, token_expira=%(expira)s, estado='fase2_pendiente'
-            WHERE id=%(id)s
-        """, {"token": token, "expira": expira_en, "id": sol_id})
-    db.commit()
+    # Reutiliza el token vigente si ya existe (p.ej. el que se envió
+    # automáticamente en Fase 1) para no invalidar el email ya enviado al
+    # usuario. Solo se genera uno nuevo si no hay token o si ha caducado.
+    token_vigente = sol.get("token") and sol.get("token_expira") and sol["token_expira"] > datetime.utcnow()
+    if token_vigente:
+        token, expira_en = sol["token"], sol["token_expira"]
+    else:
+        import secrets as _sec
+        token     = _sec.token_urlsafe(32)
+        expira_en = datetime.utcnow() + timedelta(hours=72)
+        db = get_db()
+        with db.cursor() as cur:
+            cur.execute("""
+                UPDATE solicitudes_acceso
+                SET token=%(token)s, token_expira=%(expira)s, estado='fase2_pendiente'
+                WHERE id=%(id)s
+            """, {"token": token, "expira": expira_en, "id": sol_id})
+        db.commit()
 
     app_url  = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
     nombre_c = f"{sol['nombre']} {sol['apellidos']}"
@@ -3895,36 +3926,11 @@ def admin_generar_bat(sol_id):
     )
 
 
-# ─── ADMIN: enviar Fase 2 por email al usuario ────────────────────────────────
+# ─── Construcción del email de Fase 2 (verificación) ──────────────────────────
+# Reutilizado tanto por el envío automático (Fase 1) como por el reenvío
+# manual desde el panel de admin. Requiere que `sol` ya tenga token asignado.
 
-@app.route("/api/admin/solicitudes-acceso/<int:sol_id>/enviar-fase2", methods=["POST"])
-def admin_enviar_fase2(sol_id):
-    """
-    Genera el token si no existe, y envía al usuario un email con
-    instrucciones + enlace para completar la Fase 2.
-    """
-    if session.get("rol") != "admin":
-        return jsonify({"error": "Sin permisos"}), 403
-
-    sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
-    if not sol:
-        return jsonify({"error": "Solicitud no encontrada"}), 404
-
-    # Generar token si no tiene aún
-    if not sol["token"]:
-        import secrets as _sec
-        token     = _sec.token_urlsafe(32)
-        expira_en = datetime.utcnow() + timedelta(hours=72)
-        db = get_db()
-        with db.cursor() as cur:
-            cur.execute("""
-                UPDATE solicitudes_acceso
-                SET token=%(t)s, token_expira=%(e)s, estado='fase2_pendiente'
-                WHERE id=%(id)s
-            """, {"t": token, "e": expira_en, "id": sol_id})
-        db.commit()
-        sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
-
+def _construir_email_fase2(sol: dict) -> dict:
     app_url   = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
     url_token = f"{app_url}/?token={sol['token']}"
     nombre_c  = f"{sol['nombre']} {sol['apellidos']}"
@@ -3998,16 +4004,61 @@ def admin_enviar_fase2(sol_id):
         f"El enlace caduca en 72 horas.\n\nControl Pedidos Princess Canarias"
     )
 
-    # El envío real lo hace el frontend vía EmailJS
-    log.info("[SOL_FASE2] Email pendiente de envío vía EmailJS a %s", sol["email"])
-    return jsonify({
-        "ok":           True,
-        "sin_email":    True,
+    return {
         "destinatarios": [sol["email"]],
-        "asunto":       asunto,
-        "body_html":    body_html,
-        "body_text":    body_text,
-        "url_token":    url_token,
+        "asunto":        asunto,
+        "body_html":     body_html,
+        "body_text":     body_text,
+        "url_token":     url_token,
+    }
+
+
+# ─── ADMIN: reenviar Fase 2 por email al usuario (fallback manual) ────────────
+# Desde v12.4 el email de Fase 2 se envía automáticamente al terminar la
+# Fase 1 (ver solicitar_usuario_fase1). Este endpoint queda como reenvío
+# manual por si el envío automático falla o el enlace caducó.
+
+@app.route("/api/admin/solicitudes-acceso/<int:sol_id>/enviar-fase2", methods=["POST"])
+def admin_enviar_fase2(sol_id):
+    """
+    Regenera el token (refrescando la caducidad de 72h) y devuelve el
+    email de Fase 2 para que el frontend lo reenvíe al usuario vía EmailJS.
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Sin permisos"}), 403
+
+    sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
+    if not sol:
+        return jsonify({"error": "Solicitud no encontrada"}), 404
+    if sol["estado"] not in ("fase1_pendiente", "fase2_pendiente"):
+        return jsonify({"error": f"La solicitud ya está en estado '{sol['estado']}' — no se puede reenviar."}), 409
+
+    # Siempre se regenera el token al reenviar manualmente, para refrescar
+    # la caducidad de 72h (por ejemplo si el enlace original había expirado).
+    import secrets as _sec
+    token     = _sec.token_urlsafe(32)
+    expira_en = datetime.utcnow() + timedelta(hours=72)
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute("""
+            UPDATE solicitudes_acceso
+            SET token=%(t)s, token_expira=%(e)s, estado='fase2_pendiente'
+            WHERE id=%(id)s
+        """, {"t": token, "e": expira_en, "id": sol_id})
+    db.commit()
+    sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
+
+    email_fase2 = _construir_email_fase2(sol)
+    log.info("[SOL_FASE2] Reenvío manual pendiente de EmailJS a %s", sol["email"])
+
+    return jsonify({
+        "ok":            True,
+        "sin_email":     True,
+        "destinatarios": email_fase2["destinatarios"],
+        "asunto":        email_fase2["asunto"],
+        "body_html":     email_fase2["body_html"],
+        "body_text":     email_fase2["body_text"],
+        "url_token":     email_fase2["url_token"],
     })
 
 

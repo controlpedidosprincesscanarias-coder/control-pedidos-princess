@@ -1,3 +1,17 @@
+# v12.3.2 — 14 julio 2026
+
+⚡ Solicitud de acceso: Fase 2 automática, sin intervención del admin
+
+Hasta ahora el flujo de alta de usuario requería que un admin recibiera el email de Fase 1 y pulsase manualmente "Enviar Fase 2" para que el usuario recibiera el enlace/.bat de verificación. Ahora, en cuanto el usuario envía el formulario de Fase 1, el backend genera el token de verificación y dispara automáticamente el email de Fase 2 al propio usuario — el admin ya no tiene que hacer nada en este paso.
+
+Cambios:
+- `/api/solicitar-usuario` (Fase 1) genera el token, guarda la solicitud directamente en estado `fase2_pendiente` y devuelve, junto al aviso informativo para los admins, el email de Fase 2 listo para que el frontend lo envíe al usuario vía EmailJS en el mismo golpe.
+- El aviso a los admins (Telegram + email) pasa a ser puramente informativo: ya no incluye ninguna acción pendiente.
+- `/api/admin/solicitudes-acceso/<id>/enviar-fase2` y `/generar-bat` se conservan como reenvío/regeneración manual (p.ej. si el email automático falla o el enlace caduca) — el botón del panel de admin pasa a llamarse "🔁 Reenviar Fase 2". `generar-bat` reutiliza el token vigente en vez de invalidarlo si ya se envió uno válido.
+- Se extrajo la construcción del email de Fase 2 a `_construir_email_fase2()`, reutilizada tanto en el envío automático como en el reenvío manual.
+
+El resto del flujo no cambia: el usuario recibe el email, ejecuta el .bat (o el enlace), completa la Fase 2, y el admin aprueba y crea la cuenta como hasta ahora.
+
 # v12.3.0 — 14 julio 2026
 
 🔐 Fix: código de verificación por email invalidado antes de poder usarse
