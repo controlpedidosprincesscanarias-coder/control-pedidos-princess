@@ -1,3 +1,26 @@
+# v12.3.6 — 14 julio 2026
+
+📊 Egress: estimación más fiel + aviso automático movido a las 08:00
+
+Hasta ahora `egress_tracking` (y por tanto el aviso automático de Telegram/bridge) solo contaba los bytes que Flask reenvía al navegador. Eso subestimaba mucho el egress real que factura Supabase: por ejemplo, un adjunto ya cacheado en el navegador responde 304 (0 bytes hacia el usuario), pero la fila con el archivo completo se seguía leyendo de Postgres para comparar el ETag — tráfico real, invisible para nuestra propia cifra.
+
+Cambios:
+- `query()` (punto único por el que pasan todos los `SELECT` de la app) ahora estima el tamaño de cada fila leída y lo acumula en el contexto de la petición o job en curso (`_track_db_bytes`, `_tam_fila`, `_tam_valor`).
+- `_track_egress()` (hook `after_request`) suma esos bytes de lectura de Postgres a los bytes de respuesta HTTP antes de guardar el total del día.
+- Los 6 jobs en segundo plano (alertas diarias, familia repetida, techo urgente admins, techo mensual, alerta de egress, health check) llaman a `_flush_egress_bytes()` al terminar, para que sus propias lecturas de Postgres —que no pasan por `_track_egress`, al no haber respuesta HTTP— también queden registradas.
+- `_job_alerta_egress` (aviso por Telegram + popup bridge si se acerca/supera el umbral del plan Free) pasa de ejecutarse a las 20:30 a las **08:00 hora Canaria**, al principio de la jornada de oficina. Nota: esto reintroduce el desfase que la versión anterior evitaba deliberadamente — un cruce del umbral a media tarde no se avisará hasta la mañana siguiente.
+
+Sigue sin cubrir Auth, Storage, Realtime ni Log Drains (esta app no usa Supabase Storage; todo se guarda como `bytea` en Postgres), pero para el patrón de uso real de esta app la cifra ahora debería acercarse mucho más al contador oficial de Supabase que antes.
+
+# v12.3.5 — 14 julio 2026
+
+📉 Fix: `/api/adjuntos/<id>` seguía descargando el adjunto completo desde Supabase aunque el navegador ya lo tuviera en caché (304)
+
+El fix anterior de egress (v12.x, cabeceras `Cache-Control`/`ETag`) evitaba que el navegador volviera a *pedir* el archivo, pero la consulta SQL que trae la columna `datos` (el adjunto completo, hasta 2MB) seguía ejecutándose ANTES de comprobar el `If-None-Match`. Resultado: cada apertura de un pedido con adjuntos, aunque terminara en un 304 sin cuerpo hacia el navegador, ya había hecho que la app descargara el archivo entero desde Postgres — egress de base de datos invisible tanto para el usuario como para el contador interno `egress_tracking` (que solo mide bytes de respuesta HTTP salientes, no el tráfico Postgres↔app).
+
+Cambio:
+- `download_adjunto()`: el `ETag` se comprueba primero con una consulta ligera (`SELECT id`, sin `datos`); solo si hace falta servir el contenido real se ejecuta la consulta completa.
+
 # v12.3.4 — 14 julio 2026
 
 🔔 Fix: popups de Integridad y Egress no llegaban a main_agenda (solo Telegram)

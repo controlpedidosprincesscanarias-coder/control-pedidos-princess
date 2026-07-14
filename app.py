@@ -474,15 +474,19 @@ def close_db(e=None):
 def _track_egress(response):
     """
     Estimación interna de egress (Jul 2026) — acumula por día los bytes de
-    cada respuesta que sirve esta app. No es exactamente el mismo número
-    que el contador de Supabase (que también incluye overhead del propio
-    protocolo Postgres, conexiones, etc.), pero al ser esta app el origen
-    de prácticamente todo el tráfico del proyecto, sirve como aviso
-    temprano fiable de la tendencia día a día. Nunca debe romper una
-    respuesta real: cualquier fallo aquí se ignora en silencio.
+    cada respuesta que sirve esta app, MÁS los bytes leídos de Postgres en
+    las consultas de esta misma petición (ver _track_db_bytes / query()),
+    que es la parte que antes quedaba invisible en casos como un adjunto
+    servido con 304 (cuerpo vacío hacia el navegador, pero lectura completa
+    desde Supabase para comparar el ETag). No es exactamente el mismo
+    número que el contador de Supabase (que también incluye overhead del
+    propio protocolo Postgres, Auth, Storage, Realtime, etc.), pero al ser
+    esta app el origen de prácticamente todo el tráfico del proyecto, sirve
+    como aviso temprano fiable de la tendencia día a día. Nunca debe romper
+    una respuesta real: cualquier fallo aquí se ignora en silencio.
     """
     try:
-        nbytes = response.content_length
+        nbytes = (response.content_length or 0) + g.get("egress_db_bytes", 0)
         if nbytes:
             execute(
                 """INSERT INTO egress_tracking (fecha, bytes)
@@ -520,6 +524,7 @@ def query(sql, args=(), one=False):
     with get_db().cursor() as cur:
         cur.execute(sql, args)
         rv = cur.fetchall()
+    _track_db_bytes(sum(_tam_fila(r) for r in rv))
     return (rv[0] if rv else None) if one else rv
 
 def execute(sql, args=()):
@@ -527,6 +532,65 @@ def execute(sql, args=()):
     cur = get_db().cursor()
     cur.execute(sql, args)
     return cur
+
+# ── Estimación de egress — tamaño de lo leído de Postgres (Jul 2026) ──────────
+# `_track_egress` (más abajo) solo veía los bytes que Flask reenvía al
+# navegador. Eso deja fuera casos reales de egress facturado por Supabase:
+# p.ej. un adjunto ya cacheado en el navegador responde 304 (0 bytes al
+# usuario), pero la fila con el archivo completo igualmente se leyó de
+# Postgres para poder comparar el ETag — ese tráfico sí lo cobra Supabase y
+# antes era completamente invisible para nuestra propia estimación.
+# Instrumentamos `query()` (punto único por el que pasan todos los SELECT
+# de la app) para sumar el tamaño aproximado de cada fila leída, acumulado
+# en `g` durante la petición o el job en curso.
+def _tam_valor(v) -> int:
+    """Tamaño aproximado en bytes de un valor de columna."""
+    if v is None:
+        return 0
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return len(v)
+    if isinstance(v, str):
+        return len(v.encode("utf-8", errors="ignore"))
+    try:
+        return len(str(v).encode("utf-8", errors="ignore"))
+    except Exception:
+        return 0
+
+def _tam_fila(row) -> int:
+    try:
+        return sum(_tam_valor(v) for v in row.values())
+    except Exception:
+        return 0
+
+def _track_db_bytes(nbytes: int):
+    """Acumula bytes leídos de Postgres en el contexto actual (request HTTP
+    o job en background — ambos corren dentro de un app_context, donde `g`
+    vive y se resetea solo al terminar cada uno)."""
+    if not nbytes:
+        return
+    try:
+        g.egress_db_bytes = g.get("egress_db_bytes", 0) + nbytes
+    except Exception:
+        pass
+
+def _flush_egress_bytes():
+    """Registra en egress_tracking los bytes de Postgres acumulados durante
+    un job en segundo plano. Los jobs no pasan por `_track_egress` (no hay
+    respuesta HTTP), así que cada job debe llamar a esto explícitamente al
+    terminar, dentro de su propio app_context."""
+    try:
+        nbytes = g.get("egress_db_bytes", 0)
+        if nbytes:
+            execute(
+                """INSERT INTO egress_tracking (fecha, bytes)
+                   VALUES ((NOW() AT TIME ZONE 'Atlantic/Canary')::date, %s)
+                   ON CONFLICT (fecha) DO UPDATE
+                   SET bytes = egress_tracking.bytes + EXCLUDED.bytes""",
+                (nbytes,)
+            )
+            get_db().commit()
+    except Exception as e:
+        log.debug(f"[EGRESS_TRACK] No se pudo registrar (job): {e}")
 
 def row_to_dict(row):
     return dict(row) if row else None
@@ -1836,8 +1900,7 @@ def _job_alertas_diarias():
     """
     with app.app_context():
         _job_alertas_diarias_inner()
-
-def _job_alertas_diarias_inner():
+        _flush_egress_bytes()
     log.info("▶ [SCHEDULER] Inicio job alertas diarias — %s", _date.today())
     try:
         alertas_raw = rows_to_list(query(
@@ -2049,6 +2112,7 @@ def _job_familia_repetida() -> None:
     """
     with app.app_context():
         _job_familia_repetida_inner()
+        _flush_egress_bytes()
 
 
 def _job_familia_repetida_inner() -> None:
@@ -2354,6 +2418,7 @@ def _job_techo_urgente_admins() -> None:
     """
     with app.app_context():
         _job_techo_urgente_admins_inner()
+        _flush_egress_bytes()
 
 
 def _job_techo_urgente_admins_inner() -> None:
@@ -2569,6 +2634,7 @@ def _job_alertas_techo_mensual() -> None:
     """
     with app.app_context():
         _job_alertas_techo_mensual_inner()
+        _flush_egress_bytes()
 
 
 def _job_alertas_techo_mensual_inner() -> None:
@@ -7304,6 +7370,27 @@ def upload_adjunto(pid):
 @login_required
 def download_adjunto(aid):
     from flask import Response
+
+    # ── Fix egress (Jul 2026, parte 2) ──────────────────────────────────
+    # Un adjunto es inmutable una vez subido (no hay ruta de edición, solo
+    # alta con id nuevo o borrado), así que puede cachearse indefinidamente
+    # sin riesgo de servir contenido obsoleto. El fix anterior añadió estas
+    # cabeceras de caché, pero la consulta que trae `datos` (el archivo
+    # completo, hasta 2MB) se seguía ejecutando ANTES de comprobar el ETag
+    # — es decir, aunque el navegador ya tuviera el adjunto en caché y la
+    # respuesta final fuera un 304 sin cuerpo, la app ya había descargado
+    # el archivo entero desde Supabase. Eso consume egress de base de datos
+    # de forma invisible para el navegador y para cualquier métrica de
+    # bytes de respuesta HTTP. Comprobamos el ETag primero, con una
+    # consulta ligera que NO trae `datos`, y solo si hace falta servir el
+    # contenido de verdad hacemos la consulta pesada.
+    etag = f'"{aid}"'
+    if request.headers.get("If-None-Match") == etag:
+        existe = query("SELECT id FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
+        if existe:
+            return Response(status=304)
+        # Si no existe (fue borrado), seguimos abajo para devolver el 404 real.
+
     row = query("SELECT nombre, mime_type, datos, es_correo FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
     if not row:
         return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
@@ -7311,17 +7398,6 @@ def download_adjunto(aid):
     # los abra con el gestor de correo predeterminado.
     # El resto (PDF, imagenes, Word) se sirven inline para previsualizacion.
     disposition = "attachment" if row["es_correo"] else "inline"
-
-    # ── Fix egress — cabeceras de caché (Jul 2026) ──────────────────────
-    # Un adjunto es inmutable una vez subido (no hay ruta de edición, solo
-    # alta con id nuevo o borrado), así que puede cachearse indefinidamente
-    # sin riesgo de servir contenido obsoleto. Sin estas cabeceras el
-    # navegador re-descargaba el fichero completo cada vez que se abría
-    # un pedido (renderAdjuntosImg/Fecha regenera el <img>/<a> en cada
-    # carga), disparando el egress mensual del proyecto.
-    etag = f'"{aid}"'
-    if request.headers.get("If-None-Match") == etag:
-        return Response(status=304)
 
     resp = Response(
         bytes(row["datos"]),
@@ -7642,15 +7718,22 @@ def _ya_alertado_egress_hoy() -> bool:
 
 def _job_alerta_egress(force: bool = False):
     """
-    Job diario (20:30 hora Canarias, al final de la jornada): estima el
+    Job diario (08:00 hora Canarias, al principio de la jornada): estima el
     egress consumido en el ciclo de facturación actual de Supabase (según
     lo que ha servido esta app) y
     avisa por Telegram a los admins si se acerca o supera el límite del plan
     Free. Máximo un aviso al día. Si force=True, avisa siempre (para probar
     el canal desde el botón de admin), aunque no se haya superado el umbral.
+
+    Nota (Jul 2026): al ejecutarse a primera hora, la cifra refleja lo
+    acumulado HASTA AYER — si el umbral se cruza a media tarde, el aviso no
+    llega hasta la mañana siguiente. Se prioriza así para que el admin
+    empiece el día con el dato claro, a costa de perder el aviso "al
+    instante" que daba la ejecución de las 20:30 (versión anterior).
     """
     with app.app_context():
         _job_alerta_egress_inner(force)
+        _flush_egress_bytes()
 
 
 def _job_alerta_egress_inner(force: bool = False):
@@ -7729,6 +7812,7 @@ def _job_health_check(force: bool = False):
     """
     with app.app_context():
         _job_health_check_inner(force)
+        _flush_egress_bytes()
 
 def _job_health_check_inner(force: bool = False):
     log.info("▶ [HEALTH] Inicio job integridad operativa — %s", _date.today())
@@ -7896,18 +7980,19 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=300,
     )
-    # Job de alerta de egress Supabase: una vez al día a las 20:30 hora
-    # Canarias — deliberadamente al FINAL de la jornada (el horario de
-    # oficina llega hasta las 16:59), no a primera hora, para que la
-    # comprobación del acumulado ya incluya todo el tráfico generado ese
-    # día. Comprobarlo a las 08:15 (como estaba antes) evaluaba el umbral
-    # justo cuando el día apenas había empezado, con lo que un cruce del
-    # 80% a media tarde no se habría avisado hasta el día siguiente.
+    # Job de alerta de egress Supabase: una vez al día a las 08:00 hora
+    # Canarias, al principio de la jornada de oficina (07:00-16:59) — así
+    # el admin arranca el día con el dato claro. Antes se comprobaba a las
+    # 20:30 (final de jornada) precisamente para que el acumulado incluyera
+    # todo el tráfico generado ese mismo día; volver a las 08:00 reintroduce
+    # ese desfase (un cruce del 80% a media tarde no se avisará hasta la
+    # mañana siguiente), asumido deliberadamente para tener el aviso a
+    # primera hora en vez de a última.
     scheduler.add_job(
         _job_alerta_egress,
         trigger="cron",
-        hour="20",
-        minute="30",
+        hour="8",
+        minute="0",
         second="0",
         id="alerta_egress_diaria",
         replace_existing=True,
@@ -7919,7 +8004,7 @@ def _iniciar_scheduler():
     log.info("✅ Scheduler — alertas techo mensual diarias a las 08:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — familia/partida repetida cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
-    log.info("✅ Scheduler — alerta de egress Supabase diaria a las 20:30 (Atlantic/Canary)")
+    log.info("✅ Scheduler — alerta de egress Supabase diaria a las 08:00 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
@@ -8119,7 +8204,7 @@ def test_health_check():
 def test_egress_alerta():
     """
     Fuerza el job de alerta de egress inmediatamente (mismo que corre a las
-    20:30), ignorando el umbral y la deduplicación diaria — sirve para
+    08:00), ignorando el umbral y la deduplicación diaria — sirve para
     confirmar que el canal de Telegram funciona.
     POST /api/admin/test-egress
     """
