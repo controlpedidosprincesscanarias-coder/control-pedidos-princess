@@ -1,3 +1,16 @@
+# v12.2.7 — 13 julio 2026
+
+📉 Reducción de egress — caché de index.html + logos como ficheros estáticos
+
+Tras el fix de adjuntos/miniaturas de v12.2.0, index.html seguía siendo el mayor origen de egress: se servía sin ninguna cabecera de caché, así que cada apertura de la app o refresco de pestaña descargaba el archivo entero (570 KB), de los cuales 151 KB eran dos logos incrustados en base64.
+
+Novedades
+
+`/` ahora responde con ETag (el mismo hash MD5 que ya usaba /api/version) y Cache-Control: no-cache — el navegador revalida con una petición condicional ligera y solo descarga el archivo completo si de verdad cambió tras un despliegue.
+Los dos logos (login y sidebar) se extrajeron de base64 a ficheros reales en /static/ (logo-login.jpg, logo-sidebar.png), reduciendo index.html de 570 KB a 419 KB.
+Nueva cabecera Cache-Control (7 días) en la ruta /static/<filename>, que antes no tenía ninguna.
+Nota: uno de los dos logos estaba etiquetado como image/png en el data URI original pero sus bytes reales eran JPEG — se corrigió la extensión/mime al extraerlo (logo-login.jpg).
+
 # v12.2.6 — 13 julio 2026
 
 🔔 Paridad Telegram ↔ popups de main_agenda + login dedicado para el bridge

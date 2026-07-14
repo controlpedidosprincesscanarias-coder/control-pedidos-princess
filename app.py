@@ -12,7 +12,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import psycopg2
 from psycopg2.extras import RealDictCursor
 
-from flask import Flask, request, jsonify, send_from_directory, session, g
+from flask import Flask, request, jsonify, send_from_directory, session, g, Response
 from models import SQL_STATEMENTS, ESTADOS_VALIDOS, ESTADOS_EMAIL_PROVEEDOR, ESTADOS_EMAIL_INTERNO
 
 # ── Configuración ──────────────────────────────────────────────────────────────
@@ -1157,8 +1157,7 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
 
     Parámetros:
         usuario   – username del destinatario (igual que en la tabla usuarios)
-        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'supervision' |
-                    'solicitud_acceso' | 'egress' | 'health_check'
+        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'supervision'
         titulo    – línea resumen (se mostrará como título del popup)
         mensaje   – cuerpo completo del aviso
         nivel     – 'aviso' | 'urgente'
@@ -3288,9 +3287,43 @@ def _next_norden(db):
 
 # ── Rutas estáticas ────────────────────────────────────────────────────────────
 
+def _index_html_bytes_and_hash():
+    """
+    Lee templates/index.html una sola vez y devuelve (bytes, hash).
+    El hash es el mismo cálculo (MD5, 12 caracteres) que ya usaba
+    /api/version, así que ambos endpoints quedan siempre consistentes.
+    """
+    tpl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "index.html")
+    with open(tpl_path, "rb") as f:
+        content = f.read()
+    return content, hashlib.md5(content).hexdigest()[:12]
+
 @app.route("/")
 def index():
-    return send_from_directory("templates", "index.html")
+    """
+    ── Fix egress (Jul 2026) ──────────────────────────────────────────
+    index.html pesa varios cientos de KB y se servía sin ninguna cabecera
+    de caché: cada apertura de la app, cada refresco de pestaña y cada
+    comprobación del navegador volvía a descargar el archivo entero,
+    convirtiéndolo en el mayor origen de egress del proyecto.
+    Ahora se sirve con ETag (el mismo hash MD5 de /api/version) y
+    Cache-Control: no-cache, así que el navegador siempre revalida con
+    una petición condicional ligera (cabeceras, sin cuerpo) y solo
+    vuelve a descargar el archivo completo cuando de verdad cambió
+    tras un despliegue.
+    """
+    try:
+        content, version_hash = _index_html_bytes_and_hash()
+    except Exception:
+        return send_from_directory("templates", "index.html")
+
+    if request.headers.get("If-None-Match") == version_hash:
+        return Response(status=304)
+
+    resp = Response(content, mimetype="text/html")
+    resp.headers["Cache-Control"] = "no-cache"
+    resp.headers["ETag"] = version_hash
+    return resp
 
 @app.route("/api/version")
 def app_version():
@@ -3299,9 +3332,7 @@ def app_version():
     Cualquier cambio en el archivo, por pequeño que sea, produce un hash diferente.
     """
     try:
-        tpl_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "templates", "index.html")
-        with open(tpl_path, "rb") as f:
-            version_hash = hashlib.md5(f.read()).hexdigest()[:12]
+        _, version_hash = _index_html_bytes_and_hash()
     except Exception:
         version_hash = "unknown"
     return jsonify({"version": version_hash})
@@ -3324,7 +3355,15 @@ def app_changelog():
 
 @app.route("/static/<path:filename>")
 def static_files(filename):
-    return send_from_directory("static", filename)
+    """
+    ── Fix egress (Jul 2026) ──────────────────────────────────────────
+    Los ficheros de /static (logos, etc.) son estáticos y cambian solo
+    de forma manual junto con un despliegue. send_from_directory ya
+    gestiona automáticamente ETag/Last-Modified y responde 304 a
+    peticiones condicionales; con max_age además añadimos Cache-Control,
+    así el navegador ni siquiera necesita revalidar durante 7 días.
+    """
+    return send_from_directory("static", filename, max_age=604800)
 
 # ── API Auth ───────────────────────────────────────────────────────────────────
 
@@ -7565,25 +7604,11 @@ def _job_alerta_egress_inner(force: bool = False):
         f"Revisa Supabase → Organization → Usage para el dato oficial. "
         f"El ciclo actual renueva el día {EGRESS_CICLO_DIA_INICIO}."
     )
-    nivel_egress = "urgente" if pct >= 100 else "aviso"
-    icono_egress = "🔴" if pct >= 100 else "🟠"
-
     for adm in admins:
-        username = adm.get("username", "admin")
-        chat_id  = adm.get("telegram_chat_id")
+        chat_id = adm.get("telegram_chat_id")
         if chat_id:
             res = _send_telegram(chat_id, texto)
-            log.info("[EGRESS] -> %s: %s", username, res)
-        # ── Encolar en bridge agenda para que el admin también lo vea como
-        #    popup en main_agenda (paridad total con Telegram) ──────────────
-        _encolar_bridge_notificacion(
-            usuario=username,
-            tipo="egress",
-            titulo=f"{icono_egress} Egress Supabase — {pct:.0f}% del límite",
-            mensaje=texto.replace("*", "").replace("_", ""),
-            nivel=nivel_egress,
-            pedido_id=None,
-        )
+            log.info("[EGRESS] -> %s: %s", adm.get("username", "admin"), res)
 
     # Registrar el aviso para no repetirlo hoy (reutiliza whatsapp_log,
     # igual que el resto de dedupes de notificaciones de la app).
@@ -7617,23 +7642,12 @@ def _job_health_check_inner(force: bool = False):
     # El campo telegram_chat_id se gestiona exclusivamente desde el panel de administración.
     admins_bd = _get_admins_telegram()
 
-    def _enviar_a_admins(texto_msg, titulo_bridge=None, nivel_bridge="aviso"):
+    def _enviar_a_admins(texto_msg):
         for adm in admins_bd:
-            username = adm["username"]
             res = _send_telegram(adm["telegram_chat_id"], texto_msg)
             log.info("[HEALTH] Telegram → %s (%s): %s",
-                     username, adm["telegram_chat_id"],
+                     adm["username"], adm["telegram_chat_id"],
                      "OK" if res.get("ok") else res.get("error"))
-            # ── Encolar en bridge agenda para que el admin también lo vea
-            #    como popup en main_agenda (paridad total con Telegram) ──────
-            _encolar_bridge_notificacion(
-                usuario=username,
-                tipo="health_check",
-                titulo=titulo_bridge or "🚨 ALERTA DE CONFIGURACIÓN — Control Pedidos",
-                mensaje=texto_msg.replace("*", ""),
-                nivel=nivel_bridge,
-                pedido_id=None,
-            )
 
     if resultado.get("ok"):
         log.info("✅ [HEALTH] Integridad OK — sin problemas detectados")
@@ -7642,9 +7656,7 @@ def _job_health_check_inner(force: bool = False):
                 "✅ *Control Pedidos — Integridad OK*\n\n"
                 f"Sistema en buen estado — ningún problema detectado.\n"
                 f"🏨 Hoteles activos: {resultado['resumen']['total_hoteles_activos']}\n"
-                f"🛒 Compradores activos: {resultado['resumen']['total_compradores']}",
-                titulo_bridge="✅ Control Pedidos — Integridad OK",
-                nivel_bridge="aviso",
+                f"🛒 Compradores activos: {resultado['resumen']['total_compradores']}"
             )
         elif force:
             log.warning("[HEALTH] Sin admins con Telegram configurado — no se envió confirmación")
@@ -7691,11 +7703,7 @@ def _job_health_check_inner(force: bool = False):
 
     # Enviar a todos los admins con Telegram configurado
     if admins_bd:
-        _enviar_a_admins(
-            texto,
-            titulo_bridge="🚨 ALERTA DE CONFIGURACIÓN — Control Pedidos",
-            nivel_bridge="urgente",
-        )
+        _enviar_a_admins(texto)
     else:
         log.warning("[HEALTH] Sin admins con Telegram configurado — alerta solo en log")
 
