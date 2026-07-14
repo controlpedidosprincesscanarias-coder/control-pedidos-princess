@@ -1,4 +1,19 @@
-# v12.2.8 — 14 julio 2026
+# v12.3.0 — 14 julio 2026
+
+🔐 Fix: código de verificación por email invalidado antes de poder usarse
+
+Tras varios días sin acceder, algunos usuarios reportaban que el primer código de verificación recibido por email nunca funcionaba ("código incorrecto o caducado"), viéndose obligados siempre a pulsar "Reenviar código" para completar el login. El email llegaba correctamente y a tiempo — el problema no era el envío.
+
+Causa: el botón "Acceder" no se deshabilitaba mientras la petición de login estaba en curso (p.ej. mientras Render despertaba tras estar dormido varios días), así que un doble clic o un Enter mantenido podía disparar una segunda llamada a /api/login. Cada llamada invalida por diseño cualquier código anterior sin usar antes de generar uno nuevo — con lo que el primer código, aunque el email llegara perfectamente, quedaba invalidado por la segunda petición antes de que el usuario llegara a introducirlo. El mensaje de error era idéntico tanto si el código realmente había caducado por tiempo como si había sido superado por uno más nuevo, lo que ocultaba la causa real.
+
+Novedades
+
+Bloqueo de doble-submit en el login: mientras hay una petición a /api/login en curso, el botón "Acceder" queda deshabilitado y no se admite un segundo envío, evitando que se generen dos códigos para un mismo intento.
+Mensajes de error diferenciados en /api/login/verificar-codigo: ahora distingue entre código incorrecto, código superado por uno más reciente (probable doble solicitud de login) y código realmente caducado por tiempo — cada caso queda además registrado en el log del servidor con el id y timestamps de la fila implicada.
+Endurecido el cálculo de expira_en: se usa datetime.now(timezone.utc) en vez de datetime.utcnow() (naive) al insertarlo en la columna TIMESTAMPTZ, para no depender de que la sesión de Postgres tenga el timezone en UTC por defecto — la ventana de 10 minutos es demasiado ajustada como para arriesgarse a un desfase de interpretación.
+Envío del email de verificación (EmailJS) con un reintento automático y aviso visible en pantalla si aun así falla, en vez de fallar en silencio como antes.
+
+# v12.2.8 — 13 julio 2026
 
 📉 Reducción de egress — caché de index.html + logos como ficheros estáticos
 

@@ -1123,7 +1123,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.2.8
+          V 12.3.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2196,7 +2196,22 @@ let G = {
 ═══════════════════════════════════════════════════════════════════════════ */
 let _loginPendienteUsername = null;
 
+let _loginEnCurso = false;
+
 async function doLogin(reenvio=false) {
+  // Bloqueo de doble-submit: si el usuario pulsa "Acceder" (o Enter) dos
+  // veces seguidas mientras la primera petición sigue en curso (p.ej. el
+  // servidor tarda en responder tras estar dormido), sin este bloqueo se
+  // dispararían DOS llamadas a /api/login — cada una genera un código nuevo
+  // e invalida el anterior (por diseño, para que solo el último código
+  // enviado sea válido). El resultado: el primer email que llega contiene
+  // un código ya invalidado por la segunda petición, y el usuario lo ve
+  // como si hubiera "caducado" sin haberlo hecho realmente.
+  if (_loginEnCurso) return;
+  _loginEnCurso = true;
+  const btnAcceder = document.querySelector('#login-paso1 .login-btn');
+  if (btnAcceder) btnAcceder.disabled = true;
+
   const u = reenvio ? _loginPendienteUsername : document.getElementById('login-user').value.trim();
   const p = document.getElementById('login-pass').value;
   const err = document.getElementById('login-error');
@@ -2207,26 +2222,53 @@ async function doLogin(reenvio=false) {
 
     if (r.requiere_verificacion) {
       _loginPendienteUsername = r.username;
-      if (r.email) {
-        try {
-          await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
-            to_email: r.email,
-            subject:  r.subject,
-            message:  r.message,
-            reply_to: r.email,
-          });
-        } catch(_) {}
-      }
       document.getElementById('login-paso1').style.display = 'none';
       document.getElementById('login-paso2').style.display = '';
       document.getElementById('login-codigo').value = '';
-      document.getElementById('login-error2').style.display = 'none';
+      const err2 = document.getElementById('login-error2');
+      err2.style.display = 'none';
       if (!reenvio) document.getElementById('login-codigo').focus();
+
+      if (r.email) {
+        const enviado = await _enviarCodigoVerificacion(r.email, r.subject, r.message);
+        if (!enviado) {
+          // Antes este fallo se tragaba en silencio (catch vacío) y el
+          // usuario se quedaba esperando un email que nunca llegó, dando
+          // la sensación de que el código "caducaba" — en realidad no se
+          // había llegado a enviar. Ahora se avisa de inmediato.
+          err2.textContent = '⚠️ No se pudo enviar el email de verificación (posible bloqueo de red/antivirus). Pulsa "Reenviar código" para reintentarlo.';
+          err2.style.display = 'block';
+        }
+      }
       return;
     }
 
     await _entrarEnApp(r);
   } catch(e) { err.textContent='Error de conexión'; err.style.display='block'; }
+  finally {
+    _loginEnCurso = false;
+    if (btnAcceder) btnAcceder.disabled = false;
+  }
+}
+
+/* Envía el código de verificación por email vía EmailJS con un reintento
+   automático (con pequeña espera) antes de darlo por fallido. Muchos de los
+   fallos del primer intento son transitorios (proxy/antivirus corporativo,
+   petición en frío al despertar el navegador, etc.) y un segundo intento
+   inmediato suele bastar — evitando que el usuario tenga que descubrir por
+   sí mismo que debe pulsar "Reenviar código". */
+async function _enviarCodigoVerificacion(email, subject, message) {
+  const payload = { to_email: email, subject, message, reply_to: email };
+  for (let intento = 1; intento <= 2; intento++) {
+    try {
+      await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, payload);
+      return true;
+    } catch (e) {
+      console.warn(`[login] Envío de código de verificación (intento ${intento}/2) falló:`, e);
+      if (intento < 2) await new Promise(res => setTimeout(res, 1200));
+    }
+  }
+  return false;
 }
 
 async function verificarCodigoLogin() {

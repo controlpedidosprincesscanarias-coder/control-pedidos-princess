@@ -3397,7 +3397,12 @@ def login():
     if requiere_verificacion and user.get("email"):
         import secrets
         codigo = f"{secrets.randbelow(1_000_000):06d}"
-        expira = datetime.utcnow() + timedelta(minutes=10)
+        # datetime.now(timezone.utc) en vez de utcnow(): el valor queda
+        # explícitamente marcado como UTC (tz-aware) al insertarlo en la
+        # columna TIMESTAMPTZ, sin depender de que la sesión de Postgres
+        # tenga el timezone en UTC por defecto — ventana de 10 min muy
+        # ajustada como para arriesgarse a un desfase de interpretación.
+        expira = datetime.now(timezone.utc) + timedelta(minutes=10)
         db = get_db()
         execute("UPDATE login_verification_codes SET usado=1 WHERE usuario_id=%s AND usado=0", (user["id"],))
         execute(
@@ -3476,7 +3481,33 @@ def verificar_codigo_login():
         (user["id"], codigo), one=True
     )
     if not row:
-        return jsonify({"error": "Código incorrecto o caducado"}), 401
+        # El código no es válido — antes se devolvía siempre el mismo mensaje
+        # genérico, lo que impedía distinguir si de verdad había caducado por
+        # tiempo o si había sido invalidado por una petición de login
+        # posterior (p.ej. doble clic, o un "Reenviar código" que el propio
+        # usuario no recuerda haber pulsado). Se diagnostica el motivo real
+        # para poder confirmarlo en logs y en el mensaje mostrado.
+        fila_cualquiera = query(
+            """SELECT * FROM login_verification_codes
+               WHERE usuario_id=%s AND codigo=%s
+               ORDER BY id DESC LIMIT 1""",
+            (user["id"], codigo), one=True
+        )
+        if fila_cualquiera is None:
+            log.warning("LOGIN-CODIGO — '%s' introdujo un código que no existe para su cuenta", username)
+            return jsonify({"error": "Código incorrecto"}), 401
+        if fila_cualquiera["usado"]:
+            log.warning(
+                "LOGIN-CODIGO — '%s' introdujo un código ya superado por uno más reciente "
+                "(id=%s, creado_en=%s) — probable doble solicitud de login",
+                username, fila_cualquiera["id"], fila_cualquiera.get("creado_en")
+            )
+            return jsonify({"error": "Este código ya no es válido: se generó uno más reciente. Usa el último código recibido por email."}), 401
+        log.warning(
+            "LOGIN-CODIGO — '%s' introdujo un código realmente caducado por tiempo (id=%s, expira_en=%s)",
+            username, fila_cualquiera["id"], fila_cualquiera.get("expira_en")
+        )
+        return jsonify({"error": "El código ha caducado (han pasado más de 10 minutos). Pulsa \"Reenviar código\"."}), 401
 
     db = get_db()
     execute("UPDATE login_verification_codes SET usado=1 WHERE id=%s", (row["id"],))
