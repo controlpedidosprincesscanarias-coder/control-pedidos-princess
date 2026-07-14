@@ -1,4 +1,4 @@
-# v12.2.8 — 13 julio 2026
+# v12.2.8 — 14 julio 2026
 
 📉 Reducción de egress — caché de index.html + logos como ficheros estáticos
 
