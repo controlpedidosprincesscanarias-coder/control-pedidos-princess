@@ -1,3 +1,14 @@
+# v12.3.4 — 14 julio 2026
+
+🔔 Fix: popups de Integridad y Egress no llegaban a main_agenda (solo Telegram)
+
+Los avisos de "ALERTA DE CONFIGURACIÓN — Integridad" (job diario 07:05 + botón "Probar" del panel admin) y "Egress Supabase" (job diario 20:30 + botón "Probar" del panel admin) son exclusivos de administrador: nunca tuvieron contrapartida de comprador, así que —a diferencia del resto de notificaciones de la app— nunca pasaron por la auditoría de paridad Telegram↔bridge de v12.2.x. Solo llamaban a `_send_telegram()`, sin encolar nunca una fila en `bridge_notificaciones`; el resultado era que llegaban perfectamente al Telegram del admin pero jamás disparaban un popup en main_agenda, ya fuera por el job automático o por los botones "Probar" (`/api/admin/test-health`, `/api/admin/test-egress`) del panel de administración — ambos ejecutan la misma función interna, así que el fallo era idéntico en ambos casos.
+
+Cambios:
+- `_job_health_check_inner()`: cada envío de Telegram a un admin ahora encola también una notificación en `bridge_notificaciones` (tipo `integridad`, nivel `urgente` si hay problemas reales, `aviso` para la confirmación "todo OK" del botón "Probar").
+- `_job_alerta_egress_inner()`: mismo tratamiento (tipo `egress`, nivel `urgente` si el ciclo ya superó el 100%, `aviso` si solo se acerca al umbral).
+- `pedidos_agenda_bridge.py` no necesitó ningún cambio: `/api/bridge/notificaciones` ya procesa cualquier tipo de notificación de forma genérica — el problema era exclusivamente que estas dos rutas nunca llegaban a encolar nada.
+
 # v12.3.2 — 14 julio 2026
 
 ⚡ Solicitud de acceso: Fase 2 automática, sin intervención del admin

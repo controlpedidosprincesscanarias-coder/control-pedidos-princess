@@ -7686,11 +7686,25 @@ def _job_alerta_egress_inner(force: bool = False):
         f"Revisa Supabase → Organization → Usage para el dato oficial. "
         f"El ciclo actual renueva el día {EGRESS_CICLO_DIA_INICIO}."
     )
+    titulo_bridge = ("🔴 [Egress] Límite superado — Supabase" if pct >= 100
+                      else "🟠 [Egress] Acercándose al límite — Supabase")
     for adm in admins:
-        chat_id = adm.get("telegram_chat_id")
+        username = adm.get("username", "admin")
+        chat_id  = adm.get("telegram_chat_id")
         if chat_id:
             res = _send_telegram(chat_id, texto)
-            log.info("[EGRESS] -> %s: %s", adm.get("username", "admin"), res)
+            log.info("[EGRESS] -> %s: %s", username, res)
+        # ── Encolar en bridge agenda para este admin ─────────────────────────
+        # ANTI-REGRESION (bug 2026-07-14): aviso exclusivo de admin, hasta ahora
+        # solo se enviaba por Telegram — nunca se encolaba para main_agenda.
+        _encolar_bridge_notificacion(
+            usuario=username,
+            tipo="egress",
+            titulo=titulo_bridge,
+            mensaje=texto.replace("*", ""),
+            nivel="urgente" if pct >= 100 else "aviso",
+            pedido_id=None,
+        )
 
     # Registrar el aviso para no repetirlo hoy (reutiliza whatsapp_log,
     # igual que el resto de dedupes de notificaciones de la app).
@@ -7724,12 +7738,27 @@ def _job_health_check_inner(force: bool = False):
     # El campo telegram_chat_id se gestiona exclusivamente desde el panel de administración.
     admins_bd = _get_admins_telegram()
 
-    def _enviar_a_admins(texto_msg):
+    def _enviar_a_admins(texto_msg, titulo_bridge="🚨 [Integridad] Control Pedidos", nivel_bridge="urgente"):
         for adm in admins_bd:
+            username = adm.get("username", "admin")
             res = _send_telegram(adm["telegram_chat_id"], texto_msg)
             log.info("[HEALTH] Telegram → %s (%s): %s",
-                     adm["username"], adm["telegram_chat_id"],
+                     username, adm["telegram_chat_id"],
                      "OK" if res.get("ok") else res.get("error"))
+            # ── Encolar en bridge agenda para este admin ─────────────────────
+            # ANTI-REGRESION (bug 2026-07-14): este aviso es EXCLUSIVO de admin
+            # (no tiene contrapartida de comprador) y hasta ahora solo se enviaba
+            # por Telegram — nunca se encolaba para main_agenda, así que el
+            # popup no aparecía nunca en el Organizador Princess del admin
+            # aunque el mensaje sí llegara a su Telegram.
+            _encolar_bridge_notificacion(
+                usuario=username,
+                tipo="integridad",
+                titulo=titulo_bridge,
+                mensaje=texto_msg.replace("*", ""),
+                nivel=nivel_bridge,
+                pedido_id=None,
+            )
 
     if resultado.get("ok"):
         log.info("✅ [HEALTH] Integridad OK — sin problemas detectados")
@@ -7738,7 +7767,9 @@ def _job_health_check_inner(force: bool = False):
                 "✅ *Control Pedidos — Integridad OK*\n\n"
                 f"Sistema en buen estado — ningún problema detectado.\n"
                 f"🏨 Hoteles activos: {resultado['resumen']['total_hoteles_activos']}\n"
-                f"🛒 Compradores activos: {resultado['resumen']['total_compradores']}"
+                f"🛒 Compradores activos: {resultado['resumen']['total_compradores']}",
+                titulo_bridge="✅ [Integridad] Control Pedidos — OK",
+                nivel_bridge="aviso",
             )
         elif force:
             log.warning("[HEALTH] Sin admins con Telegram configurado — no se envió confirmación")
