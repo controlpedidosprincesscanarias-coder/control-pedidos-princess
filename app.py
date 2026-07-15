@@ -8477,6 +8477,28 @@ def backup_listar():
         """, (ruta_norm,))
         filas = cur.fetchall()
 
+        # Fix "sin sincronizar" falso (15 jul 2026): `actualizado_en` de
+        # backups_cache solo se toca cuando un backup cambia de verdad —
+        # normal casi todo el día, ya que solo hay un backup diario a las
+        # 17:00. Usarlo como "última vez que corrió el agente" generaba
+        # avisos de agente caído durante horas aunque estuviera
+        # sincronizando bien cada 5 minutos sin encontrar nada nuevo que
+        # subir. `agente_heartbeat` (restore_agent.py ≥ 15 jul 2026) sí
+        # registra cada ciclo, haya cambios o no. Si la tabla todavía no
+        # existe (agente sin actualizar) o no tiene fila para esta ruta,
+        # se usa el cálculo antiguo como red de seguridad.
+        ultimo_heartbeat = None
+        try:
+            cur.execute(
+                "SELECT visto_en FROM agente_heartbeat WHERE ruta_normalizada = %s",
+                (ruta_norm,)
+            )
+            fila_hb = cur.fetchone()
+            if fila_hb:
+                ultimo_heartbeat = fila_hb["visto_en"]
+        except Exception:
+            db.rollback()
+
     if not filas:
         return jsonify({
             "ok": True,
@@ -8489,7 +8511,7 @@ def backup_listar():
             ),
         })
 
-    ultimo_escaneo = max(f["actualizado_en"] for f in filas)
+    ultimo_escaneo = ultimo_heartbeat or max(f["actualizado_en"] for f in filas)
     minutos = int((datetime.now(timezone.utc) - ultimo_escaneo).total_seconds() // 60)
 
     resp = {

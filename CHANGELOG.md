@@ -1,3 +1,13 @@
+# v12.4.4 — 15 julio 2026
+
+🐛 Fix: aviso falso "agente sin sincronizar" en Restaurar Backup
+
+`ultimo_escaneo` se calculaba como `MAX(actualizado_en)` de `backups_cache` — pero esa columna solo se toca cuando un backup cambia de verdad (fix de egress anterior). Como normalmente solo hay un backup nuevo al día (17:00), el panel podía avisar de "agente sin sincronizar hace 60+ minutos" aunque `restore_agent.py` estuviera corriendo perfectamente cada 5 minutos sin encontrar nada nuevo que subir.
+
+`/api/admin/backup/listar` ahora lee de una tabla nueva, `agente_heartbeat`, que `restore_agent.py` actualiza en cada ciclo — haya cambios o no. Si el agente todavía no está actualizado (tabla o fila inexistente), cae de vuelta al cálculo antiguo como red de seguridad, así que no rompe nada para quien no haya desplegado el `restore_agent.py` nuevo todavía.
+
+Requiere desplegar también la versión de `restore_agent.py` con el heartbeat (ver `ComprasPrincess_Backup`) — si solo se actualiza `app.py`, el aviso seguirá comportándose como antes (fallback automático, no falla, pero tampoco se arregla).
+
 # v12.4.2 — 15 julio 2026 (hotfix)
 
 🐛 Fix: `_job_alertas_diarias` rota desde el deploy de v12.4.0
