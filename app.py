@@ -261,7 +261,7 @@ def _auto_migrate():
                 CREATE TABLE IF NOT EXISTS bridge_notificaciones (
                     id           SERIAL PRIMARY KEY,
                     usuario      TEXT NOT NULL,         -- username del destinatario
-                    tipo         TEXT NOT NULL,         -- 'cambio_estado' | 'alerta_auto' | 'techo'
+                    tipo         TEXT NOT NULL,         -- 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida'
                     pedido_id    INTEGER,               -- puede ser NULL (p.ej. alertas de techo)
                     titulo       TEXT NOT NULL,
                     mensaje      TEXT NOT NULL,
@@ -284,6 +284,49 @@ def _auto_migrate():
                 ('plazo_urgente_ciclo',             '2', 'numero', 'Plazo entrega — Ciclo urgente tras vencer (cada N días)',   'plazo_entrega', 2),
                 ('plazo_parcial_aviso_dias_antes',  '3', 'numero', 'Entrega Parcial c/plazo — Aviso previo (días antes)',       'plazo_entrega', 3),
                 ('plazo_parcial_urgente_ciclo',     '2', 'numero', 'Entrega Parcial c/plazo — Ciclo urgente (cada N días)',     'plazo_entrega', 4),
+            ]:
+                cur.execute("""
+                    INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (clave) DO NOTHING
+                """, (_clave, _valor, _tipo, _label, _grupo, _orden))
+            # ── v12.5.0 — Repetición de popups en Agenda por tipo de alerta ────
+            # Controla, para cada estado de pedido, si el popup en Organizador
+            # Princess se repite mientras el pedido siga en alerta y cada
+            # cuántas horas (por separado para nivel 🔴 crítico/urgente y
+            # 🟡 normal/aviso). Antes esto era fijo en código (bridge: 1h
+            # urgente / 24h aviso) e igual para todos los tipos. Consumido por
+            # _clasificar_alertas() → expuesto en /api/bridge/alertas → leído
+            # por pedidos_agenda_bridge.py (Organizador Princess).
+            for _clave, _valor, _tipo, _label, _grupo, _orden in [
+                ('enviado_popup_repetir',           '1',  'bool',   'Enviado al proveedor — Repetir popup en Agenda',        'popup_repeticion', 1),
+                ('enviado_popup_horas_critico',     '1',  'numero', 'Enviado al proveedor — Repetir cada (horas) si 🔴 URGENTE', 'popup_repeticion', 2),
+                ('enviado_popup_horas_normal',       '24', 'numero', 'Enviado al proveedor — Repetir cada (horas) si 🟡 AVISO',   'popup_repeticion', 3),
+                ('firma_compras_popup_repetir',      '1',  'bool',   'Firma Dir. Compras — Repetir popup en Agenda',           'popup_repeticion', 4),
+                ('firma_compras_popup_horas_critico', '1', 'numero', 'Firma Dir. Compras — Repetir cada (horas) si 🔴 URGENTE', 'popup_repeticion', 5),
+                ('firma_compras_popup_horas_normal',  '24','numero', 'Firma Dir. Compras — Repetir cada (horas) si 🟡 AVISO',   'popup_repeticion', 6),
+                ('firma_hotel_popup_repetir',        '1',  'bool',   'Firma Dir. Hotel — Repetir popup en Agenda',             'popup_repeticion', 7),
+                ('firma_hotel_popup_horas_critico',  '1',  'numero', 'Firma Dir. Hotel — Repetir cada (horas) si 🔴 URGENTE',   'popup_repeticion', 8),
+                ('firma_hotel_popup_horas_normal',   '24', 'numero', 'Firma Dir. Hotel — Repetir cada (horas) si 🟡 AVISO',     'popup_repeticion', 9),
+                ('entrega_parcial_popup_repetir',    '1',  'bool',   'Entrega Parcial — Repetir popup en Agenda',              'popup_repeticion', 10),
+                ('entrega_parcial_popup_horas_critico','1','numero', 'Entrega Parcial — Repetir cada (horas) si 🔴 URGENTE',    'popup_repeticion', 11),
+                ('entrega_parcial_popup_horas_normal', '24','numero','Entrega Parcial — Repetir cada (horas) si 🟡 AVISO',      'popup_repeticion', 12),
+                ('cotizacion_popup_repetir',         '1',  'bool',   'Pendiente Cotización — Repetir popup en Agenda',         'popup_repeticion', 13),
+                ('cotizacion_popup_horas_critico',   '1',  'numero', 'Pendiente Cotización — Repetir cada (horas) si 🔴 URGENTE','popup_repeticion', 14),
+                ('cotizacion_popup_horas_normal',    '24', 'numero', 'Pendiente Cotización — Repetir cada (horas) si 🟡 AVISO', 'popup_repeticion', 15),
+            ]:
+                cur.execute("""
+                    INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (clave) DO NOTHING
+                """, (_clave, _valor, _tipo, _label, _grupo, _orden))
+            # ── v12.6.0 — Reenvío a Admins (antes hardcodeado a "cada 2 días") ─
+            # Ambos jobs (techo urgente y familia/partida repetida) esperaban un
+            # número fijo de días naturales entre avisos repetidos al mismo
+            # hotel para el rol admin. Se convierte en config editable.
+            for _clave, _valor, _tipo, _label, _grupo, _orden in [
+                ('techo_urgente_admin_reenvio_dias',    '2', 'numero', 'Techo urgente — Reenvío a Admins (cada N días)',            'reenvio_admin', 1),
+                ('familia_repetida_admin_reenvio_dias', '2', 'numero', 'Familia/partida repetida — Reenvío a Admins (cada N días)', 'reenvio_admin', 2),
             ]:
                 cur.execute("""
                     INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
@@ -1302,7 +1345,7 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
 
     Parámetros:
         usuario   – username del destinatario (igual que en la tabla usuarios)
-        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'supervision'
+        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida' | 'supervision'
         titulo    – línea resumen (se mostrará como título del popup)
         mensaje   – cuerpo completo del aviso
         nivel     – 'aviso' | 'urgente'
@@ -1707,6 +1750,13 @@ def get_config() -> dict:
         "plazo_parcial_urgente_ciclo": 2,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_pct_amarillo": 60,
+        "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
+        "firma_compras_popup_repetir": 1, "firma_compras_popup_horas_critico": 1, "firma_compras_popup_horas_normal": 24,
+        "firma_hotel_popup_repetir": 1, "firma_hotel_popup_horas_critico": 1, "firma_hotel_popup_horas_normal": 24,
+        "entrega_parcial_popup_repetir": 1, "entrega_parcial_popup_horas_critico": 1, "entrega_parcial_popup_horas_normal": 24,
+        "cotizacion_popup_repetir": 1, "cotizacion_popup_horas_critico": 1, "cotizacion_popup_horas_normal": 24,
+        "techo_urgente_admin_reenvio_dias": 2,
+        "familia_repetida_admin_reenvio_dias": 2,
     }
     for k, v in defaults.items():
         cfg.setdefault(k, v)
@@ -2334,7 +2384,7 @@ def _job_familia_repetida_inner() -> None:
                         log.warning("[FAM-REP] Sin telegram_chat_id para comprador %s", username)
                     _encolar_bridge_notificacion(
                         usuario=username,
-                        tipo="techo",
+                        tipo="familia_repetida",
                         titulo=titulo_bridge,
                         mensaje=texto.replace("*", ""),
                         nivel="urgente",
@@ -2349,9 +2399,9 @@ def _job_familia_repetida_inner() -> None:
         )
         if skip_adm_hoy:
             log.debug("[FAM-REP] Admin hotel %s — ya notificado hoy, omitiendo", hotel_codigo)
-        elif reenvio_adm is not None and reenvio_adm < 2:
-            log.debug("[FAM-REP] Admin hotel %s — último aviso hace %d día(s), esperando 2d",
-                      hotel_codigo, reenvio_adm)
+        elif reenvio_adm is not None and reenvio_adm < get_config().get("familia_repetida_admin_reenvio_dias", 2):
+            log.debug("[FAM-REP] Admin hotel %s — último aviso hace %d día(s), esperando %dd",
+                      hotel_codigo, reenvio_adm, get_config().get("familia_repetida_admin_reenvio_dias", 2))
         else:
             admins = _destinatarios_evento("familia_repetida_admin", "telegram")
             if not admins:
@@ -2393,7 +2443,7 @@ def _job_familia_repetida_inner() -> None:
                         log.warning("[FAM-REP] Sin telegram_chat_id para admin %s", username)
                     _encolar_bridge_notificacion(
                         usuario=username,
-                        tipo="techo",
+                        tipo="familia_repetida",
                         titulo=titulo_bridge,
                         mensaje=texto.replace("*", ""),
                         nivel="urgente",
@@ -2578,10 +2628,11 @@ def _job_techo_urgente_admins_inner() -> None:
 
         # ── 3. Regla de reenvío cada 2 días ──────────────────────────────
         dias_desde_ultimo = _dias_desde_ultimo_techo_urgente_admin(hotel_codigo)
-        if dias_desde_ultimo is not None and dias_desde_ultimo < 2:
+        _reenvio_dias_techo = get_config().get("techo_urgente_admin_reenvio_dias", 2)
+        if dias_desde_ultimo is not None and dias_desde_ultimo < _reenvio_dias_techo:
             log.debug(
-                "[TECHO-URG] Hotel %s — último aviso hace %d día(s), esperando 2d",
-                hotel_codigo, dias_desde_ultimo
+                "[TECHO-URG] Hotel %s — último aviso hace %d día(s), esperando %dd",
+                hotel_codigo, dias_desde_ultimo, _reenvio_dias_techo
             )
             continue
 
@@ -5905,14 +5956,43 @@ def _dias_desde_alerta(fecha_str) -> int | None:
 # "urgente": días para escalar a urgente (None = nunca).
 # "ciclo":   cada cuántos días se reavisa (no usado en clasificación actual).
 # "fecha_ref": campo de fecha a usar (default "fecha_tramitacion").
-_UMBRALES_ALERTAS: dict = {
-    "ENVIADO AL PROVEEDOR":              {"primera": 15, "urgente": 25, "ciclo": 10},
-    "PENDIENTE FIRMA DIRECCION COMPRAS": {"primera": 8,  "urgente": None, "ciclo": 8},
-    "PENDIENTE DE FIRMA DIRECCION HOTEL":{"primera": 5,  "urgente": None, "ciclo": 5},
-    "ENTREGA PARCIAL":                   {"primera": 10, "urgente": None, "ciclo": 10},
-    "PENDIENTE COTIZACIÓN":              {"primera": 2,  "urgente": 3, "ciclo": None,
-                                          "fecha_ref": "fecha_solicitud"},
+#
+# NOTA v12.5.0 — FIX de inconsistencia: hasta ahora esta clasificación usaba
+# un dict fijo en código (_UMBRALES_ALERTAS), mientras que el resto de la app
+# (cambio de estado, job diario del scheduler) ya usaba _build_umbrales(),
+# que lee de la tabla config_alertas (editable desde el panel Admin). Esto
+# provocaba que cambiar un umbral en Admin no afectase a los popups de
+# Agenda. Se elimina el dict fijo y se usa _build_umbrales() también aquí,
+# para que Admin sea la única fuente de verdad en todos los canales.
+
+# Mapeo estado de pedido → prefijo de claves de config_alertas para la
+# repetición de popups en Agenda (grupo "popup_repeticion").
+_ESTADO_POPUP_PREFIX: dict = {
+    "ENVIADO AL PROVEEDOR":               "enviado",
+    "PENDIENTE FIRMA DIRECCION COMPRAS":  "firma_compras",
+    "PENDIENTE DE FIRMA DIRECCION HOTEL": "firma_hotel",
+    "ENTREGA PARCIAL":                    "entrega_parcial",
+    "PENDIENTE COTIZACIÓN":               "cotizacion",
 }
+
+
+def _aplicar_config_popup(p: dict) -> None:
+    """Añade al pedido los campos de repetición de popup (leídos de Admin):
+        popup_repetir        (bool)  — si False, el popup se muestra 1 sola vez
+        popup_horas_critico  (int)   — cada cuántas horas se repite si 🔴 urgente
+        popup_horas_normal   (int)   — cada cuántas horas se repite si 🟡 aviso
+    Consumido por pedidos_agenda_bridge.py (Organizador Princess).
+    """
+    prefix = _ESTADO_POPUP_PREFIX.get(p.get("estado"))
+    c = get_config()
+    if prefix:
+        p["popup_repetir"]       = bool(int(c.get(f"{prefix}_popup_repetir", 1) or 0))
+        p["popup_horas_critico"] = int(c.get(f"{prefix}_popup_horas_critico", 1) or 1)
+        p["popup_horas_normal"]  = int(c.get(f"{prefix}_popup_horas_normal", 24) or 24)
+    else:
+        p["popup_repetir"]       = True
+        p["popup_horas_critico"] = 1
+        p["popup_horas_normal"]  = 24
 
 
 def _resumen_ultima_notificacion(p: dict) -> dict:
@@ -5968,6 +6048,8 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
       • nivel_alerta      ("aviso" | "urgente")
       • fecha_entrega_prevista (str ISO o None)
       • ultima_notificacion    (dict — ver _resumen_ultima_notificacion)
+      • popup_repetir, popup_horas_critico, popup_horas_normal
+                          (ver _aplicar_config_popup — config editable desde Admin)
 
     Devuelve la lista ordenada: urgentes primero, luego por días descendente.
     """
@@ -5982,10 +6064,11 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
             fep = info_plazo["fecha_entrega_prevista"]
             p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
             p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
+            _aplicar_config_popup(p)
             alertas.append(p)
             continue
         # ── Lógica estándar ─────────────────────────────────────────────
-        cfg = _UMBRALES_ALERTAS.get(p["estado"])
+        cfg = _build_umbrales().get(p["estado"])
         if not cfg:
             continue
         fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
@@ -5997,6 +6080,7 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
         p["nivel_alerta"]          = nivel
         p["fecha_entrega_prevista"] = None
         p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
+        _aplicar_config_popup(p)
         alertas.append(p)
 
     alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1,
@@ -6683,7 +6767,7 @@ def bridge_notificaciones_usuario():
         "notificaciones": [
             {
                 "id": 42,
-                "tipo": "cambio_estado",      -- 'cambio_estado'|'alerta_auto'|'techo'|'supervision'
+                "tipo": "cambio_estado",      -- 'cambio_estado'|'alerta_auto'|'techo'|'familia_repetida'|'supervision'
                 "pedido_id": 123,             -- puede ser null
                 "titulo": "...",
                 "mensaje": "...",

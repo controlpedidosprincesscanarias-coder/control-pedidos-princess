@@ -1,3 +1,42 @@
+# v12.5.0 — 15 julio 2026
+
+📮 Reenvío a admins configurable en techo urgente y familia repetida
+
+Cambios:
+- 2 claves nuevas en `config_alertas`, nuevo grupo en Admin → Config Alertas: "📮 Reenvío a Admins (Techo / Familia repetida)":
+  - `techo_urgente_admin_reenvio_dias` (default 2)
+  - `familia_repetida_admin_reenvio_dias` (default 2)
+- 2 números mágicos corregidos — antes `< 2` hardcodeado en el código, ahora leen `get_config()`:
+  - Job de techo urgente a admins (reenvío cada N días)
+  - Job de familia/partida repetida a admins (reenvío cada N días)
+
+Bug de etiquetado corregido: las notificaciones push de "familia/partida repetida" (tanto a comprador como a admin) se encolaban con `tipo="techo"` en `bridge_notificaciones`, mezclándose con las de techo de gastos real. Ahora usan `tipo="familia_repetida"`, un tipo propio. Inocuo para lo ya desplegado (main_agenda no filtra por `tipo`, solo lo muestra/loguea), pero deja el dato limpio por si en el futuro se quiere tratar distinto.
+
+Lo que se deja tal cual, con su motivo:
+- `cambio_estado`, `solicitud_acceso`, "techo nuevo pedido" → eventos puntuales, no recordatorios; no tiene sentido regular su repetición.
+- `alerta_auto` (Telegram/push de pedidos en alerta) → ya era configurable en días vía las claves `<estado>_ciclo` + `dias_critico`, ya existentes en Admin.
+- `egress`, `health` → alertas de infraestructura para admin, cadencia diaria intencionada por diseño del job, no de negocio de pedidos.
+
+# v12.4.6 — 15 julio 2026
+
+🔁 Repetición de popups configurable por tipo y nivel de alerta
+
+Hasta ahora la frecuencia con la que un popup de Agenda se repetía para un pedido en alerta (🔴 urgente / 🟡 aviso) estaba fija en el código de main_agenda (`INTERVALO_POPUP_URGENTE`/`NORMAL`), igual para todos los tipos de alerta. Ahora es configurable por tipo desde Admin → Config Alertas.
+
+Cambios (`control_pedidos` — `app.py` + `templates/index.html`):
+- 15 claves nuevas en `config_alertas`, grupo "🔁 Repetición de Popups en Agenda" — 3 por cada uno de los 5 tipos (Enviado al proveedor, Firma Compras, Firma Hotel, Entrega Parcial, Cotización): `<tipo>_popup_repetir` (on/off), `<tipo>_popup_horas_critico`, `<tipo>_popup_horas_normal`.
+- El panel de Config Alertas ya renderiza cualquier clave/grupo de forma genérica, así que solo hizo falta añadir el label del grupo y la unidad ("horas") en `index.html` — el formulario en sí no cambió.
+- `_clasificar_alertas()` añade estos 3 campos a cada alerta antes de devolverla en `/api/bridge/alertas`, para que main_agenda sepa cómo repetir cada una.
+
+Bug corregido de paso: `_clasificar_alertas()` usaba un diccionario de umbrales fijo en código (`_UMBRALES_ALERTAS`) en vez de `_build_umbrales()` — la función que sí lee de Admin y que ya usaba el resto de la app. Esto significaba que cambiar los días de "Enviado al proveedor — Urgente" en Admin no afectaba a los popups de Agenda, solo al email/Telegram del job diario. Ahora los tres canales (popup, email, Telegram) leen del mismo sitio.
+
+Cambios en `main_agenda` (`pedidos_agenda_bridge.py`), publicados como v4.7.0 / bridge v4.7:
+- `_debe_mostrar_popup()` y `_aviso_para_popup()` leen `popup_repetir`/`popup_horas_critico`/`popup_horas_normal` de cada alerta recibida, en vez de las constantes fijas de antes (que quedan como fallback si el servidor no manda esos campos — compatibilidad con versiones anteriores de `control_pedidos`).
+- Si `popup_repetir=False`, el popup se muestra una única vez por pedido.
+- Bug corregido: el reseteo del temporizador al escalar de "aviso" a "urgente" comparaba contra un nivel `"normal"` que nunca existe (debía ser `"aviso"`), así que nunca se disparaba — el popup podía tardar mucho más de lo esperado en repetirse tras un cambio de nivel.
+
+Requiere main_agenda/bridge ≥ v4.7.0 para aprovechar la repetición configurable — con una versión anterior del bridge, sigue funcionando con los intervalos fijos de siempre (fallback de compatibilidad, sin romper nada).
+
 # v12.4.4 — 15 julio 2026
 
 🐛 Fix: aviso falso "agente sin sincronizar" en Restaurar Backup
