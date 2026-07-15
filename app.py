@@ -429,6 +429,82 @@ def _auto_migrate():
                     creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
+            # ── Configuración de Avisos (v12.4.0) ────────────────────────────
+            # Sustituye la lógica hardcodeada de qué administradores reciben
+            # cada tipo de alerta de sistema (antes: TIPOS_SUPERVISION_ADMIN +
+            # "todos los admins con telegram_chat_id" para cualquier evento).
+            # Ahora cada "evento/causa" tiene una lista configurable de
+            # usuarios y, por usuario, qué canal(es) recibe. Se gestiona desde
+            # Administrador → Configuración de Avisos, y se consulta en
+            # tiempo real tanto aquí como desde main_agenda / otros módulos
+            # vía GET /api/config-avisos/resolver.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS eventos_aviso (
+                    codigo       TEXT PRIMARY KEY,
+                    nombre       TEXT NOT NULL,
+                    descripcion  TEXT,
+                    orden        INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS config_avisos (
+                    id            SERIAL PRIMARY KEY,
+                    evento_codigo TEXT NOT NULL REFERENCES eventos_aviso(codigo) ON DELETE CASCADE,
+                    usuario_id    INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                    telegram      BOOLEAN NOT NULL DEFAULT FALSE,
+                    email         BOOLEAN NOT NULL DEFAULT FALSE,
+                    UNIQUE(evento_codigo, usuario_id)
+                )
+            """)
+            # Cola de emails de sistema (avisos de evento, no ligados a un
+            # pedido concreto) — se generan desde jobs sin navegador abierto
+            # (APScheduler), así que no pueden enviarse vía EmailJS en el
+            # momento. Quedan aquí pendientes y cualquier admin que abra la
+            # app los envía en segundo plano (mismo patrón que el resto de
+            # emails de la aplicación, que dependen de EmailJS en el navegador).
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS emails_sistema_pendientes (
+                    id             SERIAL PRIMARY KEY,
+                    evento_codigo  TEXT NOT NULL,
+                    destinatario   TEXT NOT NULL,
+                    asunto         TEXT NOT NULL,
+                    cuerpo_html    TEXT,
+                    cuerpo_text    TEXT,
+                    enviado        BOOLEAN NOT NULL DEFAULT FALSE,
+                    creado_en      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    enviado_en     TIMESTAMPTZ
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_emails_sistema_pendientes_estado "
+                "ON emails_sistema_pendientes(enviado)"
+            )
+            cur.execute("SELECT COUNT(*) as n FROM eventos_aviso")
+            _row_ev = cur.fetchone()
+            _n_ev = _row_ev[0] if isinstance(_row_ev, tuple) else _row_ev['n']
+            if _n_ev == 0:
+                _eventos_default = [
+                    ("cambio_estado_supervision", "Cambio de estado con alerta urgente",
+                     "Copia de supervisión cuando un cambio de estado de pedido genera una alerta urgente.", 1),
+                    ("pedido_urgente_admin", "Pedido crítico parado (job diario)",
+                     "Copia de supervisión cuando el job diario detecta pedidos en nivel urgente sin resolver.", 2),
+                    ("techo_urgente_admin", "Techo de gastos superado (100%)",
+                     "Aviso cuando un hotel supera el techo mensual de gasto o de número de pedidos.", 3),
+                    ("techo_nuevo_pedido_admin", "Nuevo pedido sujeto a techo",
+                     "Aviso informativo cada vez que se crea un pedido que computa contra el techo de un hotel.", 4),
+                    ("familia_repetida_admin", "Familias de artículos repetidas",
+                     "Aviso cuando se detectan pedidos repetidos de la misma familia en un hotel/mes.", 5),
+                    ("egress_alerta", "Consumo de egress (Supabase) elevado",
+                     "Aviso del job diario cuando el consumo de egress se acerca al límite del plan.", 6),
+                    ("health_check", "Fallo de integridad operativa",
+                     "Aviso del job diario de salud del sistema cuando detecta una incidencia.", 7),
+                    ("solicitud_acceso", "Nueva solicitud de acceso",
+                     "Aviso cuando un usuario nuevo solicita acceso a la aplicación (Fase 1 / Fase 2).", 8),
+                ]
+                cur.executemany(
+                    "INSERT INTO eventos_aviso (codigo, nombre, descripcion, orden) VALUES (%s,%s,%s,%s)",
+                    _eventos_default
+                )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -1001,136 +1077,141 @@ TELEGRAM_BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 # ── Tipos de alerta que generan copia de supervisión a los administradores ──────
 # "urgente"       → job diario con nivel urgente (pedidos críticos parados)
 # "techo"         → alerta de techo de gastos (supervisión financiera)
-# "cambio_estado" → cambio de estado CON bloque de alerta activo
-# "aviso"         → recordatorio diario → NO se copia (evitar saturación)
-# Solo las alertas URGENTES llegan a admins por supervisión automática.
-# techo-rojo usa tipo="urgente"; techo-amarillo y cambio_estado sin alerta urgente NO llegan a admins.
-TIPOS_SUPERVISION_ADMIN = {"urgente"}
+# ── Configuración de Avisos (v12.4.0) ──────────────────────────────────────────
+# Sustituye TIPOS_SUPERVISION_ADMIN y "todos los admins con Telegram/email" por
+# una configuración editable en Administrador → Configuración de Avisos (tabla
+# config_avisos). Cada evento/causa tiene su propia lista de destinatarios y,
+# por destinatario, qué canal(es) recibe. Si nadie está configurado para un
+# evento, simplemente no se envía nada — ya no hay un fallback "todos los
+# admins reciben todo".
 
-
-def _get_admin_emails() -> list:
+def _destinatarios_evento(evento_codigo: str, canal: str) -> list:
     """
-    Devuelve lista de emails de todos los usuarios con rol admin o compras activos en BD.
-    Los destinatarios se gestionan exclusivamente desde el panel de administración.
-    USO: notificaciones de pedidos (cambios de estado, alertas).
-    NUNCA usar para solicitudes de acceso — usar _get_solo_admin_emails().
+    Devuelve los usuarios configurados para recibir el evento/causa indicado
+    por el canal dado ('telegram' o 'email'), leyendo la configuración
+    editable desde Administrador → Configuración de Avisos.
+    Cada dict incluye: id, username, nombre, email, telegram_chat_id.
     """
+    columna = "telegram" if canal == "telegram" else "email"
     try:
-        admins = rows_to_list(query(
-            "SELECT email FROM usuarios WHERE rol IN ('admin','compras') AND activo=1 "
-            "AND email IS NOT NULL AND TRIM(email) != ''"
+        rows = rows_to_list(query(
+            f"""SELECT u.id, u.username, u.nombre, u.email, u.telegram_chat_id
+                FROM config_avisos ca
+                JOIN usuarios u ON u.id = ca.usuario_id
+                WHERE ca.evento_codigo = %s AND ca.{columna} = TRUE AND u.activo = 1""",
+            (evento_codigo,)
         )) or []
-        return [a["email"] for a in admins if a.get("email")]
+        return rows
     except Exception as exc:
-        log.error("[_get_admin_emails] Error consultando emails admin/compras: %s", exc)
+        log.error("[CONFIG-AVISOS] Error resolviendo destinatarios evento=%s canal=%s: %s",
+                  evento_codigo, canal, exc)
         return []
+
+
+def _destinatarios_evento_emails(evento_codigo: str) -> list:
+    """Atajo: lista de emails (strings) configurados para el evento indicado."""
+    return [d["email"] for d in _destinatarios_evento(evento_codigo, "email") if d.get("email")]
 
 
 def _get_solo_admin_emails() -> list:
     """
-    Devuelve ÚNICAMENTE emails de administradores (rol='admin') activos en BD.
-    Los administradores se gestionan exclusivamente desde el panel de administración.
+    Compatibilidad: antes devolvía TODOS los admins con email en BD.
+    Ahora devuelve los emails configurados para el evento 'solicitud_acceso'
+    en Administrador → Configuración de Avisos.
     """
-    try:
-        admins = rows_to_list(query(
-            "SELECT email FROM usuarios WHERE rol='admin' AND activo=1 "
-            "AND email IS NOT NULL AND TRIM(email) != ''"
-        )) or []
-        return [a["email"] for a in admins if a.get("email")]
-    except Exception as exc:
-        log.error("[_get_solo_admin_emails] Error consultando emails admin: %s", exc)
-        return []
+    return _destinatarios_evento_emails("solicitud_acceso")
 
 
-def _get_admins_telegram() -> list:
+def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
+                           asunto: str, cuerpo_html: str = None, cuerpo_text: str = None) -> None:
     """
-    Devuelve lista de dicts {username, nombre, telegram_chat_id} de todos los
-    administradores activos que tienen telegram_chat_id configurado en BD.
-    El campo telegram_chat_id se gestiona desde el panel de administración.
+    Encola un email de sistema (no ligado a un pedido) para cada destinatario.
+    Estos avisos se generan desde jobs sin navegador abierto (APScheduler), y
+    esta app no tiene SMTP propio en el backend — el envío real depende de
+    EmailJS en el navegador (igual que el resto de emails de la aplicación).
+    Por eso se encolan en emails_sistema_pendientes: el primer admin que abra
+    la app los envía en segundo plano.
     """
+    if not destinatarios_email:
+        return
     try:
-        admins = rows_to_list(query(
-            "SELECT username, nombre, telegram_chat_id FROM usuarios "
-            "WHERE rol='admin' AND activo=1 AND telegram_chat_id IS NOT NULL "
-            "AND TRIM(telegram_chat_id) != ''"
-        )) or []
+        db = get_db()
+        cur = db.cursor()
+        for email in destinatarios_email:
+            cur.execute(
+                """INSERT INTO emails_sistema_pendientes
+                   (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text)
+                   VALUES (%s,%s,%s,%s,%s)""",
+                (evento_codigo, email, asunto, cuerpo_html, cuerpo_text)
+            )
+        db.commit()
     except Exception as exc:
-        log.error("[_get_admins_telegram] Error consultando admins con Telegram: %s", exc)
-        admins = []
-    return admins
+        log.error("[CONFIG-AVISOS] Error encolando email sistema evento=%s: %s", evento_codigo, exc)
+
+
+def _notificar_evento(evento_codigo: str, texto_telegram: str,
+                      titulo_bridge: str = None, pedido_id_bridge: int = None,
+                      nivel_bridge: str = "urgente", tipo_bridge: str = "supervision",
+                      asunto_email: str = None, cuerpo_email_html: str = None,
+                      cuerpo_email_text: str = None) -> None:
+    """
+    Punto único de envío para avisos de sistema/administración configurables.
+    Resuelve destinatarios desde config_avisos y despacha por Telegram +
+    Agenda (bridge) de forma inmediata, y por email de forma encolada.
+    """
+    destinatarios_tg = _destinatarios_evento(evento_codigo, "telegram")
+    for dest in destinatarios_tg:
+        chat_id  = dest.get("telegram_chat_id")
+        username = dest.get("username", "?")
+        if chat_id:
+            res = _send_telegram(chat_id, texto_telegram)
+            log.info("[AVISO-%s] Telegram → %s (%s): %s",
+                     evento_codigo, username, chat_id, "OK" if res.get("ok") else res.get("error"))
+        else:
+            log.warning("[AVISO-%s] %s configurado para Telegram pero sin telegram_chat_id", evento_codigo, username)
+        _encolar_bridge_notificacion(
+            usuario=username,
+            tipo=tipo_bridge,
+            titulo=titulo_bridge or f"📋 Aviso — {evento_codigo}",
+            mensaje=texto_telegram.replace("*", ""),
+            nivel=nivel_bridge,
+            pedido_id=pedido_id_bridge,
+        )
+
+    if asunto_email:
+        destinatarios_email = _destinatarios_evento_emails(evento_codigo)
+        _encolar_email_sistema(evento_codigo, destinatarios_email, asunto_email, cuerpo_email_html, cuerpo_email_text)
 
 
 def _notify_solicitud_telegram(texto: str) -> None:
     """
-    Envia un mensaje Telegram a todos los admins con chat_id configurado.
-    Usado para notificaciones del flujo de solicitudes de acceso (Fase 1 / Fase 2).
+    Notifica una nueva solicitud de acceso (Fase 1 / Fase 2) a los usuarios
+    configurados para el evento 'solicitud_acceso'.
     """
-    admins = _get_admins_telegram()
-    if not admins:
-        log.debug("[SOL_TELEGRAM] Sin admins con Telegram configurado.")
-        return
-    for adm in admins:
-        username = adm.get("username", "admin")
-        chat_id  = adm.get("telegram_chat_id")
-        if chat_id:
-            res = _send_telegram(chat_id, texto)
-            log.info("[SOL_TELEGRAM] -> %s (%s): %s",
-                     username, chat_id,
-                     "OK" if res.get("ok") else res.get("error"))
-        # Encolar en bridge para que el admin lo vea también en main_agenda
-        _encolar_bridge_notificacion(
-            usuario=username,
-            tipo="solicitud_acceso",
-            titulo="📋 Nueva solicitud de acceso",
-            mensaje=texto.replace("*", ""),
-            nivel="aviso",
-            pedido_id=None,
-        )
+    _notificar_evento(
+        "solicitud_acceso", texto,
+        titulo_bridge="📋 Nueva solicitud de acceso",
+        nivel_bridge="aviso",
+        tipo_bridge="solicitud_acceso",
+    )
 
 
-def _enviar_supervision_admins(texto: str, tipo_supervision: str,
+def _enviar_supervision_admins(texto: str, evento_codigo: str,
                                titulo_bridge: str = None,
                                pedido_id_bridge: int = None) -> None:
     """
-    Envía copia de supervisión a todos los admins con Telegram configurado,
-    SOLO si el tipo_supervision está en TIPOS_SUPERVISION_ADMIN.
-
-    Parámetros:
-        texto             – Mensaje ya construido (igual que el enviado al comprador).
-        tipo_supervision  – "urgente" | "techo" | "cambio_estado" | "aviso" | …
-        titulo_bridge     – Título descriptivo para la entrada en Agenda/bridge.
-                            Si es None se usa un texto genérico de supervisión.
-        pedido_id_bridge  – ID del pedido relacionado (None para alertas sin pedido).
+    Envía copia de supervisión a los usuarios configurados para el
+    evento_codigo indicado (Administrador → Configuración de Avisos).
+    Antes: enviaba a "todos los admins con Telegram" filtrado por un
+    conjunto fijo TIPOS_SUPERVISION_ADMIN = {"urgente"} en código.
     """
-    if tipo_supervision not in TIPOS_SUPERVISION_ADMIN:
-        return  # Este tipo no requiere copia a admins
-
-    admins = _get_admins_telegram()
-    if not admins:
-        log.debug("[SUPERVISION] Sin admins con Telegram — tipo=%s", tipo_supervision)
-        return
-
-    prefijo = "\U0001F4CB *[Supervisión Admin]* — copia automática\n\n"
-    texto_admin = prefijo + texto
-
-    for adm in admins:
-        chat_id  = adm.get("telegram_chat_id")
-        username = adm.get("username", "admin")
-        if chat_id:
-            res = _send_telegram(chat_id, texto_admin)
-            log.info("[SUPERVISION] Telegram admin → %s (%s) tipo=%s: %s",
-                     username, chat_id, tipo_supervision,
-                     "OK" if res.get("ok") else res.get("error"))
-        # ── Encolar en bridge agenda para este admin ────────────────────────
-        # Usar el título descriptivo si se proporcionó, o uno genérico
-        _encolar_bridge_notificacion(
-            usuario=username,
-            tipo="supervision",
-            titulo=titulo_bridge or "📋 [Supervisión Admin] — copia automática",
-            mensaje=texto.replace("*", ""),
-            nivel="urgente",
-            pedido_id=pedido_id_bridge,
-        )
+    _notificar_evento(
+        evento_codigo, texto,
+        titulo_bridge=titulo_bridge or "📋 [Supervisión Admin] — copia automática",
+        pedido_id_bridge=pedido_id_bridge,
+        nivel_bridge="urgente",
+        tipo_bridge="supervision",
+    )
 
 
 def _get_compradores_hotel(hotel_codigo: str) -> list:
@@ -1324,15 +1405,16 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
 
     # ── Encolar en bridge agenda para ADMINS — SOLO eventos urgentes ─────────
     # Los admins solo deben recibir popup en su Agenda para: solicitudes de
-    # acceso y eventos marcados como urgentes (misma regla que el resto de
-    # notificaciones de la app — ver TIPOS_SUPERVISION_ADMIN). Los avisos de
+    # acceso y eventos marcados como urgentes (quién concretamente los recibe
+    # se configura en Administrador → Configuración de Avisos). Los avisos de
     # nivel normal del comprador NO se replican al admin, para no saturar su
     # Agenda con el día a día rutinario de cada comprador.
-    _enviar_supervision_admins(
-        texto, nivel,
-        titulo_bridge=titulo_bridge,
-        pedido_id_bridge=pid_pedido,
-    )  # nivel="urgente" → copia Telegram + Agenda; "aviso" → se omite (ver TIPOS_SUPERVISION_ADMIN)
+    if nivel == "urgente":
+        _enviar_supervision_admins(
+            texto, "pedido_urgente_admin",
+            titulo_bridge=titulo_bridge,
+            pedido_id_bridge=pid_pedido,
+        )
 
     return resultados
 
@@ -1528,7 +1610,7 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
         # Cambio de estado con alerta urgente → comprador + admins.
         if info_alerta and info_alerta.get("nivel") == "urgente":
             _enviar_supervision_admins(
-                texto, "urgente",
+                texto, "cambio_estado_supervision",
                 titulo_bridge=titulo_bridge,
                 pedido_id_bridge=pedido_id,
             )
@@ -2271,7 +2353,7 @@ def _job_familia_repetida_inner() -> None:
             log.debug("[FAM-REP] Admin hotel %s — último aviso hace %d día(s), esperando 2d",
                       hotel_codigo, reenvio_adm)
         else:
-            admins = _get_admins_telegram()
+            admins = _destinatarios_evento("familia_repetida_admin", "telegram")
             if not admins:
                 log.warning("[FAM-REP] Sin admins con Telegram configurado")
             else:
@@ -2541,9 +2623,9 @@ def _job_techo_urgente_admins_inner() -> None:
             "— Control Pedidos Princess Canarias"
         )
 
-        admins = _get_admins_telegram()
+        admins = _destinatarios_evento("techo_urgente_admin", "telegram")
         if not admins:
-            log.warning("[TECHO-URG] Sin admins con Telegram configurado")
+            log.warning("[TECHO-URG] Sin destinatarios configurados en Configuración de Avisos")
             continue
 
         for adm in admins:
@@ -2838,7 +2920,7 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
 
         # ── Copia de supervisión a admins: creación de pedido sujeto a techo es siempre urgente ──
         _enviar_supervision_admins(
-            texto, "urgente",
+            texto, "techo_nuevo_pedido_admin",
             titulo_bridge=f"🏦 [Supervisión] Nuevo pedido techo · Hotel {hotel_cod}",
             pedido_id_bridge=pedido_id,
         )
@@ -7755,9 +7837,9 @@ def _job_alerta_egress_inner(force: bool = False):
                   total_gb, limite_gb, pct)
         return
 
-    admins = _get_admins_telegram()
+    admins = _destinatarios_evento("egress_alerta", "telegram")
     if not admins:
-        log.warning("[EGRESS] Umbral superado pero no hay admins con Telegram configurado.")
+        log.warning("[EGRESS] Umbral superado pero no hay destinatarios configurados en Configuración de Avisos.")
         return
 
     estado = "🔴 *LÍMITE SUPERADO*" if pct >= 100 else "🟠 *Acercándose al límite*"
@@ -7820,17 +7902,21 @@ def _job_health_check_inner(force: bool = False):
     log.info("▶ [HEALTH] Inicio job integridad operativa — %s", _date.today())
     resultado = _validar_integridad_operativa()
 
-    # ── Destinatarios: todos los admins activos con telegram_chat_id en BD ──
-    # El campo telegram_chat_id se gestiona exclusivamente desde el panel de administración.
-    admins_bd = _get_admins_telegram()
+    # ── Destinatarios: configurados para el evento 'health_check' en
+    #    Administrador → Configuración de Avisos ───────────────────────────
+    admins_bd = _destinatarios_evento("health_check", "telegram")
 
     def _enviar_a_admins(texto_msg, titulo_bridge="🚨 [Integridad] Control Pedidos", nivel_bridge="urgente"):
         for adm in admins_bd:
             username = adm.get("username", "admin")
-            res = _send_telegram(adm["telegram_chat_id"], texto_msg)
-            log.info("[HEALTH] Telegram → %s (%s): %s",
-                     username, adm["telegram_chat_id"],
-                     "OK" if res.get("ok") else res.get("error"))
+            chat_id  = adm.get("telegram_chat_id")
+            if chat_id:
+                res = _send_telegram(chat_id, texto_msg)
+                log.info("[HEALTH] Telegram → %s (%s): %s",
+                         username, chat_id,
+                         "OK" if res.get("ok") else res.get("error"))
+            else:
+                log.warning("[HEALTH] %s configurado para Telegram pero sin telegram_chat_id", username)
             # ── Encolar en bridge agenda para este admin ─────────────────────
             # ANTI-REGRESION (bug 2026-07-14): este aviso es EXCLUSIVO de admin
             # (no tiene contrapartida de comprador) y hasta ahora solo se enviaba
@@ -8117,6 +8203,137 @@ def api_save_config_alertas():
         return jsonify({"ok": True, "actualizadas": len(data)})
     except Exception as exc:
         log.error("[CONFIG] Error guardando config: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/config-avisos", methods=["GET"])
+@admin_required
+def api_get_config_avisos():
+    """
+    Devuelve el catálogo de eventos/causas, los usuarios disponibles
+    (rol admin o compras, activos) y la configuración actual, para pintar
+    la matriz en Administrador → Configuración de Avisos.
+    GET /api/admin/config-avisos
+    """
+    try:
+        eventos = rows_to_list(query(
+            "SELECT codigo, nombre, descripcion FROM eventos_aviso ORDER BY orden, nombre"
+        )) or []
+        usuarios = rows_to_list(query(
+            "SELECT id, username, nombre, email, telegram_chat_id, rol FROM usuarios "
+            "WHERE rol IN ('admin','compras') AND activo=1 ORDER BY rol, nombre"
+        )) or []
+        filas = rows_to_list(query(
+            "SELECT evento_codigo, usuario_id, telegram, email FROM config_avisos"
+        )) or []
+        config = {}
+        for f in filas:
+            config.setdefault(f["evento_codigo"], {})[str(f["usuario_id"])] = {
+                "telegram": bool(f["telegram"]),
+                "email": bool(f["email"]),
+            }
+        return jsonify({"ok": True, "eventos": eventos, "usuarios": usuarios, "config": config})
+    except Exception as exc:
+        log.error("[CONFIG-AVISOS] Error GET: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/config-avisos", methods=["PUT"])
+@admin_required
+def api_save_config_avisos():
+    """
+    Guarda uno o varios cambios de la matriz de Configuración de Avisos.
+    Body: {"cambios": [{"evento_codigo":"...", "usuario_id":1, "telegram":true, "email":false}, ...]}
+    PUT /api/admin/config-avisos
+    """
+    data = request.get_json() or {}
+    cambios = data.get("cambios") or []
+    if not cambios:
+        return jsonify({"ok": False, "error": "Sin cambios"}), 400
+    try:
+        db  = get_db()
+        cur = db.cursor()
+        for c in cambios:
+            evento_codigo = c.get("evento_codigo")
+            usuario_id    = c.get("usuario_id")
+            telegram      = bool(c.get("telegram", False))
+            email         = bool(c.get("email", False))
+            if not evento_codigo or not usuario_id:
+                continue
+            if not telegram and not email:
+                # Sin ningún canal activo — no tiene sentido dejar la fila
+                cur.execute(
+                    "DELETE FROM config_avisos WHERE evento_codigo=%s AND usuario_id=%s",
+                    (evento_codigo, usuario_id)
+                )
+            else:
+                cur.execute(
+                    """INSERT INTO config_avisos (evento_codigo, usuario_id, telegram, email)
+                       VALUES (%s,%s,%s,%s)
+                       ON CONFLICT (evento_codigo, usuario_id)
+                       DO UPDATE SET telegram=EXCLUDED.telegram, email=EXCLUDED.email""",
+                    (evento_codigo, usuario_id, telegram, email)
+                )
+        db.commit()
+        log.info("[CONFIG-AVISOS] Actualizados %d destinatario(s) por admin", len(cambios))
+        return jsonify({"ok": True, "actualizados": len(cambios)})
+    except Exception as exc:
+        log.error("[CONFIG-AVISOS] Error PUT: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/config-avisos/resolver", methods=["GET"])
+@login_required
+def api_resolver_config_avisos():
+    """
+    Consulta en tiempo real de destinatarios configurados para un evento, en
+    el formato que necesita cualquier módulo que envíe avisos — incluido
+    main_agenda (vía el bridge, con la misma sesión que /api/bridge/*).
+    GET /api/config-avisos/resolver?evento=techo_urgente_admin&canal=telegram
+    Respuesta: {"ok": true, "destinatarios": [{"username":.., "telegram_chat_id":.., "email":..}, ...]}
+    """
+    evento_codigo = (request.args.get("evento") or "").strip()
+    canal = (request.args.get("canal") or "telegram").strip().lower()
+    if not evento_codigo:
+        return jsonify({"ok": False, "error": "Falta el parámetro 'evento'"}), 400
+    if canal not in ("telegram", "email"):
+        return jsonify({"ok": False, "error": "canal debe ser 'telegram' o 'email'"}), 400
+    destinatarios = _destinatarios_evento(evento_codigo, canal)
+    return jsonify({"ok": True, "evento": evento_codigo, "canal": canal, "destinatarios": destinatarios})
+
+
+@app.route("/api/emails-sistema-pendientes", methods=["GET"])
+@login_required
+def api_emails_sistema_pendientes():
+    """
+    Devuelve los emails de sistema pendientes de envío (encolados por jobs
+    sin navegador abierto) para que el frontend los envíe vía EmailJS.
+    GET /api/emails-sistema-pendientes
+    """
+    try:
+        pendientes = rows_to_list(query(
+            "SELECT id, evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text "
+            "FROM emails_sistema_pendientes WHERE enviado=FALSE ORDER BY id LIMIT 20"
+        )) or []
+        return jsonify({"ok": True, "pendientes": pendientes})
+    except Exception as exc:
+        log.error("[EMAILS-SISTEMA] Error listando pendientes: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/emails-sistema-pendientes/<int:email_id>/marcar-enviado", methods=["POST"])
+@login_required
+def api_marcar_email_sistema_enviado(email_id):
+    """POST /api/emails-sistema-pendientes/<id>/marcar-enviado — tras enviarlo vía EmailJS."""
+    try:
+        execute(
+            "UPDATE emails_sistema_pendientes SET enviado=TRUE, enviado_en=NOW() WHERE id=%s",
+            (email_id,)
+        )
+        get_db().commit()
+        return jsonify({"ok": True})
+    except Exception as exc:
+        log.error("[EMAILS-SISTEMA] Error marcando enviado id=%s: %s", email_id, exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 

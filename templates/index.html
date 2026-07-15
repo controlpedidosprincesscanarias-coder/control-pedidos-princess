@@ -1112,6 +1112,10 @@ tbody tr:last-child{border-bottom:none}
       <span class="icon">⚙️</span> Config alertas
     </div>
 
+    <div class="sb-item admin-only" data-view="config-avisos" data-roles="admin" onclick="showViewGuarded('config-avisos',this)">
+      <span class="icon">🔔</span> Config. Avisos
+    </div>
+
     <div class="sb-item admin-only" data-view="restore" data-roles="admin" onclick="showViewGuarded('restore',this)">
       <span class="icon">🔄</span> Restaurar backup
     </div>
@@ -1123,7 +1127,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.3.8
+          V 12.4.2
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1423,7 +1427,26 @@ tbody tr:last-child{border-bottom:none}
         </div>
       </div>
 
-      <!-- ── Vista: Restaurar Backup (solo admin) ────────────────────────── -->
+      <!-- ── Vista: Configuración de Avisos (solo admin) ─────────────────── -->
+      <div id="view-config-avisos" class="section-hidden">
+        <div class="card">
+          <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <span class="card-title">🔔 Configuración de Avisos</span>
+            <button onclick="loadConfigAvisos()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Recargar</button>
+            <button onclick="saveConfigAvisos()" style="padding:5px 18px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">💾 Guardar cambios</button>
+          </div>
+          <div style="margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:12.5px;background:#eef4ff;color:#1a4d8f;line-height:1.5">
+            Elige, para cada evento/causa, qué usuarios reciben el aviso y por qué canal(es). Si un evento no tiene
+            ningún usuario marcado, ese aviso simplemente no se envía a nadie. Los cambios se aplican de inmediato
+            para <b>control_pedidos</b>, <b>main_agenda</b> y cualquier otro módulo que consulte esta configuración.
+          </div>
+          <div id="config-avisos-msg" style="display:none;margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600"></div>
+          <div id="config-avisos-body" style="padding:0 16px 24px;overflow-x:auto">
+            <div style="text-align:center;padding:32px;color:var(--text-secondary)">Cargando configuración…</div>
+          </div>
+        </div>
+      </div>
+
       <div id="view-restore" class="section-hidden">
         <div class="card">
           <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
@@ -2331,6 +2354,7 @@ async function _entrarEnApp(r) {
   // loadStats (llamado por showView) ya actualiza badge y card de alertas del dashboard.
   _checkIntegridadBadge();  // badge silencioso en sidebar para admin
   _startVersionPolling();   // polling automático de nueva versión cada 5 min
+  if (G.rol === 'admin') _startEmailsSistemaPolling();
 }
 
 async function doLogout() {
@@ -2994,6 +3018,7 @@ const _viewLabels = {
   usuarios:        'Usuarios',
   integridad:      'Integridad',
   'config-alertas':'Config alertas',
+  'config-avisos': 'Config. Avisos',
 };
 
 const _rolLabels = { admin: '👑 Administrador', compras: '🛒 Compras', hotel: '🏨 Hotel' };
@@ -3048,7 +3073,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Config Alertas',restore:'🔄 Restaurar Backup'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Config Alertas','config-avisos':'🔔 Configuración de Avisos',restore:'🔄 Restaurar Backup'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -3067,6 +3092,7 @@ function showView(view, el) {
   if (view==='usuarios')    { loadUsuarios(); adminCargarSolicitudes(); }
   if (view==='integridad')     loadIntegridad();
   if (view==='config-alertas') loadConfigAlertas();
+  if (view==='config-avisos') loadConfigAvisos();
   if (view==='restore') { restoreCargarLista(); restoreComprobarAlEntrar(); }
 }
 
@@ -5033,6 +5059,7 @@ function calcDias(s) {
       }
     } catch(_) {}
     _startVersionPolling();   // polling automático cada 30 s (primeros 15 min) luego 1 min
+    if (G.rol === 'admin') _startEmailsSistemaPolling();
   }
 })();
 </script>
@@ -5761,6 +5788,99 @@ async function saveConfigAlertas() {
     if (d.ok) {
       msg.style.background = '#d4edda'; msg.style.color = '#155724';
       msg.textContent = `✅ ${d.actualizadas} parámetros guardados. Se aplican en el próximo ciclo de alertas.`;
+    } else {
+      msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
+      msg.textContent = '❌ Error: ' + d.error;
+    }
+    setTimeout(() => { msg.style.display = 'none'; }, 5000);
+  } catch(e) {
+    msg.style.display = 'block';
+    msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
+    msg.textContent = '❌ Error de red: ' + e.message;
+  }
+}
+
+// ── Configuración de Avisos: matriz eventos × usuarios × canal ─────────────
+// Reemplaza la lógica hardcodeada de qué usuarios reciben Telegram/email
+// para cada evento/causa (antes: TIPOS_SUPERVISION_ADMIN + "todos los
+// admins" en código). Cada checkbox se guarda tal cual en config_avisos.
+let _configAvisosData = null;   // { eventos, usuarios, config } — última carga del servidor
+
+async function loadConfigAvisos() {
+  const body = document.getElementById('config-avisos-body');
+  try {
+    const d = await api('/api/admin/config-avisos');
+    if (!d.ok) throw new Error(d.error);
+    _configAvisosData = d;
+
+    let html = `<table style="width:100%;border-collapse:collapse;font-size:12px">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:8px 10px;border-bottom:2px solid var(--border);min-width:220px;position:sticky;left:0;background:var(--surface)">Evento / causa</th>`;
+    for (const u of d.usuarios) {
+      const rolIcon = u.rol === 'admin' ? '👑' : '🛒';
+      html += `<th style="padding:8px 6px;border-bottom:2px solid var(--border);text-align:center;min-width:110px">
+        ${rolIcon} ${u.nombre || u.username}
+        ${!u.telegram_chat_id ? '<div style="font-size:9px;color:#dc3545;font-weight:400">sin chat_id</div>' : ''}
+        ${!u.email ? '<div style="font-size:9px;color:#dc3545;font-weight:400">sin email</div>' : ''}
+      </th>`;
+    }
+    html += `</tr></thead><tbody>`;
+
+    for (const ev of d.eventos) {
+      html += `<tr>
+        <td style="padding:8px 10px;border-bottom:1px solid #eee;position:sticky;left:0;background:var(--surface)">
+          <div style="font-weight:600">${ev.nombre}</div>
+          <div style="font-size:10.5px;color:var(--text-secondary);line-height:1.3;max-width:260px">${ev.descripcion || ''}</div>
+        </td>`;
+      for (const u of d.usuarios) {
+        const cfg = (d.config[ev.codigo] && d.config[ev.codigo][String(u.id)]) || { telegram: false, email: false };
+        html += `<td style="padding:6px;border-bottom:1px solid #eee;text-align:center">
+          <label style="display:inline-flex;align-items:center;gap:3px;margin-right:8px;cursor:pointer" title="Telegram">
+            <input type="checkbox" class="avisos-chk" data-evento="${ev.codigo}" data-usuario="${u.id}" data-canal="telegram" ${cfg.telegram ? 'checked' : ''}>
+            <span style="font-size:13px">📱</span>
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer" title="Email">
+            <input type="checkbox" class="avisos-chk" data-evento="${ev.codigo}" data-usuario="${u.id}" data-canal="email" ${cfg.email ? 'checked' : ''}>
+            <span style="font-size:13px">✉️</span>
+          </label>
+        </td>`;
+      }
+      html += `</tr>`;
+    }
+    html += `</tbody></table>`;
+    if (!d.usuarios.length) {
+      html = `<div style="padding:24px;color:var(--text-secondary)">No hay usuarios con rol admin o compras activos para configurar.</div>`;
+    }
+    body.innerHTML = html;
+  } catch(e) {
+    body.innerHTML = `<div style="color:red;padding:24px">Error cargando configuración: ${e.message}</div>`;
+  }
+}
+
+async function saveConfigAvisos() {
+  const checks = document.querySelectorAll('#config-avisos-body input.avisos-chk');
+  // Agrupar por (evento, usuario) para enviar telegram+email juntos
+  const clave = (ev, uid) => `${ev}__${uid}`;
+  const mapa = {};
+  checks.forEach(chk => {
+    const k = clave(chk.dataset.evento, chk.dataset.usuario);
+    if (!mapa[k]) mapa[k] = { evento_codigo: chk.dataset.evento, usuario_id: parseInt(chk.dataset.usuario), telegram: false, email: false };
+    mapa[k][chk.dataset.canal] = chk.checked;
+  });
+  const cambios = Object.values(mapa);
+  const msg = document.getElementById('config-avisos-msg');
+  try {
+    const r = await fetch('/api/admin/config-avisos', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ cambios })
+    });
+    const d = await r.json();
+    msg.style.display = 'block';
+    if (d.ok) {
+      msg.style.background = '#d4edda'; msg.style.color = '#155724';
+      msg.textContent = `✅ Configuración guardada (${d.actualizados} destinatario(s)). Se aplica de inmediato.`;
     } else {
       msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
       msg.textContent = '❌ Error: ' + d.error;
@@ -7646,6 +7766,43 @@ function _abrirVentanaImpresion(html) {
 
   </div>
 </div>
+
+<script>
+/* ── Emails de sistema pendientes (Configuración de Avisos) ───────────────
+   Los avisos generados por jobs sin navegador abierto (egress, integridad,
+   techo urgente, familias repetidas, solicitudes de acceso...) se encolan
+   en el backend (emails_sistema_pendientes) porque esta app no tiene SMTP
+   propio — el envío real depende de EmailJS en el navegador, igual que el
+   resto de emails de la aplicación. Este poller (solo admin) los recoge y
+   envía cada 5 minutos mientras haya una sesión de admin abierta. */
+let _emailsSistemaPollTimer = null;
+
+function _startEmailsSistemaPolling() {
+  if (_emailsSistemaPollTimer) return;   // ya activo, no duplicar
+  _enviarEmailsSistemaPendientes();      // primera pasada inmediata
+  _emailsSistemaPollTimer = setInterval(_enviarEmailsSistemaPendientes, 5 * 60 * 1000);
+}
+
+async function _enviarEmailsSistemaPendientes() {
+  try {
+    const r = await api('/api/emails-sistema-pendientes', 'GET');
+    if (!r || !r.ok || !r.pendientes || !r.pendientes.length) return;
+    for (const p of r.pendientes) {
+      try {
+        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+          to_email: p.destinatario,
+          subject:  p.asunto,
+          message:  p.cuerpo_text || p.cuerpo_html || '',
+          reply_to: p.destinatario,
+        });
+        await api(`/api/emails-sistema-pendientes/${p.id}/marcar-enviado`, 'POST');
+      } catch (ejsErr) {
+        console.warn(`[EmailJS] fallo email de sistema "${p.evento_codigo}" a ${p.destinatario}:`, ejsErr);
+      }
+    }
+  } catch (_) {}
+}
+</script>
 
 <script>
 /* ── Detector automático de nueva versión ───────────────────────────────── */

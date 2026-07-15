@@ -1,3 +1,24 @@
+# v12.4.2 — 15 julio 2026 (hotfix)
+
+🐛 Fix: `_job_alertas_diarias` rota desde el deploy de v12.4.0
+
+v12.4.0 (Configuración de Avisos) se ramificó desde v12.3.6, antes del hotfix v12.3.8, así que traía de vuelta el mismo `NameError: name '_job_alertas_diarias_inner' is not defined` que ya se había corregido una vez (ver v12.3.8 más abajo). Se revisaron también los otros 5 jobs en segundo plano (familia repetida, techo urgente, techo mensual, alerta de egress, health check) y estaban bien — el problema era exclusivo de `_job_alertas_diarias`.
+
+Corregido: se restaura la línea `def _job_alertas_diarias_inner():` en su sitio.
+
+# v12.4.0 — 15 julio 2026
+
+🔔 Configuración de Avisos: destinatarios de Telegram/email configurables por evento, sin tocar código
+
+Hasta ahora, quién recibía cada tipo de alerta de sistema (cambios de estado urgentes, techo de gastos superado, familias repetidas, egress, integridad, solicitudes de acceso...) estaba hardcodeado: `TIPOS_SUPERVISION_ADMIN = {"urgente"}` decidía qué tipos se replicaban a admins, y "todos los admins con `telegram_chat_id`" (o "todos los admins con email") recibían indiscriminadamente cualquier evento de ese tipo. Añadir o quitar un destinatario, o decidir que un evento concreto solo interese a una persona, requería tocar `app.py`.
+
+Cambios:
+- Nuevas tablas `eventos_aviso` (catálogo de 8 causas: cambio de estado urgente, pedido crítico parado, techo superado, nuevo pedido sujeto a techo, familias repetidas, egress, integridad, solicitud de acceso) y `config_avisos` (qué usuario recibe qué evento, por qué canal — Telegram y/o email).
+- Nueva sección **Administrador → Configuración de Avisos**: matriz eventos × usuarios con checkbox de Telegram/email por celda. Si nadie está marcado para un evento, no se envía nada — ya no hay un fallback "todos los admins".
+- `TIPOS_SUPERVISION_ADMIN`, `_get_admins_telegram()`, `_get_admin_emails()` y `_get_solo_admin_emails()` (esta última mantenida como alias de compatibilidad hacia el evento `solicitud_acceso`) quedan sustituidas por `_destinatarios_evento(evento_codigo, canal)` y el dispatcher único `_notificar_evento(...)`.
+- Nuevo endpoint `GET /api/config-avisos/resolver?evento=...&canal=...` para que main_agenda (vía el bridge) o cualquier otro módulo consulte esta configuración en tiempo real, sin pasar por el panel de admin.
+- El canal email para avisos de sistema (egress, integridad, techo, familias) no tenía SMTP propio en el backend — solo existía el envío vía EmailJS en el navegador. Se añade una cola (`emails_sistema_pendientes`) que el primer admin con sesión abierta envía en segundo plano cada 5 minutos; a diferencia de Telegram, este canal no es instantáneo si no hay ningún admin con la app abierta.
+
 # v12.3.8 — 15 julio 2026 (hotfix)
 
 🐛 Fix: `_job_alertas_diarias` rota desde el deploy de v12.3.6
