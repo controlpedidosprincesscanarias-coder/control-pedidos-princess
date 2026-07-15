@@ -1,3 +1,11 @@
+# v12.3.8 — 15 julio 2026 (hotfix)
+
+🐛 Fix: `_job_alertas_diarias` rota desde el deploy de v12.3.6
+
+Al añadir `_flush_egress_bytes()` tras `_job_alertas_diarias_inner()` en v12.3.6 se borró por error la línea `def _job_alertas_diarias_inner():`, fusionando el cuerpo de esa función dentro de `_job_alertas_diarias()`. Resultado: el job (corre cada minuto, 07:00-15:59h) fallaba cada vez con `NameError: name '_job_alertas_diarias_inner' is not defined` — ninguna alerta diaria por Telegram a compradores se envió desde el deploy hasta este hotfix. Los otros 5 jobs tocados en el mismo cambio (familia repetida, techo urgente, techo mensual, alerta de egress, health check) se revisaron y estaban bien.
+
+Corregido: se restaura la línea `def _job_alertas_diarias_inner():` en su sitio.
+
 # v12.3.6 — 14 julio 2026
 
 📊 Egress: estimación más fiel + aviso automático movido a las 08:00

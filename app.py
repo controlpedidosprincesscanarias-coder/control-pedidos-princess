@@ -1901,6 +1901,8 @@ def _job_alertas_diarias():
     with app.app_context():
         _job_alertas_diarias_inner()
         _flush_egress_bytes()
+
+def _job_alertas_diarias_inner():
     log.info("▶ [SCHEDULER] Inicio job alertas diarias — %s", _date.today())
     try:
         alertas_raw = rows_to_list(query(
