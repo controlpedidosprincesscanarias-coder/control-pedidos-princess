@@ -1,51 +1,59 @@
-# v12.5.0 — 15 julio 2026
+# v12.6.0 — 15 julio 2026
 
-📮 Reenvío a admins configurable en techo urgente y familia repetida
+🗄️ El chat pasa a poder usar una Supabase separada de la de pedidos
+
+La Supabase de `pedidos` estaba saturada, y el chat (v12.5.0) añadía carga
+extra sobre ella con cada mensaje y cada apertura de conversación. Las 4
+tablas del chat nunca tuvieron `FOREIGN KEY` hacia `usuarios` ni ninguna
+tabla de pedidos — usan el username como texto plano — así que se han
+podido mover a una conexión completamente independiente sin tocar el
+esquema.
 
 Cambios:
-- 2 claves nuevas en `config_alertas`, nuevo grupo en Admin → Config Alertas: "📮 Reenvío a Admins (Techo / Familia repetida)":
-  - `techo_urgente_admin_reenvio_dias` (default 2)
-  - `familia_repetida_admin_reenvio_dias` (default 2)
-- 2 números mágicos corregidos — antes `< 2` hardcodeado en el código, ahora leen `get_config()`:
-  - Job de techo urgente a admins (reenvío cada N días)
-  - Job de familia/partida repetida a admins (reenvío cada N días)
+- Nueva variable de entorno opcional `CHAT_DATABASE_URL`. Si no se
+  configura, el chat sigue usando `DATABASE_URL` exactamente como en
+  v12.5.0 — este cambio es opt-in, no rompe nada por sí solo.
+- Nueva `get_chat_db()` (conexión psycopg2 separada) y helpers
+  `query_chat()` / `execute_chat()`, paralelos a los `get_db()` / `query()`
+  / `execute()` de siempre.
+- La creación de las tablas del chat se separa de `_auto_migrate()` a
+  `_auto_migrate_chat()`, que corre contra `CHAT_DATABASE_URL`.
+- Única excepción intencional: `GET /api/chat/usuarios` sigue leyendo de
+  la Supabase de pedidos, porque la tabla `usuarios` vive ahí — es una
+  lectura ligera que no crece con el volumen de mensajes, así que no
+  contribuye a la saturación que se quería aliviar.
+- Documentado en `GUIA_DESPLIEGUE.md` (Paso 1b) cómo crear el segundo
+  proyecto de Supabase, si se quiere aprovechar el cambio.
 
-Bug de etiquetado corregido: las notificaciones push de "familia/partida repetida" (tanto a comprador como a admin) se encolaban con `tipo="techo"` en `bridge_notificaciones`, mezclándose con las de techo de gastos real. Ahora usan `tipo="familia_repetida"`, un tipo propio. Inocuo para lo ya desplegado (main_agenda no filtra por `tipo`, solo lo muestra/loguea), pero deja el dato limpio por si en el futuro se quiere tratar distinto.
+# v12.5.0 — 15 julio 2026
 
-Lo que se deja tal cual, con su motivo:
-- `cambio_estado`, `solicitud_acceso`, "techo nuevo pedido" → eventos puntuales, no recordatorios; no tiene sentido regular su repetición.
-- `alerta_auto` (Telegram/push de pedidos en alerta) → ya era configurable en días vía las claves `<estado>_ciclo` + `dias_critico`, ya existentes en Admin.
-- `egress`, `health` → alertas de infraestructura para admin, cadencia diaria intencionada por diseño del job, no de negocio de pedidos.
+💬 Chat interno entre usuarios (privado 1 a 1 + canal general), en tiempo real
 
-# v12.4.6 — 15 julio 2026
+Hasta ahora no había forma de que los compañeros que comparten la app (compradores,
+hoteles, admins) se comunicasen entre ellos sin salir a WhatsApp o email. Se añade
+un chat que reutiliza el mismo usuario/contraseña de Control de Pedidos — no hay
+alta ni login nuevo.
 
-🔁 Repetición de popups configurable por tipo y nivel de alerta
-
-Hasta ahora la frecuencia con la que un popup de Agenda se repetía para un pedido en alerta (🔴 urgente / 🟡 aviso) estaba fija en el código de main_agenda (`INTERVALO_POPUP_URGENTE`/`NORMAL`), igual para todos los tipos de alerta. Ahora es configurable por tipo desde Admin → Config Alertas.
-
-Cambios (`control_pedidos` — `app.py` + `templates/index.html`):
-- 15 claves nuevas en `config_alertas`, grupo "🔁 Repetición de Popups en Agenda" — 3 por cada uno de los 5 tipos (Enviado al proveedor, Firma Compras, Firma Hotel, Entrega Parcial, Cotización): `<tipo>_popup_repetir` (on/off), `<tipo>_popup_horas_critico`, `<tipo>_popup_horas_normal`.
-- El panel de Config Alertas ya renderiza cualquier clave/grupo de forma genérica, así que solo hizo falta añadir el label del grupo y la unidad ("horas") en `index.html` — el formulario en sí no cambió.
-- `_clasificar_alertas()` añade estos 3 campos a cada alerta antes de devolverla en `/api/bridge/alertas`, para que main_agenda sepa cómo repetir cada una.
-
-Bug corregido de paso: `_clasificar_alertas()` usaba un diccionario de umbrales fijo en código (`_UMBRALES_ALERTAS`) en vez de `_build_umbrales()` — la función que sí lee de Admin y que ya usaba el resto de la app. Esto significaba que cambiar los días de "Enviado al proveedor — Urgente" en Admin no afectaba a los popups de Agenda, solo al email/Telegram del job diario. Ahora los tres canales (popup, email, Telegram) leen del mismo sitio.
-
-Cambios en `main_agenda` (`pedidos_agenda_bridge.py`), publicados como v4.7.0 / bridge v4.7:
-- `_debe_mostrar_popup()` y `_aviso_para_popup()` leen `popup_repetir`/`popup_horas_critico`/`popup_horas_normal` de cada alerta recibida, en vez de las constantes fijas de antes (que quedan como fallback si el servidor no manda esos campos — compatibilidad con versiones anteriores de `control_pedidos`).
-- Si `popup_repetir=False`, el popup se muestra una única vez por pedido.
-- Bug corregido: el reseteo del temporizador al escalar de "aviso" a "urgente" comparaba contra un nivel `"normal"` que nunca existe (debía ser `"aviso"`), así que nunca se disparaba — el popup podía tardar mucho más de lo esperado en repetirse tras un cambio de nivel.
-
-Requiere main_agenda/bridge ≥ v4.7.0 para aprovechar la repetición configurable — con una versión anterior del bridge, sigue funcionando con los intervalos fijos de siempre (fallback de compatibilidad, sin romper nada).
-
-# v12.4.4 — 15 julio 2026
-
-🐛 Fix: aviso falso "agente sin sincronizar" en Restaurar Backup
-
-`ultimo_escaneo` se calculaba como `MAX(actualizado_en)` de `backups_cache` — pero esa columna solo se toca cuando un backup cambia de verdad (fix de egress anterior). Como normalmente solo hay un backup nuevo al día (17:00), el panel podía avisar de "agente sin sincronizar hace 60+ minutos" aunque `restore_agent.py` estuviera corriendo perfectamente cada 5 minutos sin encontrar nada nuevo que subir.
-
-`/api/admin/backup/listar` ahora lee de una tabla nueva, `agente_heartbeat`, que `restore_agent.py` actualiza en cada ciclo — haya cambios o no. Si el agente todavía no está actualizado (tabla o fila inexistente), cae de vuelta al cálculo antiguo como red de seguridad, así que no rompe nada para quien no haya desplegado el `restore_agent.py` nuevo todavía.
-
-Requiere desplegar también la versión de `restore_agent.py` con el heartbeat (ver `ComprasPrincess_Backup`) — si solo se actualiza `app.py`, el aviso seguirá comportándose como antes (fallback automático, no falla, pero tampoco se arregla).
+Cambios:
+- Nuevas tablas `chat_canales`, `chat_participantes`, `chat_mensajes` y
+  `chat_lecturas` (esta última solo para el contador de no leídos).
+- Canal `general` fijo, visible para todos los usuarios activos, más canales
+  privados 1 a 1 creados bajo demanda (id determinista `dm:usuarioA:usuarioB`,
+  ordenado alfabéticamente, para no duplicar conversación).
+- Entrega en tiempo real vía **Flask-SocketIO**: eventos `connect`,
+  `unirse_canal`, `enviar_mensaje` → `nuevo_mensaje`. Reutiliza la sesión de
+  Flask ya existente (`manage_session=True`), sin autenticación paralela.
+- Endpoints REST equivalentes (`GET/POST /api/chat/mensajes`,
+  `GET /api/chat/canales`, `GET /api/chat/usuarios`) para que cualquier
+  cliente que aún no hable socket.io (o si el WebSocket no llega a
+  establecerse) siga funcionando por polling, sin perder mensajes.
+- **Requiere cambiar el Start Command en Render** a
+  `gunicorn -k eventlet -w 1 app:app` — ver GUIA_DESPLIEGUE.md. Sin este
+  cambio el chat sigue funcionando (long-polling), pero sin entrega instantánea.
+- Pendiente: interfaz de chat en el frontend web (`templates/index.html`) y en
+  `main_agenda` (escritorio). Este release deja lista toda la base de datos y
+  la API; el cliente de escritorio se entrega en una versión aparte de
+  OrganizadorPrincess.
 
 # v12.4.2 — 15 julio 2026 (hotfix)
 

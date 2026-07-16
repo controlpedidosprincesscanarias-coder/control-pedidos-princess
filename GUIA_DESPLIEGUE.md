@@ -28,6 +28,23 @@
    Puedes hacerlo pegando el contenido de `models.py` (las sentencias en `SQL_STATEMENTS`)
    o dejando que Flask lo ejecute en el primer arranque con `init_db()`.
 
+### PASO 1b — Segunda Supabase, solo para el chat (v12.6.0, opcional)
+
+Las tablas del chat (`chat_canales`, `chat_participantes`, `chat_mensajes`,
+`chat_lecturas`) pueden vivir en un proyecto de Supabase **distinto** al de
+pedidos, para no competir por la misma cuota de egress/almacenamiento. No es
+obligatorio — si no haces este paso, el chat simplemente usa la misma
+Supabase de siempre (`DATABASE_URL`) y todo sigue funcionando igual que
+antes de esta versión.
+
+1. Repite el punto 1 de arriba, pero con otro nombre: `control-pedidos-chat`.
+2. Copia su Connection String (igual que en el punto 2).
+3. **No hace falta ejecutar ningún SQL a mano aquí**: la app crea las 4
+   tablas del chat sola en el primer arranque (`_auto_migrate_chat()`),
+   igual que ya hace con el resto de tablas.
+4. En Render añadirás esta URI como variable `CHAT_DATABASE_URL` — ver
+   PASO 3.
+
 ---
 
 ## PASO 2 — EmailJS: envío de email desde el frontend
@@ -51,7 +68,21 @@ Configura tu Service ID y Template ID en EmailJS y actualiza las constantes en e
 3. Configura el servicio:
    - **Runtime:** Python 3
    - **Build command:** `pip install -r requirements.txt`
-   - **Start command:** `gunicorn app:app`
+   - **Start command:** `gunicorn -k eventlet -w 1 app:app`
+
+   > ⚠️ **Chat interno (v12.5.0):** el Start Command cambia respecto a versiones
+   > anteriores (`gunicorn app:app`, sin `-k eventlet -w 1`). El worker `eventlet`
+   > es el que permite mantener las conexiones WebSocket abiertas para el chat en
+   > tiempo real. Si por lo que sea no se puede aplicar este cambio (o el
+   > **Worker de Cloudflare** que hace de proxy — `proxy.controlpedidosprincess-
+   > canarias.workers.dev` — no reenvía la cabecera `Upgrade` de WebSocket, algo
+   > que no se puede confirmar sin revisar su código), el chat NO se rompe: la
+   > librería cliente de socket.io degrada sola a long-polling (peticiones HTTP
+   > normales, las que el Worker ya sabe proxiar hoy). Solo se pierde la entrega
+   > instantánea, no la funcionalidad. `-w 1` es intencional: con el worker
+   > eventlet, un solo proceso ya gestiona muchas conexiones concurrentes
+   > mediante green threads; usar varios workers de gunicorn partiría las salas
+   > de socket.io entre procesos que no se ven entre sí.
    - **Plan:** Free
 
 4. En **Environment → Add Environment Variable**, añade estas variables:
@@ -59,6 +90,7 @@ Configura tu Service ID y Template ID en EmailJS y actualiza las constantes en e
    | Variable | Valor |
    |---|---|
    | `DATABASE_URL` | La URI de Supabase del Paso 1 |
+   | `CHAT_DATABASE_URL` | *(opcional, v12.6.0)* La URI de Supabase del Paso 1b, solo para el chat. Si la omites, el chat usa `DATABASE_URL`. |
    | `SECRET_KEY` | Una cadena aleatoria larga |
    | *(sin variables de email)* | El email se gestiona en el frontend vía EmailJS |
    | `EMAILS_INTERNOS` | `victor.martin@princess.es,jesus.curbelo@princess.es` |

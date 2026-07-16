@@ -13,11 +13,15 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 
 from flask import Flask, request, jsonify, send_from_directory, session, g, Response
+from flask_socketio import SocketIO, emit, join_room
 from models import SQL_STATEMENTS, ESTADOS_VALIDOS, ESTADOS_EMAIL_PROVEEDOR, ESTADOS_EMAIL_INTERNO
 
 # ── Configuración ──────────────────────────────────────────────────────────────
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")          # Supabase → Settings → Database → URI
+# Proyecto de Supabase DISTINTO, dedicado solo al chat (v12.6.0) — ver
+# get_chat_db() más abajo. Si se deja vacía, el chat usa DATABASE_URL.
+CHAT_DATABASE_URL = os.environ.get("CHAT_DATABASE_URL", "")
 SECRET_KEY = os.environ["SECRET_KEY"]
 
 # Email — gestionado enteramente por EmailJS en el frontend
@@ -27,6 +31,17 @@ app = Flask(__name__)
 app.secret_key = SECRET_KEY
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+# ── Chat en tiempo real (v12.5.0) ────────────────────────────────────────────
+# manage_session=True (por defecto) hace que flask.session esté disponible
+# dentro de los handlers de socketio exactamente igual que en cualquier vista
+# — reutiliza la MISMA cookie de sesión que ya crea /api/login y
+# /api/bridge/login, sin autenticación paralela. async_mode="eventlet"
+# requiere arrancar gunicorn con el worker eventlet (ver GUIA_DESPLIEGUE.md);
+# si el dyno/servicio no lo soporta, los clientes de socket.io hacen
+# fallback automático a long-polling — el chat sigue funcionando, solo que
+# con más latencia, así que esto nunca es un cambio "rompedor".
+socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 def _auto_migrate():
     """Añade columnas/tablas nuevas de forma idempotente."""
@@ -261,7 +276,7 @@ def _auto_migrate():
                 CREATE TABLE IF NOT EXISTS bridge_notificaciones (
                     id           SERIAL PRIMARY KEY,
                     usuario      TEXT NOT NULL,         -- username del destinatario
-                    tipo         TEXT NOT NULL,         -- 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida'
+                    tipo         TEXT NOT NULL,         -- 'cambio_estado' | 'alerta_auto' | 'techo'
                     pedido_id    INTEGER,               -- puede ser NULL (p.ej. alertas de techo)
                     titulo       TEXT NOT NULL,
                     mensaje      TEXT NOT NULL,
@@ -284,49 +299,6 @@ def _auto_migrate():
                 ('plazo_urgente_ciclo',             '2', 'numero', 'Plazo entrega — Ciclo urgente tras vencer (cada N días)',   'plazo_entrega', 2),
                 ('plazo_parcial_aviso_dias_antes',  '3', 'numero', 'Entrega Parcial c/plazo — Aviso previo (días antes)',       'plazo_entrega', 3),
                 ('plazo_parcial_urgente_ciclo',     '2', 'numero', 'Entrega Parcial c/plazo — Ciclo urgente (cada N días)',     'plazo_entrega', 4),
-            ]:
-                cur.execute("""
-                    INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (clave) DO NOTHING
-                """, (_clave, _valor, _tipo, _label, _grupo, _orden))
-            # ── v12.5.0 — Repetición de popups en Agenda por tipo de alerta ────
-            # Controla, para cada estado de pedido, si el popup en Organizador
-            # Princess se repite mientras el pedido siga en alerta y cada
-            # cuántas horas (por separado para nivel 🔴 crítico/urgente y
-            # 🟡 normal/aviso). Antes esto era fijo en código (bridge: 1h
-            # urgente / 24h aviso) e igual para todos los tipos. Consumido por
-            # _clasificar_alertas() → expuesto en /api/bridge/alertas → leído
-            # por pedidos_agenda_bridge.py (Organizador Princess).
-            for _clave, _valor, _tipo, _label, _grupo, _orden in [
-                ('enviado_popup_repetir',           '1',  'bool',   'Enviado al proveedor — Repetir popup en Agenda',        'popup_repeticion', 1),
-                ('enviado_popup_horas_critico',     '1',  'numero', 'Enviado al proveedor — Repetir cada (horas) si 🔴 URGENTE', 'popup_repeticion', 2),
-                ('enviado_popup_horas_normal',       '24', 'numero', 'Enviado al proveedor — Repetir cada (horas) si 🟡 AVISO',   'popup_repeticion', 3),
-                ('firma_compras_popup_repetir',      '1',  'bool',   'Firma Dir. Compras — Repetir popup en Agenda',           'popup_repeticion', 4),
-                ('firma_compras_popup_horas_critico', '1', 'numero', 'Firma Dir. Compras — Repetir cada (horas) si 🔴 URGENTE', 'popup_repeticion', 5),
-                ('firma_compras_popup_horas_normal',  '24','numero', 'Firma Dir. Compras — Repetir cada (horas) si 🟡 AVISO',   'popup_repeticion', 6),
-                ('firma_hotel_popup_repetir',        '1',  'bool',   'Firma Dir. Hotel — Repetir popup en Agenda',             'popup_repeticion', 7),
-                ('firma_hotel_popup_horas_critico',  '1',  'numero', 'Firma Dir. Hotel — Repetir cada (horas) si 🔴 URGENTE',   'popup_repeticion', 8),
-                ('firma_hotel_popup_horas_normal',   '24', 'numero', 'Firma Dir. Hotel — Repetir cada (horas) si 🟡 AVISO',     'popup_repeticion', 9),
-                ('entrega_parcial_popup_repetir',    '1',  'bool',   'Entrega Parcial — Repetir popup en Agenda',              'popup_repeticion', 10),
-                ('entrega_parcial_popup_horas_critico','1','numero', 'Entrega Parcial — Repetir cada (horas) si 🔴 URGENTE',    'popup_repeticion', 11),
-                ('entrega_parcial_popup_horas_normal', '24','numero','Entrega Parcial — Repetir cada (horas) si 🟡 AVISO',      'popup_repeticion', 12),
-                ('cotizacion_popup_repetir',         '1',  'bool',   'Pendiente Cotización — Repetir popup en Agenda',         'popup_repeticion', 13),
-                ('cotizacion_popup_horas_critico',   '1',  'numero', 'Pendiente Cotización — Repetir cada (horas) si 🔴 URGENTE','popup_repeticion', 14),
-                ('cotizacion_popup_horas_normal',    '24', 'numero', 'Pendiente Cotización — Repetir cada (horas) si 🟡 AVISO', 'popup_repeticion', 15),
-            ]:
-                cur.execute("""
-                    INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
-                    VALUES (%s, %s, %s, %s, %s, %s)
-                    ON CONFLICT (clave) DO NOTHING
-                """, (_clave, _valor, _tipo, _label, _grupo, _orden))
-            # ── v12.6.0 — Reenvío a Admins (antes hardcodeado a "cada 2 días") ─
-            # Ambos jobs (techo urgente y familia/partida repetida) esperaban un
-            # número fijo de días naturales entre avisos repetidos al mismo
-            # hotel para el rol admin. Se convierte en config editable.
-            for _clave, _valor, _tipo, _label, _grupo, _orden in [
-                ('techo_urgente_admin_reenvio_dias',    '2', 'numero', 'Techo urgente — Reenvío a Admins (cada N días)',            'reenvio_admin', 1),
-                ('familia_repetida_admin_reenvio_dias', '2', 'numero', 'Familia/partida repetida — Reenvío a Admins (cada N días)', 'reenvio_admin', 2),
             ]:
                 cur.execute("""
                     INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
@@ -553,8 +525,89 @@ def _auto_migrate():
     except Exception as e:
         log.warning(f"Auto-migración omitida: {e}")
 
+def _auto_migrate_chat():
+    """
+    Migración idempotente de las tablas del chat — separada de _auto_migrate()
+    a propósito (v12.6.0): corre contra CHAT_DATABASE_URL (proyecto de
+    Supabase dedicado al chat), no contra DATABASE_URL, para no competir por
+    la cuota de la Supabase de pedidos. Si CHAT_DATABASE_URL no está
+    configurada, cae a DATABASE_URL y crea las tablas ahí (comportamiento
+    idéntico al de antes de v12.6.0).
+    """
+    try:
+        chat_url = CHAT_DATABASE_URL or DATABASE_URL
+        db = psycopg2.connect(
+            chat_url, cursor_factory=RealDictCursor,
+            connect_timeout=20,
+            application_name="control_pedidos_chat_migracion",
+        )
+        db.autocommit = True
+        with db.cursor() as cur:
+            # Un canal 'general' fijo (visible para todos los usuarios activos)
+            # más canales privados 1 a 1 creados bajo demanda. canal_id es TEXT
+            # y determinista para los privados ('dm:usuarioA:usuarioB', con los
+            # dos usernames ordenados alfabéticamente) para no duplicar canal
+            # sin importar quién escribe primero. Entrega en tiempo real vía
+            # Socket.IO (ver socketio.on(...) más abajo); estas tablas son la
+            # fuente de verdad y el historial que se sirve al conectar.
+            #
+            # IMPORTANTE: estas tablas NO tienen FOREIGN KEY hacia `usuarios`
+            # ni ninguna otra tabla de pedidos — a propósito, precisamente
+            # para poder vivir en una base de datos (Supabase) distinta.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chat_canales (
+                    id          TEXT PRIMARY KEY,
+                    tipo        TEXT NOT NULL DEFAULT 'privado',  -- 'general' | 'privado'
+                    creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute(
+                "INSERT INTO chat_canales (id, tipo) VALUES ('general', 'general') "
+                "ON CONFLICT (id) DO NOTHING"
+            )
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chat_participantes (
+                    canal_id  TEXT NOT NULL REFERENCES chat_canales(id) ON DELETE CASCADE,
+                    usuario   TEXT NOT NULL,
+                    PRIMARY KEY (canal_id, usuario)
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_participantes_usuario "
+                "ON chat_participantes(usuario)"
+            )
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chat_mensajes (
+                    id          SERIAL PRIMARY KEY,
+                    canal_id    TEXT NOT NULL REFERENCES chat_canales(id) ON DELETE CASCADE,
+                    remitente   TEXT NOT NULL,
+                    contenido   TEXT NOT NULL,
+                    creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_chat_mensajes_canal "
+                "ON chat_mensajes(canal_id, creado_en)"
+            )
+            # Puntero de última lectura por usuario y canal, para los
+            # contadores de "no leídos" en la lista de conversaciones.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS chat_lecturas (
+                    canal_id        TEXT NOT NULL REFERENCES chat_canales(id) ON DELETE CASCADE,
+                    usuario         TEXT NOT NULL,
+                    ultimo_leido_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (canal_id, usuario)
+                )
+            """)
+        db.close()
+        log.info("Auto-migración del chat OK (%s)",
+                  "CHAT_DATABASE_URL" if CHAT_DATABASE_URL else "DATABASE_URL (fallback)")
+    except Exception as e:
+        log.warning(f"Auto-migración del chat omitida: {e}")
+
 with app.app_context():
     _auto_migrate()
+    _auto_migrate_chat()
 
 # ── Base de datos (psycopg2 / PostgreSQL) ─────────────────────────────────────
 
@@ -583,11 +636,54 @@ def get_db():
         g.db.autocommit = False
     return g.db
 
+def get_chat_db():
+    """
+    Conexión SEPARADA para las tablas del chat (chat_canales / chat_participantes
+    / chat_mensajes / chat_lecturas) — v12.6.0.
+
+    Motivo: la Supabase de `pedidos` iba saturada, y el chat añade lecturas y
+    escrituras frecuentes (cada mensaje, cada apertura de conversación) que no
+    tienen nada que ver con pedidos. Se usa un proyecto de Supabase distinto,
+    con su propia cuota de egress/almacenamiento, en vez de competir por la
+    misma. Las tablas de chat nunca han tenido FOREIGN KEY hacia `usuarios`
+    ni ninguna otra tabla de pedidos (usan el username como TEXT plano), así
+    que viven perfectamente en una base de datos distinta sin romper nada.
+
+    Si CHAT_DATABASE_URL no está configurada, cae a DATABASE_URL (la misma
+    de siempre) para que nada se rompa en un despliegue que aún no haya
+    creado el segundo proyecto de Supabase — simplemente no se libera la
+    saturación hasta que se configure.
+    """
+    if "chat_db" not in g:
+        chat_url = CHAT_DATABASE_URL or DATABASE_URL
+        if not chat_url:
+            raise RuntimeError(
+                "Ni CHAT_DATABASE_URL ni DATABASE_URL están configuradas. "
+                "Añade CHAT_DATABASE_URL en Render → Environment con la URI del "
+                "proyecto de Supabase dedicado al chat (puede ser el mismo que "
+                "DATABASE_URL si aún no has creado uno aparte)."
+            )
+        g.chat_db = psycopg2.connect(
+            chat_url,
+            cursor_factory=RealDictCursor,
+            connect_timeout=10,
+            keepalives=1,
+            keepalives_idle=30,
+            keepalives_interval=10,
+            keepalives_count=3,
+            application_name="control_pedidos_chat",
+        )
+        g.chat_db.autocommit = False
+    return g.chat_db
+
 @app.teardown_appcontext
 def close_db(e=None):
     db = g.pop("db", None)
     if db:
         db.close()
+    chat_db = g.pop("chat_db", None)
+    if chat_db:
+        chat_db.close()
 
 @app.after_request
 def _track_egress(response):
@@ -649,6 +745,19 @@ def query(sql, args=(), one=False):
 def execute(sql, args=()):
     """INSERT/UPDATE/DELETE helper — devuelve el cursor para leer RETURNING."""
     cur = get_db().cursor()
+    cur.execute(sql, args)
+    return cur
+
+def query_chat(sql, args=(), one=False):
+    """Igual que query(), pero contra get_chat_db() (Supabase separada del chat)."""
+    with get_chat_db().cursor() as cur:
+        cur.execute(sql, args)
+        rv = cur.fetchall()
+    return (rv[0] if rv else None) if one else rv
+
+def execute_chat(sql, args=()):
+    """Igual que execute(), pero contra get_chat_db() (Supabase separada del chat)."""
+    cur = get_chat_db().cursor()
     cur.execute(sql, args)
     return cur
 
@@ -1345,7 +1454,7 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
 
     Parámetros:
         usuario   – username del destinatario (igual que en la tabla usuarios)
-        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida' | 'supervision'
+        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'supervision'
         titulo    – línea resumen (se mostrará como título del popup)
         mensaje   – cuerpo completo del aviso
         nivel     – 'aviso' | 'urgente'
@@ -1750,13 +1859,6 @@ def get_config() -> dict:
         "plazo_parcial_urgente_ciclo": 2,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_pct_amarillo": 60,
-        "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
-        "firma_compras_popup_repetir": 1, "firma_compras_popup_horas_critico": 1, "firma_compras_popup_horas_normal": 24,
-        "firma_hotel_popup_repetir": 1, "firma_hotel_popup_horas_critico": 1, "firma_hotel_popup_horas_normal": 24,
-        "entrega_parcial_popup_repetir": 1, "entrega_parcial_popup_horas_critico": 1, "entrega_parcial_popup_horas_normal": 24,
-        "cotizacion_popup_repetir": 1, "cotizacion_popup_horas_critico": 1, "cotizacion_popup_horas_normal": 24,
-        "techo_urgente_admin_reenvio_dias": 2,
-        "familia_repetida_admin_reenvio_dias": 2,
     }
     for k, v in defaults.items():
         cfg.setdefault(k, v)
@@ -2384,7 +2486,7 @@ def _job_familia_repetida_inner() -> None:
                         log.warning("[FAM-REP] Sin telegram_chat_id para comprador %s", username)
                     _encolar_bridge_notificacion(
                         usuario=username,
-                        tipo="familia_repetida",
+                        tipo="techo",
                         titulo=titulo_bridge,
                         mensaje=texto.replace("*", ""),
                         nivel="urgente",
@@ -2399,9 +2501,9 @@ def _job_familia_repetida_inner() -> None:
         )
         if skip_adm_hoy:
             log.debug("[FAM-REP] Admin hotel %s — ya notificado hoy, omitiendo", hotel_codigo)
-        elif reenvio_adm is not None and reenvio_adm < get_config().get("familia_repetida_admin_reenvio_dias", 2):
-            log.debug("[FAM-REP] Admin hotel %s — último aviso hace %d día(s), esperando %dd",
-                      hotel_codigo, reenvio_adm, get_config().get("familia_repetida_admin_reenvio_dias", 2))
+        elif reenvio_adm is not None and reenvio_adm < 2:
+            log.debug("[FAM-REP] Admin hotel %s — último aviso hace %d día(s), esperando 2d",
+                      hotel_codigo, reenvio_adm)
         else:
             admins = _destinatarios_evento("familia_repetida_admin", "telegram")
             if not admins:
@@ -2443,7 +2545,7 @@ def _job_familia_repetida_inner() -> None:
                         log.warning("[FAM-REP] Sin telegram_chat_id para admin %s", username)
                     _encolar_bridge_notificacion(
                         usuario=username,
-                        tipo="familia_repetida",
+                        tipo="techo",
                         titulo=titulo_bridge,
                         mensaje=texto.replace("*", ""),
                         nivel="urgente",
@@ -2628,11 +2730,10 @@ def _job_techo_urgente_admins_inner() -> None:
 
         # ── 3. Regla de reenvío cada 2 días ──────────────────────────────
         dias_desde_ultimo = _dias_desde_ultimo_techo_urgente_admin(hotel_codigo)
-        _reenvio_dias_techo = get_config().get("techo_urgente_admin_reenvio_dias", 2)
-        if dias_desde_ultimo is not None and dias_desde_ultimo < _reenvio_dias_techo:
+        if dias_desde_ultimo is not None and dias_desde_ultimo < 2:
             log.debug(
-                "[TECHO-URG] Hotel %s — último aviso hace %d día(s), esperando %dd",
-                hotel_codigo, dias_desde_ultimo, _reenvio_dias_techo
+                "[TECHO-URG] Hotel %s — último aviso hace %d día(s), esperando 2d",
+                hotel_codigo, dias_desde_ultimo
             )
             continue
 
@@ -5956,43 +6057,14 @@ def _dias_desde_alerta(fecha_str) -> int | None:
 # "urgente": días para escalar a urgente (None = nunca).
 # "ciclo":   cada cuántos días se reavisa (no usado en clasificación actual).
 # "fecha_ref": campo de fecha a usar (default "fecha_tramitacion").
-#
-# NOTA v12.5.0 — FIX de inconsistencia: hasta ahora esta clasificación usaba
-# un dict fijo en código (_UMBRALES_ALERTAS), mientras que el resto de la app
-# (cambio de estado, job diario del scheduler) ya usaba _build_umbrales(),
-# que lee de la tabla config_alertas (editable desde el panel Admin). Esto
-# provocaba que cambiar un umbral en Admin no afectase a los popups de
-# Agenda. Se elimina el dict fijo y se usa _build_umbrales() también aquí,
-# para que Admin sea la única fuente de verdad en todos los canales.
-
-# Mapeo estado de pedido → prefijo de claves de config_alertas para la
-# repetición de popups en Agenda (grupo "popup_repeticion").
-_ESTADO_POPUP_PREFIX: dict = {
-    "ENVIADO AL PROVEEDOR":               "enviado",
-    "PENDIENTE FIRMA DIRECCION COMPRAS":  "firma_compras",
-    "PENDIENTE DE FIRMA DIRECCION HOTEL": "firma_hotel",
-    "ENTREGA PARCIAL":                    "entrega_parcial",
-    "PENDIENTE COTIZACIÓN":               "cotizacion",
+_UMBRALES_ALERTAS: dict = {
+    "ENVIADO AL PROVEEDOR":              {"primera": 15, "urgente": 25, "ciclo": 10},
+    "PENDIENTE FIRMA DIRECCION COMPRAS": {"primera": 8,  "urgente": None, "ciclo": 8},
+    "PENDIENTE DE FIRMA DIRECCION HOTEL":{"primera": 5,  "urgente": None, "ciclo": 5},
+    "ENTREGA PARCIAL":                   {"primera": 10, "urgente": None, "ciclo": 10},
+    "PENDIENTE COTIZACIÓN":              {"primera": 2,  "urgente": 3, "ciclo": None,
+                                          "fecha_ref": "fecha_solicitud"},
 }
-
-
-def _aplicar_config_popup(p: dict) -> None:
-    """Añade al pedido los campos de repetición de popup (leídos de Admin):
-        popup_repetir        (bool)  — si False, el popup se muestra 1 sola vez
-        popup_horas_critico  (int)   — cada cuántas horas se repite si 🔴 urgente
-        popup_horas_normal   (int)   — cada cuántas horas se repite si 🟡 aviso
-    Consumido por pedidos_agenda_bridge.py (Organizador Princess).
-    """
-    prefix = _ESTADO_POPUP_PREFIX.get(p.get("estado"))
-    c = get_config()
-    if prefix:
-        p["popup_repetir"]       = bool(int(c.get(f"{prefix}_popup_repetir", 1) or 0))
-        p["popup_horas_critico"] = int(c.get(f"{prefix}_popup_horas_critico", 1) or 1)
-        p["popup_horas_normal"]  = int(c.get(f"{prefix}_popup_horas_normal", 24) or 24)
-    else:
-        p["popup_repetir"]       = True
-        p["popup_horas_critico"] = 1
-        p["popup_horas_normal"]  = 24
 
 
 def _resumen_ultima_notificacion(p: dict) -> dict:
@@ -6048,8 +6120,6 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
       • nivel_alerta      ("aviso" | "urgente")
       • fecha_entrega_prevista (str ISO o None)
       • ultima_notificacion    (dict — ver _resumen_ultima_notificacion)
-      • popup_repetir, popup_horas_critico, popup_horas_normal
-                          (ver _aplicar_config_popup — config editable desde Admin)
 
     Devuelve la lista ordenada: urgentes primero, luego por días descendente.
     """
@@ -6064,11 +6134,10 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
             fep = info_plazo["fecha_entrega_prevista"]
             p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
             p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
-            _aplicar_config_popup(p)
             alertas.append(p)
             continue
         # ── Lógica estándar ─────────────────────────────────────────────
-        cfg = _build_umbrales().get(p["estado"])
+        cfg = _UMBRALES_ALERTAS.get(p["estado"])
         if not cfg:
             continue
         fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
@@ -6080,7 +6149,6 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
         p["nivel_alerta"]          = nivel
         p["fecha_entrega_prevista"] = None
         p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
-        _aplicar_config_popup(p)
         alertas.append(p)
 
     alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1,
@@ -6767,7 +6835,7 @@ def bridge_notificaciones_usuario():
         "notificaciones": [
             {
                 "id": 42,
-                "tipo": "cambio_estado",      -- 'cambio_estado'|'alerta_auto'|'techo'|'familia_repetida'|'supervision'
+                "tipo": "cambio_estado",      -- 'cambio_estado'|'alerta_auto'|'techo'|'supervision'
                 "pedido_id": 123,             -- puede ser null
                 "titulo": "...",
                 "mensaje": "...",
@@ -6822,6 +6890,241 @@ def bridge_notificaciones_usuario():
         "usuario":        usuario,
         "rol":            rol,
     })
+
+
+# ── Chat interno entre usuarios (v12.5.0) ─────────────────────────────────────
+# Historial y listado de conversaciones por REST; entrega de mensajes nuevos
+# por Socket.IO con fallback automático a long-polling. Ambas vías escriben
+# en las mismas tres tablas (chat_canales / chat_participantes / chat_mensajes),
+# así que un cliente que solo sepa hacer polling (p.ej. una versión antigua
+# de main_agenda) sigue funcionando llamando a GET /api/chat/mensajes cada
+# pocos segundos, sin necesidad de socket.io.
+
+def _canal_privado_id(usuario_a: str, usuario_b: str) -> str:
+    a, b = sorted([usuario_a.lower().strip(), usuario_b.lower().strip()])
+    return f"dm:{a}:{b}"
+
+def _asegurar_canal_privado(usuario_a: str, usuario_b: str) -> str:
+    canal_id = _canal_privado_id(usuario_a, usuario_b)
+    db = get_chat_db()
+    with db.cursor() as cur:
+        cur.execute(
+            "INSERT INTO chat_canales (id, tipo) VALUES (%s, 'privado') "
+            "ON CONFLICT (id) DO NOTHING", (canal_id,)
+        )
+        cur.execute(
+            "INSERT INTO chat_participantes (canal_id, usuario) VALUES (%s,%s),(%s,%s) "
+            "ON CONFLICT DO NOTHING",
+            (canal_id, usuario_a.lower().strip(), canal_id, usuario_b.lower().strip())
+        )
+    db.commit()
+    return canal_id
+
+def _usuario_puede_ver_canal(usuario: str, canal_id: str) -> bool:
+    if canal_id == "general":
+        return True
+    if not canal_id.startswith("dm:"):
+        return False
+    fila = query_chat(
+        "SELECT 1 FROM chat_participantes WHERE canal_id=%s AND usuario=%s",
+        (canal_id, usuario.lower().strip()), one=True
+    )
+    return bool(fila)
+
+def _guardar_mensaje_chat(remitente: str, canal_id: str, contenido: str) -> dict:
+    """Inserta el mensaje y devuelve el dict ya serializable, listo para
+    jsonify() (ruta REST) o socketio.emit() (ruta en tiempo real)."""
+    contenido = (contenido or "").strip()
+    if not contenido:
+        raise ValueError("Mensaje vacío")
+    if len(contenido) > 4000:
+        contenido = contenido[:4000]
+    cur = execute_chat(
+        """INSERT INTO chat_mensajes (canal_id, remitente, contenido)
+           VALUES (%s,%s,%s) RETURNING id, canal_id, remitente, contenido, creado_en""",
+        (canal_id, remitente.lower().strip(), contenido)
+    )
+    row = cur.fetchone()
+    get_chat_db().commit()
+    return {
+        "id":        row["id"],
+        "canal_id":  row["canal_id"],
+        "remitente": row["remitente"],
+        "contenido": row["contenido"],
+        "creado_en": row["creado_en"].isoformat(),
+    }
+
+@app.route("/api/chat/usuarios")
+@login_required
+def chat_usuarios():
+    """Usuarios activos con los que se puede abrir una conversación privada.
+    ÚNICA consulta del chat que sigue yendo contra la Supabase de pedidos
+    (get_db/query, no get_chat_db/query_chat): la tabla `usuarios` vive ahí,
+    no en la Supabase del chat. Es una lectura ligera de la lista de activos,
+    no crece con el volumen de mensajes, así que no aporta a la saturación
+    que se quería aliviar separando el resto de tablas."""
+    yo = session.get("username", "").lower()
+    rows = rows_to_list(query(
+        "SELECT username, nombre, rol FROM usuarios WHERE activo=1 AND username<>%s ORDER BY nombre",
+        (yo,)
+    ))
+    return jsonify({"usuarios": rows})
+
+@app.route("/api/chat/canales")
+@login_required
+def chat_canales():
+    """Lista de conversaciones del usuario: 'general' + sus DMs, con último
+    mensaje y contador de no leídos, para pintar la lista lateral del chat."""
+    yo = session.get("username", "").lower()
+    rows = rows_to_list(query_chat("""
+        SELECT c.id, c.tipo
+        FROM chat_canales c
+        WHERE c.tipo = 'general'
+           OR c.id IN (SELECT canal_id FROM chat_participantes WHERE usuario=%s)
+        ORDER BY c.tipo DESC
+    """, (yo,)))
+
+    resultado = []
+    for c in rows:
+        canal_id = c["id"]
+        otro = None
+        if c["tipo"] == "privado":
+            otro = canal_id.replace("dm:", "").replace(yo, "").replace(":", "")
+        ultimo = query_chat(
+            "SELECT contenido, remitente, creado_en FROM chat_mensajes "
+            "WHERE canal_id=%s ORDER BY creado_en DESC LIMIT 1",
+            (canal_id,), one=True
+        )
+        lectura = query_chat(
+            "SELECT ultimo_leido_en FROM chat_lecturas WHERE canal_id=%s AND usuario=%s",
+            (canal_id, yo), one=True
+        )
+        desde = lectura["ultimo_leido_en"] if lectura else datetime(1970, 1, 1, tzinfo=timezone.utc)
+        no_leidos = query_chat(
+            "SELECT COUNT(*) AS n FROM chat_mensajes "
+            "WHERE canal_id=%s AND creado_en > %s AND remitente <> %s",
+            (canal_id, desde, yo), one=True
+        )["n"]
+        resultado.append({
+            "canal_id":  canal_id,
+            "tipo":      c["tipo"],
+            "otro_usuario": otro,
+            "ultimo_mensaje": (dict(ultimo, creado_en=ultimo["creado_en"].isoformat())
+                               if ultimo else None),
+            "no_leidos": no_leidos,
+        })
+    return jsonify({"canales": resultado})
+
+@app.route("/api/chat/mensajes", methods=["GET"])
+@login_required
+def chat_obtener_mensajes():
+    yo = session.get("username", "").lower()
+    canal_id = request.args.get("canal_id", "").strip()
+    destinatario = request.args.get("destinatario", "").strip().lower()
+    if not canal_id and destinatario:
+        canal_id = _asegurar_canal_privado(yo, destinatario)
+    if not canal_id or not _usuario_puede_ver_canal(yo, canal_id):
+        return jsonify({"error": "Canal no encontrado o sin acceso"}), 404
+
+    antes_de_id = request.args.get("antes_de", type=int)
+    if antes_de_id:
+        rows = rows_to_list(query_chat(
+            "SELECT id, canal_id, remitente, contenido, creado_en FROM chat_mensajes "
+            "WHERE canal_id=%s AND id < %s ORDER BY creado_en DESC LIMIT 50",
+            (canal_id, antes_de_id)
+        ))
+    else:
+        rows = rows_to_list(query_chat(
+            "SELECT id, canal_id, remitente, contenido, creado_en FROM chat_mensajes "
+            "WHERE canal_id=%s ORDER BY creado_en DESC LIMIT 50",
+            (canal_id,)
+        ))
+    for r in rows:
+        r["creado_en"] = r["creado_en"].isoformat()
+    rows.reverse()
+
+    execute_chat(
+        "INSERT INTO chat_lecturas (canal_id, usuario, ultimo_leido_en) VALUES (%s,%s,NOW()) "
+        "ON CONFLICT (canal_id, usuario) DO UPDATE SET ultimo_leido_en=NOW()",
+        (canal_id, yo)
+    )
+    get_chat_db().commit()
+
+    return jsonify({"canal_id": canal_id, "mensajes": rows})
+
+@app.route("/api/chat/mensajes", methods=["POST"])
+@login_required
+def chat_enviar_mensaje():
+    """Vía REST — funciona igual haya o no conexión de socket.io activa
+    (fallback de polling, o clientes que aún no la implementen)."""
+    yo = session.get("username", "").lower()
+    body = request.get_json(silent=True) or {}
+    canal_id = (body.get("canal_id") or "").strip()
+    destinatario = (body.get("destinatario") or "").strip().lower()
+    contenido = body.get("contenido", "")
+
+    if not canal_id and destinatario:
+        canal_id = _asegurar_canal_privado(yo, destinatario)
+    if not canal_id or not _usuario_puede_ver_canal(yo, canal_id):
+        return jsonify({"error": "Canal no encontrado o sin acceso"}), 404
+
+    try:
+        mensaje = _guardar_mensaje_chat(yo, canal_id, contenido)
+    except ValueError as e:
+        return jsonify({"error": str(e)}), 400
+
+    socketio.emit("nuevo_mensaje", mensaje, room=canal_id)
+    if canal_id.startswith("dm:"):
+        for u in canal_id.replace("dm:", "").split(":"):
+            socketio.emit("nuevo_mensaje", mensaje, room=f"user:{u}")
+
+    return jsonify({"ok": True, "mensaje": mensaje})
+
+
+@socketio.on("connect")
+def chat_socket_connect():
+    if "user_id" not in session:
+        return False  # rechaza el handshake — mismo criterio que login_required
+    yo = session.get("username", "").lower()
+    join_room(f"user:{yo}")
+    join_room("general")
+
+@socketio.on("unirse_canal")
+def chat_socket_unirse(data):
+    if "user_id" not in session:
+        return
+    yo = session.get("username", "").lower()
+    canal_id = (data or {}).get("canal_id", "").strip()
+    if _usuario_puede_ver_canal(yo, canal_id):
+        join_room(canal_id)
+
+@socketio.on("enviar_mensaje")
+def chat_socket_enviar(data):
+    """Equivalente en tiempo real de POST /api/chat/mensajes — misma
+    validación y misma tabla, para que REST y socket.io nunca diverjan."""
+    if "user_id" not in session:
+        return
+    yo = session.get("username", "").lower()
+    data = data or {}
+    canal_id = (data.get("canal_id") or "").strip()
+    destinatario = (data.get("destinatario") or "").strip().lower()
+
+    if not canal_id and destinatario:
+        canal_id = _asegurar_canal_privado(yo, destinatario)
+    if not canal_id or not _usuario_puede_ver_canal(yo, canal_id):
+        emit("error_chat", {"error": "Canal no encontrado o sin acceso"})
+        return
+
+    try:
+        mensaje = _guardar_mensaje_chat(yo, canal_id, data.get("contenido", ""))
+    except ValueError as e:
+        emit("error_chat", {"error": str(e)})
+        return
+
+    emit("nuevo_mensaje", mensaje, room=canal_id)
+    if canal_id.startswith("dm:"):
+        for u in canal_id.replace("dm:", "").split(":"):
+            emit("nuevo_mensaje", mensaje, room=f"user:{u}")
 
 
 # ── API Reset completo (admin only) ───────────────────────────────────────────
@@ -8561,28 +8864,6 @@ def backup_listar():
         """, (ruta_norm,))
         filas = cur.fetchall()
 
-        # Fix "sin sincronizar" falso (15 jul 2026): `actualizado_en` de
-        # backups_cache solo se toca cuando un backup cambia de verdad —
-        # normal casi todo el día, ya que solo hay un backup diario a las
-        # 17:00. Usarlo como "última vez que corrió el agente" generaba
-        # avisos de agente caído durante horas aunque estuviera
-        # sincronizando bien cada 5 minutos sin encontrar nada nuevo que
-        # subir. `agente_heartbeat` (restore_agent.py ≥ 15 jul 2026) sí
-        # registra cada ciclo, haya cambios o no. Si la tabla todavía no
-        # existe (agente sin actualizar) o no tiene fila para esta ruta,
-        # se usa el cálculo antiguo como red de seguridad.
-        ultimo_heartbeat = None
-        try:
-            cur.execute(
-                "SELECT visto_en FROM agente_heartbeat WHERE ruta_normalizada = %s",
-                (ruta_norm,)
-            )
-            fila_hb = cur.fetchone()
-            if fila_hb:
-                ultimo_heartbeat = fila_hb["visto_en"]
-        except Exception:
-            db.rollback()
-
     if not filas:
         return jsonify({
             "ok": True,
@@ -8595,7 +8876,7 @@ def backup_listar():
             ),
         })
 
-    ultimo_escaneo = ultimo_heartbeat or max(f["actualizado_en"] for f in filas)
+    ultimo_escaneo = max(f["actualizado_en"] for f in filas)
     minutos = int((datetime.now(timezone.utc) - ultimo_escaneo).total_seconds() // 60)
 
     resp = {
@@ -8777,4 +9058,8 @@ def backup_estado_cola():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=False)
+    # socketio.run en vez de app.run: arranca el servidor eventlet con
+    # soporte de WebSocket para pruebas en local. En Render, gunicorn sigue
+    # sirviendo app:app tal cual — ver GUIA_DESPLIEGUE.md para el cambio de
+    # Start Command necesario para WebSocket en producción.
+    socketio.run(app, host="0.0.0.0", port=port, debug=False)

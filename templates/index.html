@@ -1127,7 +1127,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.5.0
+          V 12.6.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5711,8 +5711,6 @@ const GRUPOS_LABEL = {
   plazo_entrega:     '📅 Plazo de entrega proveedor',
   global:            '🌐 Umbrales globales',
   techo:             '💳 Techo de gastos',
-  popup_repeticion:  '🔁 Repetición de Popups en Agenda (compradores)',
-  reenvio_admin:     '📮 Reenvío a Admins (Techo / Familia repetida)',
 };
 
 async function loadConfigAlertas() {
@@ -5728,12 +5726,12 @@ async function loadConfigAlertas() {
         <div style="font-weight:700;font-size:13px;color:#1a73e8;border-bottom:2px solid #e8f0fe;padding-bottom:5px;margin-bottom:8px">${label}</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px">`;
       for (const item of items) {
-        const esUrgente = item.clave.includes('urgente') || item.clave.includes('ciclo') || item.clave.includes('horas_critico');
-        const esPrimera = item.clave.includes('primera') || item.clave.includes('dias_antes') || item.clave.includes('horas_normal');
+        const esUrgente = item.clave.includes('urgente') || item.clave.includes('ciclo');
+        const esPrimera = item.clave.includes('primera') || item.clave.includes('dias_antes');
         const dot   = esUrgente ? '🔴' : esPrimera ? '🟡' : '⚪';
         const color = esUrgente ? '#dc3545' : esPrimera ? '#ffc107' : '#adb5bd';
         const unidad = (item.clave.includes('techo_max_pedido') || item.clave.includes('techo_max_mes'))
-          ? '€' : item.clave.includes('pct') ? '%' : item.clave.includes('_horas_') ? 'horas' : (item.tipo === 'bool' ? '' : 'días');
+          ? '€' : item.clave.includes('pct') ? '%' : (item.tipo === 'bool' ? '' : 'días');
         const nota = (item.clave.includes('urgente') && !item.clave.includes('ciclo'))
           ? '<span style="font-size:10px;color:#888">(0=nunca)</span>' : '';
         // Bool: render as toggle checkbox
