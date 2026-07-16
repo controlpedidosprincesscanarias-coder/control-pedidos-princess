@@ -1127,7 +1127,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.6.0
+          V 12.6.2
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1408,6 +1408,11 @@ tbody tr:last-child{border-bottom:none}
             <div id="integridad-resumen" style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:20px"></div>
             <!-- Bloques de problemas -->
             <div id="integridad-bloques"></div>
+            <!-- Tamaño de base de datos -->
+            <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
+              <h3 style="margin:0 0 12px 0;font-size:14px;color:var(--text-secondary)">🗄️ Tamaño de Base de Datos</h3>
+              <div id="db-size-content"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -5957,6 +5962,8 @@ async function loadIntegridad() {
     ${ts ? `<div style="margin-left:auto;align-self:flex-end;font-size:11px;color:var(--text-secondary)">Analizado a las ${ts}</div>` : ''}
   `;
 
+  loadDbSize();
+
   // Bloques de problemas
   const bloques = document.getElementById('integridad-bloques');
   const probs = data.problemas;
@@ -6062,6 +6069,70 @@ async function loadIntegridad() {
 
   // Actualizar badge sidebar al cargar cualquier vista (si es admin)
   _refreshIntegridadBadge(data);
+}
+
+async function loadDbSize() {
+  const el = document.getElementById('db-size-content');
+  if (!el) return;
+  el.innerHTML = '<div style="color:var(--text-secondary);font-size:13px">Cargando…</div>';
+
+  let data;
+  try {
+    const r = await fetch('/api/admin/db-size', { credentials: 'same-origin' });
+    data = await r.json();
+    if (!r.ok) throw new Error(data.error || `Error ${r.status}`);
+  } catch (err) {
+    el.innerHTML = `<div style="color:#dc3545;font-size:13px">❌ Error al cargar: ${err.message}</div>`;
+    return;
+  }
+
+  const mb = b => (b / 1024 / 1024).toFixed(1);
+  const LIMITE_MB = 512; // plan Free de Supabase
+
+  const actualTotal = data.actual.bytes_total;
+  const actualAdj   = data.actual.bytes_adjuntos;
+  const pct = actualTotal ? (actualTotal / (LIMITE_MB * 1024 * 1024) * 100) : 0;
+  const colorPct = pct >= 90 ? '#dc3545' : pct >= 70 ? '#e67e22' : '#28a745';
+
+  let html = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;margin-bottom:16px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:150px">
+        <div style="font-size:22px;font-weight:700;color:${colorPct}">${actualTotal !== null ? mb(actualTotal) + ' MB' : '—'}</div>
+        <div style="font-size:11px;color:var(--text-secondary)">Total ahora mismo (de ${LIMITE_MB} MB, ${pct.toFixed(0)}%)</div>
+      </div>
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:12px 20px;text-align:center;min-width:150px">
+        <div style="font-size:22px;font-weight:700;color:var(--primary)">${actualAdj !== null ? mb(actualAdj) + ' MB' : '—'}</div>
+        <div style="font-size:11px;color:var(--text-secondary)">Solo pedido_adjuntos</div>
+      </div>
+    </div>
+  `;
+
+  if (data.historial.length > 0) {
+    html += `
+      <table style="width:100%;border-collapse:collapse;font-size:12px">
+        <thead>
+          <tr style="text-align:left;color:var(--text-secondary);border-bottom:1px solid var(--border)">
+            <th style="padding:6px 10px">Fecha</th>
+            <th style="padding:6px 10px">Total BD</th>
+            <th style="padding:6px 10px">Adjuntos</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${data.historial.map(h => `
+            <tr style="border-bottom:1px solid var(--border)">
+              <td style="padding:6px 10px">${new Date(h.fecha + 'T00:00:00').toLocaleDateString('es-ES')}</td>
+              <td style="padding:6px 10px">${mb(h.bytes_total)} MB</td>
+              <td style="padding:6px 10px">${mb(h.bytes_adjuntos)} MB</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    `;
+  } else {
+    html += `<div style="color:var(--text-secondary);font-size:12px">Todavía no hay snapshots diarios registrados — el primero se guarda a las 08:10h. Los valores de arriba son en vivo.</div>`;
+  }
+
+  el.innerHTML = html;
 }
 
 function _refreshIntegridadBadge(data) {

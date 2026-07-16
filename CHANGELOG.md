@@ -1,3 +1,17 @@
+# v12.6.2 — 16 julio 2026
+
+🗄️ Seguimiento de tamaño de base de datos (Admin → Integridad)
+
+A diferencia del egress, el tamaño de la base de datos solo crece — no hay ningún mecanismo de caché que lo compense. Tras confirmar que `pedido_adjuntos` es, con diferencia, la mayor consumidora (277 MB de 306 MB totales — los archivos se guardan como `bytea`, en TOAST), se añade visibilidad sobre la tendencia sin depender de entrar al dashboard de Supabase.
+
+Cambios:
+- Nueva tabla `db_size_tracking` (fecha, bytes_total, bytes_adjuntos).
+- Nuevo job diario `_job_db_size_tracking`, a las 08:10 hora Canarias (justo después de la alerta de egress) — snapshot vía `pg_database_size()` y `pg_total_relation_size('pedido_adjuntos')`.
+- Nuevo endpoint `GET /api/admin/db-size` — historial de los últimos 30 días + valor en vivo calculado al vuelo (para tener dato desde el primer momento, sin esperar al primer job de las 08:10).
+- Nueva tarjeta en Admin → Integridad, debajo de los bloques de problemas: total actual (con % sobre los 512 MB del plan Free), tamaño de `pedido_adjuntos` en concreto, y tabla de los últimos 30 días.
+
+Puramente informativo por ahora — sin alerta automática por Telegram/bridge todavía (a diferencia de egress). Si el seguimiento confirma que hace falta, el siguiente paso natural es purgar adjuntos antiguos o migrarlos a Supabase Storage.
+
 # v12.6.0 — 15 julio 2026
 
 💬 Chat interno entre usuarios (privado 1 a 1 + canal general), en tiempo real,

@@ -478,6 +478,18 @@ def _auto_migrate():
                     bytes  BIGINT NOT NULL DEFAULT 0
                 )
             """)
+            # ── Seguimiento de tamaño de base de datos (Jul 2026) ───────────
+            # A diferencia del egress, el tamaño de la BD solo crece — no hay
+            # "caché" que compense. `pedido_adjuntos` es, con diferencia, la
+            # mayor consumidora (archivos en TOAST). Snapshot diario para ver
+            # la tendencia sin tener que entrar al dashboard de Supabase.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS db_size_tracking (
+                    fecha           DATE PRIMARY KEY,
+                    bytes_total     BIGINT NOT NULL DEFAULT 0,
+                    bytes_adjuntos  BIGINT NOT NULL DEFAULT 0
+                )
+            """)
             # ── Seguridad de sesión: caducidad diaria + verificación por
             # email tras varios días de inactividad (Jul 2026) ─────────────
             # Los usuarios suelen dejar la app abierta todo el día en el
@@ -8406,6 +8418,41 @@ def _job_alerta_egress_inner(force: bool = False):
         log.error("[EGRESS] Error registrando dedupe: %s", e)
 
 
+def _job_db_size_tracking() -> None:
+    """
+    Job diario (08:00 hora Canarias, junto al resto de jobs matutinos):
+    snapshot del tamaño real de la base de datos (pg_database_size) y de
+    pedido_adjuntos en concreto (con diferencia la mayor consumidora, al
+    guardar los archivos como bytea/TOAST) — visible en Admin → Integridad.
+
+    A diferencia del egress, aquí no hay "caché" que compense: el tamaño
+    de la BD solo crece. Este tracking es puramente informativo por ahora
+    (sin alerta automática todavía) — sirve para ver la tendencia sin
+    tener que entrar al dashboard de Supabase cada vez.
+    """
+    with app.app_context():
+        try:
+            fila = query("""
+                SELECT
+                    pg_database_size(current_database()) AS bytes_total,
+                    COALESCE(pg_total_relation_size('pedido_adjuntos'), 0) AS bytes_adjuntos
+            """, one=True)
+            execute("""
+                INSERT INTO db_size_tracking (fecha, bytes_total, bytes_adjuntos)
+                VALUES ((NOW() AT TIME ZONE 'Atlantic/Canary')::date, %s, %s)
+                ON CONFLICT (fecha) DO UPDATE
+                SET bytes_total = EXCLUDED.bytes_total,
+                    bytes_adjuntos = EXCLUDED.bytes_adjuntos
+            """, (fila["bytes_total"], fila["bytes_adjuntos"]))
+            get_db().commit()
+            log.info("[DB-SIZE] Snapshot: %.1f MB totales (%.1f MB en adjuntos)",
+                      fila["bytes_total"] / 1024 / 1024, fila["bytes_adjuntos"] / 1024 / 1024)
+        except Exception as e:
+            get_db().rollback()
+            log.error("[DB-SIZE] Error registrando snapshot: %s", e)
+        _flush_egress_bytes()
+
+
 def _job_health_check(force: bool = False):
     """
     Job diario (07:05 hora Canarias): valida integridad operativa y envía
@@ -8606,6 +8653,18 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    # Snapshot diario de tamaño de BD: a las 08:10, justo después de la
+    # alerta de egress — mismo horario matutino, sin motivo para separarlo.
+    scheduler.add_job(
+        _job_db_size_tracking,
+        trigger="cron",
+        hour="8",
+        minute="10",
+        second="0",
+        id="db_size_tracking_diario",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
     log.info("✅ Scheduler iniciado — alertas cada 60s en horario 07:00-16:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — techo URGENTE admins cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
@@ -8613,6 +8672,7 @@ def _iniciar_scheduler():
     log.info("✅ Scheduler — familia/partida repetida cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
     log.info("✅ Scheduler — alerta de egress Supabase diaria a las 08:00 (Atlantic/Canary)")
+    log.info("✅ Scheduler — snapshot de tamaño de BD diario a las 08:10 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
@@ -8921,6 +8981,48 @@ def get_integridad():
     """
     resultado = _validar_integridad_operativa()
     return jsonify(resultado)
+
+
+@app.route("/api/admin/db-size", methods=["GET"])
+@admin_required
+def get_db_size():
+    """
+    Historial de tamaño de base de datos (últimos 30 días registrados por
+    _job_db_size_tracking) + el tamaño EN VIVO ahora mismo, calculado al
+    vuelo — así la primera vez que se abre esta vista tras desplegar (antes
+    de que corra el job de las 08:10) ya hay algo que mostrar.
+    GET /api/admin/db-size
+    """
+    historial = query("""
+        SELECT fecha, bytes_total, bytes_adjuntos
+        FROM db_size_tracking
+        ORDER BY fecha DESC
+        LIMIT 30
+    """)
+    try:
+        actual = query("""
+            SELECT
+                pg_database_size(current_database()) AS bytes_total,
+                COALESCE(pg_total_relation_size('pedido_adjuntos'), 0) AS bytes_adjuntos
+        """, one=True)
+    except Exception:
+        actual = None
+
+    return jsonify({
+        "ok": True,
+        "actual": {
+            "bytes_total": actual["bytes_total"] if actual else None,
+            "bytes_adjuntos": actual["bytes_adjuntos"] if actual else None,
+        },
+        "historial": [
+            {
+                "fecha": f["fecha"].isoformat(),
+                "bytes_total": f["bytes_total"],
+                "bytes_adjuntos": f["bytes_adjuntos"],
+            }
+            for f in historial
+        ],
+    })
 
 
 @app.route("/api/admin/test-health", methods=["POST"])
