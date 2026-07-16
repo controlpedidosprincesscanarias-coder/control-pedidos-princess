@@ -1,3 +1,19 @@
+# v12.6.4 — 16 julio 2026
+
+📮 Alerta combinada egress + tamaño BD, umbral bajado a 50%, movida a las 08:30
+
+Hasta ahora había una sola alerta (solo egress, umbral 80%, a las 08:00). Se combina con tamaño de BD en un único mensaje/popup, para no duplicar avisos sobre la misma cuota de Supabase.
+
+Cambios:
+- `EGRESS_UMBRAL_AVISO_PCT`: 80% → **50%**.
+- Nuevo `DB_SIZE_UMBRAL_AVISO_PCT = 50%` (sobre `DB_SIZE_LIMITE_MB = 512`, el límite del plan Free).
+- `_job_alerta_egress` → renombrado `_job_alerta_consumo`: comprueba ambas métricas y envía **un único** Telegram + popup bridge si cualquiera de las dos supera su umbral (egress con `⚠️` si supera, BD con `⚠️` si supera, ambas cifras siempre visibles en el mensaje para dar contexto).
+- Horario: **08:30** (antes 08:00) — 20 min después del snapshot diario de tamaño de BD (08:10, sin cambios, sigue siendo independiente para el histórico de tendencia).
+- Egress sigue siendo el acumulado por día desde `egress_tracking` (con el mismo desfase de "hasta ayer" ya documentado); tamaño de BD se consulta en vivo en el momento del job, no depende del snapshot de las 08:10.
+- Dedup diario movido de `tipo='egress_alerta'` a `tipo='consumo_alerta'` en `whatsapp_log`.
+- El evento en Config Avisos (antes "Consumo de egress (Supabase) elevado") se renombra a "Consumo Supabase elevado (egress / tamaño BD)" — mismo `codigo` (`egress_alerta`), mismos destinatarios ya configurados, sin que el admin tenga que volver a marcar nada.
+- Endpoint `/api/admin/test-egress` y su botón en Integridad ("📶 Probar alerta consumo (egress + BD)") sin cambiar de ruta/nombre de función, por compatibilidad — ahora disparan la alerta combinada.
+
 # v12.6.2 — 16 julio 2026
 
 🗄️ Seguimiento de tamaño de base de datos (Admin → Integridad)

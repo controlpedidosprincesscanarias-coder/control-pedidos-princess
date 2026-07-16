@@ -587,6 +587,19 @@ def _auto_migrate():
                     "INSERT INTO eventos_aviso (codigo, nombre, descripcion, orden) VALUES (%s,%s,%s,%s)",
                     _eventos_default
                 )
+            else:
+                # El bloque de arriba solo siembra si la tabla está vacía
+                # (primera instalación) — en un sistema ya en marcha, como
+                # este, el texto del evento "egress_alerta" se queda con el
+                # de cuando se creó. Se refresca aparte, aquí, porque desde
+                # Jul 2026 este evento ya no es solo egress: el job de las
+                # 08:30 avisa también de tamaño de BD en el mismo mensaje.
+                cur.execute("""
+                    UPDATE eventos_aviso
+                    SET nombre = 'Consumo Supabase elevado (egress / tamaño BD)',
+                        descripcion = 'Aviso del job diario (08:30) cuando el consumo de egress o el tamaño de la base de datos se acercan al límite del plan — un único mensaje si cualquiera de las dos supera el umbral.'
+                    WHERE codigo = 'egress_alerta'
+                """)
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -8295,10 +8308,17 @@ def _validar_integridad_operativa() -> dict:
     }
 
 
-# ── Alerta de egress a admins por Telegram (Jul 2026) ────────────────────────
+# ── Alerta de consumo a admins por Telegram (Jul 2026) ───────────────────────
+# Egress y tamaño de BD se avisan juntos, en un único mensaje/popup, para no
+# duplicar avisos separados sobre el mismo tema (cuota de Supabase). Ambos
+# comparten el mismo umbral de aviso (50%) y el mismo destinatario
+# configurado en Config Avisos, evento "egress_alerta".
 EGRESS_LIMITE_GB          = 5.0   # cuota del plan Free de Supabase (egress sin caché)
-EGRESS_UMBRAL_AVISO_PCT   = 80    # avisar al llegar a este % del límite
+EGRESS_UMBRAL_AVISO_PCT   = 50    # avisar al llegar a este % del límite
 EGRESS_CICLO_DIA_INICIO   = 23    # el ciclo de facturación de Supabase renueva el día 23 de cada mes
+
+DB_SIZE_LIMITE_MB         = 512   # cuota del plan Free de Supabase (tamaño de BD)
+DB_SIZE_UMBRAL_AVISO_PCT  = 50    # mismo umbral que egress, por consistencia
 
 
 def _egress_ciclo_actual_inicio() -> "_date":
@@ -8321,10 +8341,18 @@ def _egress_bytes_ciclo_actual() -> int:
     return int(row["total"]) if row else 0
 
 
-def _ya_alertado_egress_hoy() -> bool:
+def _db_size_bytes_actual() -> int:
+    """Tamaño real de la BD ahora mismo (en vivo, no del último snapshot
+    diario) — coherente con cómo egress también se recalcula en vivo en
+    cada ejecución del job, en vez de depender de un valor cacheado."""
+    row = query("SELECT pg_database_size(current_database()) AS bytes_total", one=True)
+    return int(row["bytes_total"]) if row else 0
+
+
+def _ya_alertado_consumo_hoy() -> bool:
     row = query(
         """SELECT COUNT(*) as n FROM whatsapp_log
-           WHERE pedido_id IS NULL AND tipo='egress_alerta'
+           WHERE pedido_id IS NULL AND tipo='consumo_alerta'
              AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
                  (NOW() AT TIME ZONE 'Atlantic/Canary')::date""",
         one=True
@@ -8332,76 +8360,88 @@ def _ya_alertado_egress_hoy() -> bool:
     return (row["n"] if row else 0) > 0
 
 
-def _job_alerta_egress(force: bool = False):
+def _job_alerta_consumo(force: bool = False):
     """
-    Job diario (08:00 hora Canarias, al principio de la jornada): estima el
-    egress consumido en el ciclo de facturación actual de Supabase (según
-    lo que ha servido esta app) y
-    avisa por Telegram a los admins si se acerca o supera el límite del plan
-    Free. Máximo un aviso al día. Si force=True, avisa siempre (para probar
-    el canal desde el botón de admin), aunque no se haya superado el umbral.
+    Job diario (08:30 hora Canarias): un único mensaje combinado con egress
+    Y tamaño de base de datos — dos métricas distintas pero ambas cuotas de
+    Supabase, así que un solo aviso evita duplicar ruido sobre el mismo
+    tema. Avisa por Telegram + popup bridge a los admins si CUALQUIERA de
+    las dos se acerca o supera su límite del plan Free. Máximo un aviso al
+    día. Si force=True, avisa siempre (para probar el canal desde el botón
+    de admin), aunque ninguna haya superado el umbral.
 
-    Nota (Jul 2026): al ejecutarse a primera hora, la cifra refleja lo
-    acumulado HASTA AYER — si el umbral se cruza a media tarde, el aviso no
-    llega hasta la mañana siguiente. Se prioriza así para que el admin
-    empiece el día con el dato claro, a costa de perder el aviso "al
-    instante" que daba la ejecución de las 20:30 (versión anterior).
+    Nota (Jul 2026): al ejecutarse a primera hora, egress refleja lo
+    acumulado HASTA AYER (tabla egress_tracking, por día) — si el umbral
+    se cruza a media tarde, el aviso no llega hasta la mañana siguiente.
+    Tamaño de BD sí se consulta en vivo en el momento del job (no depende
+    del snapshot diario de las 08:10), así que esa parte del mensaje es
+    siempre el dato actual real.
     """
     with app.app_context():
-        _job_alerta_egress_inner(force)
+        _job_alerta_consumo_inner(force)
         _flush_egress_bytes()
 
 
-def _job_alerta_egress_inner(force: bool = False):
-    log.info("▶ [EGRESS] Inicio job alerta de egress — %s", _date.today())
-    if not force and _ya_alertado_egress_hoy():
-        log.info("[EGRESS] Ya se avisó hoy — se omite.")
+def _job_alerta_consumo_inner(force: bool = False):
+    log.info("▶ [CONSUMO] Inicio job alerta de egress + tamaño BD — %s", _date.today())
+    if not force and _ya_alertado_consumo_hoy():
+        log.info("[CONSUMO] Ya se avisó hoy — se omite.")
         return
 
-    total_bytes = _egress_bytes_ciclo_actual()
-    total_gb = total_bytes / (1024 ** 3)
-    limite_gb = EGRESS_LIMITE_GB
-    pct = (total_gb / limite_gb * 100) if limite_gb else 0
-    inicio = _egress_ciclo_actual_inicio()
+    # Egress (acumulado del ciclo de facturación, por día)
+    egress_bytes = _egress_bytes_ciclo_actual()
+    egress_gb = egress_bytes / (1024 ** 3)
+    egress_pct = (egress_gb / EGRESS_LIMITE_GB * 100) if EGRESS_LIMITE_GB else 0
+    inicio_ciclo = _egress_ciclo_actual_inicio()
 
-    if not force and pct < EGRESS_UMBRAL_AVISO_PCT:
-        log.info("[EGRESS] %.2f GB / %.1f GB (%.0f%%) — por debajo del umbral, no se avisa.",
-                  total_gb, limite_gb, pct)
+    # Tamaño de BD (en vivo, ahora mismo)
+    db_bytes = _db_size_bytes_actual()
+    db_mb = db_bytes / (1024 ** 2)
+    db_pct = (db_mb / DB_SIZE_LIMITE_MB * 100) if DB_SIZE_LIMITE_MB else 0
+
+    egress_supera = egress_pct >= EGRESS_UMBRAL_AVISO_PCT
+    db_supera     = db_pct >= DB_SIZE_UMBRAL_AVISO_PCT
+
+    if not force and not egress_supera and not db_supera:
+        log.info("[CONSUMO] Egress %.2f GB (%.0f%%), BD %.1f MB (%.0f%%) — ambos por debajo del umbral, no se avisa.",
+                  egress_gb, egress_pct, db_mb, db_pct)
         return
 
     admins = _destinatarios_evento("egress_alerta", "telegram")
     if not admins:
-        log.warning("[EGRESS] Umbral superado pero no hay destinatarios configurados en Configuración de Avisos.")
+        log.warning("[CONSUMO] Umbral superado pero no hay destinatarios configurados en Configuración de Avisos.")
         return
 
-    estado = "🔴 *LÍMITE SUPERADO*" if pct >= 100 else "🟠 *Acercándose al límite*"
+    pct_max = max(egress_pct, db_pct)
+    estado = "🔴 *LÍMITE SUPERADO*" if pct_max >= 100 else "🟠 *Acercándose al límite*"
+    marca_egress = " ⚠️" if egress_supera else ""
+    marca_db     = " ⚠️" if db_supera else ""
     texto = (
-        f"{estado} — Egress Supabase (control-pedidos-princess)\n\n"
-        f"Estimación interna desde el {inicio.strftime('%d/%m/%Y')}: "
-        f"*{total_gb:.2f} GB* de {limite_gb:.0f} GB ({pct:.0f}%)\n\n"
-        f"_Nota: esta cifra es una estimación basada en lo que sirve la app; "
+        f"{estado} — Consumo Supabase (control-pedidos-princess)\n\n"
+        f"📶 Egress{marca_egress}: estimación desde el {inicio_ciclo.strftime('%d/%m/%Y')}: "
+        f"*{egress_gb:.2f} GB* de {EGRESS_LIMITE_GB:.0f} GB ({egress_pct:.0f}%)\n"
+        f"🗄️ Tamaño BD{marca_db}: *{db_mb:.0f} MB* de {DB_SIZE_LIMITE_MB} MB ({db_pct:.0f}%)\n\n"
+        f"_Nota: el egress es una estimación basada en lo que sirve la app; "
         f"puede no coincidir exactamente con el contador de Supabase, que "
-        f"también incluye tráfico interno del proyecto._\n\n"
-        f"Revisa Supabase → Organization → Usage para el dato oficial. "
-        f"El ciclo actual renueva el día {EGRESS_CICLO_DIA_INICIO}."
+        f"también incluye tráfico interno del proyecto. El tamaño de BD sí "
+        f"es el dato real, en vivo._\n\n"
+        f"Revisa Supabase → Organization → Usage para el dato oficial de egress. "
+        f"El ciclo de egress renueva el día {EGRESS_CICLO_DIA_INICIO}."
     )
-    titulo_bridge = ("🔴 [Egress] Límite superado — Supabase" if pct >= 100
-                      else "🟠 [Egress] Acercándose al límite — Supabase")
+    titulo_bridge = ("🔴 [Consumo] Límite superado — Supabase" if pct_max >= 100
+                      else "🟠 [Consumo] Acercándose al límite — Supabase")
     for adm in admins:
         username = adm.get("username", "admin")
         chat_id  = adm.get("telegram_chat_id")
         if chat_id:
             res = _send_telegram(chat_id, texto)
-            log.info("[EGRESS] -> %s: %s", username, res)
-        # ── Encolar en bridge agenda para este admin ─────────────────────────
-        # ANTI-REGRESION (bug 2026-07-14): aviso exclusivo de admin, hasta ahora
-        # solo se enviaba por Telegram — nunca se encolaba para main_agenda.
+            log.info("[CONSUMO] -> %s: %s", username, res)
         _encolar_bridge_notificacion(
             usuario=username,
-            tipo="egress",
+            tipo="consumo",
             titulo=titulo_bridge,
             mensaje=texto.replace("*", ""),
-            nivel="urgente" if pct >= 100 else "aviso",
+            nivel="urgente" if pct_max >= 100 else "aviso",
             pedido_id=None,
         )
 
@@ -8410,12 +8450,12 @@ def _job_alerta_egress_inner(force: bool = False):
     try:
         execute(
             "INSERT INTO whatsapp_log (pedido_id, tipo, destinatario, mensaje, enviado) "
-            "VALUES (NULL, 'egress_alerta', 'admins', %s, 1)",
+            "VALUES (NULL, 'consumo_alerta', 'admins', %s, 1)",
             (texto,)
         )
         get_db().commit()
     except Exception as e:
-        log.error("[EGRESS] Error registrando dedupe: %s", e)
+        log.error("[CONSUMO] Error registrando dedupe: %s", e)
 
 
 def _job_db_size_tracking() -> None:
@@ -8635,26 +8675,9 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=300,
     )
-    # Job de alerta de egress Supabase: una vez al día a las 08:00 hora
-    # Canarias, al principio de la jornada de oficina (07:00-16:59) — así
-    # el admin arranca el día con el dato claro. Antes se comprobaba a las
-    # 20:30 (final de jornada) precisamente para que el acumulado incluyera
-    # todo el tráfico generado ese mismo día; volver a las 08:00 reintroduce
-    # ese desfase (un cruce del 80% a media tarde no se avisará hasta la
-    # mañana siguiente), asumido deliberadamente para tener el aviso a
-    # primera hora en vez de a última.
-    scheduler.add_job(
-        _job_alerta_egress,
-        trigger="cron",
-        hour="8",
-        minute="0",
-        second="0",
-        id="alerta_egress_diaria",
-        replace_existing=True,
-        misfire_grace_time=3600,
-    )
-    # Snapshot diario de tamaño de BD: a las 08:10, justo después de la
-    # alerta de egress — mismo horario matutino, sin motivo para separarlo.
+    # Snapshot diario de tamaño de BD: a las 08:10 — se mantiene
+    # independiente de la alerta (sirve también para el histórico de
+    # tendencia en Admin → Integridad, no solo para avisar).
     scheduler.add_job(
         _job_db_size_tracking,
         trigger="cron",
@@ -8665,14 +8688,34 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    # Job de alerta combinada de consumo Supabase (egress + tamaño BD): una
+    # vez al día a las 08:30 hora Canarias, tras el snapshot de tamaño de
+    # BD de las 08:10 — un único mensaje/popup si CUALQUIERA de las dos
+    # cuotas se acerca o supera el límite del plan Free, en vez de dos
+    # avisos separados sobre el mismo tema.
+    #
+    # Nota: egress usa el acumulado por día (tabla egress_tracking) y
+    # refleja lo consumido HASTA AYER — si el umbral se cruza a media
+    # tarde, el aviso no llega hasta la mañana siguiente. Tamaño de BD sí
+    # se consulta en vivo en el momento del job.
+    scheduler.add_job(
+        _job_alerta_consumo,
+        trigger="cron",
+        hour="8",
+        minute="30",
+        second="0",
+        id="alerta_consumo_diaria",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
     log.info("✅ Scheduler iniciado — alertas cada 60s en horario 07:00-16:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — techo URGENTE admins cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — alertas techo mensual diarias a las 08:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — familia/partida repetida cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
-    log.info("✅ Scheduler — alerta de egress Supabase diaria a las 08:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — snapshot de tamaño de BD diario a las 08:10 (Atlantic/Canary)")
+    log.info("✅ Scheduler — alerta combinada de consumo (egress + tamaño BD) diaria a las 08:30 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
@@ -9044,16 +9087,19 @@ def test_health_check():
 @admin_required
 def test_egress_alerta():
     """
-    Fuerza el job de alerta de egress inmediatamente (mismo que corre a las
-    08:00), ignorando el umbral y la deduplicación diaria — sirve para
-    confirmar que el canal de Telegram funciona.
+    Fuerza el job combinado de alerta de consumo (egress + tamaño BD)
+    inmediatamente (mismo que corre a las 08:30), ignorando el umbral y la
+    deduplicación diaria — sirve para confirmar que el canal de Telegram
+    funciona. Ruta y nombre de función sin cambiar (por compatibilidad con
+    el botón ya existente en el frontend), aunque desde Jul 2026 dispara
+    la alerta combinada, no solo egress.
     POST /api/admin/test-egress
     """
     import threading
-    t = threading.Thread(target=lambda: _job_alerta_egress(force=True), daemon=True)
+    t = threading.Thread(target=lambda: _job_alerta_consumo(force=True), daemon=True)
     t.start()
-    log.info("▶ [MANUAL] Job alerta-egress lanzado manualmente por admin")
-    return jsonify({"ok": True, "mensaje": "Alerta de egress ejecutándose — revisa Telegram en unos segundos."})
+    log.info("▶ [MANUAL] Job alerta-consumo (egress + tamaño BD) lanzado manualmente por admin")
+    return jsonify({"ok": True, "mensaje": "Alerta de consumo ejecutándose — revisa Telegram en unos segundos."})
 
 
 # ── RESTAURACIÓN DE BACKUP ────────────────────────────────────────────────────
