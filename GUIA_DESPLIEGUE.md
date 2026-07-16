@@ -34,8 +34,7 @@ Las tablas del chat (`chat_canales`, `chat_participantes`, `chat_mensajes`,
 `chat_lecturas`) pueden vivir en un proyecto de Supabase **distinto** al de
 pedidos, para no competir por la misma cuota de egress/almacenamiento. No es
 obligatorio — si no haces este paso, el chat simplemente usa la misma
-Supabase de siempre (`DATABASE_URL`) y todo sigue funcionando igual que
-antes de esta versión.
+Supabase de siempre (`DATABASE_URL`) y todo sigue funcionando igual.
 
 1. Repite el punto 1 de arriba, pero con otro nombre: `control-pedidos-chat`.
 2. Copia su Connection String (igual que en el punto 2).
@@ -69,21 +68,20 @@ Configura tu Service ID y Template ID en EmailJS y actualiza las constantes en e
    - **Runtime:** Python 3
    - **Build command:** `pip install -r requirements.txt`
    - **Start command:** `gunicorn -k eventlet -w 1 app:app`
+   - **Plan:** Free
 
-   > ⚠️ **Chat interno (v12.5.0):** el Start Command cambia respecto a versiones
+   > ⚠️ **Chat interno (v12.6.0):** el Start Command cambia respecto a versiones
    > anteriores (`gunicorn app:app`, sin `-k eventlet -w 1`). El worker `eventlet`
    > es el que permite mantener las conexiones WebSocket abiertas para el chat en
    > tiempo real. Si por lo que sea no se puede aplicar este cambio (o el
    > **Worker de Cloudflare** que hace de proxy — `proxy.controlpedidosprincess-
    > canarias.workers.dev` — no reenvía la cabecera `Upgrade` de WebSocket, algo
    > que no se puede confirmar sin revisar su código), el chat NO se rompe: la
-   > librería cliente de socket.io degrada sola a long-polling (peticiones HTTP
-   > normales, las que el Worker ya sabe proxiar hoy). Solo se pierde la entrega
-   > instantánea, no la funcionalidad. `-w 1` es intencional: con el worker
+   > librería cliente de socket.io degrada sola a long-polling. Solo se pierde
+   > la entrega instantánea, no la funcionalidad. `-w 1` es intencional: con
    > eventlet, un solo proceso ya gestiona muchas conexiones concurrentes
-   > mediante green threads; usar varios workers de gunicorn partiría las salas
-   > de socket.io entre procesos que no se ven entre sí.
-   - **Plan:** Free
+   > mediante green threads; varios workers de gunicorn partirían las salas de
+   > socket.io entre procesos que no se ven entre sí.
 
 4. En **Environment → Add Environment Variable**, añade estas variables:
 

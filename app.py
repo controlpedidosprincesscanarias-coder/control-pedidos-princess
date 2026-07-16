@@ -11,6 +11,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2.pool import ThreadedConnectionPool
 
 from flask import Flask, request, jsonify, send_from_directory, session, g, Response
 from flask_socketio import SocketIO, emit, join_room
@@ -24,6 +25,17 @@ DATABASE_URL = os.environ.get("DATABASE_URL", "")          # Supabase → Settin
 CHAT_DATABASE_URL = os.environ.get("CHAT_DATABASE_URL", "")
 SECRET_KEY = os.environ["SECRET_KEY"]
 
+# Tamaño de los pools de conexiones (v12.7.0). Antes cada request abría y
+# cerraba su propia conexión con psycopg2.connect() — con el tráfico actual
+# (10 hoteles) ese handshake TCP/TLS repetido en cada petición era el
+# principal cuello de botella. Ahora se reutilizan conexiones ya abiertas de
+# un pool. MAXCONN limita cuántas conexiones físicas simultáneas se mantienen
+# contra Supabase; con gunicorn -w 1 -k eventlet, esto es el máximo de
+# peticiones haciendo trabajo de BD en paralelo en todo el proceso, no por
+# usuario. Ajustable por variable de entorno sin tocar código.
+DB_POOL_MAXCONN = int(os.environ.get("DB_POOL_MAXCONN", "15"))
+CHAT_POOL_MAXCONN = int(os.environ.get("CHAT_POOL_MAXCONN", "8"))
+
 # Email — gestionado enteramente por EmailJS en el frontend
 # EMAILS_INTERNOS eliminado: los destinatarios internos se leen siempre de la BD (rol admin/compras)
 
@@ -32,7 +44,7 @@ app.secret_key = SECRET_KEY
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
-# ── Chat en tiempo real (v12.5.0) ────────────────────────────────────────────
+# ── Chat en tiempo real (v12.6.0) ────────────────────────────────────────────
 # manage_session=True (por defecto) hace que flask.session esté disponible
 # dentro de los handlers de socketio exactamente igual que en cualquier vista
 # — reutiliza la MISMA cookie de sesión que ya crea /api/login y
@@ -276,7 +288,7 @@ def _auto_migrate():
                 CREATE TABLE IF NOT EXISTS bridge_notificaciones (
                     id           SERIAL PRIMARY KEY,
                     usuario      TEXT NOT NULL,         -- username del destinatario
-                    tipo         TEXT NOT NULL,         -- 'cambio_estado' | 'alerta_auto' | 'techo'
+                    tipo         TEXT NOT NULL,         -- 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida'
                     pedido_id    INTEGER,               -- puede ser NULL (p.ej. alertas de techo)
                     titulo       TEXT NOT NULL,
                     mensaje      TEXT NOT NULL,
@@ -299,6 +311,49 @@ def _auto_migrate():
                 ('plazo_urgente_ciclo',             '2', 'numero', 'Plazo entrega — Ciclo urgente tras vencer (cada N días)',   'plazo_entrega', 2),
                 ('plazo_parcial_aviso_dias_antes',  '3', 'numero', 'Entrega Parcial c/plazo — Aviso previo (días antes)',       'plazo_entrega', 3),
                 ('plazo_parcial_urgente_ciclo',     '2', 'numero', 'Entrega Parcial c/plazo — Ciclo urgente (cada N días)',     'plazo_entrega', 4),
+            ]:
+                cur.execute("""
+                    INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (clave) DO NOTHING
+                """, (_clave, _valor, _tipo, _label, _grupo, _orden))
+            # ── v12.5.0 — Repetición de popups en Agenda por tipo de alerta ────
+            # Controla, para cada estado de pedido, si el popup en Organizador
+            # Princess se repite mientras el pedido siga en alerta y cada
+            # cuántas horas (por separado para nivel 🔴 crítico/urgente y
+            # 🟡 normal/aviso). Antes esto era fijo en código (bridge: 1h
+            # urgente / 24h aviso) e igual para todos los tipos. Consumido por
+            # _clasificar_alertas() → expuesto en /api/bridge/alertas → leído
+            # por pedidos_agenda_bridge.py (Organizador Princess).
+            for _clave, _valor, _tipo, _label, _grupo, _orden in [
+                ('enviado_popup_repetir',           '1',  'bool',   'Enviado al proveedor — Repetir popup en Agenda',        'popup_repeticion', 1),
+                ('enviado_popup_horas_critico',     '1',  'numero', 'Enviado al proveedor — Repetir cada (horas) si 🔴 URGENTE', 'popup_repeticion', 2),
+                ('enviado_popup_horas_normal',       '24', 'numero', 'Enviado al proveedor — Repetir cada (horas) si 🟡 AVISO',   'popup_repeticion', 3),
+                ('firma_compras_popup_repetir',      '1',  'bool',   'Firma Dir. Compras — Repetir popup en Agenda',           'popup_repeticion', 4),
+                ('firma_compras_popup_horas_critico', '1', 'numero', 'Firma Dir. Compras — Repetir cada (horas) si 🔴 URGENTE', 'popup_repeticion', 5),
+                ('firma_compras_popup_horas_normal',  '24','numero', 'Firma Dir. Compras — Repetir cada (horas) si 🟡 AVISO',   'popup_repeticion', 6),
+                ('firma_hotel_popup_repetir',        '1',  'bool',   'Firma Dir. Hotel — Repetir popup en Agenda',             'popup_repeticion', 7),
+                ('firma_hotel_popup_horas_critico',  '1',  'numero', 'Firma Dir. Hotel — Repetir cada (horas) si 🔴 URGENTE',   'popup_repeticion', 8),
+                ('firma_hotel_popup_horas_normal',   '24', 'numero', 'Firma Dir. Hotel — Repetir cada (horas) si 🟡 AVISO',     'popup_repeticion', 9),
+                ('entrega_parcial_popup_repetir',    '1',  'bool',   'Entrega Parcial — Repetir popup en Agenda',              'popup_repeticion', 10),
+                ('entrega_parcial_popup_horas_critico','1','numero', 'Entrega Parcial — Repetir cada (horas) si 🔴 URGENTE',    'popup_repeticion', 11),
+                ('entrega_parcial_popup_horas_normal', '24','numero','Entrega Parcial — Repetir cada (horas) si 🟡 AVISO',      'popup_repeticion', 12),
+                ('cotizacion_popup_repetir',         '1',  'bool',   'Pendiente Cotización — Repetir popup en Agenda',         'popup_repeticion', 13),
+                ('cotizacion_popup_horas_critico',   '1',  'numero', 'Pendiente Cotización — Repetir cada (horas) si 🔴 URGENTE','popup_repeticion', 14),
+                ('cotizacion_popup_horas_normal',    '24', 'numero', 'Pendiente Cotización — Repetir cada (horas) si 🟡 AVISO', 'popup_repeticion', 15),
+            ]:
+                cur.execute("""
+                    INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                    VALUES (%s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (clave) DO NOTHING
+                """, (_clave, _valor, _tipo, _label, _grupo, _orden))
+            # ── v12.6.0 — Reenvío a Admins (antes hardcodeado a "cada 2 días") ─
+            # Ambos jobs (techo urgente y familia/partida repetida) esperaban un
+            # número fijo de días naturales entre avisos repetidos al mismo
+            # hotel para el rol admin. Se convierte en config editable.
+            for _clave, _valor, _tipo, _label, _grupo, _orden in [
+                ('techo_urgente_admin_reenvio_dias',    '2', 'numero', 'Techo urgente — Reenvío a Admins (cada N días)',            'reenvio_admin', 1),
+                ('familia_repetida_admin_reenvio_dias', '2', 'numero', 'Familia/partida repetida — Reenvío a Admins (cada N días)', 'reenvio_admin', 2),
             ]:
                 cur.execute("""
                     INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
@@ -527,12 +582,14 @@ def _auto_migrate():
 
 def _auto_migrate_chat():
     """
-    Migración idempotente de las tablas del chat — separada de _auto_migrate()
-    a propósito (v12.6.0): corre contra CHAT_DATABASE_URL (proyecto de
-    Supabase dedicado al chat), no contra DATABASE_URL, para no competir por
-    la cuota de la Supabase de pedidos. Si CHAT_DATABASE_URL no está
-    configurada, cae a DATABASE_URL y crea las tablas ahí (comportamiento
-    idéntico al de antes de v12.6.0).
+    Migración idempotente de las tablas del chat interno (v12.6.0) — corre
+    SIEMPRE contra CHAT_DATABASE_URL (proyecto de Supabase dedicado al chat),
+    no contra DATABASE_URL, precisamente para no competir por la cuota de la
+    Supabase de pedidos. Si CHAT_DATABASE_URL no está configurada, cae a
+    DATABASE_URL y crea las tablas ahí.
+
+    Separada de _auto_migrate() a propósito: son dos bases de datos
+    potencialmente distintas.
     """
     try:
         chat_url = CHAT_DATABASE_URL or DATABASE_URL
@@ -610,8 +667,37 @@ with app.app_context():
     _auto_migrate_chat()
 
 # ── Base de datos (psycopg2 / PostgreSQL) ─────────────────────────────────────
+#
+# Pools de conexiones (v12.7.0) — antes get_db()/get_chat_db() abrían una
+# conexión nueva con psycopg2.connect() en cada request y se cerraba en el
+# teardown. Con el volumen actual (10 hoteles) ese handshake TCP/TLS+auth
+# contra Supabase en cada petición era el principal cuello de botella. Ahora
+# se reserva un pool de conexiones ya abiertas al arrancar la app (una por
+# cada URL de BD distinta) y cada request simplemente toma una prestada
+# (getconn) y la devuelve al terminar (putconn) en vez de cerrarla. El puerto
+# de conexión (5432, directo) y el resto de parámetros (keepalives,
+# application_name, cursor_factory) se mantienen exactamente igual que antes.
+_db_pool = None
+_chat_pool = None
+
+def _crear_pool(url, maxconn, app_name):
+    return ThreadedConnectionPool(
+        1, maxconn, url,
+        cursor_factory=RealDictCursor,
+        connect_timeout=10,
+        keepalives=1,
+        keepalives_idle=30,
+        keepalives_interval=10,
+        keepalives_count=3,
+        # Identifica las conexiones de este pool en pg_stat_activity / Postgres
+        # Logs de Supabase, para distinguirlas de un vistazo de cualquier otro
+        # proceso que se conecte a la misma base de datos (ej. restore_agent.py,
+        # que usa su propio application_name).
+        application_name=app_name,
+    )
 
 def get_db():
+    global _db_pool
     if "db" not in g:
         if not DATABASE_URL:
             raise RuntimeError(
@@ -619,20 +705,10 @@ def get_db():
                 "Ve a Render → tu servicio → Environment y añade la variable DATABASE_URL "
                 "con la URI de tu base de datos PostgreSQL (Supabase → Settings → Database → URI)."
             )
-        g.db = psycopg2.connect(
-            DATABASE_URL,
-            cursor_factory=RealDictCursor,
-            connect_timeout=10,
-            keepalives=1,
-            keepalives_idle=30,
-            keepalives_interval=10,
-            keepalives_count=3,
-            # Identifica esta conexión en pg_stat_activity / Postgres Logs de
-            # Supabase, para poder distinguirla de un vistazo de cualquier
-            # otro proceso que se conecte a la misma base de datos (ej.
-            # restore_agent.py, que usa su propio application_name).
-            application_name="control_pedidos_web",
-        )
+        if _db_pool is None:
+            _db_pool = _crear_pool(DATABASE_URL, DB_POOL_MAXCONN, "control_pedidos_web")
+            atexit.register(lambda: _db_pool.closeall())
+        g.db = _db_pool.getconn()
         g.db.autocommit = False
     return g.db
 
@@ -651,9 +727,9 @@ def get_chat_db():
 
     Si CHAT_DATABASE_URL no está configurada, cae a DATABASE_URL (la misma
     de siempre) para que nada se rompa en un despliegue que aún no haya
-    creado el segundo proyecto de Supabase — simplemente no se libera la
-    saturación hasta que se configure.
+    creado el segundo proyecto de Supabase.
     """
+    global _chat_pool
     if "chat_db" not in g:
         chat_url = CHAT_DATABASE_URL or DATABASE_URL
         if not chat_url:
@@ -663,27 +739,44 @@ def get_chat_db():
                 "proyecto de Supabase dedicado al chat (puede ser el mismo que "
                 "DATABASE_URL si aún no has creado uno aparte)."
             )
-        g.chat_db = psycopg2.connect(
-            chat_url,
-            cursor_factory=RealDictCursor,
-            connect_timeout=10,
-            keepalives=1,
-            keepalives_idle=30,
-            keepalives_interval=10,
-            keepalives_count=3,
-            application_name="control_pedidos_chat",
-        )
+        if _chat_pool is None:
+            _chat_pool = _crear_pool(chat_url, CHAT_POOL_MAXCONN, "control_pedidos_chat")
+            atexit.register(lambda: _chat_pool.closeall())
+        g.chat_db = _chat_pool.getconn()
         g.chat_db.autocommit = False
     return g.chat_db
+
+def _devolver_conexion(pool, conn):
+    """
+    Devuelve una conexión al pool en vez de cerrarla. Si quedó con una
+    transacción abierta sin commit (p.ej. porque la request terminó en una
+    excepción no controlada), se hace rollback antes de devolverla, para que
+    la siguiente request que la reciba del pool empiece siempre en un estado
+    limpio. Si la conexión ya está rota (closed != 0), se le pide al pool que
+    la descarte en vez de reciclarla.
+    """
+    try:
+        rota = conn.closed != 0
+        if not rota:
+            conn.rollback()
+    except Exception:
+        rota = True
+    try:
+        pool.putconn(conn, close=rota)
+    except Exception:
+        try:
+            conn.close()
+        except Exception:
+            pass
 
 @app.teardown_appcontext
 def close_db(e=None):
     db = g.pop("db", None)
-    if db:
-        db.close()
+    if db and _db_pool is not None:
+        _devolver_conexion(_db_pool, db)
     chat_db = g.pop("chat_db", None)
-    if chat_db:
-        chat_db.close()
+    if chat_db and _chat_pool is not None:
+        _devolver_conexion(_chat_pool, chat_db)
 
 @app.after_request
 def _track_egress(response):
@@ -1454,7 +1547,7 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
 
     Parámetros:
         usuario   – username del destinatario (igual que en la tabla usuarios)
-        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'supervision'
+        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida' | 'supervision'
         titulo    – línea resumen (se mostrará como título del popup)
         mensaje   – cuerpo completo del aviso
         nivel     – 'aviso' | 'urgente'
@@ -1859,6 +1952,13 @@ def get_config() -> dict:
         "plazo_parcial_urgente_ciclo": 2,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_pct_amarillo": 60,
+        "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
+        "firma_compras_popup_repetir": 1, "firma_compras_popup_horas_critico": 1, "firma_compras_popup_horas_normal": 24,
+        "firma_hotel_popup_repetir": 1, "firma_hotel_popup_horas_critico": 1, "firma_hotel_popup_horas_normal": 24,
+        "entrega_parcial_popup_repetir": 1, "entrega_parcial_popup_horas_critico": 1, "entrega_parcial_popup_horas_normal": 24,
+        "cotizacion_popup_repetir": 1, "cotizacion_popup_horas_critico": 1, "cotizacion_popup_horas_normal": 24,
+        "techo_urgente_admin_reenvio_dias": 2,
+        "familia_repetida_admin_reenvio_dias": 2,
     }
     for k, v in defaults.items():
         cfg.setdefault(k, v)
@@ -2486,7 +2586,7 @@ def _job_familia_repetida_inner() -> None:
                         log.warning("[FAM-REP] Sin telegram_chat_id para comprador %s", username)
                     _encolar_bridge_notificacion(
                         usuario=username,
-                        tipo="techo",
+                        tipo="familia_repetida",
                         titulo=titulo_bridge,
                         mensaje=texto.replace("*", ""),
                         nivel="urgente",
@@ -2501,9 +2601,9 @@ def _job_familia_repetida_inner() -> None:
         )
         if skip_adm_hoy:
             log.debug("[FAM-REP] Admin hotel %s — ya notificado hoy, omitiendo", hotel_codigo)
-        elif reenvio_adm is not None and reenvio_adm < 2:
-            log.debug("[FAM-REP] Admin hotel %s — último aviso hace %d día(s), esperando 2d",
-                      hotel_codigo, reenvio_adm)
+        elif reenvio_adm is not None and reenvio_adm < get_config().get("familia_repetida_admin_reenvio_dias", 2):
+            log.debug("[FAM-REP] Admin hotel %s — último aviso hace %d día(s), esperando %dd",
+                      hotel_codigo, reenvio_adm, get_config().get("familia_repetida_admin_reenvio_dias", 2))
         else:
             admins = _destinatarios_evento("familia_repetida_admin", "telegram")
             if not admins:
@@ -2545,7 +2645,7 @@ def _job_familia_repetida_inner() -> None:
                         log.warning("[FAM-REP] Sin telegram_chat_id para admin %s", username)
                     _encolar_bridge_notificacion(
                         usuario=username,
-                        tipo="techo",
+                        tipo="familia_repetida",
                         titulo=titulo_bridge,
                         mensaje=texto.replace("*", ""),
                         nivel="urgente",
@@ -2730,10 +2830,11 @@ def _job_techo_urgente_admins_inner() -> None:
 
         # ── 3. Regla de reenvío cada 2 días ──────────────────────────────
         dias_desde_ultimo = _dias_desde_ultimo_techo_urgente_admin(hotel_codigo)
-        if dias_desde_ultimo is not None and dias_desde_ultimo < 2:
+        _reenvio_dias_techo = get_config().get("techo_urgente_admin_reenvio_dias", 2)
+        if dias_desde_ultimo is not None and dias_desde_ultimo < _reenvio_dias_techo:
             log.debug(
-                "[TECHO-URG] Hotel %s — último aviso hace %d día(s), esperando 2d",
-                hotel_codigo, dias_desde_ultimo
+                "[TECHO-URG] Hotel %s — último aviso hace %d día(s), esperando %dd",
+                hotel_codigo, dias_desde_ultimo, _reenvio_dias_techo
             )
             continue
 
@@ -6057,14 +6158,43 @@ def _dias_desde_alerta(fecha_str) -> int | None:
 # "urgente": días para escalar a urgente (None = nunca).
 # "ciclo":   cada cuántos días se reavisa (no usado en clasificación actual).
 # "fecha_ref": campo de fecha a usar (default "fecha_tramitacion").
-_UMBRALES_ALERTAS: dict = {
-    "ENVIADO AL PROVEEDOR":              {"primera": 15, "urgente": 25, "ciclo": 10},
-    "PENDIENTE FIRMA DIRECCION COMPRAS": {"primera": 8,  "urgente": None, "ciclo": 8},
-    "PENDIENTE DE FIRMA DIRECCION HOTEL":{"primera": 5,  "urgente": None, "ciclo": 5},
-    "ENTREGA PARCIAL":                   {"primera": 10, "urgente": None, "ciclo": 10},
-    "PENDIENTE COTIZACIÓN":              {"primera": 2,  "urgente": 3, "ciclo": None,
-                                          "fecha_ref": "fecha_solicitud"},
+#
+# NOTA v12.5.0 — FIX de inconsistencia: hasta ahora esta clasificación usaba
+# un dict fijo en código (_UMBRALES_ALERTAS), mientras que el resto de la app
+# (cambio de estado, job diario del scheduler) ya usaba _build_umbrales(),
+# que lee de la tabla config_alertas (editable desde el panel Admin). Esto
+# provocaba que cambiar un umbral en Admin no afectase a los popups de
+# Agenda. Se elimina el dict fijo y se usa _build_umbrales() también aquí,
+# para que Admin sea la única fuente de verdad en todos los canales.
+
+# Mapeo estado de pedido → prefijo de claves de config_alertas para la
+# repetición de popups en Agenda (grupo "popup_repeticion").
+_ESTADO_POPUP_PREFIX: dict = {
+    "ENVIADO AL PROVEEDOR":               "enviado",
+    "PENDIENTE FIRMA DIRECCION COMPRAS":  "firma_compras",
+    "PENDIENTE DE FIRMA DIRECCION HOTEL": "firma_hotel",
+    "ENTREGA PARCIAL":                    "entrega_parcial",
+    "PENDIENTE COTIZACIÓN":               "cotizacion",
 }
+
+
+def _aplicar_config_popup(p: dict) -> None:
+    """Añade al pedido los campos de repetición de popup (leídos de Admin):
+        popup_repetir        (bool)  — si False, el popup se muestra 1 sola vez
+        popup_horas_critico  (int)   — cada cuántas horas se repite si 🔴 urgente
+        popup_horas_normal   (int)   — cada cuántas horas se repite si 🟡 aviso
+    Consumido por pedidos_agenda_bridge.py (Organizador Princess).
+    """
+    prefix = _ESTADO_POPUP_PREFIX.get(p.get("estado"))
+    c = get_config()
+    if prefix:
+        p["popup_repetir"]       = bool(int(c.get(f"{prefix}_popup_repetir", 1) or 0))
+        p["popup_horas_critico"] = int(c.get(f"{prefix}_popup_horas_critico", 1) or 1)
+        p["popup_horas_normal"]  = int(c.get(f"{prefix}_popup_horas_normal", 24) or 24)
+    else:
+        p["popup_repetir"]       = True
+        p["popup_horas_critico"] = 1
+        p["popup_horas_normal"]  = 24
 
 
 def _resumen_ultima_notificacion(p: dict) -> dict:
@@ -6120,6 +6250,8 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
       • nivel_alerta      ("aviso" | "urgente")
       • fecha_entrega_prevista (str ISO o None)
       • ultima_notificacion    (dict — ver _resumen_ultima_notificacion)
+      • popup_repetir, popup_horas_critico, popup_horas_normal
+                          (ver _aplicar_config_popup — config editable desde Admin)
 
     Devuelve la lista ordenada: urgentes primero, luego por días descendente.
     """
@@ -6134,10 +6266,11 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
             fep = info_plazo["fecha_entrega_prevista"]
             p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
             p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
+            _aplicar_config_popup(p)
             alertas.append(p)
             continue
         # ── Lógica estándar ─────────────────────────────────────────────
-        cfg = _UMBRALES_ALERTAS.get(p["estado"])
+        cfg = _build_umbrales().get(p["estado"])
         if not cfg:
             continue
         fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
@@ -6149,6 +6282,7 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
         p["nivel_alerta"]          = nivel
         p["fecha_entrega_prevista"] = None
         p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
+        _aplicar_config_popup(p)
         alertas.append(p)
 
     alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1,
@@ -6835,7 +6969,7 @@ def bridge_notificaciones_usuario():
         "notificaciones": [
             {
                 "id": 42,
-                "tipo": "cambio_estado",      -- 'cambio_estado'|'alerta_auto'|'techo'|'supervision'
+                "tipo": "cambio_estado",      -- 'cambio_estado'|'alerta_auto'|'techo'|'familia_repetida'|'supervision'
                 "pedido_id": 123,             -- puede ser null
                 "titulo": "...",
                 "mensaje": "...",
@@ -6892,13 +7026,12 @@ def bridge_notificaciones_usuario():
     })
 
 
-# ── Chat interno entre usuarios (v12.5.0) ─────────────────────────────────────
+# ── Chat interno entre usuarios (v12.6.0) ─────────────────────────────────────
 # Historial y listado de conversaciones por REST; entrega de mensajes nuevos
-# por Socket.IO con fallback automático a long-polling. Ambas vías escriben
-# en las mismas tres tablas (chat_canales / chat_participantes / chat_mensajes),
-# así que un cliente que solo sepa hacer polling (p.ej. una versión antigua
-# de main_agenda) sigue funcionando llamando a GET /api/chat/mensajes cada
-# pocos segundos, sin necesidad de socket.io.
+# por Socket.IO con fallback automático a long-polling. Todas las tablas
+# viven en la Supabase separada de get_chat_db() (ver más arriba), excepto
+# la única consulta que necesita la tabla `usuarios` de pedidos
+# (GET /api/chat/usuarios), señalada explícitamente donde ocurre.
 
 def _canal_privado_id(usuario_a: str, usuario_b: str) -> str:
     a, b = sorted([usuario_a.lower().strip(), usuario_b.lower().strip()])
@@ -8864,6 +8997,28 @@ def backup_listar():
         """, (ruta_norm,))
         filas = cur.fetchall()
 
+        # Fix "sin sincronizar" falso (15 jul 2026): `actualizado_en` de
+        # backups_cache solo se toca cuando un backup cambia de verdad —
+        # normal casi todo el día, ya que solo hay un backup diario a las
+        # 17:00. Usarlo como "última vez que corrió el agente" generaba
+        # avisos de agente caído durante horas aunque estuviera
+        # sincronizando bien cada 5 minutos sin encontrar nada nuevo que
+        # subir. `agente_heartbeat` (restore_agent.py ≥ 15 jul 2026) sí
+        # registra cada ciclo, haya cambios o no. Si la tabla todavía no
+        # existe (agente sin actualizar) o no tiene fila para esta ruta,
+        # se usa el cálculo antiguo como red de seguridad.
+        ultimo_heartbeat = None
+        try:
+            cur.execute(
+                "SELECT visto_en FROM agente_heartbeat WHERE ruta_normalizada = %s",
+                (ruta_norm,)
+            )
+            fila_hb = cur.fetchone()
+            if fila_hb:
+                ultimo_heartbeat = fila_hb["visto_en"]
+        except Exception:
+            db.rollback()
+
     if not filas:
         return jsonify({
             "ok": True,
@@ -8876,7 +9031,7 @@ def backup_listar():
             ),
         })
 
-    ultimo_escaneo = max(f["actualizado_en"] for f in filas)
+    ultimo_escaneo = ultimo_heartbeat or max(f["actualizado_en"] for f in filas)
     minutos = int((datetime.now(timezone.utc) - ultimo_escaneo).total_seconds() // 60)
 
     resp = {
