@@ -1,3 +1,11 @@
+# v12.8.4 — 17 julio 2026
+
+🐛 Fix: `/api/changelog` (125 KB) se pedía duplicado en la misma carga
+
+Detectado en logs de Render: la carga inicial completa de la app (`/api/me`, `/api/maestros`, `/api/stats`... y `/api/changelog`) aparecía repetida dos veces seguidas en cuestión de segundos. `_mostrarModalNuevaVersion()` tiene varios puntos de entrada (chequeo al cargar, polling periódico, `refreshCurrentView()`) que podían solaparse tras un deploy, cada uno pidiendo el changelog por su cuenta.
+
+No se persiguió la causa exacta del doble disparo (podría ser el proxy de Cloudflare Worker, un listener duplicado, etc.) — en su lugar, `_obtenerChangelog()` cachea el resultado en memoria de sesión + comparte la promesa en vuelo entre llamadas simultáneas, así que aunque algo dispare la función dos veces, `/api/changelog` solo se pide una vez de verdad. Es correcto de todas formas: el contenido no cambia dentro de una misma sesión (solo cambia con un deploy nuevo, momento en el que la página se recarga entera).
+
 # v12.8.2 — 17 julio 2026
 
 🗜️ Compactación automática (VACUUM FULL) tras migrar adjuntos a Storage

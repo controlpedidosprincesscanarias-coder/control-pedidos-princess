@@ -1127,7 +1127,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.8.2
+          V 12.8.4
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -8062,14 +8062,39 @@ function _renderChangelog(texto) {
   return html;
 }
 
+// ── Caché de changelog (Jul 2026) ─────────────────────────────────────────
+// _mostrarModalNuevaVersion() tiene varios puntos de entrada (chequeo al
+// cargar, polling periódico, refreshCurrentView...) y en la práctica podían
+// dispararse más de uno casi a la vez tras un deploy, cada uno pidiendo de
+// nuevo /api/changelog (125 KB) por su cuenta — egress duplicado sin
+// necesidad, ya que el contenido es el mismo dentro de una misma sesión
+// (solo cambia cuando hay una versión nueva de verdad, momento en el que
+// la página ya se recarga). Cacheado en memoria + una promesa compartida
+// para las llamadas que lleguen mientras la primera sigue en vuelo.
+let _changelogCache = null;
+let _changelogFetchPromise = null;
+
+async function _obtenerChangelog() {
+  if (_changelogCache !== null) return _changelogCache;
+  if (_changelogFetchPromise) return _changelogFetchPromise;
+
+  _changelogFetchPromise = fetch('/api/changelog?_=' + Date.now())
+    .then(r => r.ok ? r.json() : {})
+    .then(d => {
+      _changelogCache = d.changelog || 'Sin notas de versión disponibles.';
+      return _changelogCache;
+    })
+    .catch(() => 'No se pudieron cargar las notas de versión.')
+    .finally(() => { _changelogFetchPromise = null; });
+
+  return _changelogFetchPromise;
+}
+
 async function _mostrarModalNuevaVersion() {
   const modal = document.getElementById('modal-nueva-version');
   const el = document.getElementById('modal-nv-changelog');
-  // Cargar changelog desde el servidor
   try {
-    const r = await fetch('/api/changelog?_=' + Date.now());
-    const d = r.ok ? await r.json() : {};
-    const texto = d.changelog || 'Sin notas de versión disponibles.';
+    const texto = await _obtenerChangelog();
     el.innerHTML = _renderChangelog(texto);
   } catch(_) {
     el.innerHTML = '<p style="color:#6b7a99;">No se pudieron cargar las notas de versión.</p>';
