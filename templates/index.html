@@ -1127,7 +1127,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.8.0
+          V 12.8.2
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6121,6 +6121,7 @@ async function loadDbSize() {
   } else {
     const totalRelevantes = (st.migrados || 0) + (st.pendientes || 0);
     const pctMigrado = totalRelevantes ? (st.migrados / totalRelevantes * 100) : 100;
+    const uv = st.ultimo_vacuum;
     html += `
       <div style="border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:16px">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -6130,6 +6131,11 @@ async function loadDbSize() {
         <div style="font-size:12px;color:var(--text-secondary)">
           ${st.migrados} en Storage · ${st.pendientes} pendientes en BD
           ${totalRelevantes ? `(${pctMigrado.toFixed(0)}% migrado)` : ''}
+        </div>
+        <div style="font-size:11px;color:var(--text-secondary);margin-top:4px">
+          ${uv
+            ? `Última compactación (VACUUM FULL): ${new Date(uv.fecha).toLocaleString('es-ES')} — ${uv.mb_liberados.toFixed(1)} MB liberados (${uv.mb_antes.toFixed(0)} → ${uv.mb_despues.toFixed(0)} MB)`
+            : 'Todavía sin compactar — se hace automáticamente de madrugada (03:00) la primera noche que se migre algo.'}
         </div>
         <div id="migrar-storage-resultado" style="font-size:12px;margin-top:6px"></div>
       </div>

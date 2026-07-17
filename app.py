@@ -507,6 +507,18 @@ def _auto_migrate():
                     bytes_adjuntos  BIGINT NOT NULL DEFAULT 0
                 )
             """)
+            # Historial de compactaciones (VACUUM FULL) de pedido_adjuntos —
+            # v12.8.1. Solo se inserta una fila cuando de verdad se ejecuta
+            # (ver _vacuum_full_adjuntos), no en cada intento.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS db_vacuum_log (
+                    id            SERIAL PRIMARY KEY,
+                    fecha         TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    mb_antes      NUMERIC,
+                    mb_despues    NUMERIC,
+                    mb_liberados  NUMERIC
+                )
+            """)
             # ── Seguridad de sesión: caducidad diaria + verificación por
             # email tras varios días de inactividad (Jul 2026) ─────────────
             # Los usuarios suelen dejar la app abierta todo el día en el
@@ -8328,13 +8340,78 @@ def _slugify_nombre_archivo(nombre: str) -> str:
     return base[:150]  # límite razonable de longitud
 
 
+def _vacuum_full_adjuntos() -> dict:
+    """
+    VACUUM FULL sobre pedido_adjuntos — solo se llama cuando esa noche se
+    migró al menos un adjunto de verdad (ver _job_migrar_adjuntos_storage_diario).
+    Poner `datos=NULL` libera el espacio LÓGICAMENTE, pero Postgres no
+    encoge el archivo físico en disco por sí solo; sin este VACUUM FULL el
+    tamaño reportado de la tabla no bajaría nunca, aunque el conteo de
+    "migrados" siguiera subiendo cada noche.
+
+    VACUUM FULL no puede ejecutarse dentro de una transacción normal, así
+    que usa una conexión propia con autocommit — no la del pool compartido
+    (para no dejarla en un estado raro si algo falla a mitad). También
+    toma un ACCESS EXCLUSIVE lock sobre la tabla mientras dura — por eso
+    solo se dispara a las 03:00, en horario de mínimo tráfico.
+    """
+    resultado = {"mb_antes": None, "mb_despues": None, "mb_liberados": None, "error": None}
+    conn = None
+    try:
+        mb_antes = query(
+            "SELECT pg_total_relation_size('pedido_adjuntos') / 1024.0 / 1024.0 AS mb", one=True
+        )["mb"]
+        resultado["mb_antes"] = float(mb_antes)
+
+        conn = psycopg2.connect(DATABASE_URL, application_name="control_pedidos_vacuum")
+        conn.autocommit = True
+        with conn.cursor() as cur:
+            cur.execute("VACUUM FULL pedido_adjuntos")
+        conn.close()
+        conn = None
+
+        mb_despues = query(
+            "SELECT pg_total_relation_size('pedido_adjuntos') / 1024.0 / 1024.0 AS mb", one=True
+        )["mb"]
+        resultado["mb_despues"] = float(mb_despues)
+        resultado["mb_liberados"] = round(resultado["mb_antes"] - resultado["mb_despues"], 1)
+
+        execute(
+            """INSERT INTO db_vacuum_log (fecha, mb_antes, mb_despues, mb_liberados)
+               VALUES (NOW(), %s, %s, %s)""",
+            (resultado["mb_antes"], resultado["mb_despues"], resultado["mb_liberados"])
+        )
+        get_db().commit()
+
+        log.info("[VACUUM] pedido_adjuntos: %.1f MB -> %.1f MB (%.1f MB liberados)",
+                  resultado["mb_antes"], resultado["mb_despues"], resultado["mb_liberados"])
+    except Exception as e:
+        resultado["error"] = str(e)
+        log.error("[VACUUM] Error compactando pedido_adjuntos: %s", e)
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+    return resultado
+
+
 def _job_migrar_adjuntos_storage_diario() -> None:
     with app.app_context():
+        resumen = {"migrados": 0}
         try:
-            _job_migrar_adjuntos_storage()
+            resumen = _job_migrar_adjuntos_storage()
         except Exception as e:
             log.error("[STORAGE-MIGRA] Error en job diario: %s", e)
         _flush_egress_bytes()
+
+        # Compactar solo si esta noche se migró algo de verdad — si no,
+        # el VACUUM FULL no liberaría nada y solo bloquearía la tabla sin
+        # motivo (ver docstring de _vacuum_full_adjuntos).
+        if resumen.get("migrados", 0) > 0:
+            _vacuum_full_adjuntos()
+        else:
+            log.info("[VACUUM] Sin adjuntos migrados esta noche — se omite la compactación.")
 
 
 def _job_health_check(force: bool = False):
@@ -8919,6 +8996,13 @@ def get_db_size():
         JOIN pedidos p ON p.id = pa.pedido_id
     """, (list(ESTADOS_CERRADOS),), one=True)
 
+    ultimo_vacuum = query("""
+        SELECT fecha, mb_antes, mb_despues, mb_liberados
+        FROM db_vacuum_log
+        ORDER BY fecha DESC
+        LIMIT 1
+    """, one=True)
+
     return jsonify({
         "ok": True,
         "actual": {
@@ -8929,6 +9013,12 @@ def get_db_size():
             "configurado": STORAGE_CONFIGURADO,
             "migrados": migracion["migrados"] if migracion else 0,
             "pendientes": migracion["pendientes"] if migracion else 0,
+            "ultimo_vacuum": {
+                "fecha": ultimo_vacuum["fecha"].isoformat(),
+                "mb_antes": float(ultimo_vacuum["mb_antes"]),
+                "mb_despues": float(ultimo_vacuum["mb_despues"]),
+                "mb_liberados": float(ultimo_vacuum["mb_liberados"]),
+            } if ultimo_vacuum else None,
         },
         "historial": [
             {
@@ -8949,6 +9039,11 @@ def migrar_adjuntos_storage_manual():
     el job de las 03:00), en primer plano — así el admin ve el resultado
     al momento en vez de esperar a la log. Útil para arrancar la migración
     nada más desplegar, sin esperar a la madrugada.
+
+    A propósito NO compacta (VACUUM FULL) aquí, aunque el job nocturno sí
+    lo haga tras migrar algo — VACUUM FULL bloquea la tabla por completo
+    mientras dura, y este botón puede pulsarse en horario de oficina con
+    gente usando la app. La compactación solo se dispara de madrugada.
     POST /api/admin/migrar-adjuntos-storage
     """
     if not STORAGE_CONFIGURADO:

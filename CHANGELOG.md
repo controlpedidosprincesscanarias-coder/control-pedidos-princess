@@ -1,3 +1,16 @@
+# v12.8.2 — 17 julio 2026
+
+🗜️ Compactación automática (VACUUM FULL) tras migrar adjuntos a Storage
+
+Poner `datos=NULL` al migrar un adjunto libera el espacio lógicamente, pero Postgres no encoge el archivo físico en disco por sí solo — sin este cambio, el tamaño reportado de `pedido_adjuntos` no bajaría nunca aunque el conteo de "migrados" fuera subiendo cada noche.
+
+Cambios:
+- Nueva tabla `db_vacuum_log` (fecha, mb_antes, mb_después, mb_liberados).
+- Nueva función `_vacuum_full_adjuntos()` — conexión propia con autocommit (VACUUM FULL no puede ir dentro de una transacción normal), mide tamaño antes/después, registra el resultado.
+- El job nocturno de migración (03:00) encadena la compactación **solo si esa noche se migró al menos un adjunto** — evita bloquear la tabla sin motivo las noches en que no hay nada nuevo que compactar.
+- El botón manual "Migrar lote ahora" (Admin → Integridad) **no** compacta — solo migra. VACUUM FULL toma un lock exclusivo sobre la tabla, y ese botón puede pulsarse en horario de oficina con gente usando la app; la compactación se reserva para la ventana de madrugada.
+- Admin → Integridad → Tamaño de BD: nueva línea con la fecha y MB liberados de la última compactación.
+
 # v12.8.0 — 16 julio 2026
 
 📦 Adjuntos de pedidos cerrados migrados a Supabase Storage
