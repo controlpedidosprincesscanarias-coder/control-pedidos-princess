@@ -1,3 +1,50 @@
+# v12.8.0 — 16 julio 2026
+
+📦 Adjuntos de pedidos cerrados migrados a Supabase Storage
+
+`pedido_adjuntos.datos` es, con diferencia, la mayor consumidora del tamaño de base de datos (277 MB de ~306 MB totales — los archivos se guardan como `bytea`, en TOAST). Los adjuntos de pedidos ya cerrados (`ENTREGADO`/`CANCELADO`) no vuelven a escribirse nunca, así que se migran a Supabase Storage: siguen siendo consultables exactamente igual desde `/api/adjuntos/<id>`, solo cambia dónde vive el byte.
+
+**Importante — esto reduce tamaño de BD, no egress.** Storage tiene su propia cuota (separada, 1 GB en el plan Free), pero cada descarga desde Storage sigue contando como egress igual que antes contaba el `SELECT` de la columna `datos`.
+
+Cambios:
+- Esquema: `pedido_adjuntos.storage_path` (nueva, TEXT), `datos` deja de ser `NOT NULL` (se pone a `NULL` tras migrar, liberando el TOAST). `datos_thumb` **no se toca** — las miniaturas se quedan siempre en Postgres, pequeñas, para que la vista previa siga siendo instantánea aunque el original esté en Storage.
+- Nuevos helpers de Storage (`_storage_subir`, `_storage_descargar`, `_storage_borrar`, `_storage_asegurar_bucket`) — llamadas directas a la API REST de Storage con la `service_role` key (bypassa RLS; el control de acceso lo sigue haciendo esta app con `@login_required`, igual que ahora). Bucket privado, creado automáticamente al arrancar si no existe.
+- Nuevo job diario `_job_migrar_adjuntos_storage`, a las 03:00 — migra por lotes de 50 los adjuntos de pedidos cerrados que aún viven en la BD. Cada fila se marca migrada inmediatamente tras subirse, así que un job interrumpido a mitad retoma donde lo dejó al día siguiente, sin repetir trabajo.
+- `download_adjunto()` y el backfill de miniaturas en `download_adjunto_thumb()` ahora comprueban `storage_path`: si está migrado, sirven desde Storage; si no, desde `datos` como siempre. El fix de ETag-antes-de-traer-el-archivo (v12.3.5) se mantiene intacto en ambos casos.
+- `delete_adjunto()` borra también el objeto en Storage cuando aplica.
+- Admin → Integridad → Tamaño de BD: nuevo bloque con el progreso (migrados / pendientes) y botón **"Migrar lote ahora"** para lanzar un lote manualmente sin esperar a las 03:00.
+- Nuevo endpoint `POST /api/admin/migrar-adjuntos-storage`.
+- Nueva dependencia: `requests` (llamadas HTTP a la API de Storage).
+
+**Requiere configuración antes de desplegar** — dos variables de entorno nuevas en Render:
+- `SUPABASE_URL`: la URL del proyecto (`https://xxxx.supabase.co`), **no** la de conexión a la base de datos.
+- `SUPABASE_SERVICE_ROLE_KEY`: Supabase → Settings → API → `service_role` (⚠️ nunca la `anon`/`public` — esta clave bypassa todos los permisos, debe quedarse solo en el servidor).
+
+Sin estas dos variables, la app funciona exactamente igual que antes (los adjuntos se siguen guardando en la BD, sin error ni degradación) — la migración simplemente se queda desactivada, con un aviso visible en Admin → Integridad.
+
+# v12.7.0 — 16 julio 2026
+
+🔀 El chat interno sale de este servicio (aislamiento de memoria tras OOM)
+
+Los logs de Render mostraron un `SIGKILL` por falta de memoria en el
+proceso único (`gunicorn -k eventlet -w 1`) que alojaba a la vez pedidos,
+alertas, scheduler y el chat con sus websockets. Se mueve el chat a un
+servicio de Render independiente (`control_pedidos_chat`), para que un
+pico de memoria en uno no tumbe al otro.
+
+Cambios en este servicio:
+- Quitadas todas las rutas `/api/chat/*`, los handlers de `socketio.on(...)`,
+  la instancia `SocketIO`, el pool `_chat_pool`/`get_chat_db()`/
+  `query_chat()`/`execute_chat()` y `CHAT_DATABASE_URL`. Cero cambio de
+  comportamiento de pedidos/alertas — solo se retira código que ya no vive
+  aquí (ver paquete `control_pedidos_chat_v1_0_0`).
+- `requirements.txt`: quitados `flask-socketio` y `eventlet` (ya no se usan).
+- Start Command en Render: vuelve a gunicorn estándar (`gunicorn -w 2
+  app:app`), sin `-k eventlet -w 1` — puede volver a usar varios workers.
+- `SECRET_KEY` sigue siendo obligatoria y debe coincidir exactamente con la
+  del nuevo servicio de chat: es la que firma la cookie de sesión que ambos
+  servicios comparten para no duplicar el login.
+
 # v12.6.4 — 16 julio 2026
 
 📮 Alerta combinada egress + tamaño BD, umbral bajado a 50%, movida a las 08:30

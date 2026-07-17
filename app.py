@@ -12,29 +12,41 @@ from apscheduler.schedulers.background import BackgroundScheduler
 import psycopg2
 from psycopg2.extras import RealDictCursor
 from psycopg2.pool import ThreadedConnectionPool
+import requests
 
 from flask import Flask, request, jsonify, send_from_directory, session, g, Response
-from flask_socketio import SocketIO, emit, join_room
 from models import SQL_STATEMENTS, ESTADOS_VALIDOS, ESTADOS_EMAIL_PROVEEDOR, ESTADOS_EMAIL_INTERNO
 
 # ── Configuración ──────────────────────────────────────────────────────────────
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")          # Supabase → Settings → Database → URI
-# Proyecto de Supabase DISTINTO, dedicado solo al chat (v12.6.0) — ver
-# get_chat_db() más abajo. Si se deja vacía, el chat usa DATABASE_URL.
-CHAT_DATABASE_URL = os.environ.get("CHAT_DATABASE_URL", "")
 SECRET_KEY = os.environ["SECRET_KEY"]
 
-# Tamaño de los pools de conexiones (v12.7.0). Antes cada request abría y
+# Tamaño del pool de conexiones (v12.7.0). Antes cada request abría y
 # cerraba su propia conexión con psycopg2.connect() — con el tráfico actual
 # (10 hoteles) ese handshake TCP/TLS repetido en cada petición era el
 # principal cuello de botella. Ahora se reutilizan conexiones ya abiertas de
 # un pool. MAXCONN limita cuántas conexiones físicas simultáneas se mantienen
-# contra Supabase; con gunicorn -w 1 -k eventlet, esto es el máximo de
-# peticiones haciendo trabajo de BD en paralelo en todo el proceso, no por
-# usuario. Ajustable por variable de entorno sin tocar código.
+# contra Supabase. Ajustable por variable de entorno sin tocar código.
 DB_POOL_MAXCONN = int(os.environ.get("DB_POOL_MAXCONN", "15"))
-CHAT_POOL_MAXCONN = int(os.environ.get("CHAT_POOL_MAXCONN", "8"))
+
+# ── Storage para adjuntos de pedidos cerrados (v12.8.0) ──────────────────────
+# pedido_adjuntos.datos (bytea) es, con diferencia, la mayor consumidora del
+# tamaño de la base de datos (ver Admin → Integridad → Tamaño de BD). Los
+# adjuntos de pedidos ya cerrados (ENTREGADO/CANCELADO) no vuelven a
+# escribirse nunca, así que se migran a Supabase Storage — el dato sigue
+# siendo consultable exactamente igual desde /api/adjuntos/<id>, solo cambia
+# dónde vive el byte. Importante: esto reduce TAMAÑO DE BD, no egress — cada
+# descarga desde Storage sigue contando como egress igual que antes.
+# SUPABASE_URL: la URL del proyecto (https://xxxx.supabase.co), NO la de la
+# base de datos. SUPABASE_SERVICE_ROLE_KEY: Supabase → Settings → API →
+# service_role (NUNCA la anon/public key — esta debe quedarse solo en el
+# servidor, nunca llegar al navegador).
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").rstrip("/")
+SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
+SUPABASE_STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "adjuntos-cerrados")
+STORAGE_CONFIGURADO = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
+ESTADOS_CERRADOS = ("ENTREGADO", "CANCELADO")
 
 # Email — gestionado enteramente por EmailJS en el frontend
 # EMAILS_INTERNOS eliminado: los destinatarios internos se leen siempre de la BD (rol admin/compras)
@@ -43,17 +55,6 @@ app = Flask(__name__)
 app.secret_key = SECRET_KEY
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
-
-# ── Chat en tiempo real (v12.6.0) ────────────────────────────────────────────
-# manage_session=True (por defecto) hace que flask.session esté disponible
-# dentro de los handlers de socketio exactamente igual que en cualquier vista
-# — reutiliza la MISMA cookie de sesión que ya crea /api/login y
-# /api/bridge/login, sin autenticación paralela. async_mode="eventlet"
-# requiere arrancar gunicorn con el worker eventlet (ver GUIA_DESPLIEGUE.md);
-# si el dyno/servicio no lo soporta, los clientes de socket.io hacen
-# fallback automático a long-polling — el chat sigue funcionando, solo que
-# con más latencia, así que esto nunca es un cambio "rompedor".
-socketio = SocketIO(app, cors_allowed_origins="*", async_mode="eventlet")
 
 def _auto_migrate():
     """Añade columnas/tablas nuevas de forma idempotente."""
@@ -467,6 +468,22 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS thumb_mime_type TEXT"
             )
+            # ── Migración de adjuntos cerrados a Supabase Storage (v12.8.0) ──
+            # `datos` deja de ser NOT NULL: un adjunto migrado tiene
+            # `storage_path` con la ruta en Storage y `datos = NULL` (libera
+            # el TOAST). `datos_thumb` NO se toca — las miniaturas se quedan
+            # siempre en Postgres, son pequeñas y así la vista previa sigue
+            # siendo instantánea aunque el archivo original esté en Storage.
+            cur.execute(
+                "ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS storage_path TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE pedido_adjuntos ALTER COLUMN datos DROP NOT NULL"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_adjuntos_storage_path "
+                "ON pedido_adjuntos(storage_path) WHERE storage_path IS NOT NULL"
+            )
             # ── Alerta de egress a admins por Telegram (Jul 2026) ───────────
             # Tabla de acumulado diario de bytes servidos por la app, usada
             # para estimar cuánto egress llevamos consumido en el ciclo de
@@ -605,105 +622,22 @@ def _auto_migrate():
     except Exception as e:
         log.warning(f"Auto-migración omitida: {e}")
 
-def _auto_migrate_chat():
-    """
-    Migración idempotente de las tablas del chat interno (v12.6.0) — corre
-    SIEMPRE contra CHAT_DATABASE_URL (proyecto de Supabase dedicado al chat),
-    no contra DATABASE_URL, precisamente para no competir por la cuota de la
-    Supabase de pedidos. Si CHAT_DATABASE_URL no está configurada, cae a
-    DATABASE_URL y crea las tablas ahí.
-
-    Separada de _auto_migrate() a propósito: son dos bases de datos
-    potencialmente distintas.
-    """
-    try:
-        chat_url = CHAT_DATABASE_URL or DATABASE_URL
-        db = psycopg2.connect(
-            chat_url, cursor_factory=RealDictCursor,
-            connect_timeout=20,
-            application_name="control_pedidos_chat_migracion",
-        )
-        db.autocommit = True
-        with db.cursor() as cur:
-            # Un canal 'general' fijo (visible para todos los usuarios activos)
-            # más canales privados 1 a 1 creados bajo demanda. canal_id es TEXT
-            # y determinista para los privados ('dm:usuarioA:usuarioB', con los
-            # dos usernames ordenados alfabéticamente) para no duplicar canal
-            # sin importar quién escribe primero. Entrega en tiempo real vía
-            # Socket.IO (ver socketio.on(...) más abajo); estas tablas son la
-            # fuente de verdad y el historial que se sirve al conectar.
-            #
-            # IMPORTANTE: estas tablas NO tienen FOREIGN KEY hacia `usuarios`
-            # ni ninguna otra tabla de pedidos — a propósito, precisamente
-            # para poder vivir en una base de datos (Supabase) distinta.
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_canales (
-                    id          TEXT PRIMARY KEY,
-                    tipo        TEXT NOT NULL DEFAULT 'privado',  -- 'general' | 'privado'
-                    creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """)
-            cur.execute(
-                "INSERT INTO chat_canales (id, tipo) VALUES ('general', 'general') "
-                "ON CONFLICT (id) DO NOTHING"
-            )
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_participantes (
-                    canal_id  TEXT NOT NULL REFERENCES chat_canales(id) ON DELETE CASCADE,
-                    usuario   TEXT NOT NULL,
-                    PRIMARY KEY (canal_id, usuario)
-                )
-            """)
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS idx_chat_participantes_usuario "
-                "ON chat_participantes(usuario)"
-            )
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_mensajes (
-                    id          SERIAL PRIMARY KEY,
-                    canal_id    TEXT NOT NULL REFERENCES chat_canales(id) ON DELETE CASCADE,
-                    remitente   TEXT NOT NULL,
-                    contenido   TEXT NOT NULL,
-                    creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW()
-                )
-            """)
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS idx_chat_mensajes_canal "
-                "ON chat_mensajes(canal_id, creado_en)"
-            )
-            # Puntero de última lectura por usuario y canal, para los
-            # contadores de "no leídos" en la lista de conversaciones.
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS chat_lecturas (
-                    canal_id        TEXT NOT NULL REFERENCES chat_canales(id) ON DELETE CASCADE,
-                    usuario         TEXT NOT NULL,
-                    ultimo_leido_en TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    PRIMARY KEY (canal_id, usuario)
-                )
-            """)
-        db.close()
-        log.info("Auto-migración del chat OK (%s)",
-                  "CHAT_DATABASE_URL" if CHAT_DATABASE_URL else "DATABASE_URL (fallback)")
-    except Exception as e:
-        log.warning(f"Auto-migración del chat omitida: {e}")
-
 with app.app_context():
     _auto_migrate()
-    _auto_migrate_chat()
 
 # ── Base de datos (psycopg2 / PostgreSQL) ─────────────────────────────────────
 #
-# Pools de conexiones (v12.7.0) — antes get_db()/get_chat_db() abrían una
-# conexión nueva con psycopg2.connect() en cada request y se cerraba en el
-# teardown. Con el volumen actual (10 hoteles) ese handshake TCP/TLS+auth
-# contra Supabase en cada petición era el principal cuello de botella. Ahora
-# se reserva un pool de conexiones ya abiertas al arrancar la app (una por
-# cada URL de BD distinta) y cada request simplemente toma una prestada
-# (getconn) y la devuelve al terminar (putconn) en vez de cerrarla. El puerto
-# de conexión (5432, directo) y el resto de parámetros (keepalives,
-# application_name, cursor_factory) se mantienen exactamente igual que antes.
+# Pool de conexiones — antes get_db() abría una conexión nueva con
+# psycopg2.connect() en cada request y se cerraba en el teardown. Con el
+# volumen actual (10 hoteles) ese handshake TCP/TLS+auth contra Supabase en
+# cada petición era el principal cuello de botella. Ahora se reserva un
+# pool de conexiones ya abiertas al arrancar la app y cada request
+# simplemente toma una prestada (getconn) y la devuelve al terminar
+# (putconn) en vez de cerrarla. El puerto de conexión (5432, directo) y el
+# resto de parámetros (keepalives, application_name, cursor_factory) se
+# mantienen exactamente igual que antes. (v12.7.0: el pool del chat ya no
+# vive aquí — ver control_pedidos_chat.)
 _db_pool = None
-_chat_pool = None
 
 def _crear_pool(url, maxconn, app_name):
     return ThreadedConnectionPool(
@@ -737,40 +671,6 @@ def get_db():
         g.db.autocommit = False
     return g.db
 
-def get_chat_db():
-    """
-    Conexión SEPARADA para las tablas del chat (chat_canales / chat_participantes
-    / chat_mensajes / chat_lecturas) — v12.6.0.
-
-    Motivo: la Supabase de `pedidos` iba saturada, y el chat añade lecturas y
-    escrituras frecuentes (cada mensaje, cada apertura de conversación) que no
-    tienen nada que ver con pedidos. Se usa un proyecto de Supabase distinto,
-    con su propia cuota de egress/almacenamiento, en vez de competir por la
-    misma. Las tablas de chat nunca han tenido FOREIGN KEY hacia `usuarios`
-    ni ninguna otra tabla de pedidos (usan el username como TEXT plano), así
-    que viven perfectamente en una base de datos distinta sin romper nada.
-
-    Si CHAT_DATABASE_URL no está configurada, cae a DATABASE_URL (la misma
-    de siempre) para que nada se rompa en un despliegue que aún no haya
-    creado el segundo proyecto de Supabase.
-    """
-    global _chat_pool
-    if "chat_db" not in g:
-        chat_url = CHAT_DATABASE_URL or DATABASE_URL
-        if not chat_url:
-            raise RuntimeError(
-                "Ni CHAT_DATABASE_URL ni DATABASE_URL están configuradas. "
-                "Añade CHAT_DATABASE_URL en Render → Environment con la URI del "
-                "proyecto de Supabase dedicado al chat (puede ser el mismo que "
-                "DATABASE_URL si aún no has creado uno aparte)."
-            )
-        if _chat_pool is None:
-            _chat_pool = _crear_pool(chat_url, CHAT_POOL_MAXCONN, "control_pedidos_chat")
-            atexit.register(lambda: _chat_pool.closeall())
-        g.chat_db = _chat_pool.getconn()
-        g.chat_db.autocommit = False
-    return g.chat_db
-
 def _devolver_conexion(pool, conn):
     """
     Devuelve una conexión al pool en vez de cerrarla. Si quedó con una
@@ -799,9 +699,6 @@ def close_db(e=None):
     db = g.pop("db", None)
     if db and _db_pool is not None:
         _devolver_conexion(_db_pool, db)
-    chat_db = g.pop("chat_db", None)
-    if chat_db and _chat_pool is not None:
-        _devolver_conexion(_chat_pool, chat_db)
 
 @app.after_request
 def _track_egress(response):
@@ -863,19 +760,6 @@ def query(sql, args=(), one=False):
 def execute(sql, args=()):
     """INSERT/UPDATE/DELETE helper — devuelve el cursor para leer RETURNING."""
     cur = get_db().cursor()
-    cur.execute(sql, args)
-    return cur
-
-def query_chat(sql, args=(), one=False):
-    """Igual que query(), pero contra get_chat_db() (Supabase separada del chat)."""
-    with get_chat_db().cursor() as cur:
-        cur.execute(sql, args)
-        rv = cur.fetchall()
-    return (rv[0] if rv else None) if one else rv
-
-def execute_chat(sql, args=()):
-    """Igual que execute(), pero contra get_chat_db() (Supabase separada del chat)."""
-    cur = get_chat_db().cursor()
     cur.execute(sql, args)
     return cur
 
@@ -943,6 +827,97 @@ def row_to_dict(row):
 
 def rows_to_list(rows):
     return [dict(r) for r in rows]
+
+# ── Helpers de Supabase Storage (v12.8.0) ────────────────────────────────────
+# Llamadas directas a la API REST de Storage (no usamos supabase-py, para no
+# añadir una dependencia grande solo para esto). Autenticación con la
+# service_role key — bypassa RLS, así que el bucket puede (y debe) quedar
+# privado; el control de acceso lo sigue haciendo esta app con @login_required,
+# exactamente igual que ahora con los adjuntos en la base de datos.
+
+def _storage_headers(content_type=None, upsert=False):
+    h = {"Authorization": f"Bearer {SUPABASE_SERVICE_ROLE_KEY}"}
+    if content_type:
+        h["Content-Type"] = content_type
+    if upsert:
+        h["x-upsert"] = "true"
+    return h
+
+
+def _storage_asegurar_bucket():
+    """Crea el bucket si no existe todavía (idempotente). Se llama una vez
+    al arrancar la app, junto a _auto_migrate(). Si falla (permisos,
+    STORAGE_CONFIGURADO=False, etc.) solo se loguea — no debe impedir que
+    arranque el resto de la aplicación."""
+    if not STORAGE_CONFIGURADO:
+        log.warning("[STORAGE] SUPABASE_URL / SUPABASE_SERVICE_ROLE_KEY no configurados — "
+                    "la migración de adjuntos a Storage queda desactivada.")
+        return
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/storage/v1/bucket",
+            headers=_storage_headers("application/json"),
+            json={"id": SUPABASE_STORAGE_BUCKET, "name": SUPABASE_STORAGE_BUCKET, "public": False},
+            timeout=10,
+        )
+        if r.status_code in (200, 201):
+            log.info("[STORAGE] Bucket '%s' creado.", SUPABASE_STORAGE_BUCKET)
+        elif r.status_code == 400 and "already exists" in r.text.lower():
+            pass  # ya existía, nada que hacer
+        else:
+            log.warning("[STORAGE] No se pudo verificar/crear el bucket '%s': %s %s",
+                        SUPABASE_STORAGE_BUCKET, r.status_code, r.text[:200])
+    except Exception as e:
+        log.warning("[STORAGE] Error creando bucket: %s", e)
+
+
+def _storage_subir(path: str, contenido: bytes, mime_type: str) -> bool:
+    try:
+        r = requests.post(
+            f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{path}",
+            headers=_storage_headers(mime_type or "application/octet-stream", upsert=True),
+            data=contenido,
+            timeout=30,
+        )
+        return r.status_code in (200, 201)
+    except Exception as e:
+        log.error("[STORAGE] Error subiendo '%s': %s", path, e)
+        return False
+
+
+def _storage_descargar(path: str):
+    """Devuelve los bytes del objeto, o None si falla. El propio tráfico de
+    esta descarga (Storage → esta app) SÍ cuenta como egress de Supabase,
+    igual que antes contaba el SELECT de la columna `datos` — moverlo a
+    Storage no elimina ese coste, solo el de tamaño de BD."""
+    try:
+        r = requests.get(
+            f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{path}",
+            headers=_storage_headers(),
+            timeout=30,
+        )
+        if r.status_code == 200:
+            return r.content
+        log.error("[STORAGE] Error descargando '%s': %s", path, r.status_code)
+        return None
+    except Exception as e:
+        log.error("[STORAGE] Error descargando '%s': %s", path, e)
+        return None
+
+
+def _storage_borrar(path: str) -> bool:
+    try:
+        r = requests.delete(
+            f"{SUPABASE_URL}/storage/v1/object/{SUPABASE_STORAGE_BUCKET}/{path}",
+            headers=_storage_headers("application/json"),
+            timeout=15,
+        )
+        return r.status_code in (200, 204)
+    except Exception as e:
+        log.error("[STORAGE] Error borrando '%s': %s", path, e)
+        return False
+
+_storage_asegurar_bucket()
 
 def format_albaran_display(albaran_str):
     """
@@ -7051,240 +7026,6 @@ def bridge_notificaciones_usuario():
     })
 
 
-# ── Chat interno entre usuarios (v12.6.0) ─────────────────────────────────────
-# Historial y listado de conversaciones por REST; entrega de mensajes nuevos
-# por Socket.IO con fallback automático a long-polling. Todas las tablas
-# viven en la Supabase separada de get_chat_db() (ver más arriba), excepto
-# la única consulta que necesita la tabla `usuarios` de pedidos
-# (GET /api/chat/usuarios), señalada explícitamente donde ocurre.
-
-def _canal_privado_id(usuario_a: str, usuario_b: str) -> str:
-    a, b = sorted([usuario_a.lower().strip(), usuario_b.lower().strip()])
-    return f"dm:{a}:{b}"
-
-def _asegurar_canal_privado(usuario_a: str, usuario_b: str) -> str:
-    canal_id = _canal_privado_id(usuario_a, usuario_b)
-    db = get_chat_db()
-    with db.cursor() as cur:
-        cur.execute(
-            "INSERT INTO chat_canales (id, tipo) VALUES (%s, 'privado') "
-            "ON CONFLICT (id) DO NOTHING", (canal_id,)
-        )
-        cur.execute(
-            "INSERT INTO chat_participantes (canal_id, usuario) VALUES (%s,%s),(%s,%s) "
-            "ON CONFLICT DO NOTHING",
-            (canal_id, usuario_a.lower().strip(), canal_id, usuario_b.lower().strip())
-        )
-    db.commit()
-    return canal_id
-
-def _usuario_puede_ver_canal(usuario: str, canal_id: str) -> bool:
-    if canal_id == "general":
-        return True
-    if not canal_id.startswith("dm:"):
-        return False
-    fila = query_chat(
-        "SELECT 1 FROM chat_participantes WHERE canal_id=%s AND usuario=%s",
-        (canal_id, usuario.lower().strip()), one=True
-    )
-    return bool(fila)
-
-def _guardar_mensaje_chat(remitente: str, canal_id: str, contenido: str) -> dict:
-    """Inserta el mensaje y devuelve el dict ya serializable, listo para
-    jsonify() (ruta REST) o socketio.emit() (ruta en tiempo real)."""
-    contenido = (contenido or "").strip()
-    if not contenido:
-        raise ValueError("Mensaje vacío")
-    if len(contenido) > 4000:
-        contenido = contenido[:4000]
-    cur = execute_chat(
-        """INSERT INTO chat_mensajes (canal_id, remitente, contenido)
-           VALUES (%s,%s,%s) RETURNING id, canal_id, remitente, contenido, creado_en""",
-        (canal_id, remitente.lower().strip(), contenido)
-    )
-    row = cur.fetchone()
-    get_chat_db().commit()
-    return {
-        "id":        row["id"],
-        "canal_id":  row["canal_id"],
-        "remitente": row["remitente"],
-        "contenido": row["contenido"],
-        "creado_en": row["creado_en"].isoformat(),
-    }
-
-@app.route("/api/chat/usuarios")
-@login_required
-def chat_usuarios():
-    """Usuarios activos con los que se puede abrir una conversación privada.
-    ÚNICA consulta del chat que sigue yendo contra la Supabase de pedidos
-    (get_db/query, no get_chat_db/query_chat): la tabla `usuarios` vive ahí,
-    no en la Supabase del chat. Es una lectura ligera de la lista de activos,
-    no crece con el volumen de mensajes, así que no aporta a la saturación
-    que se quería aliviar separando el resto de tablas."""
-    yo = session.get("username", "").lower()
-    rows = rows_to_list(query(
-        "SELECT username, nombre, rol FROM usuarios WHERE activo=1 AND username<>%s ORDER BY nombre",
-        (yo,)
-    ))
-    return jsonify({"usuarios": rows})
-
-@app.route("/api/chat/canales")
-@login_required
-def chat_canales():
-    """Lista de conversaciones del usuario: 'general' + sus DMs, con último
-    mensaje y contador de no leídos, para pintar la lista lateral del chat."""
-    yo = session.get("username", "").lower()
-    rows = rows_to_list(query_chat("""
-        SELECT c.id, c.tipo
-        FROM chat_canales c
-        WHERE c.tipo = 'general'
-           OR c.id IN (SELECT canal_id FROM chat_participantes WHERE usuario=%s)
-        ORDER BY c.tipo DESC
-    """, (yo,)))
-
-    resultado = []
-    for c in rows:
-        canal_id = c["id"]
-        otro = None
-        if c["tipo"] == "privado":
-            otro = canal_id.replace("dm:", "").replace(yo, "").replace(":", "")
-        ultimo = query_chat(
-            "SELECT contenido, remitente, creado_en FROM chat_mensajes "
-            "WHERE canal_id=%s ORDER BY creado_en DESC LIMIT 1",
-            (canal_id,), one=True
-        )
-        lectura = query_chat(
-            "SELECT ultimo_leido_en FROM chat_lecturas WHERE canal_id=%s AND usuario=%s",
-            (canal_id, yo), one=True
-        )
-        desde = lectura["ultimo_leido_en"] if lectura else datetime(1970, 1, 1, tzinfo=timezone.utc)
-        no_leidos = query_chat(
-            "SELECT COUNT(*) AS n FROM chat_mensajes "
-            "WHERE canal_id=%s AND creado_en > %s AND remitente <> %s",
-            (canal_id, desde, yo), one=True
-        )["n"]
-        resultado.append({
-            "canal_id":  canal_id,
-            "tipo":      c["tipo"],
-            "otro_usuario": otro,
-            "ultimo_mensaje": (dict(ultimo, creado_en=ultimo["creado_en"].isoformat())
-                               if ultimo else None),
-            "no_leidos": no_leidos,
-        })
-    return jsonify({"canales": resultado})
-
-@app.route("/api/chat/mensajes", methods=["GET"])
-@login_required
-def chat_obtener_mensajes():
-    yo = session.get("username", "").lower()
-    canal_id = request.args.get("canal_id", "").strip()
-    destinatario = request.args.get("destinatario", "").strip().lower()
-    if not canal_id and destinatario:
-        canal_id = _asegurar_canal_privado(yo, destinatario)
-    if not canal_id or not _usuario_puede_ver_canal(yo, canal_id):
-        return jsonify({"error": "Canal no encontrado o sin acceso"}), 404
-
-    antes_de_id = request.args.get("antes_de", type=int)
-    if antes_de_id:
-        rows = rows_to_list(query_chat(
-            "SELECT id, canal_id, remitente, contenido, creado_en FROM chat_mensajes "
-            "WHERE canal_id=%s AND id < %s ORDER BY creado_en DESC LIMIT 50",
-            (canal_id, antes_de_id)
-        ))
-    else:
-        rows = rows_to_list(query_chat(
-            "SELECT id, canal_id, remitente, contenido, creado_en FROM chat_mensajes "
-            "WHERE canal_id=%s ORDER BY creado_en DESC LIMIT 50",
-            (canal_id,)
-        ))
-    for r in rows:
-        r["creado_en"] = r["creado_en"].isoformat()
-    rows.reverse()
-
-    execute_chat(
-        "INSERT INTO chat_lecturas (canal_id, usuario, ultimo_leido_en) VALUES (%s,%s,NOW()) "
-        "ON CONFLICT (canal_id, usuario) DO UPDATE SET ultimo_leido_en=NOW()",
-        (canal_id, yo)
-    )
-    get_chat_db().commit()
-
-    return jsonify({"canal_id": canal_id, "mensajes": rows})
-
-@app.route("/api/chat/mensajes", methods=["POST"])
-@login_required
-def chat_enviar_mensaje():
-    """Vía REST — funciona igual haya o no conexión de socket.io activa
-    (fallback de polling, o clientes que aún no la implementen)."""
-    yo = session.get("username", "").lower()
-    body = request.get_json(silent=True) or {}
-    canal_id = (body.get("canal_id") or "").strip()
-    destinatario = (body.get("destinatario") or "").strip().lower()
-    contenido = body.get("contenido", "")
-
-    if not canal_id and destinatario:
-        canal_id = _asegurar_canal_privado(yo, destinatario)
-    if not canal_id or not _usuario_puede_ver_canal(yo, canal_id):
-        return jsonify({"error": "Canal no encontrado o sin acceso"}), 404
-
-    try:
-        mensaje = _guardar_mensaje_chat(yo, canal_id, contenido)
-    except ValueError as e:
-        return jsonify({"error": str(e)}), 400
-
-    socketio.emit("nuevo_mensaje", mensaje, room=canal_id)
-    if canal_id.startswith("dm:"):
-        for u in canal_id.replace("dm:", "").split(":"):
-            socketio.emit("nuevo_mensaje", mensaje, room=f"user:{u}")
-
-    return jsonify({"ok": True, "mensaje": mensaje})
-
-
-@socketio.on("connect")
-def chat_socket_connect():
-    if "user_id" not in session:
-        return False  # rechaza el handshake — mismo criterio que login_required
-    yo = session.get("username", "").lower()
-    join_room(f"user:{yo}")
-    join_room("general")
-
-@socketio.on("unirse_canal")
-def chat_socket_unirse(data):
-    if "user_id" not in session:
-        return
-    yo = session.get("username", "").lower()
-    canal_id = (data or {}).get("canal_id", "").strip()
-    if _usuario_puede_ver_canal(yo, canal_id):
-        join_room(canal_id)
-
-@socketio.on("enviar_mensaje")
-def chat_socket_enviar(data):
-    """Equivalente en tiempo real de POST /api/chat/mensajes — misma
-    validación y misma tabla, para que REST y socket.io nunca diverjan."""
-    if "user_id" not in session:
-        return
-    yo = session.get("username", "").lower()
-    data = data or {}
-    canal_id = (data.get("canal_id") or "").strip()
-    destinatario = (data.get("destinatario") or "").strip().lower()
-
-    if not canal_id and destinatario:
-        canal_id = _asegurar_canal_privado(yo, destinatario)
-    if not canal_id or not _usuario_puede_ver_canal(yo, canal_id):
-        emit("error_chat", {"error": "Canal no encontrado o sin acceso"})
-        return
-
-    try:
-        mensaje = _guardar_mensaje_chat(yo, canal_id, data.get("contenido", ""))
-    except ValueError as e:
-        emit("error_chat", {"error": str(e)})
-        return
-
-    emit("nuevo_mensaje", mensaje, room=canal_id)
-    if canal_id.startswith("dm:"):
-        for u in canal_id.replace("dm:", "").split(":"):
-            emit("nuevo_mensaje", mensaje, room=f"user:{u}")
-
-
 # ── API Reset completo (admin only) ───────────────────────────────────────────
 
 @app.route("/api/importar/backup", methods=["GET"])
@@ -8020,7 +7761,7 @@ def download_adjunto(aid):
             return Response(status=304)
         # Si no existe (fue borrado), seguimos abajo para devolver el 404 real.
 
-    row = query("SELECT nombre, mime_type, datos, es_correo FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
+    row = query("SELECT nombre, mime_type, datos, es_correo, storage_path FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
     if not row:
         return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
     # Los correos (.eml/.msg) se sirven como attachment para que el SO
@@ -8028,8 +7769,19 @@ def download_adjunto(aid):
     # El resto (PDF, imagenes, Word) se sirven inline para previsualizacion.
     disposition = "attachment" if row["es_correo"] else "inline"
 
+    # ── Adjuntos de pedidos cerrados migrados a Storage (v12.8.0) ────────
+    # `datos` es NULL cuando el archivo vive en Supabase Storage en vez de
+    # en la base de datos — mismo endpoint, mismo comportamiento desde el
+    # punto de vista del navegador, solo cambia de dónde sale el byte.
+    if row["storage_path"]:
+        contenido = _storage_descargar(row["storage_path"])
+        if contenido is None:
+            return jsonify({"ok": False, "error": "No se pudo recuperar el adjunto desde Storage"}), 502
+    else:
+        contenido = bytes(row["datos"])
+
     resp = Response(
-        bytes(row["datos"]),
+        contenido,
         mimetype=row["mime_type"],
         headers={"Content-Disposition": f'{disposition}; filename="{row["nombre"]}"'}
     )
@@ -8075,13 +7827,22 @@ def download_adjunto_thumb(aid):
     if thumb_bytes is None:
         # Backfill perezoso — imagen subida antes de existir esta columna.
         # Solo aquí (la primera vez que se pide esta imagen concreta) se
-        # trae la columna `datos` completa; en peticiones posteriores el
+        # trae la columna `datos` completa (o se descarga de Storage si el
+        # adjunto ya fue migrado — v12.8.0); en peticiones posteriores el
         # SELECT de arriba ya la evita por completo.
         original = query(
-            "SELECT datos, mime_type FROM pedido_adjuntos WHERE id=%s",
+            "SELECT datos, mime_type, storage_path FROM pedido_adjuntos WHERE id=%s",
             (aid,), one=True
         )
-        thumb_bytes, thumb_mime = _generar_thumbnail(bytes(original["datos"]), original["mime_type"])
+        if original["storage_path"]:
+            datos_originales = _storage_descargar(original["storage_path"])
+        else:
+            datos_originales = bytes(original["datos"]) if original["datos"] is not None else None
+
+        if datos_originales is None:
+            return jsonify({"ok": False, "error": "No se pudo recuperar el adjunto original"}), 502
+
+        thumb_bytes, thumb_mime = _generar_thumbnail(datos_originales, original["mime_type"])
         if thumb_bytes is not None:
             execute(
                 "UPDATE pedido_adjuntos SET datos_thumb=%s, thumb_mime_type=%s WHERE id=%s",
@@ -8091,7 +7852,7 @@ def download_adjunto_thumb(aid):
         else:
             # No se pudo generar miniatura (formato no soportado por Pillow):
             # servimos la original tal cual para no dejar la vista rota.
-            thumb_bytes, thumb_mime = bytes(original["datos"]), original["mime_type"]
+            thumb_bytes, thumb_mime = datos_originales, original["mime_type"]
 
     resp = Response(
         bytes(thumb_bytes),
@@ -8107,11 +7868,17 @@ def download_adjunto_thumb(aid):
 @login_required
 def delete_adjunto(aid):
     db  = get_db()
-    row = query("SELECT id FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
+    row = query("SELECT id, storage_path FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
     if not row:
         return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
     execute("DELETE FROM pedido_adjuntos WHERE id=%s", (aid,))
     db.commit()
+    # Borrar la fila primero: si el borrado en Storage falla, no queremos
+    # dejar el adjunto "medio borrado" — el archivo huérfano en Storage no
+    # es grave (no vuelve a ser accesible desde la app) y puede limpiarse
+    # más adelante; peor sería una fila inconsistente en la BD.
+    if row["storage_path"]:
+        _storage_borrar(row["storage_path"])
     return jsonify({"ok": True})
 
 
@@ -8493,6 +8260,83 @@ def _job_db_size_tracking() -> None:
         _flush_egress_bytes()
 
 
+def _job_migrar_adjuntos_storage(force: bool = False, limite: int = 50) -> dict:
+    """
+    Job diario (03:00 hora Canarias — horario de madrugada, sin prisa, sin
+    interferir con nada): migra a Supabase Storage los adjuntos de pedidos
+    ya cerrados (ENTREGADO/CANCELADO) que todavía viven en la base de datos.
+
+    Por lotes (`limite` por ejecución) para no bloquear mucho tiempo ni
+    disparar de golpe un pico de tráfico hacia Storage. Cada fila se marca
+    migrada (`storage_path` + `datos=NULL`) inmediatamente tras subirse, así
+    que si el job se interrumpe a mitad, lo ya migrado no se repite en la
+    siguiente ejecución — retoma donde lo dejó.
+
+    Devuelve un resumen (dict) — útil tanto para el log del job automático
+    como para la respuesta del endpoint de disparo manual desde Admin.
+    """
+    resumen = {"migrados": 0, "fallidos": 0, "omitidos_sin_storage": False}
+
+    if not STORAGE_CONFIGURADO:
+        log.warning("[STORAGE-MIGRA] SUPABASE_URL/SUPABASE_SERVICE_ROLE_KEY no configurados — se omite.")
+        resumen["omitidos_sin_storage"] = True
+        return resumen
+
+    pendientes = query("""
+        SELECT pa.id, pa.pedido_id, pa.nombre, pa.mime_type, pa.datos
+        FROM pedido_adjuntos pa
+        JOIN pedidos p ON p.id = pa.pedido_id
+        WHERE p.estado = ANY(%s)
+          AND pa.storage_path IS NULL
+          AND pa.datos IS NOT NULL
+        ORDER BY pa.id
+        LIMIT %s
+    """, (list(ESTADOS_CERRADOS), limite))
+
+    if not pendientes:
+        log.info("[STORAGE-MIGRA] Nada pendiente de migrar.")
+        return resumen
+
+    for adj in pendientes:
+        path = f"pedidos/{adj['pedido_id']}/{adj['id']}_{_slugify_nombre_archivo(adj['nombre'])}"
+        ok = _storage_subir(path, bytes(adj["datos"]), adj["mime_type"])
+        if ok:
+            try:
+                execute(
+                    "UPDATE pedido_adjuntos SET storage_path=%s, datos=NULL WHERE id=%s",
+                    (path, adj["id"])
+                )
+                get_db().commit()
+                resumen["migrados"] += 1
+            except Exception as e:
+                get_db().rollback()
+                log.error("[STORAGE-MIGRA] Subido pero fallo al actualizar fila id=%s: %s", adj["id"], e)
+                resumen["fallidos"] += 1
+        else:
+            resumen["fallidos"] += 1
+
+    log.info("[STORAGE-MIGRA] %d migrado(s), %d fallido(s) (lote de hasta %d).",
+              resumen["migrados"], resumen["fallidos"], limite)
+    return resumen
+
+
+def _slugify_nombre_archivo(nombre: str) -> str:
+    """Nombre de archivo seguro para usar como parte de una ruta de Storage
+    (sin espacios ni caracteres que puedan dar problemas en una URL)."""
+    import re
+    base = re.sub(r"[^a-zA-Z0-9._-]+", "_", nombre or "archivo")
+    return base[:150]  # límite razonable de longitud
+
+
+def _job_migrar_adjuntos_storage_diario() -> None:
+    with app.app_context():
+        try:
+            _job_migrar_adjuntos_storage()
+        except Exception as e:
+            log.error("[STORAGE-MIGRA] Error en job diario: %s", e)
+        _flush_egress_bytes()
+
+
 def _job_health_check(force: bool = False):
     """
     Job diario (07:05 hora Canarias): valida integridad operativa y envía
@@ -8688,6 +8532,19 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    # Migración de adjuntos de pedidos cerrados a Supabase Storage: a las
+    # 03:00 (madrugada, sin prisa, sin interferir con nada). Por lotes de
+    # 50 — si hay más pendientes, los coge al día siguiente.
+    scheduler.add_job(
+        _job_migrar_adjuntos_storage_diario,
+        trigger="cron",
+        hour="3",
+        minute="0",
+        second="0",
+        id="migrar_adjuntos_storage_diario",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     # Job de alerta combinada de consumo Supabase (egress + tamaño BD): una
     # vez al día a las 08:30 hora Canarias, tras el snapshot de tamaño de
     # BD de las 08:10 — un único mensaje/popup si CUALQUIERA de las dos
@@ -8715,6 +8572,7 @@ def _iniciar_scheduler():
     log.info("✅ Scheduler — familia/partida repetida cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
     log.info("✅ Scheduler — snapshot de tamaño de BD diario a las 08:10 (Atlantic/Canary)")
+    log.info("✅ Scheduler — migración de adjuntos cerrados a Storage diaria a las 03:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — alerta combinada de consumo (egress + tamaño BD) diaria a las 08:30 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
@@ -9051,11 +8909,26 @@ def get_db_size():
     except Exception:
         actual = None
 
+    # Progreso de la migración a Storage (v12.8.0) — cuántos adjuntos de
+    # pedidos cerrados ya están en Storage vs cuántos siguen en la BD.
+    migracion = query("""
+        SELECT
+            COUNT(*) FILTER (WHERE pa.storage_path IS NOT NULL) AS migrados,
+            COUNT(*) FILTER (WHERE pa.storage_path IS NULL AND p.estado = ANY(%s)) AS pendientes
+        FROM pedido_adjuntos pa
+        JOIN pedidos p ON p.id = pa.pedido_id
+    """, (list(ESTADOS_CERRADOS),), one=True)
+
     return jsonify({
         "ok": True,
         "actual": {
             "bytes_total": actual["bytes_total"] if actual else None,
             "bytes_adjuntos": actual["bytes_adjuntos"] if actual else None,
+        },
+        "storage": {
+            "configurado": STORAGE_CONFIGURADO,
+            "migrados": migracion["migrados"] if migracion else 0,
+            "pendientes": migracion["pendientes"] if migracion else 0,
         },
         "historial": [
             {
@@ -9066,6 +8939,27 @@ def get_db_size():
             for f in historial
         ],
     })
+
+
+@app.route("/api/admin/migrar-adjuntos-storage", methods=["POST"])
+@admin_required
+def migrar_adjuntos_storage_manual():
+    """
+    Lanza un lote de migración a Storage inmediatamente (mismo trabajo que
+    el job de las 03:00), en primer plano — así el admin ve el resultado
+    al momento en vez de esperar a la log. Útil para arrancar la migración
+    nada más desplegar, sin esperar a la madrugada.
+    POST /api/admin/migrar-adjuntos-storage
+    """
+    if not STORAGE_CONFIGURADO:
+        return jsonify({
+            "ok": False,
+            "error": "Storage no configurado — faltan SUPABASE_URL y/o SUPABASE_SERVICE_ROLE_KEY "
+                     "en las variables de entorno de Render."
+        }), 400
+    resumen = _job_migrar_adjuntos_storage()
+    log.info("▶ [MANUAL] Migración a Storage lanzada manualmente por admin: %s", resumen)
+    return jsonify({"ok": True, **resumen})
 
 
 @app.route("/api/admin/test-health", methods=["POST"])
@@ -9361,8 +9255,8 @@ def backup_estado_cola():
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    # socketio.run en vez de app.run: arranca el servidor eventlet con
-    # soporte de WebSocket para pruebas en local. En Render, gunicorn sigue
-    # sirviendo app:app tal cual — ver GUIA_DESPLIEGUE.md para el cambio de
-    # Start Command necesario para WebSocket en producción.
-    socketio.run(app, host="0.0.0.0", port=port, debug=False)
+    # v12.7.0: ya no hay Socket.IO en este proceso (el chat vive en su
+    # propio servicio, ver control_pedidos_chat). app.run normal basta
+    # para pruebas en local; en Render, gunicorn sirve app:app tal cual
+    # — ver GUIA_DESPLIEGUE.md para el nuevo Start Command sin eventlet.
+    app.run(host="0.0.0.0", port=port, debug=False)

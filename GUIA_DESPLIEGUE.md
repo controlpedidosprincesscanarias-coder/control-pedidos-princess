@@ -28,21 +28,14 @@
    Puedes hacerlo pegando el contenido de `models.py` (las sentencias en `SQL_STATEMENTS`)
    o dejando que Flask lo ejecute en el primer arranque con `init_db()`.
 
-### PASO 1b — Segunda Supabase, solo para el chat (v12.6.0, opcional)
+### PASO 1b — Chat: ya NO se despliega aquí (desde v12.7.0)
 
-Las tablas del chat (`chat_canales`, `chat_participantes`, `chat_mensajes`,
-`chat_lecturas`) pueden vivir en un proyecto de Supabase **distinto** al de
-pedidos, para no competir por la misma cuota de egress/almacenamiento. No es
-obligatorio — si no haces este paso, el chat simplemente usa la misma
-Supabase de siempre (`DATABASE_URL`) y todo sigue funcionando igual.
-
-1. Repite el punto 1 de arriba, pero con otro nombre: `control-pedidos-chat`.
-2. Copia su Connection String (igual que en el punto 2).
-3. **No hace falta ejecutar ningún SQL a mano aquí**: la app crea las 4
-   tablas del chat sola en el primer arranque (`_auto_migrate_chat()`),
-   igual que ya hace con el resto de tablas.
-4. En Render añadirás esta URI como variable `CHAT_DATABASE_URL` — ver
-   PASO 3.
+Desde v12.7.0 el chat interno vive en su propio Web Service de Render
+(`control_pedidos_chat`), separado de este, para aislar su memoria de la de
+pedidos/alertas tras un OOM que se llevaba por delante los dos a la vez.
+Ver `GUIA_DESPLIEGUE.md` dentro de ese paquete para desplegarlo. Este
+servicio (pedidos) ya no necesita `CHAT_DATABASE_URL` ni el worker
+`eventlet`.
 
 ---
 
@@ -67,29 +60,24 @@ Configura tu Service ID y Template ID en EmailJS y actualiza las constantes en e
 3. Configura el servicio:
    - **Runtime:** Python 3
    - **Build command:** `pip install -r requirements.txt`
-   - **Start command:** `gunicorn -k eventlet -w 1 app:app`
+   - **Start command:** `gunicorn -w 2 app:app`
    - **Plan:** Free
 
-   > ⚠️ **Chat interno (v12.6.0):** el Start Command cambia respecto a versiones
-   > anteriores (`gunicorn app:app`, sin `-k eventlet -w 1`). El worker `eventlet`
-   > es el que permite mantener las conexiones WebSocket abiertas para el chat en
-   > tiempo real. Si por lo que sea no se puede aplicar este cambio (o el
-   > **Worker de Cloudflare** que hace de proxy — `proxy.controlpedidosprincess-
-   > canarias.workers.dev` — no reenvía la cabecera `Upgrade` de WebSocket, algo
-   > que no se puede confirmar sin revisar su código), el chat NO se rompe: la
-   > librería cliente de socket.io degrada sola a long-polling. Solo se pierde
-   > la entrega instantánea, no la funcionalidad. `-w 1` es intencional: con
-   > eventlet, un solo proceso ya gestiona muchas conexiones concurrentes
-   > mediante green threads; varios workers de gunicorn partirían las salas de
-   > socket.io entre procesos que no se ven entre sí.
+   > ℹ️ **v12.7.0:** ya no hace falta `-k eventlet -w 1`. Ese Start Command
+   > era necesario mientras el chat (WebSocket) vivía en este mismo proceso;
+   > al haberse movido a su propio servicio (`control_pedidos_chat`), este
+   > servicio vuelve a gunicorn estándar y puede usar varios workers (`-w 2`
+   > como punto de partida — ajusta según la RAM de tu plan), más robusto
+   > que un único proceso. **Importante:** `SECRET_KEY` debe seguir siendo la
+   > misma que uses en `control_pedidos_chat` — el chat valida la sesión
+   > leyendo la misma cookie que crea el login de este servicio.
 
 4. En **Environment → Add Environment Variable**, añade estas variables:
 
    | Variable | Valor |
    |---|---|
    | `DATABASE_URL` | La URI de Supabase del Paso 1 |
-   | `CHAT_DATABASE_URL` | *(opcional, v12.6.0)* La URI de Supabase del Paso 1b, solo para el chat. Si la omites, el chat usa `DATABASE_URL`. |
-   | `SECRET_KEY` | Una cadena aleatoria larga |
+   | `SECRET_KEY` | Una cadena aleatoria larga (cópiala también en `control_pedidos_chat`) |
    | *(sin variables de email)* | El email se gestiona en el frontend vía EmailJS |
    | `EMAILS_INTERNOS` | `victor.martin@princess.es,jesus.curbelo@princess.es` |
 

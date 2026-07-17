@@ -1127,7 +1127,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.6.4
+          V 12.8.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6107,6 +6107,35 @@ async function loadDbSize() {
     </div>
   `;
 
+  // ── Progreso de migración a Storage (v12.8.0) ──────────────────────────
+  const st = data.storage || {};
+  if (!st.configurado) {
+    html += `
+      <div style="background:#fff3cd;border:1px solid #ffe69c;border-radius:8px;padding:10px 14px;font-size:12px;margin-bottom:16px">
+        ⚠️ La migración de adjuntos cerrados a Supabase Storage no está configurada — faltan
+        <code>SUPABASE_URL</code> y/o <code>SUPABASE_SERVICE_ROLE_KEY</code> en las variables de
+        entorno de Render. Mientras tanto, los adjuntos de pedidos cerrados se siguen guardando
+        en la base de datos como hasta ahora.
+      </div>
+    `;
+  } else {
+    const totalRelevantes = (st.migrados || 0) + (st.pendientes || 0);
+    const pctMigrado = totalRelevantes ? (st.migrados / totalRelevantes * 100) : 100;
+    html += `
+      <div style="border:1px solid var(--border);border-radius:8px;padding:12px 14px;margin-bottom:16px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+          <div style="font-size:12px;font-weight:600;color:var(--text-secondary)">📦 Adjuntos de pedidos cerrados → Storage</div>
+          <button onclick="migrarAdjuntosStorage()" id="btn-migrar-storage" style="padding:4px 12px;font-size:11px;border:none;border-radius:6px;cursor:pointer;background:#1a5276;color:#fff">Migrar lote ahora</button>
+        </div>
+        <div style="font-size:12px;color:var(--text-secondary)">
+          ${st.migrados} en Storage · ${st.pendientes} pendientes en BD
+          ${totalRelevantes ? `(${pctMigrado.toFixed(0)}% migrado)` : ''}
+        </div>
+        <div id="migrar-storage-resultado" style="font-size:12px;margin-top:6px"></div>
+      </div>
+    `;
+  }
+
   if (data.historial.length > 0) {
     html += `
       <table style="width:100%;border-collapse:collapse;font-size:12px">
@@ -6133,6 +6162,32 @@ async function loadDbSize() {
   }
 
   el.innerHTML = html;
+}
+
+async function migrarAdjuntosStorage() {
+  const btn = document.getElementById('btn-migrar-storage');
+  const res = document.getElementById('migrar-storage-resultado');
+  if (btn) { btn.disabled = true; btn.textContent = 'Migrando…'; }
+  if (res) res.textContent = '';
+
+  try {
+    const r = await fetch('/api/admin/migrar-adjuntos-storage', {
+      method: 'POST', credentials: 'same-origin'
+    });
+    const data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || `Error ${r.status}`);
+
+    if (res) {
+      res.innerHTML = `✅ ${data.migrados} migrado(s)` +
+        (data.fallidos ? `, <span style="color:#dc3545">${data.fallidos} fallido(s)</span>` : '') +
+        `. ${data.migrados >= 50 ? 'Puede que queden más — pulsa otra vez o espera al job de las 03:00.' : ''}`;
+    }
+  } catch (err) {
+    if (res) res.innerHTML = `<span style="color:#dc3545">❌ ${err.message}</span>`;
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = 'Migrar lote ahora'; }
+    loadDbSize(); // refresca los contadores de arriba
+  }
 }
 
 function _refreshIntegridadBadge(data) {
