@@ -8278,11 +8278,17 @@ def _job_migrar_adjuntos_storage(force: bool = False, limite: int = 50) -> dict:
     interferir con nada): migra a Supabase Storage los adjuntos de pedidos
     ya cerrados (ENTREGADO/CANCELADO) que todavía viven en la base de datos.
 
-    Por lotes (`limite` por ejecución) para no bloquear mucho tiempo ni
-    disparar de golpe un pico de tráfico hacia Storage. Cada fila se marca
-    migrada (`storage_path` + `datos=NULL`) inmediatamente tras subirse, así
-    que si el job se interrumpe a mitad, lo ya migrado no se repite en la
-    siguiente ejecución — retoma donde lo dejó.
+    Hasta `limite` adjuntos por ejecución, pero **de uno en uno** (una fila
+    por SELECT, no un fetchall() de todo el lote): así la memoria en uso es
+    la de un único adjunto (hasta MAX_ADJUNTO_BYTES) en vez de la suma de
+    hasta `limite` adjuntos retenidos a la vez, que en el peor caso teórico
+    (varios adjuntos grandes seguidos) podía suponer varios cientos de MB
+    de golpe. Cada fila se marca migrada (`storage_path` + `datos=NULL`)
+    inmediatamente tras subirse, así que si el job se interrumpe a mitad,
+    lo ya migrado no se repite en la siguiente ejecución — retoma donde lo
+    dejó. Las filas que fallan en esta misma ejecución se excluyen de las
+    siguientes vueltas del bucle (si no, al no quedar marcadas, volverían a
+    salir en el siguiente SELECT y el bucle no avanzaría nunca).
 
     Devuelve un resumen (dict) — útil tanto para el log del job automático
     como para la respuesta del endpoint de disparo manual desde Admin.
@@ -8294,22 +8300,24 @@ def _job_migrar_adjuntos_storage(force: bool = False, limite: int = 50) -> dict:
         resumen["omitidos_sin_storage"] = True
         return resumen
 
-    pendientes = query("""
-        SELECT pa.id, pa.pedido_id, pa.nombre, pa.mime_type, pa.datos
-        FROM pedido_adjuntos pa
-        JOIN pedidos p ON p.id = pa.pedido_id
-        WHERE p.estado = ANY(%s)
-          AND pa.storage_path IS NULL
-          AND pa.datos IS NOT NULL
-        ORDER BY pa.id
-        LIMIT %s
-    """, (list(ESTADOS_CERRADOS), limite))
+    fallidos_ids = []
 
-    if not pendientes:
-        log.info("[STORAGE-MIGRA] Nada pendiente de migrar.")
-        return resumen
+    for _ in range(limite):
+        adj = query("""
+            SELECT pa.id, pa.pedido_id, pa.nombre, pa.mime_type, pa.datos
+            FROM pedido_adjuntos pa
+            JOIN pedidos p ON p.id = pa.pedido_id
+            WHERE p.estado = ANY(%s)
+              AND pa.storage_path IS NULL
+              AND pa.datos IS NOT NULL
+              AND pa.id != ALL(%s)
+            ORDER BY pa.id
+            LIMIT 1
+        """, (list(ESTADOS_CERRADOS), fallidos_ids or [0]), one=True)
 
-    for adj in pendientes:
+        if not adj:
+            break
+
         path = f"pedidos/{adj['pedido_id']}/{adj['id']}_{_slugify_nombre_archivo(adj['nombre'])}"
         ok = _storage_subir(path, bytes(adj["datos"]), adj["mime_type"])
         if ok:
@@ -8324,8 +8332,14 @@ def _job_migrar_adjuntos_storage(force: bool = False, limite: int = 50) -> dict:
                 get_db().rollback()
                 log.error("[STORAGE-MIGRA] Subido pero fallo al actualizar fila id=%s: %s", adj["id"], e)
                 resumen["fallidos"] += 1
+                fallidos_ids.append(adj["id"])
         else:
             resumen["fallidos"] += 1
+            fallidos_ids.append(adj["id"])
+
+    if resumen["migrados"] == 0 and resumen["fallidos"] == 0:
+        log.info("[STORAGE-MIGRA] Nada pendiente de migrar.")
+        return resumen
 
     log.info("[STORAGE-MIGRA] %d migrado(s), %d fallido(s) (lote de hasta %d).",
               resumen["migrados"], resumen["fallidos"], limite)

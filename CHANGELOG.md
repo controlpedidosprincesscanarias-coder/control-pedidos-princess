@@ -1,3 +1,30 @@
+# v12.8.6 — 17 julio 2026
+
+🧠 Migración de adjuntos a Storage: pico de memoria acotado
+
+Prevención — no motivado por un OOM real, pero de la misma familia que el
+que ya obligó a separar el chat a su propio servicio en la v12.7.0 (ver esa
+entrada). El job nocturno de migración (`_job_migrar_adjuntos_storage`)
+traía con `fetchall()` el lote entero (hasta 50 adjuntos, hasta
+`MAX_ADJUNTO_BYTES` = 20 MB cada uno) antes de empezar a subir el primero.
+En el peor caso teórico — varios adjuntos grandes cerrados la misma noche —
+eso podía suponer varios cientos de MB retenidos a la vez, por encima de
+los 512 MB del plan Free de Render.
+
+Cambios:
+- El bucle ahora hace un `SELECT ... LIMIT 1` por adjunto en vez de traer
+  el lote completo de golpe: memoria en uso constante (un adjunto a la
+  vez) en lugar de proporcional al tamaño del lote.
+- Las filas que fallan la subida en la misma ejecución se excluyen (`id !=
+  ALL(...)`) de las siguientes vueltas del bucle, para que el `SELECT ...
+  LIMIT 1` no las devuelva otra vez y el job no se quede atascado en ellas.
+- Sin cambios de comportamiento observables: mismo límite de 50 por
+  ejecución, misma marca `storage_path`/`datos=NULL` fila a fila, mismo
+  endpoint manual (`POST /api/admin/migrar-adjuntos-storage`) y mismo job
+  nocturno de las 03:00. El egress hacia Supabase no cambia — se leen los
+  mismos bytes totales, solo repartidos en más consultas pequeñas en vez
+  de una grande.
+
 # v12.8.4 — 17 julio 2026
 
 🐛 Fix: `/api/changelog` (125 KB) se pedía duplicado en la misma carga
