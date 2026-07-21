@@ -6867,6 +6867,272 @@ def get_stats():
         "num_alertas": len(alertas),
     })
 
+
+# ── Dashboard v13 (Nivel 1) — resumen ejecutivo ───────────────────────────────
+#
+# Endpoint APARTE de /api/stats a propósito: /api/stats se llama desde medio
+# programa (badge del sidebar, vista Alertas, modal de impresión, tras
+# guardar/eliminar un pedido…), así que cualquier query que añadamos ahí se
+# paga en todos esos sitios. Este endpoint solo se dispara al abrir la vista
+# Dashboard, con su propia caché de 30s en el frontend — mismo patrón que
+# _fetchStats/_fetchTecho.
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.route("/api/dashboard/resumen")
+@login_required
+def get_dashboard_resumen():
+    """
+    Datos adicionales del Dashboard: variación mensual de pedidos e importe,
+    pendientes activos + tiempo medio de espera, alertas por nivel y por
+    hotel, actividad de hoy (entregas/envíos registrados) y últimos pedidos.
+    GET /api/dashboard/resumen
+    """
+    vacio = {
+        "variacion": {"pedidos_mes_actual": 0, "pedidos_mes_anterior": 0, "pct": None},
+        "importe": {"mes_actual": 0.0, "mes_anterior": 0.0, "pct": None},
+        "pendientes": {"total": 0, "tiempo_medio_dias": None},
+        "alertas_por_nivel": {"urgente": 0, "aviso": 0},
+        "actividad_hoy": {"entregados": 0, "enviados": 0},
+        "ultimos_pedidos": [],
+        "by_hotel": [],
+        "timeline": [],
+        "ranking_proveedores": [],
+        "sla_aprobacion_dias": None,
+        "necesita_atencion": None,
+    }
+
+    rol = session.get("rol", "")
+    hoteles_ids = session.get("hoteles_ids", []) if rol == "hotel" else None
+    if rol == "hotel" and not hoteles_ids:
+        return jsonify(vacio)
+
+    filtro_p = ""
+    params_p = ()
+    if hoteles_ids:
+        placeholders = ",".join(["%s"] * len(hoteles_ids))
+        filtro_p = f"AND p.hotel_id IN ({placeholders})"
+        params_p = tuple(hoteles_ids)
+
+    hoy = _date.today()
+    primer_dia_mes = hoy.replace(day=1)
+    primer_dia_mes_ant = (primer_dia_mes - timedelta(days=1)).replace(day=1)
+
+    # ── Variación mensual de pedidos e importe ─────────────────────────────
+    fila = query(f"""
+        SELECT
+            COUNT(*) FILTER (WHERE p.creado_en >= %s) AS mes_actual,
+            COUNT(*) FILTER (WHERE p.creado_en >= %s AND p.creado_en < %s) AS mes_anterior,
+            COALESCE(SUM(p.importe) FILTER (WHERE p.creado_en >= %s), 0) AS importe_mes_actual,
+            COALESCE(SUM(p.importe) FILTER (WHERE p.creado_en >= %s AND p.creado_en < %s), 0) AS importe_mes_anterior
+        FROM pedidos p
+        WHERE 1=1 {filtro_p}
+    """, (primer_dia_mes, primer_dia_mes_ant, primer_dia_mes,
+          primer_dia_mes, primer_dia_mes_ant, primer_dia_mes) + params_p, one=True)
+
+    def _pct(actual, anterior):
+        if not anterior:
+            return None
+        return round((actual - anterior) / anterior * 100, 1)
+
+    variacion = {
+        "pedidos_mes_actual": fila["mes_actual"],
+        "pedidos_mes_anterior": fila["mes_anterior"],
+        "pct": _pct(fila["mes_actual"], fila["mes_anterior"]),
+    }
+    importe_actual = float(fila["importe_mes_actual"])
+    importe_anterior = float(fila["importe_mes_anterior"])
+    importe = {
+        "mes_actual": importe_actual, "mes_anterior": importe_anterior,
+        "pct": _pct(importe_actual, importe_anterior),
+    }
+
+    # ── Pendientes activos + alertas (misma base que /api/stats) ──────────
+    activos_raw = rows_to_list(query(f"""
+        {PEDIDO_SELECT_STATS}
+        WHERE p.estado IN (
+            'ENVIADO AL PROVEEDOR', 'PENDIENTE FIRMA DIRECCION COMPRAS',
+            'PENDIENTE DE FIRMA DIRECCION HOTEL', 'ENTREGA PARCIAL',
+            'PENDIENTE COTIZACIÓN'
+        ) {filtro_p}
+    """, params_p))
+
+    dias_list = [d for d in (
+        _dias_desde_alerta(p.get("fecha_tramitacion") or p.get("fecha_solicitud"))
+        for p in activos_raw
+    ) if d is not None]
+    tiempo_medio = round(sum(dias_list) / len(dias_list), 1) if dias_list else None
+
+    cfg_activar_plazo = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
+    alertables = [p for p in activos_raw if p.get("fecha_tramitacion") or
+                  (p.get("estado") == "PENDIENTE COTIZACIÓN" and p.get("fecha_solicitud"))]
+    alertas = _clasificar_alertas(alertables, cfg_activar_plazo)
+
+    alertas_por_nivel = {"urgente": 0, "aviso": 0}
+    alertas_por_hotel = {}
+    for a in alertas:
+        nivel = a.get("nivel_alerta")
+        if nivel in alertas_por_nivel:
+            alertas_por_nivel[nivel] += 1
+        cod = a.get("hotel_codigo")
+        if cod:
+            alertas_por_hotel[cod] = alertas_por_hotel.get(cod, 0) + 1
+
+    # ── Actividad de hoy: transiciones de estado registradas hoy ──────────
+    fila_hoy = query(f"""
+        SELECT
+            COUNT(*) FILTER (WHERE he.estado_nuevo = 'ENTREGADO') AS entregados,
+            COUNT(*) FILTER (WHERE he.estado_nuevo = 'ENVIADO AL PROVEEDOR') AS enviados
+        FROM historial_estados he
+        JOIN pedidos p ON p.id = he.pedido_id
+        WHERE he.creado_en::date = CURRENT_DATE {filtro_p}
+    """, params_p, one=True)
+
+    # ── Últimos pedidos ─────────────────────────────────────────────────
+    ultimos = rows_to_list(query(f"""
+        SELECT p.id, p.norden, p.pedido_num, p.estado, p.creado_en,
+               h.codigo AS hotel_codigo, h.nombre AS hotel_nombre,
+               pr.nombre AS proveedor_nombre
+        FROM pedidos p
+        LEFT JOIN hoteles h ON p.hotel_id = h.id
+        LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
+        WHERE 1=1 {filtro_p}
+        ORDER BY p.creado_en DESC
+        LIMIT 6
+    """, params_p))
+    for u in ultimos:
+        u["creado_en"] = u["creado_en"].isoformat() if u.get("creado_en") else None
+
+    # ── Por hotel: total + entregados + % cumplimiento + alertas ──────────
+    filtro_h = ""
+    params_h = ()
+    if hoteles_ids:
+        placeholders = ",".join(["%s"] * len(hoteles_ids))
+        filtro_h = f"WHERE h.id IN ({placeholders})"
+        params_h = tuple(hoteles_ids)
+    by_hotel_raw = rows_to_list(query(f"""
+        SELECT h.codigo, h.nombre, COUNT(p.id) AS total,
+               COUNT(p.id) FILTER (WHERE p.estado = 'ENTREGADO') AS entregados
+        FROM hoteles h
+        LEFT JOIN pedidos p ON p.hotel_id = h.id
+        {filtro_h}
+        GROUP BY h.id, h.codigo, h.nombre
+        ORDER BY total DESC
+    """, params_h))
+    by_hotel = []
+    for h in by_hotel_raw:
+        total = h["total"]
+        entregados = h["entregados"]
+        pct = round(entregados / total * 100, 1) if total else None
+        by_hotel.append({
+            "codigo": h["codigo"], "nombre": h["nombre"],
+            "total": total, "entregados": entregados,
+            "pct_cumplimiento": pct,
+            "alertas": alertas_por_hotel.get(h["codigo"], 0),
+        })
+
+    # ── Necesita atención: la alerta más crítica (alertas ya viene ordenada
+    #    urgentes primero y por días descendente, ver _clasificar_alertas) ──
+    necesita_atencion = None
+    if alertas:
+        top = alertas[0]
+        necesita_atencion = {
+            "id": top.get("id"), "norden": top.get("norden"),
+            "hotel_codigo": top.get("hotel_codigo"),
+            "proveedor_nombre": top.get("proveedor_nombre"),
+            "estado": top.get("estado"),
+            "dias_tramitacion": top.get("dias_tramitacion"),
+            "nivel_alerta": top.get("nivel_alerta"),
+        }
+
+    # ── Línea temporal: últimos eventos de historial_estados ───────────────
+    timeline = rows_to_list(query(f"""
+        SELECT he.estado_antes, he.estado_nuevo, he.usuario_nombre, he.creado_en,
+               p.id AS pedido_id, p.norden, h.codigo AS hotel_codigo
+        FROM historial_estados he
+        JOIN pedidos p ON p.id = he.pedido_id
+        LEFT JOIN hoteles h ON p.hotel_id = h.id
+        WHERE 1=1 {filtro_p}
+        ORDER BY he.creado_en DESC
+        LIMIT 15
+    """, params_p))
+    for t in timeline:
+        t["creado_en"] = t["creado_en"].isoformat() if t.get("creado_en") else None
+
+    # ── Ranking de proveedores: pedidos, % cumplimiento, incidencias ──────
+    # "Incidencias" = pedidos de ese proveedor que están hoy en la lista de
+    # alertas (no hay tabla de reclamaciones real todavía).
+    ranking_raw = rows_to_list(query(f"""
+        SELECT pr.nombre, COUNT(p.id) AS total,
+               COUNT(p.id) FILTER (WHERE p.estado = 'ENTREGADO') AS entregados
+        FROM proveedores pr
+        JOIN pedidos p ON p.proveedor_id = pr.id
+        WHERE 1=1 {filtro_p}
+        GROUP BY pr.id, pr.nombre
+        HAVING COUNT(p.id) > 0
+        ORDER BY total DESC
+        LIMIT 8
+    """, params_p))
+    incidencias_por_proveedor = {}
+    for a in alertas:
+        pn = a.get("proveedor_nombre")
+        if pn:
+            incidencias_por_proveedor[pn] = incidencias_por_proveedor.get(pn, 0) + 1
+    ranking_proveedores = []
+    for r in ranking_raw:
+        total = r["total"]
+        entregados = r["entregados"]
+        ranking_proveedores.append({
+            "nombre": r["nombre"], "total": total, "entregados": entregados,
+            "pct_cumplimiento": round(entregados / total * 100, 1) if total else None,
+            "incidencias": incidencias_por_proveedor.get(r["nombre"], 0),
+        })
+
+    # ── SLA de aprobación: días entre "pendiente de firma" y "enviado al
+    #    proveedor", promediado sobre los últimos 90 días ───────────────────
+    filtro_sla = filtro_p.replace("p.hotel_id", "pe.hotel_id") if filtro_p else ""
+    fila_sla = query(f"""
+        WITH aprob AS (
+            SELECT pedido_id, MIN(creado_en) AS t_inicio
+            FROM historial_estados
+            WHERE estado_nuevo IN ('PENDIENTE FIRMA DIRECCION COMPRAS',
+                                    'PENDIENTE DE FIRMA DIRECCION HOTEL')
+            GROUP BY pedido_id
+        ),
+        envio AS (
+            SELECT pedido_id, MIN(creado_en) AS t_envio
+            FROM historial_estados
+            WHERE estado_nuevo = 'ENVIADO AL PROVEEDOR'
+            GROUP BY pedido_id
+        )
+        SELECT AVG(EXTRACT(EPOCH FROM (e.t_envio - a.t_inicio)) / 86400.0) AS sla_dias,
+               COUNT(*) AS n
+        FROM aprob a
+        JOIN envio e ON e.pedido_id = a.pedido_id
+        JOIN pedidos pe ON pe.id = a.pedido_id
+        WHERE e.t_envio > a.t_inicio
+          AND a.t_inicio >= NOW() - INTERVAL '90 days'
+          {filtro_sla}
+    """, params_p, one=True)
+    sla_dias = round(float(fila_sla["sla_dias"]), 1) if fila_sla and fila_sla["sla_dias"] is not None else None
+
+    return jsonify({
+        "variacion": variacion,
+        "importe": importe,
+        "pendientes": {"total": len(activos_raw), "tiempo_medio_dias": tiempo_medio},
+        "alertas_por_nivel": alertas_por_nivel,
+        "actividad_hoy": {
+            "entregados": fila_hoy["entregados"] if fila_hoy else 0,
+            "enviados": fila_hoy["enviados"] if fila_hoy else 0,
+        },
+        "ultimos_pedidos": ultimos,
+        "by_hotel": by_hotel,
+        "timeline": timeline,
+        "ranking_proveedores": ranking_proveedores,
+        "sla_aprobacion_dias": sla_dias,
+        "necesita_atencion": necesita_atencion,
+    })
+
+
 # ── API Bridge Agenda — alertas filtradas por usuario (v10.3) ─────────────────
 #
 # Endpoint consumido por pedidos_agenda_bridge.py en cada instancia de

@@ -1,3 +1,68 @@
+# v12.10.0 — 21 julio 2026
+
+📊 Dashboard Ejecutivo — Nivel 2 (v13, segunda entrega)
+
+Continúa el rediseño del Dashboard iniciado en v12.9.0. Todo sigue
+construido sobre `/api/dashboard/resumen`, sin cambios de esquema.
+
+Cambios:
+- **Línea temporal**: últimos 15 eventos de `historial_estados`
+  (pedido, hotel, estado nuevo, usuario, hora/fecha), con scroll interno.
+- **Ranking de proveedores**: pedidos totales, % de cumplimiento y nº de
+  "incidencias" (pedidos de ese proveedor actualmente en alerta — no hay
+  tabla de reclamaciones real, se aproxima así a propósito, documentado
+  en el propio código).
+- **SLA de aprobación**: días medios entre que un pedido entra en estado
+  de firma/aprobación y sale como "ENVIADO AL PROVEEDOR", calculado
+  sobre los últimos 90 días vía `historial_estados` (CTE con `MIN` por
+  pedido para evitar contar dos veces si hubo reenvíos). Se muestra como
+  badge junto al ranking de proveedores.
+- **Widget "Necesita atención"**: banner en la parte superior del
+  Dashboard con el pedido con la alerta más crítica (reutiliza el orden
+  ya calculado por `_clasificar_alertas` — urgentes primero, luego por
+  días), con acceso directo a la ficha. Solo aparece si hay alertas.
+
+Pendiente para más adelante (fuera del Dashboard): tabla real de
+reclamaciones/incidencias por proveedor, y comparativa de precios para
+el indicador de ahorro — ninguno de los dos existe todavía como
+concepto en el modelo de datos.
+
+# v12.9.0 — 20 julio 2026
+
+📊 Dashboard Ejecutivo — Nivel 1 (v13, primera entrega)
+
+Primera tanda del rediseño del Dashboard: todo construido sobre datos que
+ya existían en la BD, sin cambios de esquema. Objetivo: que el Dashboard
+responda en segundos a "¿qué tengo pendiente hoy?" en vez de solo mostrar
+cantidades.
+
+Cambios:
+- Nuevo endpoint `GET /api/dashboard/resumen`, **separado** de `/api/stats`
+  a propósito — `/api/stats` se usa desde medio programa (badge del
+  sidebar, vista Alertas, impresión, tras guardar/eliminar un pedido) y
+  cualquier query añadida ahí se paga en todos esos sitios. El nuevo
+  endpoint solo se dispara al abrir el Dashboard, con su propia caché de
+  30s en el frontend (mismo patrón que `_fetchStats`/`_fetchTecho`).
+- Tarjetas superiores "inteligentes": Pedidos (variación % vs mes
+  anterior), Entregados (% de cumplimiento), Pendientes (nº activos +
+  tiempo medio de espera en días) y Alertas (desglose urgentes/avisos).
+- Bloque "Actividad de hoy": entregas y envíos a proveedor registrados
+  hoy (vía `historial_estados`), pedidos esperando firma/aprobación,
+  alertas urgentes activas.
+- Bloque "Accesos rápidos", filtrado por rol (los de `hotel` no ven
+  crear pedido/proveedor/importar, igual que ya pasaba en la topbar).
+- Tarjetas por hotel: pedidos, % de cumplimiento con semáforo
+  🟢/🟡/🔴 (≥95% / ≥85% / resto) y nº de alertas activas — sustituye
+  la idea de "mapa de hoteles" de la propuesta.
+- Bloque "Últimos pedidos" (6 más recientes) con acceso directo a cada
+  ficha.
+- Los gráficos "Por estado" y "Por hotel" existentes se mantienen sin
+  cambios (siguen alimentados por `/api/stats`).
+
+Pendiente para el Nivel 2 (siguiente entrega): línea temporal de
+eventos, ranking de proveedores, SLA de aprobación y widget "Necesita
+atención".
+
 # v12.8.6 — 17 julio 2026
 
 🧠 Migración de adjuntos a Storage: pico de memoria acotado
