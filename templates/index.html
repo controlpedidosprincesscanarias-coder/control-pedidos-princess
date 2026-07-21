@@ -951,7 +951,7 @@ tbody tr:last-child{border-bottom:none}
       <h3 style="margin:0 0 10px;color:#c9a84c;font-size:17px;">¡Solicitud recibida!</h3>
       <p style="color:rgba(255,255,255,.6);font-size:14px;line-height:1.6;margin:0 0 20px;">
         Tu solicitud ha sido registrada.<br>
-        <strong style="color:rgba(255,255,255,.85);">En unos segundos recibirás un correo electrónico</strong>
+        <strong style="color:rgba(255,255,255,.85);">En breve recibirás un correo electrónico</strong>
         con un enlace que deberás abrir para completar el proceso.
       </p>
       <div style="background:rgba(201,168,76,.08);border:1px solid rgba(201,168,76,.25);
@@ -959,10 +959,11 @@ tbody tr:last-child{border-bottom:none}
                   color:rgba(255,255,255,.7);text-align:left;margin-bottom:20px;line-height:1.9;">
         <strong style="color:#c9a84c;">¿Qué pasará a continuación?</strong><br>
         1️⃣ &nbsp;Recibirás un email con un enlace de verificación.<br>
-        2️⃣ &nbsp;Descarga y ejecuta el archivo <code style="color:#c9a84c;">.bat</code> (doble clic).<br>
-        3️⃣ &nbsp;Tu usuario Windows se detecta automáticamente.<br>
-        4️⃣ &nbsp;Confirma la verificación desde esta misma app.<br>
-        5️⃣ &nbsp;El admin crea tu cuenta y podrás entrar al sistema.
+        2️⃣ &nbsp;Ábrelo y confirma tu usuario Windows desde esta misma app.<br>
+        3️⃣ &nbsp;El admin crea tu cuenta y podrás entrar al sistema.<br><br>
+        <span style="color:rgba(255,255,255,.5);">Si no te llega enseguida, no te preocupes — puede tardar unos
+        minutos en despacharse. Si pasa más de una hora, contacta con el
+        departamento de informática.</span>
       </div>
       <button class="login-btn" onclick="cerrarSolicitudUsuario()" style="width:100%;">
         Entendido, cerrar
@@ -1200,7 +1201,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.10.3
+          V 12.12.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2719,27 +2720,11 @@ async function sol_enviarFase1(btn) {
   if (!hoteles)   return mostrarErr('Selecciona al menos un hotel.');
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
   try {
-    const r = await api('/api/solicitar-usuario', 'POST', { nombre, apellidos, email, movil, hoteles });
-    // Envía, vía EmailJS, todos los correos que el backend preparó: el de
-    // Fase 2 al propio usuario (automático) y el aviso informativo a los
-    // admins. Se intentan todos aunque alguno falle.
-    const gruposEmail = r.emails && r.emails.length
-      ? r.emails
-      : (r.sin_email && r.destinatarios && r.destinatarios.length
-          ? [{ destinatarios: r.destinatarios, asunto: r.asunto, body_text: r.body_text, reply_to: r.reply_to }]
-          : []);
-    for (const grupo of gruposEmail) {
-      if (!grupo.destinatarios || !grupo.destinatarios.length) continue;
-      for (const dest of grupo.destinatarios) {
-        try {
-          await emailjs.send(
-            typeof EMAILJS_SERVICE_ID !== 'undefined' ? EMAILJS_SERVICE_ID : '',
-            typeof EMAILJS_TEMPLATE_ID !== 'undefined' ? EMAILJS_TEMPLATE_ID : '',
-            { to_email: dest, subject: grupo.asunto, message: grupo.body_text, reply_to: grupo.reply_to || '' }
-          );
-        } catch(e) { console.warn('[SOL_F1] EmailJS fallback falló', dest, e); }
-      }
-    }
+    // v12.11.0: el backend encola el email de Fase 2 (emails_sistema_pendientes)
+    // para que lo despache el navegador de un admin ya logado, en vez de
+    // depender de este navegador (de quien solicita el acceso, sin
+    // homologar) — mismo mecanismo que el resto de avisos de sistema.
+    await api('/api/solicitar-usuario', 'POST', { nombre, apellidos, email, movil, hoteles });
     _sol_resetPaneles();
     document.getElementById('sol-panel-fase1-ok').style.display = '';
     _sol_setFaseIndicador(2);
@@ -2904,6 +2889,7 @@ async function adminCargarSolicitudes() {
       const fecha = r.creado_en ? new Date(r.creado_en).toLocaleDateString('es-ES') : '—';
       const tr    = document.createElement('tr');
       tr.style.borderBottom = '1px solid var(--border)';
+      const emailBadge = _solEmailBadgeHtml(r);
       tr.innerHTML = `
         <td style="padding:10px 14px;font-family:monospace;font-size:12px;color:var(--muted);">#${r.id}</td>
         <td style="padding:10px 14px;font-size:13px;font-weight:600;">${r.nombre} ${r.apellidos}
@@ -2912,12 +2898,41 @@ async function adminCargarSolicitudes() {
         <td style="padding:10px 14px;font-size:12px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${r.hoteles}">${r.hoteles}</td>
         <td style="padding:10px 14px;font-family:monospace;font-size:13px;font-weight:700;color:var(--navy);">
           ${r.usuario_windows || '<span style="color:var(--muted);font-style:italic;font-weight:400;font-family:inherit;">Pendiente</span>'}</td>
-        <td style="padding:10px 14px;"><span style="background:${est.bg};color:${est.color};padding:3px 9px;border-radius:5px;font-size:11px;font-weight:700;white-space:nowrap;">${est.label}</span></td>
+        <td style="padding:10px 14px;">
+          <span style="background:${est.bg};color:${est.color};padding:3px 9px;border-radius:5px;font-size:11px;font-weight:700;white-space:nowrap;">${est.label}</span>
+          ${emailBadge}
+        </td>
         <td style="padding:10px 14px;">${_adminSolBotones(r)}</td>`;
       tbody.appendChild(tr);
     });
     loading.style.display = 'none'; if (tabla) tabla.style.display = '';
   } catch(e) { loading.textContent = '⚠️ Error al cargar solicitudes.'; }
+}
+
+function _solEmailBadgeHtml(r) {
+  if (r.estado === 'aprobada' || r.estado === 'rechazada') return '';
+
+  // Prioridad: estado de la cola (emails_sistema_pendientes) — es el envío
+  // automático de v12.11.0, despachado por el navegador de un admin.
+  if (r.cola_enviado === true) {
+    const fechaCola = r.cola_enviado_en ? new Date(r.cola_enviado_en).toLocaleString('es-ES', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+    return `<div style="margin-top:4px;font-size:10.5px;color:#065f46;" title="Un admin con la app abierta despachó este email vía EmailJS el ${fechaCola}. Esto no garantiza que haya llegado al buzón — si el usuario dice que no le llega, revisa spam/cuarentena corporativa.">📧 Enviado (cola) · ${fechaCola}</div>`;
+  }
+  if (r.cola_enviado === false) {
+    return `<div style="margin-top:4px;font-size:10.5px;color:#b45309;font-weight:600;" title="Encolado, esperando a que un admin abra la aplicación (se despacha automáticamente en cuanto eso pase).">⏳ En cola — esperando que se abra la app</div>`;
+  }
+
+  // Si no hay fila en la cola (solicitud antigua, previa a v12.11.0, o
+  // reenvío manual), cae al registro directo del botón "Reenviar Fase 2".
+  const fecha = r.fase2_email_en ? new Date(r.fase2_email_en).toLocaleString('es-ES', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '';
+  if (r.fase2_email_estado === 'enviado') {
+    return `<div style="margin-top:4px;font-size:10.5px;color:#065f46;" title="EmailJS confirmó el envío el ${fecha}. Esto no garantiza que haya llegado al buzón — si el usuario dice que no le llega, revisa spam/cuarentena corporativa.">📧 EmailJS ok · ${fecha}</div>`;
+  }
+  if (r.fase2_email_estado === 'error') {
+    const detalle = (r.fase2_email_detalle || '').replace(/"/g, '&quot;');
+    return `<div style="margin-top:4px;font-size:10.5px;color:#b91c1c;font-weight:700;" title="${detalle}">⚠️ EmailJS falló · ${fecha}</div>`;
+  }
+  return `<div style="margin-top:4px;font-size:10.5px;color:var(--muted);">— sin registro de envío</div>`;
 }
 
 function _adminSolBotones(r) {
@@ -2943,7 +2958,7 @@ function _adminSolBotones(r) {
     ${btnBorrar}
   </div>`;
   return `<div style="display:flex;gap:6px;flex-wrap:wrap;">
-    <button class="btn btn-gold btn-sm" onclick="adminEnviarFase2(${r.id})" title="El email de Fase 2 ya se envió automáticamente; usa esto solo si el usuario no lo recibió o el enlace caducó">🔁 Reenviar Fase 2</button>
+    <button class="btn btn-gold btn-sm" onclick="adminEnviarFase2(${r.id})" title="El email de Fase 2 se envía en cuanto un admin abre la app; usa esto para forzar el envío ahora mismo desde tu propio navegador, o si el enlace caducó">🔁 Enviar/reenviar Fase 2</button>
     <button class="btn btn-ghost btn-sm" onclick="adminDescargarBat(${r.id})" title="Descargar el .bat manualmente">💾 Descargar .bat</button>
     <button class="btn btn-danger btn-sm" onclick="adminRechazarSolicitud(${r.id})" title="Rechazar solicitud">✕</button>
     ${btnBorrar}
@@ -2961,7 +2976,7 @@ async function adminBorrarSolicitud(solId) {
 }
 
 async function adminEnviarFase2(solId) {
-  if (!confirm('El email de Fase 2 ya se envió automáticamente al usuario.\n\n¿Reenviarlo? Se generará un nuevo enlace con caducidad de 72 horas (el anterior quedará invalidado).')) return;
+  if (!confirm('El email de Fase 2 se envía en cuanto un admin abre la app (puede tardar unos minutos). ¿Forzar el envío ahora mismo desde tu navegador? Se generará un nuevo enlace con caducidad de 72 horas (el anterior quedará invalidado).')) return;
   try {
     const r = await api(`/api/admin/solicitudes-acceso/${solId}/enviar-fase2`, 'POST');
 
@@ -2971,16 +2986,18 @@ async function adminEnviarFase2(solId) {
       try {
         await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
           to_email: toEmail,
-          subject:  r.asunto || 'Verificación de acceso — Control de Pedidos Princess (Fase 2)',
+          subject:  r.asunto || 'Verificación de acceso — Control de Pedidos Princess',
           message:  r.body_text || `Hola,\n\nTu solicitud de acceso ha sido revisada.\n\nCompleta la verificación aquí:\n${r.url_token}\n\nEl enlace caduca en 72 horas.\n\nControl Pedidos Princess Canarias`,
           reply_to: toEmail,
         });
-        toast(`✅ Email de Fase 2 enviado a ${toEmail}`, 'success');
+        toast(`✅ EmailJS aceptó el envío a ${toEmail} — confírmalo con el usuario, no siempre llega`, 'success');
+        api(`/api/solicitudes-acceso/${solId}/registrar-envio-fase2`, 'POST', { ok: true, detalle: 'reenvío manual: emailjs ok' }).catch(()=>{});
       } catch(ejsErr) {
         console.warn('[EmailJS Fase2]', ejsErr);
         // Fallback final: mostrar el enlace al admin para que lo reenvíe manualmente
         toast(`⚠️ No se pudo enviar el email automáticamente. Enlace para reenviar manualmente:\n${r.url_token}`, 'warning');
         prompt(`Copia este enlace y envíaselo a ${toEmail}:`, r.url_token);
+        api(`/api/solicitudes-acceso/${solId}/registrar-envio-fase2`, 'POST', { ok: false, detalle: String(ejsErr && ejsErr.text || ejsErr && ejsErr.message || ejsErr).slice(0,200) }).catch(()=>{});
       }
     } else {
       toast(r.msg || '✅ Email de Fase 2 enviado', 'success');

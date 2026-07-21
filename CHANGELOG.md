@@ -1,3 +1,87 @@
+# v12.12.0 — 21 julio 2026
+
+📬 Fase 2 de solicitud de acceso: envío por cola en vez del navegador del solicitante
+
+Confirmado con un dato clave: antes de automatizar Fase 1→Fase 2 (v12.4),
+cuando un admin aprobaba a mano, el email llegaba bien. La diferencia real
+no era el contenido del email (arreglado en v12.11.0) sino **quién** lo
+dispara: antes salía del navegador de un admin (equipo de trabajo
+conocido, en red corporativa, con los dominios de EmailJS ya permitidos);
+desde v12.4 salía del navegador de quien solicita el acceso — por
+definición alguien nuevo, probablemente en un equipo sin homologar o una
+red más restrictiva.
+
+Cambios:
+- `solicitar_usuario_fase1()` ya no devuelve los emails para que el
+  navegador del solicitante los mande por EmailJS. Ahora se **encolan**
+  en `emails_sistema_pendientes` — la misma cola que ya usa el resto de
+  avisos de sistema (techo, integridad, egress) desde v12.4 — y los
+  despacha el navegador del primer admin que abra la aplicación. Mismo
+  mecanismo, misma fiabilidad que tenía el proceso manual original.
+- `emails_sistema_pendientes` gana `solicitud_acceso_id` (para vincular
+  la fila a la solicitud y mostrar su estado en el panel) y
+  `recordado_en` (para no repetir el recordatorio cada 10 minutos).
+- Nuevo job `_job_recordar_emails_sistema_pendientes` (cada 10 min,
+  07:00–21:00): si hay algo en la cola sin enviar desde hace más de 10
+  minutos y no se ha recordado en los últimos 30, manda un Telegram a
+  los admins — *"Abre Control de Pedidos para completarlo"*. El propio
+  aviso de Telegram de Fase 1 ya deja claro desde el primer momento que
+  hace falta abrir la app.
+- Panel admin: el badge bajo cada solicitud ahora distingue "⏳ En cola
+  — esperando que se abra la app" de "📧 Enviado (cola) · fecha".
+- El botón "Reenviar Fase 2" (ahora "Enviar/reenviar Fase 2") se
+  mantiene tal cual — sigue disparando desde el navegador del admin que
+  lo pulsa, sin pasar por la cola, porque en ese caso ya hay un admin
+  presente y no aporta nada encolarlo.
+- Actualizado el texto del panel de éxito que ve el solicitante: ya no
+  promete el email "en unos segundos" ni menciona el paso del `.bat`
+  (retirado del email en v12.11.0).
+
+Trade-off asumido a propósito: la Fase 2 deja de ser "instantánea (pero
+a veces no llega nunca)" y pasa a ser "en minutos, pero de verdad
+llega" — siempre que algún admin abra la app en un plazo razonable; el
+recordatorio de Telegram está para cubrir justo ese caso.
+
+# v12.11.0 — 21 julio 2026
+
+🐛 Fase 2 de solicitud de acceso no llegaba al usuario
+
+Diagnóstico: tanto el envío automático (tras completar Fase 1) como el
+reenvío manual desde el panel admin usan el mismo `emailjs.send()` desde
+el navegador. El botón manual reportaba éxito (toast verde) pero el
+usuario nunca recibía el email — es decir, EmailJS aceptaba el envío y
+el fallo ocurría después, fuera de este código. La causa más probable:
+el email de Fase 2 mencionaba un archivo `verificar_acceso.bat` como
+adjunto ("haz doble clic para verificar tu acceso") que en realidad
+**nunca se adjuntaba** — `emailjs.send()` en esta app nunca ha mandado
+adjuntos, el único sitio que genera el `.bat` de verdad es un endpoint
+aparte que lo descarga al navegador del *admin*, sin relación con el
+envío automático. Ese patrón (adjunto ejecutable + verificación urgente
+por enlace) es una combinación clásica que los filtros anti-phishing
+corporativos (Microsoft 365 Safe Attachments, Mimecast…) suelen poner
+en cuarentena en silencio — el remitente nunca ve el rebote.
+
+Cambios:
+- `_construir_email_fase2()` reescrito: ya no promete ningún adjunto,
+  solo el enlace de verificación — mismo patrón que el resto de emails
+  transaccionales de la app, con menos "señales" de phishing.
+- Corregido el texto del aviso a admins, que también mencionaba el
+  archivo inexistente.
+- Nuevo: `solicitudes_acceso` registra si el `emailjs.send()` del
+  navegador tuvo éxito o no (`fase2_email_estado`,
+  `fase2_email_detalle`, `fase2_email_en`), tanto en el alta automática
+  como en el reenvío manual, vía el nuevo endpoint
+  `POST /api/solicitudes-acceso/<id>/registrar-envio-fase2`.
+- El panel admin de Usuarios ahora muestra, bajo el estado de cada
+  solicitud, si el email de Fase 2 se envió (con fecha) o falló (con
+  detalle del error en el tooltip) — antes no había forma de saberlo
+  sin que el usuario avisara.
+
+No tocado a propósito: seguir dejando el botón "💾 Descargar .bat" tal
+cual — es la vía manual (el admin lo descarga y lo adjunta él mismo,
+por ejemplo desde Outlook) que sigue teniendo sentido si el correo
+corporativo del hotel bloquea sistemáticamente los envíos vía EmailJS.
+
 # v12.10.3 — 21 julio 2026
 
 🔒 Redacción de importe para rol hotel en `/api/pedidos`

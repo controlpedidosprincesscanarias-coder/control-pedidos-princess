@@ -282,6 +282,18 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE solicitudes_acceso ADD COLUMN IF NOT EXISTS movil TEXT"
             )
+            # Migración v12.11.0: registro de envío del email de Fase 2 (para
+            # poder ver en el panel admin si el EmailJS del navegador tuvo
+            # éxito o no, en vez de asumirlo a ciegas).
+            cur.execute(
+                "ALTER TABLE solicitudes_acceso ADD COLUMN IF NOT EXISTS fase2_email_estado TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE solicitudes_acceso ADD COLUMN IF NOT EXISTS fase2_email_detalle TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE solicitudes_acceso ADD COLUMN IF NOT EXISTS fase2_email_en TIMESTAMPTZ"
+            )
             # ── Tabla cola de notificaciones para el bridge agenda (v10.7.7) ──────
             # Cada fila es un aviso pendiente de entregar a un usuario concreto.
             # El bridge lo consume con GET /api/bridge/notificaciones y marca leído.
@@ -589,6 +601,18 @@ def _auto_migrate():
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_emails_sistema_pendientes_estado "
                 "ON emails_sistema_pendientes(enviado)"
+            )
+            # Migración v12.11.0: vincular una fila de la cola a una solicitud
+            # de acceso concreta (para el badge del panel admin) y registrar
+            # cuándo se mandó el último recordatorio por Telegram de "abre la
+            # app para que se despache" (para no reenviarlo cada minuto).
+            cur.execute(
+                "ALTER TABLE emails_sistema_pendientes "
+                "ADD COLUMN IF NOT EXISTS solicitud_acceso_id INTEGER"
+            )
+            cur.execute(
+                "ALTER TABLE emails_sistema_pendientes "
+                "ADD COLUMN IF NOT EXISTS recordado_en TIMESTAMPTZ"
             )
             cur.execute("SELECT COUNT(*) as n FROM eventos_aviso")
             _row_ev = cur.fetchone()
@@ -1380,7 +1404,8 @@ def _get_solo_admin_emails() -> list:
 
 
 def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
-                           asunto: str, cuerpo_html: str = None, cuerpo_text: str = None) -> None:
+                           asunto: str, cuerpo_html: str = None, cuerpo_text: str = None,
+                           solicitud_acceso_id: int = None) -> None:
     """
     Encola un email de sistema (no ligado a un pedido) para cada destinatario.
     Estos avisos se generan desde jobs sin navegador abierto (APScheduler), y
@@ -1388,6 +1413,10 @@ def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
     EmailJS en el navegador (igual que el resto de emails de la aplicación).
     Por eso se encolan en emails_sistema_pendientes: el primer admin que abra
     la app los envía en segundo plano.
+
+    solicitud_acceso_id (opcional): vincula la fila a una solicitud de acceso
+    concreta, para que el panel admin pueda mostrar si su email de Fase 2
+    ya se despachó.
     """
     if not destinatarios_email:
         return
@@ -1397,9 +1426,10 @@ def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
         for email in destinatarios_email:
             cur.execute(
                 """INSERT INTO emails_sistema_pendientes
-                   (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text)
-                   VALUES (%s,%s,%s,%s,%s)""",
-                (evento_codigo, email, asunto, cuerpo_html, cuerpo_text)
+                   (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
+                    solicitud_acceso_id)
+                   VALUES (%s,%s,%s,%s,%s,%s)""",
+                (evento_codigo, email, asunto, cuerpo_html, cuerpo_text, solicitud_acceso_id)
             )
         db.commit()
     except Exception as exc:
@@ -4097,9 +4127,16 @@ def solicitar_usuario_fase1():
     """
     FASE 1 — El usuario rellena nombre, apellidos, email y hotel(es).
     Se guarda la solicitud, se genera el token de verificación y se pasa
-    directo a 'fase2_pendiente': el email de Fase 2 se envía al usuario de
-    forma automática (ver _construir_email_fase2), sin intervención del
-    admin. Los admins solo reciben un aviso informativo (Telegram + email).
+    directo a 'fase2_pendiente'.
+
+    v12.11.0: el email de Fase 2 ya NO se manda desde el navegador de quien
+    solicita el acceso (poco fiable — suele ser un equipo nuevo/no
+    homologado, con antivirus o red corporativa más restrictiva) sino que
+    se ENCOLA en emails_sistema_pendientes, igual que el resto de avisos
+    de sistema: lo despacha el navegador del primer admin que abra la
+    aplicación (mismo mecanismo — y misma fiabilidad — que cuando este
+    paso lo hacía un admin a mano). El aviso de Telegram al admin dice
+    explícitamente que tiene que abrir la app para que se complete.
     """
     import re as _re
 
@@ -4126,9 +4163,8 @@ def solicitar_usuario_fase1():
     nombre_completo = f"{nombre} {apellidos}"
     ip_cliente = request.remote_addr or ""
 
-    # Desde v12.4: se genera el token de verificación y se pasa directo a
-    # 'fase2_pendiente' en el mismo alta, para que el email de Fase 2 se
-    # envíe automáticamente sin que el admin tenga que intervenir.
+    # El token de verificación se genera ya en Fase 1 para que, en cuanto
+    # se despache el email (por un admin), el enlace funcione directamente.
     import secrets as _sec
     token     = _sec.token_urlsafe(32)
     expira_en = datetime.utcnow() + timedelta(hours=72)
@@ -4166,11 +4202,10 @@ def solicitar_usuario_fase1():
       </div>
       <div style="padding:24px 28px;">
         <p style="margin:0 0 16px;font-size:14px;color:#333;">
-          Se ha recibido una nueva solicitud. El sistema ya le ha enviado
-          automáticamente al usuario el email con el archivo de verificación
-          (Fase 2) — <strong>no requiere ninguna acción por vuestra parte</strong>.
-          En cuanto complete la verificación, recibiréis un segundo aviso
-          para crear la cuenta.
+          Se ha recibido una nueva solicitud. El email con el enlace de
+          verificación (Fase 2) está <strong>en cola</strong> — se enviará
+          al usuario automáticamente en cuanto abras la aplicación (o ya se
+          habrá enviado, si otro admin la tiene abierta ahora mismo).
         </p>
         <table border="0" cellpadding="0" cellspacing="0"
                style="width:100%;font-size:14px;border-collapse:collapse;">
@@ -4214,45 +4249,40 @@ def solicitar_usuario_fase1():
         f"Hotel(es)     : {hoteles}\n"
         f"ID solicitud  : #{sol_id}\n"
         f"{'='*44}\n"
-        f"El email de verificación (Fase 2) ya se ha enviado automáticamente al usuario. "
-        f"No se requiere ninguna acción — se os avisará cuando complete la verificación."
+        f"El email de verificación (Fase 2) está en cola — se enviará al "
+        f"usuario en cuanto abras la aplicación."
     )
 
     destinatarios_admin = _get_solo_admin_emails()
 
-    # Telegram SIEMPRE, antes de devolver la respuesta al frontend
+    # Telegram SIEMPRE, antes de devolver la respuesta al frontend — y
+    # explícito sobre que hace falta abrir la app para que Fase 2 se
+    # despache (el email ya no sale del navegador del solicitante).
     _notify_solicitud_telegram(
         f"\U0001F514 *[Nueva solicitud de acceso]*\n\n"
         f"\U0001F464 *{nombre} {apellidos}*\n"
         f"\U0001F4E7 {email_sol}\n"
         f"\U0001F3E8 {hoteles}\n"
         f"\U0001F4CB Solicitud `#{sol_id}`\n\n"
-        f"Email de verificaci\u00f3n (Fase 2) enviado autom\u00e1ticamente. Sin acci\u00f3n pendiente."
+        f"\u26A0\uFE0F *Abre la aplicaci\u00f3n* para que el email de verificaci\u00f3n "
+        f"(Fase 2) se env\u00ede autom\u00e1ticamente al usuario."
         + (f"\n\U0001F517 {url_admin}" if url_admin else "")
     )
 
-    # Correos a enviar desde el frontend vía EmailJS: primero el de Fase 2
-    # al propio usuario (automático), y luego el aviso a los admins
-    # (informativo, sin botones de acción).
-    emails = [{
-        "destinatarios": email_fase2["destinatarios"],
-        "asunto":        email_fase2["asunto"],
-        "body_text":     email_fase2["body_text"],
-    }]
+    # Se encolan ambos emails — el de Fase 2 al usuario y el aviso a los
+    # admins — para que los despache el navegador de un admin ya logado,
+    # en vez de depender del navegador (sin homologar) de quien solicita
+    # el acceso.
+    _encolar_email_sistema(
+        "solicitud_acceso_fase2", email_fase2["destinatarios"], email_fase2["asunto"],
+        email_fase2["body_html"], email_fase2["body_text"], solicitud_acceso_id=sol_id,
+    )
     if destinatarios_admin:
-        emails.append({
-            "destinatarios": destinatarios_admin,
-            "asunto":        asunto,
-            "body_text":     body_text,
-            "reply_to":      email_sol,
-        })
+        _encolar_email_sistema("solicitud_acceso", destinatarios_admin, asunto, body_html, body_text)
     else:
         log.warning("[SOL_FASE1] Sin emails admin configurados. Sol #%s", sol_id)
 
-    return jsonify({
-        "ok": True, "sol_id": sol_id, "sin_email": True,
-        "emails": emails,
-    })
+    return jsonify({"ok": True, "sol_id": sol_id, "encolado": True})
 
 
 # ─── ADMIN: listar solicitudes de acceso ──────────────────────────────────────
@@ -4263,10 +4293,15 @@ def admin_listar_solicitudes():
     if session.get("rol") != "admin":
         return jsonify({"error": "Sin permisos"}), 403
     rows = query("""
-        SELECT id, nombre, apellidos, email, hoteles, usuario_windows,
-               estado, creado_en, completado_en
-        FROM solicitudes_acceso
-        ORDER BY creado_en DESC
+        SELECT s.id, s.nombre, s.apellidos, s.email, s.hoteles, s.usuario_windows,
+               s.estado, s.creado_en, s.completado_en,
+               s.fase2_email_estado, s.fase2_email_detalle, s.fase2_email_en,
+               e.enviado AS cola_enviado, e.enviado_en AS cola_enviado_en,
+               e.creado_en AS cola_creado_en
+        FROM solicitudes_acceso s
+        LEFT JOIN emails_sistema_pendientes e
+               ON e.solicitud_acceso_id = s.id AND e.evento_codigo = 'solicitud_acceso_fase2'
+        ORDER BY s.creado_en DESC
         LIMIT 200
     """)
     return jsonify(rows)
@@ -4349,14 +4384,21 @@ def _construir_email_fase2(sol: dict) -> dict:
     app_url   = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
     url_token = f"{app_url}/?token={sol['token']}"
     nombre_c  = f"{sol['nombre']} {sol['apellidos']}"
-    asunto    = "Verificación de acceso — Control de Pedidos Princess (Fase 2)"
+    asunto    = "Verificación de acceso — Control de Pedidos Princess"
 
+    # v12.11.0: se ha quitado toda mención a un archivo .bat adjunto — nunca
+    # se adjuntaba de verdad (EmailJS, tal y como se usa aquí, no manda
+    # adjuntos) y el texto probablemente disparaba filtros anti-phishing
+    # corporativos (mención a "doble clic en un .bat" + enlace de
+    # verificación urgente es una combinación clásica que Microsoft 365 /
+    # Mimecast suelen poner en cuarentena en silencio). Ahora es solo un
+    # enlace, igual que el resto de emails transaccionales de la app.
     body_html = f"""
     <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
                 background:#f9f9f9;border-radius:10px;overflow:hidden;
                 border:1px solid #e0e0e0;">
       <div style="background:#0f2044;padding:24px 28px;">
-        <h2 style="margin:0;color:#c9a84c;font-size:18px;">🔐 Verifica tu acceso al sistema</h2>
+        <h2 style="margin:0;color:#c9a84c;font-size:18px;">Verifica tu acceso al sistema</h2>
         <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
           Control de Pedidos · Princess Canarias
         </p>
@@ -4366,39 +4408,14 @@ def _construir_email_fase2(sol: dict) -> dict:
           Hola, <strong>{nombre_c}</strong>
         </p>
         <p style="margin:0 0 20px;font-size:14px;color:#555;line-height:1.6;">
-          Tu solicitud de acceso ha sido revisada. Para completar el proceso
-          necesitamos verificar tu usuario de Windows. Tienes <strong>dos opciones</strong>:
+          Hemos recibido tu solicitud de acceso a Control de Pedidos. Para
+          continuar, confirma tu usuario de Windows en el siguiente enlace:
         </p>
-        <div style="background:#fff;border:2px solid #c9a84c;border-radius:8px;
-                    padding:18px 20px;margin-bottom:16px;">
-          <p style="margin:0 0 8px;font-weight:700;color:#0f2044;font-size:14px;">
-            ✅ Opción recomendada — Archivo de verificación
-          </p>
-          <p style="margin:0 0 10px;font-size:13px;color:#555;line-height:1.5;">
-            Adjunto a este email encontrarás el archivo <strong>verificar_acceso.bat</strong>:
-          </p>
-          <ol style="margin:0 0 0 18px;font-size:13px;color:#555;line-height:1.9;">
-            <li>Guarda el archivo adjunto en tu escritorio.</li>
-            <li>Haz <strong>doble clic</strong> sobre él.</li>
-            <li>Se abrirá el navegador con tu usuario Windows ya detectado.</li>
-            <li>Pulsa <em>Completar verificación</em>.</li>
-          </ol>
-        </div>
-        <div style="background:#fff;border:1px solid #ddd;border-radius:8px;
-                    padding:18px 20px;margin-bottom:24px;">
-          <p style="margin:0 0 8px;font-weight:700;color:#0f2044;font-size:14px;">
-            🔗 Opción alternativa — Enlace directo
-          </p>
-          <p style="margin:0 0 12px;font-size:13px;color:#555;">
-            Si no puedes ejecutar el archivo, usa este enlace e introduce
-            tu usuario Windows manualmente.
-          </p>
-          <div style="text-align:center;">
-            <a href="{url_token}"
-               style="display:inline-block;padding:11px 24px;background:#1a3a6b;
-                      color:#fff;border-radius:7px;text-decoration:none;
-                      font-weight:600;font-size:13px;">Continuar verificación →</a>
-          </div>
+        <div style="text-align:center;margin-bottom:20px;">
+          <a href="{url_token}"
+             style="display:inline-block;padding:12px 28px;background:#1a3a6b;
+                    color:#fff;border-radius:7px;text-decoration:none;
+                    font-weight:600;font-size:14px;">Continuar verificación →</a>
         </div>
         <p style="margin:0;font-size:12px;color:#aaa;line-height:1.5;">
           Enlace personal e intransferible. Caduca en <strong>72 horas</strong>.
@@ -4413,8 +4430,8 @@ def _construir_email_fase2(sol: dict) -> dict:
 
     body_text = (
         f"Hola {nombre_c},\n\n"
-        f"Tu solicitud de acceso ha sido revisada. Para completarla, ejecuta\n"
-        f"el archivo .bat adjunto (haz doble clic) o abre este enlace:\n\n"
+        f"Hemos recibido tu solicitud de acceso a Control de Pedidos.\n"
+        f"Para continuar, abre este enlace y confirma tu usuario de Windows:\n\n"
         f"{url_token}\n\n"
         f"El enlace caduca en 72 horas.\n\nControl Pedidos Princess Canarias"
     )
@@ -4475,6 +4492,40 @@ def admin_enviar_fase2(sol_id):
         "body_text":     email_fase2["body_text"],
         "url_token":     email_fase2["url_token"],
     })
+
+
+# ─── Registro del resultado real del envío EmailJS (v12.11.0) ────────────────
+#
+# El envío del email de Fase 2 se hace 100% desde el navegador (EmailJS),
+# tanto en el alta automática como en el reenvío manual del admin. Hasta
+# ahora, si EmailJS aceptaba la llamada pero el email se perdía después
+# (filtro anti-phishing corporativo, cuota agotada, etc.), nadie se
+# enteraba: el panel admin no tenía forma de distinguir "se envió de
+# verdad" de "se perdió en algún sitio". Este endpoint deja constancia de
+# lo que el navegador vio realmente (éxito o error de emailjs.send), para
+# verlo en el panel en vez de asumirlo a ciegas.
+#
+# Sin @login_required a propósito: el alta de Fase 1 la hace un usuario
+# que todavía no tiene sesión. No expone ni acepta datos sensibles, solo
+# un estado de envío referido a una solicitud que ya existe.
+
+@app.route("/api/solicitudes-acceso/<int:sol_id>/registrar-envio-fase2", methods=["POST"])
+def registrar_envio_fase2(sol_id):
+    body    = request.get_json(silent=True) or {}
+    ok      = bool(body.get("ok"))
+    detalle = (body.get("detalle") or "")[:300]
+
+    existe = query("SELECT id FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
+    if not existe:
+        return jsonify({"error": "No encontrada"}), 404
+
+    execute("""
+        UPDATE solicitudes_acceso
+        SET fase2_email_estado=%s, fase2_email_detalle=%s, fase2_email_en=NOW()
+        WHERE id=%s
+    """, ("enviado" if ok else "error", detalle, sol_id))
+    get_db().commit()
+    return jsonify({"ok": True})
 
 
 # ─── FASE 2: el usuario llega con token + wu, completa la solicitud ───────────
@@ -8704,6 +8755,49 @@ def _job_migrar_adjuntos_storage_diario() -> None:
             log.info("[VACUUM] Sin adjuntos migrados esta noche — se omite la compactación.")
 
 
+def _job_recordar_emails_sistema_pendientes():
+    """
+    v12.11.0: desde que el email de Fase 2 de solicitudes de acceso se
+    despacha desde el navegador de un admin (emails_sistema_pendientes) en
+    vez del navegador de quien solicita el acceso, existe la posibilidad de
+    que se quede en cola simplemente porque ningún admin ha abierto la app
+    todavía. Este job avisa por Telegram con un recordatorio explícito,
+    sin repetirlo cada minuto (solo si no se recordó en los últimos 30').
+    Corre cada 10 minutos, 07:00–21:00 — no tiene sentido despertar a nadie
+    de madrugada por esto, ya lo verán al abrir la app en horario normal.
+    """
+    with app.app_context():
+        try:
+            pendientes = query("""
+                SELECT id, evento_codigo, creado_en
+                FROM emails_sistema_pendientes
+                WHERE enviado = FALSE
+                  AND creado_en < NOW() - INTERVAL '10 minutes'
+                  AND (recordado_en IS NULL OR recordado_en < NOW() - INTERVAL '30 minutes')
+            """)
+            if not pendientes:
+                return
+            n = len(pendientes)
+            eventos = ", ".join(sorted({p["evento_codigo"] for p in pendientes}))
+            plural = "es" if n != 1 else ""
+            _notify_solicitud_telegram(
+                f"\u23F0 *Recordatorio*\n\n"
+                f"Hay *{n}* email{plural} de sistema en cola sin enviar "
+                f"({eventos}), esperando a que alguien abra la aplicaci\u00f3n "
+                f"para despacharlos autom\u00e1ticamente.\n\n"
+                f"\U0001F449 Abre Control de Pedidos para completarlo."
+            )
+            ids = [p["id"] for p in pendientes]
+            execute(
+                "UPDATE emails_sistema_pendientes SET recordado_en = NOW() "
+                "WHERE id = ANY(%s)",
+                (ids,),
+            )
+            get_db().commit()
+        except Exception as exc:
+            log.error("[RECORDATORIO EMAILS SISTEMA] Error: %s", exc)
+
+
 def _job_health_check(force: bool = False):
     """
     Job diario (07:05 hora Canarias): valida integridad operativa y envía
@@ -8931,6 +9025,19 @@ def _iniciar_scheduler():
         id="alerta_consumo_diaria",
         replace_existing=True,
         misfire_grace_time=3600,
+    )
+    # Recordatorio de emails de sistema en cola (incluye Fase 2 de
+    # solicitudes de acceso): cada 10 min, 07:00-21:00 — fuera de ese
+    # rango puede esperar a la mañana siguiente.
+    scheduler.add_job(
+        _job_recordar_emails_sistema_pendientes,
+        trigger="cron",
+        hour="7-21",
+        minute="*/10",
+        second="0",
+        id="recordar_emails_sistema_pendientes",
+        replace_existing=True,
+        misfire_grace_time=120,
     )
     scheduler.start()
     log.info("✅ Scheduler iniciado — alertas cada 60s en horario 07:00-16:00 (Atlantic/Canary)")
