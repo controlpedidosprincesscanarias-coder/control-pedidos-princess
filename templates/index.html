@@ -1200,7 +1200,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.10.0
+          V 12.10.1
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3320,9 +3320,7 @@ async function loadStats() {
   // Bug fix: el card de alertas del dashboard también suma las alertas de techo
   document.getElementById('st-alertas').textContent  = d.num_alertas + nTecho;
 
-  const envi = d.by_estado.find(e=>e.estado==='ENVIADO AL PROVEEDOR');
   const entr = d.by_estado.find(e=>e.estado==='ENTREGADO');
-  document.getElementById('st-enviado').textContent   = envi ? envi.total : 0;
   document.getElementById('st-entregado').textContent = entr ? entr.total : 0;
 
   // Alerta badge sidebar — suma pedidos + alertas de techo (ya siempre actualizado)

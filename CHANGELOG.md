@@ -1,3 +1,21 @@
+# v12.10.1 — 21 julio 2026
+
+🐛 Hotfix — Dashboard se quedaba en "Cargando..." indefinidamente
+
+Al rediseñar las tarjetas superiores en v12.9.0 se eliminó la tarjeta
+"Enviados proveedor" (`#st-enviado`) del HTML, pero quedó una línea en
+`loadStats()` que seguía intentando escribirle el texto. Al no existir
+ya el elemento, `document.getElementById('st-enviado')` devolvía `null`
+y el `.textContent = ...` lanzaba un `TypeError` que cortaba en seco la
+ejecución de `loadStats()` — justo antes de los gráficos, los accesos
+rápidos y la llamada a `loadDashboardResumen()`. Por eso Actividad de
+hoy, Línea temporal, Ranking de proveedores, Hoteles y Últimos pedidos
+se quedaban permanentemente en "Cargando…".
+
+Corregido: eliminada la referencia a `st-enviado`. Verificado que no
+quedan más IDs huérfanos comparando todos los `getElementById(...)`
+contra los `id="..."` definidos en la plantilla.
+
 # v12.10.0 — 21 julio 2026
 
 📊 Dashboard Ejecutivo — Nivel 2 (v13, segunda entrega)
