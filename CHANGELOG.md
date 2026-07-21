@@ -1,3 +1,50 @@
+# v12.10.3 — 21 julio 2026
+
+🔒 Redacción de importe para rol hotel en `/api/pedidos`
+
+Extiende el criterio ya aplicado en el Dashboard (v12.10.2) al resto de
+endpoints de pedidos:
+
+- `GET /api/pedidos` (listado): el campo `importe` de cada fila se
+  devuelve `null` para el rol `hotel`. De paso corrige un detalle en la
+  propia tabla: el tooltip de la insignia "📉 TECHO" mostraba el importe
+  real en texto plano al pasar el ratón, aunque el campo estuviera
+  oculto en el modal — ahora muestra "sin importe" para ese rol, igual
+  que ya hacía cuando el pedido no tenía importe.
+- `GET /api/pedidos/<id>` (ficha individual, la que usa el modal de
+  edición): mismo tratamiento. Verificado que es seguro: `PUT
+  /api/pedidos/<id>` ya ignoraba por completo el campo `importe`
+  enviado por un usuario hotel (solo actualiza `entrada_albaran_num` y
+  `estado`), así que redactar el importe en la lectura no rompe el
+  guardado.
+
+Dos cosas que encontré de paso, relacionadas pero **no corregidas
+todavía** porque cambian comportamiento de acceso, no solo de qué
+campo se ve — a la espera de que confirmes si quieres que las toque:
+
+1. `GET /api/pedidos/<id>` no comprueba que el pedido pertenezca a un
+   hotel asignado al usuario `hotel` (sí lo hace `PUT`, pero no `GET`).
+   Un usuario hotel podría ver la ficha completa de un pedido de OTRO
+   hotel probando IDs por la URL de la API directamente.
+2. `GET /api/exportar` (Excel) no filtra en absoluto por
+   `hoteles_ids` — genera el Excel de TODOS los pedidos de TODOS los
+   hoteles para cualquier usuario logado, incluido rol hotel.
+
+# v12.10.2 — 21 julio 2026
+
+🔒 Permisos por rol en `/api/dashboard/resumen`
+
+- El bloque `importe` (importe total del mes e importe del mes anterior)
+  ahora se devuelve como `null` para el rol `hotel`, en vez de mandarlo
+  aunque no se pintara en pantalla. Mismo criterio que ya aplica el resto
+  de la app (el campo importe se oculta en el modal de pedido para ese
+  rol) — llevado también al nivel de API, no solo de interfaz.
+- Revisado el resto del endpoint: pendientes, alertas, actividad de hoy,
+  últimos pedidos, hoteles, línea temporal, ranking de proveedores y SLA
+  ya estaban correctamente filtrados por `hoteles_ids` para el rol
+  hotel, igual que `/api/pedidos` y `/api/stats`. El rol `compras` sigue
+  viendo todos los hoteles, coherente con el resto del Dashboard.
+
 # v12.10.1 — 21 julio 2026
 
 🐛 Hotfix — Dashboard se quedaba en "Cargando..." indefinidamente

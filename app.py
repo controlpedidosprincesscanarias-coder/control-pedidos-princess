@@ -6424,6 +6424,9 @@ def get_pedidos():
 
     sql     = f"{PEDIDO_SELECT} {where_sql} ORDER BY {order} LIMIT %s OFFSET %s"
     pedidos = rows_to_list(query(sql, args + [page_size, (page - 1) * page_size]))
+    if session.get("rol") == "hotel":
+        for p in pedidos:
+            p["importe"] = None
 
     return jsonify({
         "pedidos":   pedidos,
@@ -6439,6 +6442,8 @@ def get_pedido(pid):
     p = row_to_dict(query(f"{PEDIDO_SELECT} WHERE p.id=%s", (pid,), one=True))
     if not p:
         return jsonify({"error": "No encontrado"}), 404
+    if session.get("rol") == "hotel":
+        p["importe"] = None
     historial = rows_to_list(query(
         """SELECT h.*, COALESCE(h.usuario_nombre, u.nombre) as usuario_nombre
            FROM historial_estados h LEFT JOIN usuarios u ON h.usuario_id=u.id
@@ -6945,6 +6950,11 @@ def get_dashboard_resumen():
         "mes_actual": importe_actual, "mes_anterior": importe_anterior,
         "pct": _pct(importe_actual, importe_anterior),
     }
+    # El rol hotel no ve importes económicos en ningún otro sitio de la app
+    # (p-importe se oculta en el modal de pedido) — se mantiene la misma
+    # regla aquí, a nivel de API, no solo de UI.
+    if rol == "hotel":
+        importe = {"mes_actual": None, "mes_anterior": None, "pct": None}
 
     # ── Pendientes activos + alertas (misma base que /api/stats) ──────────
     activos_raw = rows_to_list(query(f"""
