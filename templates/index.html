@@ -1201,7 +1201,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.12.0
+          V 12.13.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3540,6 +3540,10 @@ async function loadDashboardResumen() {
 }
 
 /* ── Accesos rápidos — filtrados por rol ─────────────────────────────── */
+function _dashQuickNav(view) {
+  showViewGuarded(view, document.querySelector(`[data-view="${view}"]`));
+}
+
 function renderAccesosRapidos() {
   const el = document.getElementById('dash-quicklinks');
   if (!el) return;
@@ -3550,12 +3554,12 @@ function renderAccesosRapidos() {
     links.push({ icon: '👥', label: 'Nuevo proveedor', fn: `openNuevoProveedorModal()` });
     links.push({ icon: '📄', label: 'Importar Excel', fn: `openImportModal()` });
   }
-  links.push({ icon: '⚠️', label: 'Ver alertas', fn: `showViewGuarded('alertas', document.querySelector('[data-view="alertas"]'))` });
+  links.push({ icon: '⚠️', label: 'Ver alertas', fn: `_dashQuickNav('alertas')` });
   if (rol !== 'hotel') {
-    links.push({ icon: '📉', label: 'Techo de gastos', fn: `showViewGuarded('techo', document.querySelector('[data-view="techo"]'))` });
+    links.push({ icon: '📉', label: 'Techo de gastos', fn: `_dashQuickNav('techo')` });
   }
   if (rol === 'admin') {
-    links.push({ icon: '🔍', label: 'Integridad', fn: `showViewGuarded('integridad', document.querySelector('[data-view="integridad"]'))` });
+    links.push({ icon: '🔍', label: 'Integridad', fn: `_dashQuickNav('integridad')` });
   }
   el.innerHTML = links.map(l => `<button class="dash-qlink" onclick="${l.fn}">${l.icon} ${l.label}</button>`).join('');
 }

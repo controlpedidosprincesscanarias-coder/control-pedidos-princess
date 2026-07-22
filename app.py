@@ -6494,6 +6494,9 @@ def get_pedido(pid):
     if not p:
         return jsonify({"error": "No encontrado"}), 404
     if session.get("rol") == "hotel":
+        hoteles_ids = session.get("hoteles_ids", [])
+        if p.get("hotel_id") not in hoteles_ids:
+            return jsonify({"error": "Sin acceso a este pedido"}), 403
         p["importe"] = None
     historial = rows_to_list(query(
         """SELECT h.*, COALESCE(h.usuario_nombre, u.nombre) as usuario_nombre
@@ -7784,7 +7787,19 @@ def exportar_excel():
         from openpyxl.styles import Font, PatternFill, Alignment
         from flask import send_file
 
-        pedidos = rows_to_list(query(f"{PEDIDO_SELECT} ORDER BY p.creado_en DESC"))
+        rol = session.get("rol", "")
+        if rol == "hotel":
+            hoteles_ids = session.get("hoteles_ids", [])
+            if not hoteles_ids:
+                pedidos = []
+            else:
+                placeholders = ",".join(["%s"] * len(hoteles_ids))
+                pedidos = rows_to_list(query(
+                    f"{PEDIDO_SELECT} WHERE p.hotel_id IN ({placeholders}) ORDER BY p.creado_en DESC",
+                    tuple(hoteles_ids)
+                ))
+        else:
+            pedidos = rows_to_list(query(f"{PEDIDO_SELECT} ORDER BY p.creado_en DESC"))
 
         wb = openpyxl.Workbook()
         ws = wb.active

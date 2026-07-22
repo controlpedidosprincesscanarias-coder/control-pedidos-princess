@@ -1,3 +1,29 @@
+# v12.13.0 — 21 julio 2026
+
+🔒 Dos huecos de seguridad cross-hotel + 🐛 accesos rápidos del Dashboard
+
+Seguridad:
+- `GET /api/pedidos/<id>` ahora comprueba que el pedido pertenezca a un
+  hotel del usuario cuando `rol == 'hotel'` (403 "Sin acceso a este
+  pedido"), igual que ya hacía `PUT /api/pedidos/<id>`. Antes se podía
+  ver la ficha completa de un pedido de otro hotel probando IDs
+  directamente contra la API.
+- `GET /api/exportar` (descarga de Excel) ahora filtra por
+  `hoteles_ids` cuando `rol == 'hotel'`, en vez de exportar los pedidos
+  de todos los hoteles para cualquier usuario logado.
+
+Bug del Dashboard (Nivel 1, v12.9.0):
+- Los accesos rápidos "Ver alertas", "Techo de gastos" e "Integridad"
+  no funcionaban — el HTML generado tenía comillas dobles anidadas
+  (`onclick="showViewGuarded('alertas', document.querySelector('[data-view="alertas"]'))"`),
+  así que el navegador cortaba el atributo `onclick` en la primera
+  comilla interna y el botón quedaba roto. "Nuevo pedido", "Nuevo
+  proveedor" e "Importar Excel" sí funcionaban porque no tenían
+  comillas anidadas — por eso solo fallaban "varios, no todos".
+  Corregido con un helper `_dashQuickNav(view)` que hace la navegación
+  en JS real en vez de construir la llamada como texto dentro del
+  atributo HTML.
+
 # v12.12.0 — 21 julio 2026
 
 📬 Fase 2 de solicitud de acceso: envío por cola en vez del navegador del solicitante
