@@ -5200,14 +5200,22 @@ def set_usuario_comprador_hoteles(uid):
                     "hotel_codigo": hotel["codigo"],
                     "hotel_nombre": hotel["nombre"],
                 })
-    if huerfanos_por_vaciado:
+    if huerfanos_por_vaciado and not forzar:
         codigos = ", ".join(h["hotel_codigo"] for h in huerfanos_por_vaciado)
         return jsonify({
             "ok": False,
-            "error": f"⚠️ Los hoteles {codigos} quedarían sin comprador asignado. "
-                     f"Asígnalos a otro comprador antes de quitárselos a este usuario.",
+            "error": f"⚠️ Los hoteles {codigos} se quedarían sin comprador asignado "
+                     f"(todavía no se los has dado a nadie más).",
             "huerfanos": huerfanos_por_vaciado,
         }), 409
+    elif huerfanos_por_vaciado:
+        # forzar=true: el admin ha confirmado que quiere dejarlos sin comprador
+        # de momento (p. ej. porque va a asignárselos a otro usuario a
+        # continuación, en un segundo guardado). Se deja constancia en el log.
+        log.warning(
+            "Hoteles-compras: %s quedan SIN comprador (forzado por admin, usuario_id=%s)",
+            [h["hotel_codigo"] for h in huerfanos_por_vaciado], uid
+        )
 
     # ── Detectar conflictos: hoteles ya asignados a otro comprador ───────────
     conflictos = []

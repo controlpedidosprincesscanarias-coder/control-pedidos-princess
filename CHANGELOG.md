@@ -1,3 +1,29 @@
+# v12.14.0 — 21 julio 2026
+
+🐛 No dejaba reasignar hoteles entre compradores
+
+`PUT /api/usuarios/<id>/hoteles-compras` tiene dos protecciones: evitar
+que un hotel se quede sin comprador ("huérfanos") y avisar si un hotel
+ya está asignado a otro comprador ("conflictos"). La segunda ya tenía
+confirmación + reintento con `forzar=true`; la primera **no tenía
+ninguna forma de continuar** — bloqueaba en seco con un 409 y el
+frontend directamente mostraba el error y paraba.
+
+Efecto práctico: reasignar un hotel de un comprador A a un comprador B
+solo funcionaba si lo hacías en un orden concreto (añadirlo primero a
+B, confirmar la reasignación, y ya después quitarlo de A si hacía
+falta). Si lo intentabas al revés — quitárselo primero a A, pensando en
+dárselo a B a continuación — se quedaba bloqueado sin más, sin ninguna
+pista de cómo seguir. Con varias reasignaciones a la vez es fácil caer
+en ese orden y parecer que "no deja reasignar" nada.
+
+Cambios:
+- `set_usuario_comprador_hoteles()`: el bloqueo por huérfanos ahora
+  respeta `forzar=true`, igual que ya hacía el de conflictos.
+- Frontend: el caso de huérfanos ya no es un bloqueo silencioso — pide
+  confirmación ("¿Continuar de todas formas? Asígnalos a otro usuario
+  después") y, si confirmas, reintenta con `forzar=true`.
+
 # v12.13.0 — 21 julio 2026
 
 🔒 Dos huecos de seguridad cross-hotel + 🐛 accesos rápidos del Dashboard
