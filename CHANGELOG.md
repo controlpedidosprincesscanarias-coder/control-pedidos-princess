@@ -1,3 +1,25 @@
+# v12.16.0 — 21 julio 2026
+
+📎 PDF también permitido donde antes solo se aceptaba correo
+
+En el modal de pedido, "Fecha envío Vº Bº" y "Fecha tramitación" solo
+aceptaban adjuntar el correo original (.eml/.msg). Ahora también
+aceptan PDF — por si el correo se ha impreso/escaneado a PDF en vez de
+guardarse como archivo de correo. Eran los dos únicos apartados
+correo-only de todo el formulario (el resto, como "Fecha solicitud" o
+"Nº Pedido DALI/SAP", ya admitían documento + correo).
+
+Cambios:
+- `POST /api/pedidos/<id>/adjuntos`: para `vb_eml`/`tramit_eml` ahora
+  se acepta PDF además de `.eml`/`.msg`. Documento y correo son slots
+  independientes (como en `pedido_doc`): pueden convivir un PDF y un
+  correo a la vez en el mismo apartado, cada uno con su propio límite
+  (1 correo, hasta 3 PDF).
+- Frontend: los botones pasan de "✉️ Adjuntar correo" a
+  "📎 Adjuntar correo / PDF", con el selector de archivo aceptando
+  `.pdf` además de `.eml`/`.msg`. El icono de la lista de adjuntos ya
+  distinguía PDF de correo automáticamente, sin cambios ahí.
+
 # v12.14.1 — 21 julio 2026
 
 🐛 Hotfix — Guardar hoteles-compras se quedaba "colgado", sin avisar de nada

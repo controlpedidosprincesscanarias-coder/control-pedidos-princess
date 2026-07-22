@@ -8063,18 +8063,34 @@ def upload_adjunto(pid):
                 return jsonify({"ok": False, "error": f"Máximo {MAX_DOCUMENTOS_POR_APARTADO} documentos en este apartado. Elimine alguno antes de subir uno nuevo."}), 400
 
     elif tipo in ("vb_eml", "tramit_eml"):
-        if mime not in MIME_CORREO:
-            return jsonify({"ok": False, "error": "Solo se aceptan correos electronicos (.eml, .msg)"}), 400
-        if mime == "application/octet-stream" and ext not in EXT_CORREO:
-            return jsonify({"ok": False, "error": "Solo se aceptan archivos .eml o .msg"}), 400
-        if len(datos) > MAX_BYTES_CORREO:
-            return jsonify({"ok": False, "error": f"El correo supera el límite de {MAX_BYTES_CORREO // (1024*1024)} MB para este apartado"}), 400
-        existentes = query(
-            "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo=%s",
-            (pid, tipo), one=True
-        )
-        if existentes and existentes["n"] >= MAX_CORREOS_POR_APARTADO:
-            return jsonify({"ok": False, "error": f"Ya existe un correo adjunto en este apartado. Máximo {MAX_CORREOS_POR_APARTADO}. Elimínelo antes de subir uno nuevo."}), 400
+        # v12.15.0: además del correo .eml/.msg, se acepta un PDF — cubre el
+        # caso de que el correo se adjunte impreso/escaneado en PDF en vez
+        # del archivo de correo original. Documento y correo son slots
+        # independientes (como en pedido_doc): pueden coexistir uno de cada.
+        es_pdf = mime == "application/pdf" or (mime == "application/octet-stream" and ext == ".pdf")
+        if not (mime in MIME_CORREO or es_pdf):
+            return jsonify({"ok": False, "error": "Solo se aceptan correos electrónicos (.eml, .msg) o PDF en este apartado"}), 400
+        if mime == "application/octet-stream" and ext not in (EXT_CORREO | {".pdf"}):
+            return jsonify({"ok": False, "error": "Solo se aceptan archivos .eml, .msg o PDF"}), 400
+
+        if es_pdf:
+            if len(datos) > MAX_BYTES_DOCUMENTO:
+                return jsonify({"ok": False, "error": f"El PDF supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB para este apartado"}), 400
+            n_docs = query(
+                "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo=%s AND NOT es_correo",
+                (pid, tipo), one=True
+            )
+            if n_docs and n_docs["n"] >= MAX_DOCUMENTOS_POR_APARTADO:
+                return jsonify({"ok": False, "error": f"Máximo {MAX_DOCUMENTOS_POR_APARTADO} PDF en este apartado. Elimine alguno antes de subir uno nuevo."}), 400
+        else:
+            if len(datos) > MAX_BYTES_CORREO:
+                return jsonify({"ok": False, "error": f"El correo supera el límite de {MAX_BYTES_CORREO // (1024*1024)} MB para este apartado"}), 400
+            existentes = query(
+                "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo=%s AND es_correo",
+                (pid, tipo), one=True
+            )
+            if existentes and existentes["n"] >= MAX_CORREOS_POR_APARTADO:
+                return jsonify({"ok": False, "error": f"Ya existe un correo adjunto en este apartado. Máximo {MAX_CORREOS_POR_APARTADO}. Elimínelo antes de subir uno nuevo."}), 400
 
     else:
         if mime not in MIME_PERMITIDOS:
