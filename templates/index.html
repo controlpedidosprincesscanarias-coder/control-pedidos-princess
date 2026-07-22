@@ -1201,7 +1201,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.14.0
+          V 12.14.1
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2525,7 +2525,17 @@ async function api(url, method='GET', body=null) {
   // listas como `techo_errores`/`errores`. Se devuelven como datos normales
   // para que el caller los muestre tal cual, en vez de lanzarlos como
   // excepción genérica (lo que los enmascararía como "Error de conexión").
-  const esValidacionDeNegocio = r.status === 422 && (data.techo_errores || data.errores || data.error);
+  //
+  // El 409 de reasignación de hoteles-compras (conflictos/huérfanos) es el
+  // mismo caso: el caller (saveUsuario) necesita leer `data.conflictos` o
+  // `data.huerfanos` para mostrar el confirm() de reasignación — si esto
+  // lanza excepción aquí, ese código nunca se llega a ejecutar y el modal
+  // se queda colgado sin avisar de nada (bug real, v12.14.1). Acotado a
+  // propósito a esta forma exacta de respuesta para no afectar a ningún
+  // otro 409 de la app (que siguen lanzando excepción como siempre).
+  const esValidacionDeNegocio =
+    (r.status === 422 && (data.techo_errores || data.errores || data.error)) ||
+    (r.status === 409 && data && data.ok === false && (data.conflictos || data.huerfanos));
   // Sesión caducada (cambio de día): forzar vuelta a la pantalla de login
   // con un aviso claro, en vez del genérico "Error de conexión" — evita
   // que el usuario piense que la app se ha roto.

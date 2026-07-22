@@ -1,3 +1,33 @@
+# v12.14.1 — 21 julio 2026
+
+🐛 Hotfix — Guardar hoteles-compras se quedaba "colgado", sin avisar de nada
+
+La causa real de "no me deja reasignar", más profunda que el fallo de
+v12.14.0: el helper `api()` lanza una excepción para cualquier respuesta
+que no sea 2xx, con una única excepción prevista para el 422 de techo de
+gastos. El endpoint de hoteles-compras responde con **409** cuando hay
+conflictos o huérfanos — un código que `api()` no tenía contemplado, así
+que lo convertía en excepción **antes** de que `saveUsuario()` llegara a
+mirar `rc.conflictos`/`rc.huerfanos`. Como esa llamada no estaba dentro
+de un try/catch, la excepción quedaba sin capturar: no salía ningún
+toast, el modal no se cerraba, se quedaba parado sin más — el
+`confirm()` de reasignación nunca llegó a ejecutarse ni una sola vez
+desde que se construyó esta pantalla.
+
+Corregido: `api()` ahora también trata como respuesta normal (no
+excepción) el 409 de `{ok:false, conflictos:[...]}` /
+`{ok:false, huerfanos:[...]}` — acotado a esa forma exacta, para no
+tocar ningún otro 409 del resto de la aplicación.
+
+Nota sobre el comportamiento cuando hay huérfanos Y conflictos a la vez
+(p. ej. quitar dos hoteles sin sustituto Y tomar dos hoteles de otro
+comprador en el mismo guardado): el backend detecta los huérfanos
+primero, así que solo se ve un `confirm()` (por los huérfanos); al
+aceptarlo se reintenta con `forzar=true`, que de paso también resuelve
+los conflictos sin un segundo aviso específico para esos. El resultado
+final es correcto, pero si preferís un único diálogo que liste ambos
+problemas a la vez, es un ajuste aparte que puedo hacer.
+
 # v12.14.0 — 21 julio 2026
 
 🐛 No dejaba reasignar hoteles entre compradores
