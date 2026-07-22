@@ -662,6 +662,24 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS dashboard_prefs TEXT"
             )
+            # ── RLS en tablas propias de estas mejoras (Jul 2026) ────────────
+            # Supabase expone TODAS las tablas del esquema public vía su API
+            # REST automática (PostgREST) salvo que tengan RLS activado — el
+            # Security Advisor lo marca como error ("RLS Disabled in Public").
+            # Esta app nunca usa esa API (ni el backend ni el frontend; todo
+            # habla por conexión directa a Postgres con DATABASE_URL, nunca
+            # con la anon key), así que activar RLS sin ninguna política es
+            # 100% seguro para el funcionamiento — simplemente cierra el
+            # acceso público accidental por ese otro camino.
+            # Solo se tocan aquí las tablas introducidas por estas mejoras
+            # (egress/tamaño BD/vacuum/heartbeat del agente); las tablas
+            # propias de la aplicación (pedidos, usuarios, etc.) no se
+            # tocan — su RLS, si aplica, se gestiona donde ya se gestionaba.
+            for _tabla_rls in ("egress_tracking", "db_size_tracking", "db_vacuum_log", "agente_heartbeat"):
+                try:
+                    cur.execute(f"ALTER TABLE IF EXISTS {_tabla_rls} ENABLE ROW LEVEL SECURITY")
+                except Exception as e:
+                    log.warning(f"No se pudo activar RLS en {_tabla_rls}: {e}")
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:

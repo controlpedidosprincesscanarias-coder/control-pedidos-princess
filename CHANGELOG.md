@@ -1,3 +1,15 @@
+# v12.16.4 — 22 julio 2026
+
+🔒 Fix: RLS deshabilitado en tablas propias (Security Advisor de Supabase)
+
+El Security Advisor de Supabase marcó `public.db_vacuum_log` como error ("RLS Disabled in Public") — cualquier tabla del esquema `public` queda expuesta vía la API REST automática (PostgREST) salvo que tenga Row Level Security activo. Ya se corrigió a mano por SQL Editor en la base de datos en producción; este cambio lo deja también fijado en el código, para que cualquier instalación futura (o una restauración completa desde cero) no vuelva a crear estas tablas sin RLS.
+
+Esta app nunca usa la API REST de Supabase — backend y frontend hablan siempre por conexión directa a Postgres (`DATABASE_URL`), nunca con la `anon key` — así que activar RLS sin políticas es inofensivo para el funcionamiento, solo cierra un acceso público que no debería existir.
+
+Alcance a propósito limitado a las tablas introducidas por las mejoras de egress/tamaño de BD/Storage — no se toca ninguna tabla propia de la aplicación (`pedidos`, `usuarios`, etc.):
+- `egress_tracking`, `db_size_tracking`, `db_vacuum_log`
+- `agente_heartbeat` (creada por `restore_agent.py`, no por esta app — se incluye aquí también por si el agente no ha corrido todavía en una instalación nueva)
+
 # v12.16.2 — 22 julio 2026
 
 🎨 Dashboard: comparativas reales, sparklines, narrativa automática y
