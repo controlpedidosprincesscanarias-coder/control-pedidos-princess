@@ -653,6 +653,15 @@ def _auto_migrate():
                         descripcion = 'Aviso del job diario (08:30) cuando el consumo de egress o el tamaño de la base de datos se acercan al límite del plan — un único mensaje si cualquiera de las dos supera el umbral.'
                     WHERE codigo = 'egress_alerta'
                 """)
+            # ── Dashboard configurable por usuario (v12.16.2) ──────────────
+            # Cada usuario puede ocultar/reordenar los widgets de su propio
+            # Dashboard. Se guarda como JSON (lista de {id, visible}) en una
+            # columna nueva; NULL = configuración por defecto (todo visible,
+            # orden original), sin necesidad de sembrar nada al crear el
+            # usuario.
+            cur.execute(
+                "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS dashboard_prefs TEXT"
+            )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -6956,6 +6965,8 @@ def get_dashboard_resumen():
     """
     vacio = {
         "variacion": {"pedidos_mes_actual": 0, "pedidos_mes_anterior": 0, "pct": None},
+        "entregas_variacion": {"mes_actual": 0, "mes_anterior": 0, "pct": None},
+        "series": {"dias": 14, "pedidos": [], "entregas": []},
         "importe": {"mes_actual": 0.0, "mes_anterior": 0.0, "pct": None},
         "pendientes": {"total": 0, "tiempo_medio_dias": None},
         "alertas_por_nivel": {"urgente": 0, "aviso": 0},
@@ -7058,6 +7069,59 @@ def get_dashboard_resumen():
         JOIN pedidos p ON p.id = he.pedido_id
         WHERE he.creado_en::date = CURRENT_DATE {filtro_p}
     """, params_p, one=True)
+
+    # ── Variación mensual de entregas (mismo patrón que "variación" arriba,
+    #    pero contando transiciones a ENTREGADO en vez de altas de pedido) ──
+    fila_entregas = query(f"""
+        SELECT
+            COUNT(*) FILTER (WHERE he.creado_en >= %s) AS mes_actual,
+            COUNT(*) FILTER (WHERE he.creado_en >= %s AND he.creado_en < %s) AS mes_anterior
+        FROM historial_estados he
+        JOIN pedidos p ON p.id = he.pedido_id
+        WHERE he.estado_nuevo = 'ENTREGADO' {filtro_p}
+    """, (primer_dia_mes, primer_dia_mes_ant, primer_dia_mes) + params_p, one=True)
+    entregas_variacion = {
+        "mes_actual": fila_entregas["mes_actual"],
+        "mes_anterior": fila_entregas["mes_anterior"],
+        "pct": _pct(fila_entregas["mes_actual"], fila_entregas["mes_anterior"]),
+    }
+
+    # ── Series diarias (últimos 14 días) — base de los sparklines del
+    #    dashboard. Se rellenan los días sin movimiento con 0 mediante
+    #    generate_series, para que la serie siempre tenga longitud fija. ────
+    dias_serie = 14
+    fecha_ini_serie = hoy - timedelta(days=dias_serie - 1)
+
+    serie_pedidos = rows_to_list(query(f"""
+        SELECT gs::date AS dia, COALESCE(t.total, 0) AS total
+        FROM generate_series(%s::date, %s::date, interval '1 day') gs
+        LEFT JOIN (
+            SELECT p.creado_en::date AS dia, COUNT(*) AS total
+            FROM pedidos p
+            WHERE p.creado_en::date BETWEEN %s AND %s {filtro_p}
+            GROUP BY p.creado_en::date
+        ) t ON t.dia = gs::date
+        ORDER BY gs
+    """, (fecha_ini_serie, hoy, fecha_ini_serie, hoy) + params_p))
+
+    serie_entregas = rows_to_list(query(f"""
+        SELECT gs::date AS dia, COALESCE(t.total, 0) AS total
+        FROM generate_series(%s::date, %s::date, interval '1 day') gs
+        LEFT JOIN (
+            SELECT he.creado_en::date AS dia, COUNT(*) AS total
+            FROM historial_estados he
+            JOIN pedidos p ON p.id = he.pedido_id
+            WHERE he.estado_nuevo = 'ENTREGADO' AND he.creado_en::date BETWEEN %s AND %s {filtro_p}
+            GROUP BY he.creado_en::date
+        ) t ON t.dia = gs::date
+        ORDER BY gs
+    """, (fecha_ini_serie, hoy, fecha_ini_serie, hoy) + params_p))
+
+    series = {
+        "dias": dias_serie,
+        "pedidos": [r["total"] for r in serie_pedidos],
+        "entregas": [r["total"] for r in serie_entregas],
+    }
 
     # ── Últimos pedidos ─────────────────────────────────────────────────
     ultimos = rows_to_list(query(f"""
@@ -7189,6 +7253,8 @@ def get_dashboard_resumen():
 
     return jsonify({
         "variacion": variacion,
+        "entregas_variacion": entregas_variacion,
+        "series": series,
         "importe": importe,
         "pendientes": {"total": len(activos_raw), "tiempo_medio_dias": tiempo_medio},
         "alertas_por_nivel": alertas_por_nivel,
@@ -7203,6 +7269,60 @@ def get_dashboard_resumen():
         "sla_aprobacion_dias": sla_dias,
         "necesita_atencion": necesita_atencion,
     })
+
+
+# ── Dashboard configurable por usuario (v12.16.2) ──────────────────────────
+# Widgets disponibles: mismos ids que data-widget en el HTML. Se valida la
+# lista recibida contra este catálogo para no guardar basura si el frontend
+# cambia de versión o llega una petición manipulada.
+_DASHBOARD_WIDGETS_VALIDOS = {
+    "insights", "actividad", "quicklinks", "chart-estado", "chart-hotel",
+    "timeline", "ranking", "hoteles", "ultimos",
+}
+
+@app.route("/api/dashboard/prefs")
+@login_required
+def get_dashboard_prefs():
+    """GET /api/dashboard/prefs — preferencias de widgets del usuario logado."""
+    row = query("SELECT dashboard_prefs FROM usuarios WHERE id=%s", (session["user_id"],), one=True)
+    prefs = None
+    if row and row.get("dashboard_prefs"):
+        try:
+            prefs = json.loads(row["dashboard_prefs"])
+        except Exception:
+            prefs = None
+    return jsonify({"prefs": prefs})
+
+
+@app.route("/api/dashboard/prefs", methods=["PUT"])
+@login_required
+def set_dashboard_prefs():
+    """
+    PUT /api/dashboard/prefs
+    Body: {"prefs": [{"id": "insights", "visible": true}, ...]} o
+          {"prefs": null} para volver a la configuración por defecto.
+    """
+    data = request.get_json(force=True) or {}
+    prefs = data.get("prefs")
+
+    if prefs is not None:
+        if not isinstance(prefs, list):
+            return jsonify({"error": "Formato de preferencias inválido"}), 400
+        limpio = []
+        vistos = set()
+        for item in prefs:
+            wid = (item or {}).get("id")
+            if wid not in _DASHBOARD_WIDGETS_VALIDOS or wid in vistos:
+                continue
+            vistos.add(wid)
+            limpio.append({"id": wid, "visible": bool(item.get("visible", True))})
+        prefs = limpio
+
+    execute(
+        "UPDATE usuarios SET dashboard_prefs=%s WHERE id=%s",
+        (json.dumps(prefs) if prefs is not None else None, session["user_id"]),
+    )
+    return jsonify({"ok": True})
 
 
 # ── API Bridge Agenda — alertas filtradas por usuario (v10.3) ─────────────────

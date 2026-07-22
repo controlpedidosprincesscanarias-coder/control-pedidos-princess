@@ -1,3 +1,73 @@
+# v12.16.2 — 22 julio 2026
+
+🎨 Dashboard: comparativas reales, sparklines, narrativa automática y
+widgets configurables — además del icono de la app en la pestaña del
+navegador
+
+Cuatro mejoras del Dashboard, todas pensadas para acercarlo al nivel de
+un panel de control comercial sin añadir dependencias externas ni tocar
+el resto de la aplicación, más un detalle de imagen de marca.
+
+🖼️ Icono de la aplicación en la pestaña del navegador
+- Añadido `static/favicon.png` (32×32) y `static/favicon-180.png`
+  (apple-touch-icon), generados a partir del propio `logo-sidebar.png`
+  recortado y centrado en un lienzo cuadrado transparente. Sustituye el
+  folio en blanco genérico que mostraba antes la pestaña del navegador.
+- `templates/index.html`: añadidas las etiquetas `<link rel="icon">` y
+  `<link rel="apple-touch-icon">` en el `<head>`. No requiere cambios en
+  `app.py` — Flask ya sirve `static/` de forma automática.
+
+📊 Indicadores comparativos reales en las 4 tarjetas superiores
+- `GET /api/dashboard/resumen`: nuevo bloque `entregas_variacion`
+  (entregas registradas este mes vs. mes anterior), con el mismo patrón
+  que ya existía para el total de pedidos.
+- Las 4 stat-cards pasan de texto plano a "chips" de color:
+  - **Pedidos**: variación real vs. mes anterior (ya existía el dato,
+    faltaba mostrarlo bien) + tooltip con la variación del importe
+    (dato que el backend ya calculaba pero no se usaba en ningún sitio).
+  - **Entregados**: variación real de entregas vs. mes anterior (nueva);
+    el % de cumplimiento anterior pasa a tooltip.
+  - **Pendientes**: días de espera media, coloreado por umbral (verde
+    ≤3 días, ámbar 3–6, rojo >6).
+  - **Alertas**: desglose urgentes/avisos, coloreado por severidad.
+
+📈 Sparklines (mini-gráficos de tendencia)
+- `GET /api/dashboard/resumen`: nuevo bloque `series` con la evolución
+  diaria de los últimos 14 días de "pedidos creados" y "entregas
+  registradas" (días sin movimiento incluidos como 0, vía
+  `generate_series`, para longitud de serie constante).
+- Tarjetas de **Pedidos** y **Entregados**: mini-gráfico de línea con
+  área sombreada en SVG puro (sin librerías), con tooltip nativo al
+  pasar el ratón. No se añadió a Pendientes/Alertas por ser fotos del
+  estado actual sin historial diario real detrás.
+
+💡 Narrativa de datos — nueva tarjeta "Resumen de la semana"
+- Solo frontend: `_buildInsights()` traduce las cifras que ya devuelve
+  `/api/dashboard/resumen` (variación de pedidos/entregas/importe,
+  hotel líder en cumplimiento, hotel con más alertas, proveedor con
+  incidencias, tiempo medio de espera, SLA de aprobación, pedido que
+  necesita atención urgente) en frases en lenguaje natural.
+- Prioriza lo urgente primero, solo muestra variaciones significativas
+  (≥8-10%) para evitar ruido, máximo 5 frases, y un mensaje neutro
+  ("todo en orden") si no hay nada destacable esa semana.
+
+⚙️ Widgets configurables — ocultar y reordenar el Dashboard
+- Nueva columna `usuarios.dashboard_prefs` (TEXT, JSON) — cada usuario
+  guarda su propia configuración; `NULL` = por defecto (todo visible,
+  orden original), sin necesidad de sembrar nada al crear el usuario.
+- Nuevos endpoints `GET`/`PUT /api/dashboard/prefs`, con validación de
+  los widgets recibidos contra un catálogo fijo en el backend.
+- Los widgets del Dashboard (Resumen de la semana, Actividad de hoy,
+  Accesos rápidos, Por estado, Por hotel, Línea temporal, Ranking de
+  proveedores, Hoteles, Últimos pedidos) pasan a vivir en un contenedor
+  único reordenable; las 4 stat-cards superiores quedan fijas siempre
+  visibles, por ser los indicadores principales.
+- Nuevo botón "⚙️ Personalizar dashboard" abre un modal con
+  checkboxes (mostrar/ocultar) y arrastrar para reordenar
+  (drag & drop nativo, sin librerías). "Guardar" persiste vía la API y
+  aplica al momento; "Restablecer" vuelve a la configuración por
+  defecto.
+
 # v12.16.0 — 21 julio 2026
 
 📎 PDF también permitido donde antes solo se aceptaba correo
