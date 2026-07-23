@@ -1,3 +1,60 @@
+# v12.18.0 — 23 julio 2026
+
+🔔 Configuración de Avisos — dos pestañas: Administradores / Compradores y Hoteles
+
+Sustituye los dos bloques apilados de la v12.17.2 (que seguían generando
+confusión con el selector de hotel único arriba de todo) por **dos pestañas
+completamente separadas**:
+
+- **👑 Avisos para Administradores** — los eventos globales de supervisión
+  (cambio de estado con alerta urgente, pedido crítico parado, techo
+  superado, familias repetidas a nivel admin, salud del sistema, egress,
+  solicitudes de acceso). Sin selector de hotel — ni siquiera aparece en
+  esta pestaña, para que sea imposible pensar que depende de un hotel.
+- **🏨 Avisos para Compradores y Hoteles** — los eventos operativos por
+  hotel (cambio de estado normal, alertas de pedido pendiente, techo
+  mensual, nuevo pedido sujeto a techo, familia repetida al comprador). Aquí
+  sí aparece el selector de hotel, dentro de la propia pestaña.
+
+Cada pestaña guarda de forma independiente — "Guardar cambios" solo aplica a
+lo que esté visible en ese momento. Backend sin cambios respecto a la
+v12.17.2 (la separación admin/hotel ya coincidía exactamente con
+requiere_hotel=FALSE/TRUE; este cambio es puramente de interfaz).
+
+# v12.17.2 — 22 julio 2026
+
+🔔 Configuración de Avisos — corrige confusión entre eventos globales y por hotel
+
+**Reportado:** al marcar destinatarios de "Cambio de estado con alerta urgente"
+o "Pedido crítico parado" con Fuerteventura seleccionado, y luego cambiar el
+selector a Gran Canaria, la configuración parecía "traspasarse" al segundo
+hotel; al modificarla ahí, desaparecía del primero.
+
+**Causa:** esos dos eventos son globales por diseño (una única lista de
+destinatarios para supervisión de admins de todos los hoteles a la vez — son
+justo los que generaron el problema original con Fuerteventura). El dato en
+BD era correcto en todo momento; el problema era de interfaz: al mostrar
+eventos globales y por hotel mezclados bajo el mismo selector de hotel, sin
+separación visual, era natural interpretar que todo dependía del hotel
+elegido.
+
+**Arreglado:**
+- El panel ahora separa físicamente **dos bloques**: "🌐 Avisos globales"
+  (fijo, no depende del selector) arriba, y "🏨 Avisos del hotel: X" (sí
+  depende del selector) debajo — ya no hay una sola tabla mezclando ambos
+  tipos con un simple badge por fila.
+- Defensa en profundidad en el backend: `PUT /api/admin/config-avisos` ahora
+  decide el `hotel_id` de cada fila en servidor, según `requiere_hotel` en
+  `eventos_aviso` — ignora lo que mande el navegador para ese campo. Así,
+  aunque hubiera otro fallo de interfaz en el futuro, es imposible guardar
+  un evento global con un hotel real (o uno por-hotel sin ninguno).
+- Saneado automático al arrancar: borra cualquier fila que se hubiera
+  guardado con un hotel_id indebido en un evento global durante las pruebas
+  de hoy con la interfaz anterior. Si tenías algo marcado para "Cambio de
+  estado con alerta urgente"/"Pedido crítico parado" con Fuerteventura o
+  Gran Canaria seleccionados, revísalo tras desplegar — puede haberse
+  limpiado y haga falta volver a marcarlo (Jesus Curbelo / Victor Martin).
+
 # v12.17.1 — 22 julio 2026
 
 🔔 Configuración de Avisos v2 — fase 2: techo de gastos y familias repetidas

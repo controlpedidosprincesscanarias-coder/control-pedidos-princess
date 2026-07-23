@@ -800,6 +800,24 @@ def _auto_migrate():
                 db.commit()
                 log.info("[NOTIF-CONFIG] Semilla fase 2 completada.")
 
+            # ── Saneado (v12.17.2) — datos "contaminados" por la UI confusa ──
+            # Antes de este arreglo, la matriz mezclaba eventos globales y por
+            # hotel bajo el mismo selector sin separación visual, y era fácil
+            # guardar sin querer un hotel_id real en un evento global (p.ej.
+            # "Cambio de estado con alerta urgente"). Se borran esas filas mal
+            # etiquetadas en cada arranque — es un DELETE con WHERE, así que no
+            # pasa nada si ya estaba limpio (0 filas afectadas y listo).
+            cur.execute("""
+                DELETE FROM notificaciones_config nc
+                USING eventos_aviso ea
+                WHERE nc.evento_codigo = ea.codigo
+                  AND ea.requiere_hotel = FALSE
+                  AND nc.hotel_id IS NOT NULL
+            """)
+            if cur.rowcount:
+                log.warning("[NOTIF-CONFIG] Saneado: %d fila(s) con hotel_id indebido en eventos globales, eliminadas.", cur.rowcount)
+                db.commit()
+
             # ── Dashboard configurable por usuario (v12.16.2) ──────────────
             # Cada usuario puede ocultar/reordenar los widgets de su propio
             # Dashboard. Se guarda como JSON (lista de {id, visible}) en una
@@ -9633,6 +9651,13 @@ def api_save_config_avisos():
     try:
         db  = get_db()
         cur = db.cursor()
+        # Defensa en profundidad: el hotel_id correcto de cada evento se decide
+        # aquí, en servidor, según requiere_hotel en eventos_aviso — nunca según
+        # lo que mande el navegador. Así, aunque el frontend tuviera un fallo,
+        # es físicamente imposible guardar un evento global con hotel_id real
+        # (o uno por-hotel sin él).
+        _req_hotel = {r["codigo"]: bool(r["requiere_hotel"]) for r in
+                      (rows_to_list(query("SELECT codigo, requiere_hotel FROM eventos_aviso")) or [])}
         for c in cambios:
             evento_codigo = c.get("evento_codigo")
             usuario_id    = c.get("usuario_id")
@@ -9642,6 +9667,12 @@ def api_save_config_avisos():
             popup         = bool(c.get("popup", False))
             if not evento_codigo or not usuario_id:
                 continue
+            if evento_codigo not in _req_hotel:
+                continue  # evento_codigo desconocido — se ignora en vez de fallar todo el lote
+            if not _req_hotel[evento_codigo]:
+                hotel_id = None  # evento global: nunca se guarda con hotel_id real, venga lo que venga
+            elif hotel_id is None:
+                continue  # evento por hotel sin hotel_id — nada que guardar, se ignora
             # DELETE + INSERT en vez de ON CONFLICT: en Postgres dos filas con
             # hotel_id NULL nunca "chocan" en un UNIQUE (cada NULL es distinto),
             # así que ON CONFLICT no sirve para deduplicar los eventos globales.
