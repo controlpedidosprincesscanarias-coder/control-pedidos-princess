@@ -1,3 +1,22 @@
+# v12.18.2 — 23 julio 2026
+
+🐛 Corrige rotura de layout en toda la app tras "Configuración de Avisos"
+
+**Reportado:** en Usuarios (y previsiblemente en cualquier vista después de
+Config. Avisos en el HTML) la pantalla aparecía con un hueco en blanco
+enorme, un "Cargando configuración…" flotando a media pantalla, y el
+contenido real más abajo, requiriendo hacer scroll para verlo.
+
+**Causa:** una edición anterior (dentro del refactor de Configuración de
+Avisos) dejó un fragmento duplicado y huérfano — un `#config-avisos-body`
+repetido con `</div>` de más — que cerraba prematuramente los contenedores
+`.content`/`.main`/`.app`. Todas las vistas definidas después de
+"Configuración de Avisos" en el HTML (Restaurar backup, Usuarios...)
+quedaban entonces fuera del contenedor normal de scroll, con el layout roto.
+
+**Arreglado:** eliminado el bloque duplicado. Sin cambios de backend — es un
+fix puro de HTML/maquetación.
+
 # v12.18.1 — 23 julio 2026
 
 🔔 Configuración de Avisos — cada pestaña muestra solo sus usuarios
