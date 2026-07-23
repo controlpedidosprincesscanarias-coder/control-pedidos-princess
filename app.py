@@ -680,6 +680,15 @@ def _auto_migrate():
                      0, TRUE),
                     ('alerta_pedido_hotel', 'Alerta de pedido pendiente (aviso al hotel)',
                      'Aviso/urgente al hotel cuando uno de sus pedidos lleva demasiado tiempo sin avanzar — incluye el job diario y el botón «Re-notificar» de la vista Alertas. Antes fijo por código; ahora configurable por hotel.',
+                     0, TRUE),
+                    ('techo_mensual_comprador', 'Techo de gastos mensual (aviso al hotel)',
+                     'Aviso/urgente al hotel cuando su techo mensual de gasto o de nº de pedidos llega al umbral configurado (job diario). Antes fijo por código; ahora configurable por hotel.',
+                     0, TRUE),
+                    ('techo_nuevo_pedido_comprador', 'Nuevo pedido sujeto a techo (aviso al hotel)',
+                     'Aviso informativo al hotel, en el momento de crear un pedido que computa contra su techo de gastos. Antes fijo por código; ahora configurable por hotel.',
+                     0, TRUE),
+                    ('familia_repetida_comprador', 'Familia de artículos repetida (aviso al hotel)',
+                     'Aviso al hotel cuando se detectan pedidos repetidos de la misma familia en su hotel/mes. Antes fijo por código; ahora configurable por hotel.',
                      0, TRUE)
                 ON CONFLICT (codigo) DO NOTHING
             """)
@@ -757,6 +766,39 @@ def _auto_migrate():
                 """)
                 db.commit()
                 log.info("[NOTIF-CONFIG] Semilla completada.")
+
+            # ── Semilla fase 2 (v12.17.1) — techo + familia repetida ─────────
+            # Gate independiente del de arriba a propósito: si esta instalación
+            # ya desplegó la v12.17.0 (fase 1), la tabla notificaciones_config
+            # ya NO está vacía, así que el "if _n == 0" de arriba no volvería a
+            # ejecutarse — y estos tres eventos nuevos se quedarían sin
+            # sembrar. Se comprueba por código de evento, no por tabla vacía.
+            cur.execute(
+                "SELECT COUNT(*) FROM notificaciones_config WHERE evento_codigo IN "
+                "('techo_mensual_comprador','techo_nuevo_pedido_comprador','familia_repetida_comprador')"
+            )
+            if cur.fetchone()[0] == 0:
+                log.info("[NOTIF-CONFIG] Sembrando fase 2 (techo + familia repetida) desde el modelo anterior…")
+                cur.execute("""
+                    INSERT INTO notificaciones_config (evento_codigo, hotel_id, usuario_id, telegram, popup)
+                    SELECT 'techo_mensual_comprador', uch.hotel_id, uch.usuario_id, TRUE, TRUE
+                    FROM usuario_comprador_hoteles uch
+                    JOIN usuarios u ON u.id = uch.usuario_id AND u.activo = 1 AND u.rol = 'compras'
+                """)
+                cur.execute("""
+                    INSERT INTO notificaciones_config (evento_codigo, hotel_id, usuario_id, telegram, popup)
+                    SELECT 'techo_nuevo_pedido_comprador', uch.hotel_id, uch.usuario_id, TRUE, TRUE
+                    FROM usuario_comprador_hoteles uch
+                    JOIN usuarios u ON u.id = uch.usuario_id AND u.activo = 1 AND u.rol = 'compras'
+                """)
+                cur.execute("""
+                    INSERT INTO notificaciones_config (evento_codigo, hotel_id, usuario_id, telegram, popup)
+                    SELECT 'familia_repetida_comprador', uch.hotel_id, uch.usuario_id, TRUE, TRUE
+                    FROM usuario_comprador_hoteles uch
+                    JOIN usuarios u ON u.id = uch.usuario_id AND u.activo = 1 AND u.rol = 'compras'
+                """)
+                db.commit()
+                log.info("[NOTIF-CONFIG] Semilla fase 2 completada.")
 
             # ── Dashboard configurable por usuario (v12.16.2) ──────────────
             # Cada usuario puede ocultar/reordenar los widgets de su propio
@@ -2767,13 +2809,18 @@ def _job_familia_repetida_inner() -> None:
             hotel_codigo, "familia_repetida_comprador"
         )
         if not skip_comp:
-            compradores = _get_compradores_hotel(hotel_codigo)
-            if not compradores:
-                log.warning("[FAM-REP] Sin compradores para hotel %s", hotel_codigo)
+            # v12.17.1 (fase 2): destinatarios configurables por hotel desde
+            # Administrador → Configuración de Avisos (evento
+            # 'familia_repetida_comprador'), en vez del antiguo
+            # _get_compradores_hotel() fijo. Telegram y popup, listas propias.
+            destinatarios_tg    = _resolver_notificacion("familia_repetida_comprador", "telegram", hotel_id)
+            destinatarios_popup = _resolver_notificacion("familia_repetida_comprador", "popup", hotel_id)
+            if not destinatarios_tg and not destinatarios_popup:
+                log.warning("[FAM-REP] Sin destinatarios configurados para hotel %s (evento familia_repetida_comprador)", hotel_codigo)
             else:
-                for comp in compradores:
-                    username = comp.get("username", "?")
-                    chat_id  = comp.get("telegram_chat_id")
+                for dest in destinatarios_tg:
+                    username = dest.get("username", "?")
+                    chat_id  = dest.get("telegram_chat_id")
                     # ⚠️ LOG PRIMERO — garantiza dedup aunque falle el envío Telegram
                     _log_familia_repetida_hotel(
                         hotel_codigo, "familia_repetida_comprador",
@@ -2805,8 +2852,11 @@ def _job_familia_repetida_inner() -> None:
                                 log.warning("[FAM-REP] No se pudo actualizar log enviado comprador %s: %s", username, _elog)
                     else:
                         log.warning("[FAM-REP] Sin telegram_chat_id para comprador %s", username)
+
+                # ── Popup (bridge agenda) — lista propia, independiente de Telegram ──
+                for dest in destinatarios_popup:
                     _encolar_bridge_notificacion(
-                        usuario=username,
+                        usuario=dest.get("username", "?"),
                         tipo="familia_repetida",
                         titulo=titulo_bridge,
                         mensaje=texto.replace("*", ""),
@@ -3261,9 +3311,12 @@ def _job_alertas_techo_mensual_inner() -> None:
 
         log.info("[TECHO-MES] Hotel %s — semaforo=%s acumulado=%.2f pedidos=%d -> enviando",
                  hotel_codigo, semaforo, acumulado, num_pedidos)
-        compradores = _get_compradores_hotel(hotel_codigo)
-        if not compradores:
-            log.warning("[TECHO-MES] Sin compradores para hotel %s", hotel_codigo)
+        # v12.17.1 (fase 2): destinatarios configurables por hotel (evento
+        # 'techo_mensual_comprador'), en vez del antiguo _get_compradores_hotel().
+        destinatarios_tg    = _resolver_notificacion("techo_mensual_comprador", "telegram", hotel_id)
+        destinatarios_popup = _resolver_notificacion("techo_mensual_comprador", "popup", hotel_id)
+        if not destinatarios_tg and not destinatarios_popup:
+            log.warning("[TECHO-MES] Sin destinatarios configurados para hotel %s (evento techo_mensual_comprador)", hotel_codigo)
             continue
 
         # ── Construir mensaje ─────────────────────────────────────────────────
@@ -3303,9 +3356,9 @@ def _job_alertas_techo_mensual_inner() -> None:
 
         # ── Enviar a compradores ──────────────────────────────────────────────
         nivel_techo = "urgente" if semaforo == "rojo" else "aviso"
-        for comp in compradores:
-            username = comp.get("username", "?")
-            chat_id  = comp.get("telegram_chat_id")
+        for dest in destinatarios_tg:
+            username = dest.get("username", "?")
+            chat_id  = dest.get("telegram_chat_id")
             if chat_id:
                 res = _send_telegram(chat_id, texto)
                 ok  = res.get("ok", False)
@@ -3319,9 +3372,11 @@ def _job_alertas_techo_mensual_inner() -> None:
                 )
             else:
                 log.warning("[TECHO-MES] Sin telegram_chat_id para %s", username)
-            # ── Encolar en bridge agenda ──────────────────────────────────────
+
+        # ── Popup (bridge agenda) — lista propia, independiente de Telegram ──
+        for dest in destinatarios_popup:
             _encolar_bridge_notificacion(
-                usuario=username,
+                usuario=dest.get("username", "?"),
                 tipo="techo",
                 titulo=f"{emoji} [{nivel_txt}] Hotel {hotel_codigo} — {mes_txt}",
                 mensaje=texto.replace("*", ""),
@@ -3350,10 +3405,14 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
         if not pedido:
             return
 
-        hotel_cod   = (hotel_codigo or pedido.get("hotel_codigo") or "").upper()
-        compradores = _get_compradores_hotel(hotel_cod)
-        if not compradores:
-            log.warning("[TECHO] Sin compradores para hotel %s", hotel_cod)
+        hotel_cod = (hotel_codigo or pedido.get("hotel_codigo") or "").upper()
+        hotel_id  = pedido.get("hotel_id")
+        # v12.17.1 (fase 2): destinatarios configurables por hotel (evento
+        # 'techo_nuevo_pedido_comprador'), en vez del antiguo _get_compradores_hotel().
+        destinatarios_tg    = _resolver_notificacion("techo_nuevo_pedido_comprador", "telegram", hotel_id)
+        destinatarios_popup = _resolver_notificacion("techo_nuevo_pedido_comprador", "popup", hotel_id)
+        if not destinatarios_tg and not destinatarios_popup:
+            log.warning("[TECHO] Sin destinatarios configurados para hotel %s (evento techo_nuevo_pedido_comprador)", hotel_cod)
             return
 
         mes_txt = _date.today().strftime("%B %Y")
@@ -3375,16 +3434,18 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
         )
 
         resultados = []
-        for comp in compradores:
-            username = comp.get("username", "?")
-            chat_id  = comp.get("telegram_chat_id")
+        for dest in destinatarios_tg:
+            username = dest.get("username", "?")
+            chat_id  = dest.get("telegram_chat_id")
             if chat_id:
                 res = _send_telegram(chat_id, texto)
                 log.info("[TECHO] Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
                 resultados.append({"username": username, "chat_id": chat_id, **res})
-            # ── Encolar en bridge agenda ──────────────────────────────────────
+
+        # ── Popup (bridge agenda) — lista propia, independiente de Telegram ──
+        for dest in destinatarios_popup:
             _encolar_bridge_notificacion(
-                usuario=username,
+                usuario=dest.get("username", "?"),
                 tipo="techo",
                 titulo=f"🏦 Nuevo pedido sujeto a techo · Hotel {hotel_cod}",
                 mensaje=texto.replace("*", ""),
@@ -3753,8 +3814,10 @@ def alerta_email_preview(pedido_id):
     wa_text = _whatsapp_text(pedido, dias, nivel)
     wa_recipients = [{"nombre": c["nombre"], "movil": c.get("movil","")} for c in compradores if c.get("movil")]
 
-    # Telegram — compradores asignados al hotel (dinámico desde BD)
-    _compradores_telegram = _get_compradores_hotel(hotel_codigo.upper())
+    # Telegram — destinatarios configurados para este hotel (v12.17.0,
+    # evento 'alerta_pedido_hotel') — antes mostraba _get_compradores_hotel()
+    # a secas, lo que podía no coincidir con lo que realmente se envía ahora.
+    _compradores_telegram = _resolver_notificacion("alerta_pedido_hotel", "telegram", pedido.get("hotel_id"))
     telegram_recipients = [
         {"username": c.get("username"), "chat_id": c.get("telegram_chat_id"), "nombre": c.get("nombre", c.get("username"))}
         for c in _compradores_telegram if c.get("telegram_chat_id")

@@ -1,3 +1,40 @@
+# v12.17.1 — 22 julio 2026
+
+🔔 Configuración de Avisos v2 — fase 2: techo de gastos y familias repetidas
+
+Continuación de la v12.17.0: los tres avisos al comprador que quedaron fuera
+a propósito de la primera entrega pasan ahora también por el panel unificado
+Administrador → Configuración de Avisos, con selector de hotel:
+
+- `techo_mensual_comprador` — job diario de techo mensual (semáforo
+  amarillo/rojo). Antes: `_get_compradores_hotel()` fijo dentro de
+  `_job_alertas_techo_mensual_inner`.
+- `techo_nuevo_pedido_comprador` — aviso inmediato al crear un pedido sujeto
+  a techo. Antes: `_get_compradores_hotel()` fijo dentro de
+  `_telegram_alerta_techo`.
+- `familia_repetida_comprador` — aviso al comprador cuando se repite una
+  familia/partida en el mes. Antes: `_get_compradores_hotel()` fijo dentro
+  de `_job_familia_repetida_inner`.
+
+Los tres son eventos por hotel (`requiere_hotel=TRUE`), con Telegram y popup
+configurables de forma independiente, igual que los dos de la fase 1. Semilla
+automática al arrancar: copia tal cual quién recibía qué antes de esta
+versión (gate independiente del de la v12.17.0, así que aplica igual si esta
+instalación ya tenía desplegada la v12.17.0 con la tabla `notificaciones_config`
+ya poblada).
+
+De paso, se corrige una inconsistencia menor de la v12.17.0: la vista previa
+de "Reclamación" (`GET /api/alertas/<id>/email-preview`) mostraba la lista de
+Telegram del antiguo `_get_compradores_hotel()`, que ya no coincidía con
+quién realmente recibe el aviso tras el cambio de la fase 1 — ahora usa el
+mismo resolver (`alerta_pedido_hotel`) que el envío real.
+
+**Lo que sigue igual, a propósito:** el modelo "1 hotel → 1 comprador"
+(`usuario_comprador_hoteles`) se mantiene intacto para destinatario
+principal/CC del correo interno (`_get_compradores_cc`) y para cualquier otro
+uso de propiedad del hotel que no sea "a quién avisamos" — eso no formaba
+parte del alcance de este cambio.
+
 # v12.17.0 — 22 julio 2026
 
 🔔 Configuración de Avisos v2 — panel unificado, ahora también por hotel
