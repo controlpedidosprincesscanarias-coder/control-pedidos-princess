@@ -653,6 +653,111 @@ def _auto_migrate():
                         descripcion = 'Aviso del job diario (08:30) cuando el consumo de egress o el tamaño de la base de datos se acercan al límite del plan — un único mensaje si cualquiera de las dos supera el umbral.'
                     WHERE codigo = 'egress_alerta'
                 """)
+
+            # ── Configuración de Avisos v2 (v12.17.0) — panel unificado ──────
+            # Amplía el modelo anterior (solo eventos globales de supervisión
+            # admin) para cubrir también los avisos operativos ligados a un
+            # hotel concreto (cambio de estado, alertas de pedido parado),
+            # que antes salían de _get_compradores_hotel/_get_usuarios_hotel_
+            # rol_telegram (tablas usuario_comprador_hoteles/usuario_hoteles),
+            # sin ningún control desde el panel de admin.
+            #
+            # requiere_hotel=TRUE marca los eventos cuya lista de destinatarios
+            # depende del hotel del pedido (se guarda una fila por hotel en
+            # notificaciones_config); el resto son eventos globales (hotel_id
+            # NULL), igual que antes.
+            cur.execute(
+                "ALTER TABLE eventos_aviso ADD COLUMN IF NOT EXISTS requiere_hotel BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+            # Alta idempotente de los dos eventos operativos nuevos — con
+            # ON CONFLICT DO NOTHING para no pisar el nombre/descripción si
+            # un admin ya los hubiera editado a mano en una ejecución previa.
+            cur.execute("""
+                INSERT INTO eventos_aviso (codigo, nombre, descripcion, orden, requiere_hotel)
+                VALUES
+                    ('cambio_estado_pedido', 'Cambio de estado de pedido (aviso normal)',
+                     'Aviso por Telegram/popup a los usuarios de un hotel cuando cambia el estado de uno de sus pedidos (enviado al proveedor, entrega, cancelación...). Antes fijo por código; ahora configurable por hotel.',
+                     0, TRUE),
+                    ('alerta_pedido_hotel', 'Alerta de pedido pendiente (aviso al hotel)',
+                     'Aviso/urgente al hotel cuando uno de sus pedidos lleva demasiado tiempo sin avanzar — incluye el job diario y el botón «Re-notificar» de la vista Alertas. Antes fijo por código; ahora configurable por hotel.',
+                     0, TRUE)
+                ON CONFLICT (codigo) DO NOTHING
+            """)
+            # Los eventos globales ya existentes (creados antes de esta
+            # versión) se marcan explícitamente requiere_hotel=FALSE — el
+            # DEFAULT ya cubre altas nuevas, este UPDATE es solo para dejar
+            # constancia explícita en instalaciones que vinieran de antes.
+            cur.execute("""
+                UPDATE eventos_aviso SET requiere_hotel = FALSE
+                WHERE codigo IN (
+                    'cambio_estado_supervision','pedido_urgente_admin',
+                    'techo_urgente_admin','techo_nuevo_pedido_admin',
+                    'familia_repetida_admin','egress_alerta','health_check',
+                    'solicitud_acceso'
+                )
+            """)
+
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS notificaciones_config (
+                    id            SERIAL PRIMARY KEY,
+                    evento_codigo TEXT NOT NULL REFERENCES eventos_aviso(codigo) ON DELETE CASCADE,
+                    hotel_id      INTEGER REFERENCES hoteles(id) ON DELETE CASCADE,
+                    usuario_id    INTEGER NOT NULL REFERENCES usuarios(id) ON DELETE CASCADE,
+                    telegram      BOOLEAN NOT NULL DEFAULT FALSE,
+                    email         BOOLEAN NOT NULL DEFAULT FALSE,
+                    popup         BOOLEAN NOT NULL DEFAULT FALSE
+                )
+            """)
+            # Sin UNIQUE de tabla a propósito: en Postgres dos NULL nunca
+            # violan un UNIQUE (cada NULL cuenta como distinto), lo que
+            # rompería la deduplicación de los eventos globales (hotel_id
+            # NULL). En vez de un índice de expresión, el guardado hace
+            # DELETE + INSERT dentro de la misma transacción (ver
+            # api_save_config_avisos) — evita el problema sin depender de
+            # sintaxis de índice más frágil.
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_notif_config_lookup "
+                "ON notificaciones_config (evento_codigo, hotel_id)"
+            )
+
+            # ── Semilla única: migrar el modelo hardcodeado actual ───────────
+            # Solo se ejecuta si la tabla está vacía (primer despliegue de esta
+            # versión) — así el día 1 nadie deja de recibir nada: se copia tal
+            # cual quién recibía qué antes, y a partir de ahora ya es editable
+            # desde Administrador → Configuración de Avisos sin tocar código.
+            cur.execute("SELECT COUNT(*) FROM notificaciones_config")
+            if cur.fetchone()[0] == 0:
+                log.info("[NOTIF-CONFIG] Sembrando notificaciones_config desde el modelo anterior…")
+                # 'cambio_estado_pedido' — antes: compradores del hotel (Telegram)
+                cur.execute("""
+                    INSERT INTO notificaciones_config (evento_codigo, hotel_id, usuario_id, telegram, popup)
+                    SELECT 'cambio_estado_pedido', uch.hotel_id, uch.usuario_id, TRUE, TRUE
+                    FROM usuario_comprador_hoteles uch
+                    JOIN usuarios u ON u.id = uch.usuario_id AND u.activo = 1 AND u.rol = 'compras'
+                """)
+                # 'cambio_estado_pedido' — antes: usuarios rol hotel del hotel
+                cur.execute("""
+                    INSERT INTO notificaciones_config (evento_codigo, hotel_id, usuario_id, telegram, popup)
+                    SELECT 'cambio_estado_pedido', uh.hotel_id, uh.usuario_id, TRUE, TRUE
+                    FROM usuario_hoteles uh
+                    JOIN usuarios u ON u.id = uh.usuario_id AND u.activo = 1 AND u.rol = 'hotel'
+                """)
+                # 'alerta_pedido_hotel' — antes: compradores del hotel (Telegram)
+                cur.execute("""
+                    INSERT INTO notificaciones_config (evento_codigo, hotel_id, usuario_id, telegram, popup)
+                    SELECT 'alerta_pedido_hotel', uch.hotel_id, uch.usuario_id, TRUE, TRUE
+                    FROM usuario_comprador_hoteles uch
+                    JOIN usuarios u ON u.id = uch.usuario_id AND u.activo = 1 AND u.rol = 'compras'
+                """)
+                # Eventos globales existentes — migrar tal cual desde config_avisos
+                cur.execute("""
+                    INSERT INTO notificaciones_config (evento_codigo, hotel_id, usuario_id, telegram, email, popup)
+                    SELECT evento_codigo, NULL, usuario_id, telegram, email, telegram
+                    FROM config_avisos
+                """)
+                db.commit()
+                log.info("[NOTIF-CONFIG] Semilla completada.")
+
             # ── Dashboard configurable por usuario (v12.16.2) ──────────────
             # Cada usuario puede ocultar/reordenar los widgets de su propio
             # Dashboard. Se guarda como JSON (lista de {id, visible}) en una
@@ -1393,27 +1498,56 @@ TELEGRAM_BOT_TOKEN      = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 # evento, simplemente no se envía nada — ya no hay un fallback "todos los
 # admins reciben todo".
 
-def _destinatarios_evento(evento_codigo: str, canal: str) -> list:
+def _resolver_notificacion(evento_codigo: str, canal: str, hotel_id: int = None) -> list:
     """
-    Devuelve los usuarios configurados para recibir el evento/causa indicado
-    por el canal dado ('telegram' o 'email'), leyendo la configuración
-    editable desde Administrador → Configuración de Avisos.
-    Cada dict incluye: id, username, nombre, email, telegram_chat_id.
+    Única fuente de verdad para "quién recibe qué evento, por qué canal, en
+    qué hotel" (v12.17.0) — sustituye tanto a la _destinatarios_evento()
+    original (eventos globales de supervisión admin) como a las funciones
+    hardcodeadas _get_compradores_hotel()/_get_usuarios_hotel_rol_telegram()
+    (avisos operativos ligados a un pedido/hotel concreto). Todo se gestiona
+    ahora desde Administrador → Configuración de Avisos, tabla
+    notificaciones_config.
+
+    canal: 'telegram' | 'email' | 'popup'
+    hotel_id: None para eventos globales (requiere_hotel=FALSE en
+              eventos_aviso); id de hotel para eventos operativos ligados a
+              un pedido concreto (requiere_hotel=TRUE).
+    Cada dict incluye: id, username, nombre, email, telegram_chat_id, rol.
     """
-    columna = "telegram" if canal == "telegram" else "email"
+    columna = {"telegram": "telegram", "email": "email", "popup": "popup"}.get(canal, "telegram")
     try:
-        rows = rows_to_list(query(
-            f"""SELECT u.id, u.username, u.nombre, u.email, u.telegram_chat_id
-                FROM config_avisos ca
-                JOIN usuarios u ON u.id = ca.usuario_id
-                WHERE ca.evento_codigo = %s AND ca.{columna} = TRUE AND u.activo = 1""",
-            (evento_codigo,)
-        )) or []
+        if hotel_id is not None:
+            rows = rows_to_list(query(
+                f"""SELECT u.id, u.username, u.nombre, u.email, u.telegram_chat_id, u.rol
+                    FROM notificaciones_config nc
+                    JOIN usuarios u ON u.id = nc.usuario_id
+                    WHERE nc.evento_codigo = %s AND nc.hotel_id = %s
+                      AND nc.{columna} = TRUE AND u.activo = 1""",
+                (evento_codigo, hotel_id)
+            )) or []
+        else:
+            rows = rows_to_list(query(
+                f"""SELECT u.id, u.username, u.nombre, u.email, u.telegram_chat_id, u.rol
+                    FROM notificaciones_config nc
+                    JOIN usuarios u ON u.id = nc.usuario_id
+                    WHERE nc.evento_codigo = %s AND nc.hotel_id IS NULL
+                      AND nc.{columna} = TRUE AND u.activo = 1""",
+                (evento_codigo,)
+            )) or []
         return rows
     except Exception as exc:
-        log.error("[CONFIG-AVISOS] Error resolviendo destinatarios evento=%s canal=%s: %s",
-                  evento_codigo, canal, exc)
+        log.error("[NOTIF-CONFIG] Error resolviendo evento=%s canal=%s hotel_id=%s: %s",
+                  evento_codigo, canal, hotel_id, exc)
         return []
+
+
+def _destinatarios_evento(evento_codigo: str, canal: str) -> list:
+    """
+    Compatibilidad: todos los eventos globales de supervisión admin siguen
+    llamando a esta función tal cual — ahora es un envoltorio fino sobre
+    _resolver_notificacion() con hotel_id=None.
+    """
+    return _resolver_notificacion(evento_codigo, canal, hotel_id=None)
 
 
 def _destinatarios_evento_emails(evento_codigo: str) -> list:
@@ -1470,8 +1604,11 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
                       cuerpo_email_text: str = None) -> None:
     """
     Punto único de envío para avisos de sistema/administración configurables.
-    Resuelve destinatarios desde config_avisos y despacha por Telegram +
-    Agenda (bridge) de forma inmediata, y por email de forma encolada.
+    Resuelve destinatarios desde notificaciones_config y despacha por
+    Telegram, popup (Agenda/bridge) y email — los tres canales, de forma
+    independiente entre sí (v12.17.0: antes el popup viajaba siempre pegado
+    a la lista de Telegram; ahora cada uno tiene su propio checkbox en el
+    panel de admin).
     """
     destinatarios_tg = _destinatarios_evento(evento_codigo, "telegram")
     for dest in destinatarios_tg:
@@ -1483,8 +1620,11 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
                      evento_codigo, username, chat_id, "OK" if res.get("ok") else res.get("error"))
         else:
             log.warning("[AVISO-%s] %s configurado para Telegram pero sin telegram_chat_id", evento_codigo, username)
+
+    destinatarios_popup = _resolver_notificacion(evento_codigo, "popup", hotel_id=None)
+    for dest in destinatarios_popup:
         _encolar_bridge_notificacion(
-            usuario=username,
+            usuario=dest.get("username", "?"),
             tipo=tipo_bridge,
             titulo=titulo_bridge or f"📋 Aviso — {evento_codigo}",
             mensaje=texto_telegram.replace("*", ""),
@@ -1637,14 +1777,21 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
 
 def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
     """
-    Envía alerta automática por Telegram a los compradores responsables del hotel.
-    Los compradores se obtienen dinámicamente desde BD via _get_compradores_hotel().
-    Devuelve lista de resultados [{username, chat_id, ok, error}].
+    Envía alerta automática (Telegram + popup) a los destinatarios configurados
+    para el hotel del pedido — evento 'alerta_pedido_hotel' en Administrador →
+    Configuración de Avisos (v12.17.0; antes fijo vía _get_compradores_hotel()).
+    Devuelve lista de resultados de Telegram [{username, chat_id, ok, error}].
     """
-    hotel_codigo = (pedido.get("hotel_codigo") or "").upper()
-    compradores  = _get_compradores_hotel(hotel_codigo)
-    if not compradores:
-        log.warning("Telegram: sin compradores para hotel %s", hotel_codigo)
+    hotel_codigo   = (pedido.get("hotel_codigo") or "").upper()
+    hotel_id       = pedido.get("hotel_id")
+    # v12.17.0: destinatarios configurables por hotel desde Administrador →
+    # Configuración de Avisos (evento 'alerta_pedido_hotel'), en vez del
+    # antiguo _get_compradores_hotel() fijo. Telegram y popup son
+    # independientes: alguien puede estar marcado para uno sin el otro.
+    destinatarios_tg    = _resolver_notificacion("alerta_pedido_hotel", "telegram", hotel_id)
+    destinatarios_popup = _resolver_notificacion("alerta_pedido_hotel", "popup", hotel_id)
+    if not destinatarios_tg and not destinatarios_popup:
+        log.warning("Telegram: sin destinatarios configurados para hotel %s (evento alerta_pedido_hotel)", hotel_codigo)
         return []
 
     # ── Construir mensaje compacto y limpio ──────────────────────────────────
@@ -1697,9 +1844,9 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
     titulo_bridge = f"{emoji} [{nivel_txt}] Pedido #{pid_pedido} · {hotel_cod}"
 
     resultados = []
-    for comp in compradores:
-        username = comp.get("username", "?")
-        chat_id  = comp.get("telegram_chat_id")
+    for dest in destinatarios_tg:
+        username = dest.get("username", "?")
+        chat_id  = dest.get("telegram_chat_id")
         if not chat_id:
             log.warning("Telegram: sin telegram_chat_id para %s", username)
             resultados.append({"username": username, "chat_id": None, "ok": False, "error": "Sin telegram_chat_id"})
@@ -1707,9 +1854,11 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
             res = _send_telegram(chat_id, texto)
             log.info("Telegram → %s (%s): %s", username, chat_id, "OK" if res["ok"] else res["error"])
             resultados.append({"username": username, "chat_id": chat_id, **res})
-        # ── Encolar en bridge agenda (independiente de si tiene Telegram) ─────
+
+    # ── Popup (bridge agenda) — lista propia, independiente de Telegram ──────
+    for dest in destinatarios_popup:
         _encolar_bridge_notificacion(
-            usuario=username,
+            usuario=dest.get("username", "?"),
             tipo="alerta_auto",
             titulo=titulo_bridge,
             mensaje=texto.replace("*", ""),  # quitar markdown de Telegram
@@ -1802,13 +1951,13 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
     - Nunca se envía Telegram al proveedor (a diferencia del correo, que sí
       le escribe en ENVIADO AL PROVEEDOR) — el Telegram es exclusivamente
       un canal interno.
-    - Destinatarios internos: compradores del hotel + usuarios con rol
-      "hotel" asignados a ese hotel (igual conjunto que el BCC del correo
-      interno). Se comprueba individualmente quién tiene telegram_chat_id
-      configurado: si un usuario hotel no lo tiene, simplemente no recibe
-      Telegram, pero el comprador (si tiene chat_id) lo recibe igualmente.
-      Si, en cambio, el usuario hotel SÍ tiene chat_id configurado, también
-      recibe la comunicación, igual que el comprador.
+    - Destinatarios (v12.17.0): configurables por hotel desde Administrador →
+      Configuración de Avisos (evento 'cambio_estado_pedido'), con Telegram y
+      popup como toggles independientes por usuario. Antes era fijo por
+      código (compradores del hotel + usuarios rol "hotel", igual conjunto
+      que el BCC del correo interno) — ese seguía siendo el conjunto de
+      partida al desplegar esta versión (se migró tal cual), pero ya es
+      editable sin tocar código.
     - Si el nuevo estado genera una condición de alerta (UMBRALES_ALERTAS)
       Y es_cambio_manual=False, se añade al mensaje: nivel y motivo (días).
     - Con es_cambio_manual=True (default para cambios desde update_pedido):
@@ -1832,15 +1981,16 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
             log.warning("[ESTADO] Pedido %s no encontrado para Telegram", pedido_id)
             return
 
-        hotel_cod   = (pedido.get("hotel_codigo") or "").upper()
-        # ── Destinatarios internos: compradores + usuarios rol "hotel" ───────
-        # (mismo conjunto de personas que reciben el BCC del correo interno;
-        # aquí se comprueba uno por uno quién tiene telegram_chat_id).
-        compradores  = _get_compradores_hotel(hotel_cod)
-        usuarios_hot = _get_usuarios_hotel_rol_telegram(hotel_cod)
-        destinatarios = compradores + usuarios_hot
-        if not destinatarios:
-            log.warning("[ESTADO] Sin compradores ni usuarios hotel para %s", hotel_cod)
+        hotel_cod = (pedido.get("hotel_codigo") or "").upper()
+        hotel_id  = pedido.get("hotel_id")
+        # ── Destinatarios: configurables por hotel desde Administrador → ────
+        # Configuración de Avisos (evento 'cambio_estado_pedido'), en vez del
+        # antiguo _get_compradores_hotel()+_get_usuarios_hotel_rol_telegram()
+        # fijo por código (v12.17.0). Telegram y popup son independientes.
+        destinatarios_tg    = _resolver_notificacion("cambio_estado_pedido", "telegram", hotel_id)
+        destinatarios_popup = _resolver_notificacion("cambio_estado_pedido", "popup", hotel_id)
+        if not destinatarios_tg and not destinatarios_popup:
+            log.warning("[ESTADO] Sin destinatarios configurados para %s (evento cambio_estado_pedido)", hotel_cod)
             return
 
         # ── Bloque base: siempre presente ─────────────────────────────────────
@@ -1895,11 +2045,11 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
         nivel_estado = info_alerta["nivel"] if info_alerta else "aviso"
         titulo_bridge = f"🔔 Cambio estado pedido #{pedido_id} · {pedido.get('hotel_codigo', '?')}"
 
-        # ── Envío: compradores + usuarios rol "hotel" con telegram_chat_id ────────
+        # ── Envío Telegram — solo destinatarios marcados para este hotel ──────
         resultados = []
-        for comp in destinatarios:
-            username = comp.get("username", "?")
-            chat_id  = comp.get("telegram_chat_id")
+        for dest in destinatarios_tg:
+            username = dest.get("username", "?")
+            chat_id  = dest.get("telegram_chat_id")
             if not chat_id:
                 log.warning("[ESTADO] Sin telegram_chat_id para %s", username)
                 resultados.append({"username": username, "chat_id": None,
@@ -1909,9 +2059,11 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
                 log.info("[ESTADO] Telegram → %s (%s): %s",
                          username, chat_id, "OK" if res["ok"] else res["error"])
                 resultados.append({"username": username, "chat_id": chat_id, **res})
-            # ── Encolar en bridge agenda (siempre, con o sin Telegram) ─────────
+
+        # ── Popup (bridge agenda) — lista propia, independiente de Telegram ───
+        for dest in destinatarios_popup:
             _encolar_bridge_notificacion(
-                usuario=username,
+                usuario=dest.get("username", "?"),
                 tipo="cambio_estado",
                 titulo=titulo_bridge,
                 mensaje=texto.replace("*", ""),
@@ -2129,7 +2281,7 @@ def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
 _JOB_PEDIDO_SQL = """
     SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
-           p.plazo_entrega_dias,
+           p.plazo_entrega_dias, p.hotel_id,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
@@ -3550,7 +3702,7 @@ def _log_whatsapp(db, pedido_id, tipo, destinatario, mensaje, enviado, error=Non
 PEDIDO_SELECT_ALERTA = """
     SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
-           p.proveedor_id,
+           p.proveedor_id, p.hotel_id,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
@@ -9342,29 +9494,59 @@ def api_save_config_alertas():
 @admin_required
 def api_get_config_avisos():
     """
-    Devuelve el catálogo de eventos/causas, los usuarios disponibles
-    (rol admin o compras, activos) y la configuración actual, para pintar
-    la matriz en Administrador → Configuración de Avisos.
-    GET /api/admin/config-avisos
+    Devuelve el catálogo de eventos/causas, los hoteles (para el selector de
+    eventos ligados a hotel), los usuarios disponibles (rol admin, compras
+    o **hotel** — v12.17.0, antes solo admin/compras — activos, sin incluir
+    ningún usuario técnico) y la configuración actual, para pintar la matriz
+    ampliada en Administrador → Configuración de Avisos.
+
+    GET /api/admin/config-avisos?hotel_id=<id>
+    El parámetro hotel_id solo aplica a los eventos con requiere_hotel=TRUE;
+    los eventos globales (requiere_hotel=FALSE) siempre muestran su config
+    única (hotel_id NULL en BD), sea cual sea el hotel seleccionado.
     """
     try:
         eventos = rows_to_list(query(
-            "SELECT codigo, nombre, descripcion FROM eventos_aviso ORDER BY orden, nombre"
+            "SELECT codigo, nombre, descripcion, requiere_hotel FROM eventos_aviso ORDER BY orden, nombre"
+        )) or []
+        hoteles = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
         )) or []
         usuarios = rows_to_list(query(
             "SELECT id, username, nombre, email, telegram_chat_id, rol FROM usuarios "
-            "WHERE rol IN ('admin','compras') AND activo=1 ORDER BY rol, nombre"
+            "WHERE rol IN ('admin','compras','hotel') AND activo=1 "
+            "ORDER BY CASE rol WHEN 'admin' THEN 0 WHEN 'compras' THEN 1 ELSE 2 END, nombre"
         )) or []
+
+        hotel_id = None
+        hotel_param = (request.args.get("hotel_id") or "").strip()
+        if hotel_param and hotel_param.lower() != "global":
+            try:
+                hotel_id = int(hotel_param)
+            except ValueError:
+                hotel_id = None
+        if hotel_id is None and hoteles:
+            hotel_id = hoteles[0]["id"]  # selección por defecto: el primer hotel activo
+
+        # Config de eventos globales (hotel_id NULL, siempre visible) +
+        # config del hotel seleccionado para los eventos que lo requieren.
         filas = rows_to_list(query(
-            "SELECT evento_codigo, usuario_id, telegram, email FROM config_avisos"
+            """SELECT evento_codigo, hotel_id, usuario_id, telegram, email, popup
+               FROM notificaciones_config
+               WHERE hotel_id IS NULL OR hotel_id = %s""",
+            (hotel_id,)
         )) or []
         config = {}
         for f in filas:
             config.setdefault(f["evento_codigo"], {})[str(f["usuario_id"])] = {
                 "telegram": bool(f["telegram"]),
                 "email": bool(f["email"]),
+                "popup": bool(f["popup"]),
             }
-        return jsonify({"ok": True, "eventos": eventos, "usuarios": usuarios, "config": config})
+        return jsonify({
+            "ok": True, "eventos": eventos, "hoteles": hoteles, "usuarios": usuarios,
+            "config": config, "hotel_id": hotel_id,
+        })
     except Exception as exc:
         log.error("[CONFIG-AVISOS] Error GET: %s", exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
@@ -9375,7 +9557,10 @@ def api_get_config_avisos():
 def api_save_config_avisos():
     """
     Guarda uno o varios cambios de la matriz de Configuración de Avisos.
-    Body: {"cambios": [{"evento_codigo":"...", "usuario_id":1, "telegram":true, "email":false}, ...]}
+    Body: {"cambios": [{"evento_codigo":"...", "hotel_id": 9|null, "usuario_id":1,
+                        "telegram":true, "email":false, "popup":true}, ...]}
+    hotel_id debe ser null para eventos globales (requiere_hotel=FALSE) y el
+    id de hotel correspondiente para eventos ligados a hotel.
     PUT /api/admin/config-avisos
     """
     data = request.get_json() or {}
@@ -9388,23 +9573,27 @@ def api_save_config_avisos():
         for c in cambios:
             evento_codigo = c.get("evento_codigo")
             usuario_id    = c.get("usuario_id")
+            hotel_id      = c.get("hotel_id")  # None para eventos globales
             telegram      = bool(c.get("telegram", False))
             email         = bool(c.get("email", False))
+            popup         = bool(c.get("popup", False))
             if not evento_codigo or not usuario_id:
                 continue
-            if not telegram and not email:
-                # Sin ningún canal activo — no tiene sentido dejar la fila
+            # DELETE + INSERT en vez de ON CONFLICT: en Postgres dos filas con
+            # hotel_id NULL nunca "chocan" en un UNIQUE (cada NULL es distinto),
+            # así que ON CONFLICT no sirve para deduplicar los eventos globales.
+            # IS NOT DISTINCT FROM sí compara NULL=NULL como iguales.
+            cur.execute(
+                "DELETE FROM notificaciones_config "
+                "WHERE evento_codigo=%s AND usuario_id=%s AND hotel_id IS NOT DISTINCT FROM %s",
+                (evento_codigo, usuario_id, hotel_id)
+            )
+            if telegram or email or popup:
                 cur.execute(
-                    "DELETE FROM config_avisos WHERE evento_codigo=%s AND usuario_id=%s",
-                    (evento_codigo, usuario_id)
-                )
-            else:
-                cur.execute(
-                    """INSERT INTO config_avisos (evento_codigo, usuario_id, telegram, email)
-                       VALUES (%s,%s,%s,%s)
-                       ON CONFLICT (evento_codigo, usuario_id)
-                       DO UPDATE SET telegram=EXCLUDED.telegram, email=EXCLUDED.email""",
-                    (evento_codigo, usuario_id, telegram, email)
+                    """INSERT INTO notificaciones_config
+                       (evento_codigo, hotel_id, usuario_id, telegram, email, popup)
+                       VALUES (%s,%s,%s,%s,%s,%s)""",
+                    (evento_codigo, hotel_id, usuario_id, telegram, email, popup)
                 )
         db.commit()
         log.info("[CONFIG-AVISOS] Actualizados %d destinatario(s) por admin", len(cambios))
@@ -9422,16 +9611,26 @@ def api_resolver_config_avisos():
     el formato que necesita cualquier módulo que envíe avisos — incluido
     main_agenda (vía el bridge, con la misma sesión que /api/bridge/*).
     GET /api/config-avisos/resolver?evento=techo_urgente_admin&canal=telegram
+    GET /api/config-avisos/resolver?evento=cambio_estado_pedido&canal=popup&hotel_id=9
+    hotel_id es opcional — obligatorio en la práctica solo para eventos con
+    requiere_hotel=TRUE (cambio_estado_pedido, alerta_pedido_hotel).
     Respuesta: {"ok": true, "destinatarios": [{"username":.., "telegram_chat_id":.., "email":..}, ...]}
     """
     evento_codigo = (request.args.get("evento") or "").strip()
     canal = (request.args.get("canal") or "telegram").strip().lower()
+    hotel_param = (request.args.get("hotel_id") or "").strip()
     if not evento_codigo:
         return jsonify({"ok": False, "error": "Falta el parámetro 'evento'"}), 400
-    if canal not in ("telegram", "email"):
-        return jsonify({"ok": False, "error": "canal debe ser 'telegram' o 'email'"}), 400
-    destinatarios = _destinatarios_evento(evento_codigo, canal)
-    return jsonify({"ok": True, "evento": evento_codigo, "canal": canal, "destinatarios": destinatarios})
+    if canal not in ("telegram", "email", "popup"):
+        return jsonify({"ok": False, "error": "canal debe ser 'telegram', 'email' o 'popup'"}), 400
+    hotel_id = None
+    if hotel_param:
+        try:
+            hotel_id = int(hotel_param)
+        except ValueError:
+            return jsonify({"ok": False, "error": "hotel_id debe ser numérico"}), 400
+    destinatarios = _resolver_notificacion(evento_codigo, canal, hotel_id=hotel_id)
+    return jsonify({"ok": True, "evento": evento_codigo, "canal": canal, "hotel_id": hotel_id, "destinatarios": destinatarios})
 
 
 @app.route("/api/emails-sistema-pendientes", methods=["GET"])

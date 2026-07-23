@@ -1239,7 +1239,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.16.4
+          V 12.17.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1618,13 +1618,20 @@ tbody tr:last-child{border-bottom:none}
         <div class="card">
           <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
             <span class="card-title">🔔 Configuración de Avisos</span>
-            <button onclick="loadConfigAvisos()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Recargar</button>
-            <button onclick="saveConfigAvisos()" style="padding:5px 18px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">💾 Guardar cambios</button>
+            <select id="config-avisos-hotel-sel" onchange="loadConfigAvisos()" style="padding:5px 10px;font-size:12px;border:1px solid var(--border);border-radius:6px;background:var(--surface)">
+              <option value="">Cargando hoteles…</option>
+            </select>
+            <button onclick="loadConfigAvisos()" style="padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Recargar</button>
+            <button onclick="saveConfigAvisos()" style="margin-left:auto;padding:5px 18px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">💾 Guardar cambios</button>
           </div>
           <div style="margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:12.5px;background:#eef4ff;color:#1a4d8f;line-height:1.5">
-            Elige, para cada evento/causa, qué usuarios reciben el aviso y por qué canal(es). Si un evento no tiene
-            ningún usuario marcado, ese aviso simplemente no se envía a nadie. Los cambios se aplican de inmediato
-            para <b>control_pedidos</b>, <b>main_agenda</b> y cualquier otro módulo que consulte esta configuración.
+            Elige, para cada evento/causa, qué usuarios reciben el aviso y por qué canal(es) — 📱 Telegram, 🔔 popup
+            (Organizador Princess), ✉️ email. Si un evento no tiene ningún usuario marcado, ese aviso simplemente no
+            se envía a nadie. Los eventos marcados con 🏨 dependen del hotel seleccionado arriba — cada hotel tiene
+            su propia lista de destinatarios, así un comprador o el personal de un hotel nunca ven avisos de otros
+            hoteles. Los eventos sin ese marcador son globales (aplican igual sea cual sea el hotel elegido). Los
+            cambios se aplican de inmediato para <b>control_pedidos</b>, <b>main_agenda</b> y cualquier otro módulo
+            que consulte esta configuración.
           </div>
           <div id="config-avisos-msg" style="display:none;margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600"></div>
           <div id="config-avisos-body" style="padding:0 16px 24px;overflow-x:auto">
@@ -6484,25 +6491,37 @@ async function saveConfigAlertas() {
 }
 
 // ── Configuración de Avisos: matriz eventos × usuarios × canal ─────────────
-// Reemplaza la lógica hardcodeada de qué usuarios reciben Telegram/email
-// para cada evento/causa (antes: TIPOS_SUPERVISION_ADMIN + "todos los
-// admins" en código). Cada checkbox se guarda tal cual en config_avisos.
-let _configAvisosData = null;   // { eventos, usuarios, config } — última carga del servidor
+// v12.17.0: panel unificado — ya no solo eventos globales de supervisión
+// admin, sino también los avisos operativos ligados a un hotel concreto
+// (antes fijos por código vía usuario_comprador_hoteles/usuario_hoteles).
+// Los eventos con requiere_hotel=true guardan una fila por hotel; el
+// selector de arriba decide qué hotel se está viendo/editando para esos.
+// Los eventos globales (requiere_hotel=false) no dependen del hotel elegido.
+let _configAvisosData = null;   // { eventos, hoteles, usuarios, config, hotel_id } — última carga del servidor
 
 async function loadConfigAvisos() {
   const body = document.getElementById('config-avisos-body');
+  const sel  = document.getElementById('config-avisos-hotel-sel');
   try {
-    const d = await api('/api/admin/config-avisos');
+    const hotelParam = sel && sel.value ? `?hotel_id=${encodeURIComponent(sel.value)}` : '';
+    const d = await api(`/api/admin/config-avisos${hotelParam}`);
     if (!d.ok) throw new Error(d.error);
     _configAvisosData = d;
+
+    // Rellenar el selector de hotel (solo la primera vez / si cambian los hoteles)
+    if (sel && (!sel.options.length || sel.dataset.loaded !== '1')) {
+      sel.innerHTML = d.hoteles.map(h => `<option value="${h.id}">🏨 ${h.codigo} — ${h.nombre}</option>`).join('');
+      sel.dataset.loaded = '1';
+    }
+    if (sel && d.hotel_id) sel.value = String(d.hotel_id);
 
     let html = `<table style="width:100%;border-collapse:collapse;font-size:12px">
       <thead>
         <tr>
           <th style="text-align:left;padding:8px 10px;border-bottom:2px solid var(--border);min-width:220px;position:sticky;left:0;background:var(--surface)">Evento / causa</th>`;
     for (const u of d.usuarios) {
-      const rolIcon = u.rol === 'admin' ? '👑' : '🛒';
-      html += `<th style="padding:8px 6px;border-bottom:2px solid var(--border);text-align:center;min-width:110px">
+      const rolIcon = u.rol === 'admin' ? '👑' : (u.rol === 'compras' ? '🛒' : '🏨');
+      html += `<th style="padding:8px 6px;border-bottom:2px solid var(--border);text-align:center;min-width:120px">
         ${rolIcon} ${u.nombre || u.username}
         ${!u.telegram_chat_id ? '<div style="font-size:9px;color:#dc3545;font-weight:400">sin chat_id</div>' : ''}
         ${!u.email ? '<div style="font-size:9px;color:#dc3545;font-weight:400">sin email</div>' : ''}
@@ -6511,20 +6530,29 @@ async function loadConfigAvisos() {
     html += `</tr></thead><tbody>`;
 
     for (const ev of d.eventos) {
+      const badge = ev.requiere_hotel
+        ? `<span style="font-size:10px;background:#fff3cd;color:#856404;padding:1px 6px;border-radius:4px;margin-left:6px;white-space:nowrap">🏨 por hotel</span>`
+        : `<span style="font-size:10px;background:#e2e3e5;color:#41464b;padding:1px 6px;border-radius:4px;margin-left:6px;white-space:nowrap">🌐 global</span>`;
+      // hotel_id que se guarda con este evento: el seleccionado si requiere_hotel, si no NULL
+      const hotelIdEvento = ev.requiere_hotel ? (d.hotel_id ?? '') : '';
       html += `<tr>
         <td style="padding:8px 10px;border-bottom:1px solid #eee;position:sticky;left:0;background:var(--surface)">
-          <div style="font-weight:600">${ev.nombre}</div>
+          <div style="font-weight:600">${ev.nombre} ${badge}</div>
           <div style="font-size:10.5px;color:var(--text-secondary);line-height:1.3;max-width:260px">${ev.descripcion || ''}</div>
         </td>`;
       for (const u of d.usuarios) {
-        const cfg = (d.config[ev.codigo] && d.config[ev.codigo][String(u.id)]) || { telegram: false, email: false };
-        html += `<td style="padding:6px;border-bottom:1px solid #eee;text-align:center">
-          <label style="display:inline-flex;align-items:center;gap:3px;margin-right:8px;cursor:pointer" title="Telegram">
-            <input type="checkbox" class="avisos-chk" data-evento="${ev.codigo}" data-usuario="${u.id}" data-canal="telegram" ${cfg.telegram ? 'checked' : ''}>
+        const cfg = (d.config[ev.codigo] && d.config[ev.codigo][String(u.id)]) || { telegram: false, email: false, popup: false };
+        html += `<td style="padding:6px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap">
+          <label style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;cursor:pointer" title="Telegram">
+            <input type="checkbox" class="avisos-chk" data-evento="${ev.codigo}" data-usuario="${u.id}" data-hotel="${hotelIdEvento}" data-canal="telegram" ${cfg.telegram ? 'checked' : ''}>
             <span style="font-size:13px">📱</span>
           </label>
-          <label style="display:inline-flex;align-items:center;gap:3px;cursor:pointer" title="Email">
-            <input type="checkbox" class="avisos-chk" data-evento="${ev.codigo}" data-usuario="${u.id}" data-canal="email" ${cfg.email ? 'checked' : ''}>
+          <label style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;cursor:pointer" title="Popup (Organizador Princess)">
+            <input type="checkbox" class="avisos-chk" data-evento="${ev.codigo}" data-usuario="${u.id}" data-hotel="${hotelIdEvento}" data-canal="popup" ${cfg.popup ? 'checked' : ''}>
+            <span style="font-size:13px">🔔</span>
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:2px;cursor:pointer" title="Email">
+            <input type="checkbox" class="avisos-chk" data-evento="${ev.codigo}" data-usuario="${u.id}" data-hotel="${hotelIdEvento}" data-canal="email" ${cfg.email ? 'checked' : ''}>
             <span style="font-size:13px">✉️</span>
           </label>
         </td>`;
@@ -6533,7 +6561,7 @@ async function loadConfigAvisos() {
     }
     html += `</tbody></table>`;
     if (!d.usuarios.length) {
-      html = `<div style="padding:24px;color:var(--text-secondary)">No hay usuarios con rol admin o compras activos para configurar.</div>`;
+      html = `<div style="padding:24px;color:var(--text-secondary)">No hay usuarios con rol admin, compras u hotel activos para configurar.</div>`;
     }
     body.innerHTML = html;
   } catch(e) {
@@ -6543,12 +6571,14 @@ async function loadConfigAvisos() {
 
 async function saveConfigAvisos() {
   const checks = document.querySelectorAll('#config-avisos-body input.avisos-chk');
-  // Agrupar por (evento, usuario) para enviar telegram+email juntos
-  const clave = (ev, uid) => `${ev}__${uid}`;
+  // Agrupar por (evento, hotel, usuario) para enviar telegram+email+popup juntos
+  const clave = (ev, hotel, uid) => `${ev}__${hotel}__${uid}`;
   const mapa = {};
   checks.forEach(chk => {
-    const k = clave(chk.dataset.evento, chk.dataset.usuario);
-    if (!mapa[k]) mapa[k] = { evento_codigo: chk.dataset.evento, usuario_id: parseInt(chk.dataset.usuario), telegram: false, email: false };
+    const hotelRaw = chk.dataset.hotel;
+    const hotelId  = hotelRaw === '' ? null : parseInt(hotelRaw);
+    const k = clave(chk.dataset.evento, hotelId, chk.dataset.usuario);
+    if (!mapa[k]) mapa[k] = { evento_codigo: chk.dataset.evento, hotel_id: hotelId, usuario_id: parseInt(chk.dataset.usuario), telegram: false, email: false, popup: false };
     mapa[k][chk.dataset.canal] = chk.checked;
   });
   const cambios = Object.values(mapa);

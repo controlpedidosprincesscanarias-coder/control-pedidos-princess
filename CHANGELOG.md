@@ -1,3 +1,50 @@
+# v12.17.0 — 22 julio 2026
+
+🔔 Configuración de Avisos v2 — panel unificado, ahora también por hotel
+
+**Motivo:** una reclamación urgente (50 días, hotel Fuerteventura) llegó por
+Telegram y popup a los 4 compradores en vez de solo al responsable de ese
+hotel. La causa: el evento de supervisión `pedido_urgente_admin` tenía
+configurados a los 4 compradores (en vez de a los admins), en Administrador →
+Configuración de Avisos — se corrigió esa configuración directamente en BD sin
+necesidad de tocar código. A raíz de esto, se ha ampliado el propio panel para
+que este tipo de ajuste ya no dependa de tocar la base de datos a mano.
+
+**Qué cambia:**
+- El panel de Configuración de Avisos, que hasta ahora solo cubría 8 eventos
+  globales de supervisión admin, incorpora dos eventos operativos nuevos que
+  antes estaban fijos por código:
+  - `cambio_estado_pedido` — el Telegram/popup inmediato al cambiar el estado
+    de un pedido (antes: `_get_compradores_hotel()` + `_get_usuarios_hotel_rol_telegram()`).
+  - `alerta_pedido_hotel` — el aviso automático del job diario y el botón
+    «Re-notificar» de la vista Alertas (antes: `_get_compradores_hotel()`).
+- Estos dos eventos son **por hotel**: el panel incluye un selector de hotel
+  arriba de la matriz, y cada hotel tiene su propia lista de destinatarios —
+  así un comprador o el personal de un hotel nunca ven avisos de otros
+  hoteles, sin depender de que nadie recuerde marcar bien las casillas.
+- La lista de usuarios seleccionables ahora incluye también el **rol "hotel"**
+  (antes solo admin/compras), para poder decidir explícitamente si el
+  personal de un hotel recibe estos avisos o no.
+- Nuevo canal independiente: **popup** (🔔, Organizador Princess), separado
+  de Telegram — antes el popup viajaba siempre pegado a quien tuviera
+  Telegram marcado; ahora cada uno es un checkbox propio.
+- Tabla nueva `notificaciones_config` (evento_codigo, hotel_id nullable,
+  usuario_id, telegram, email, popup), sustituyendo a `config_avisos` para
+  todo lo nuevo. Semilla automática al desplegar: copia tal cual quién
+  recibía qué en el modelo anterior, así el día 1 nadie deja de recibir
+  nada — a partir de ahí, todo editable desde el panel.
+- `GET/PUT /api/admin/config-avisos` amplían su contrato para aceptar
+  `hotel_id` y el canal `popup`; `GET /api/config-avisos/resolver` acepta
+  `hotel_id` opcional y `canal=popup`.
+
+**Deliberadamente fuera de esta versión** (queda para una fase 2, para no
+arriesgar dos refactors grandes a la vez): los avisos de techo de gastos y de
+familias de artículos repetidas al comprador siguen usando
+`_get_compradores_hotel()` sin pasar por este panel — sí se mantiene, como
+hasta ahora, el modelo "1 hotel → 1 comprador" (`usuario_comprador_hoteles`)
+para todo lo que no es estrictamente "a quién avisamos": destinatario
+principal del correo interno, CC, dashboards, etc.
+
 # v12.16.4 — 22 julio 2026
 
 🔒 Fix: RLS deshabilitado en tablas propias (Security Advisor de Supabase)
