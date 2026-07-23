@@ -1239,7 +1239,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.18.0
+          V 12.18.1
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6570,9 +6570,9 @@ function renderConfigAvisos() {
   const d = _configAvisosData;
   if (!d) return;
 
-  const cabeceraUsuarios = () => {
+  const cabeceraUsuarios = (usuarios) => {
     let h = `<th style="text-align:left;padding:8px 10px;border-bottom:2px solid var(--border);min-width:220px;position:sticky;left:0;background:var(--surface)">Evento / causa</th>`;
-    for (const u of d.usuarios) {
+    for (const u of usuarios) {
       const rolIcon = u.rol === 'admin' ? '👑' : (u.rol === 'compras' ? '🛒' : '🏨');
       h += `<th style="padding:8px 6px;border-bottom:2px solid var(--border);text-align:center;min-width:120px">
         ${rolIcon} ${u.nombre || u.username}
@@ -6583,13 +6583,13 @@ function renderConfigAvisos() {
     return h;
   };
 
-  const filaEvento = (ev, hotelIdEvento) => {
+  const filaEvento = (ev, hotelIdEvento, usuarios) => {
     let f = `<tr>
       <td style="padding:8px 10px;border-bottom:1px solid #eee;position:sticky;left:0;background:var(--surface)">
         <div style="font-weight:600">${ev.nombre}</div>
         <div style="font-size:10.5px;color:var(--text-secondary);line-height:1.3;max-width:260px">${ev.descripcion || ''}</div>
       </td>`;
-    for (const u of d.usuarios) {
+    for (const u of usuarios) {
       const cfg = (d.config[ev.codigo] && d.config[ev.codigo][String(u.id)]) || { telegram: false, email: false, popup: false };
       f += `<td style="padding:6px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap">
         <label style="display:inline-flex;align-items:center;gap:2px;margin-right:6px;cursor:pointer" title="Telegram">
@@ -6609,8 +6609,20 @@ function renderConfigAvisos() {
     return f + `</tr>`;
   };
 
-  if (!d.usuarios.length) {
-    body.innerHTML = `<div style="padding:24px;color:var(--text-secondary)">No hay usuarios con rol admin, compras u hotel activos para configurar.</div>`;
+  // v12.18.1: cada pestaña muestra solo los usuarios que le corresponden —
+  // antes las dos pestañas compartían la misma lista completa (admin +
+  // compras + hotel), así que los admins aparecían también en "Compradores
+  // y Hoteles" sin ningún motivo (esa pestaña es para quien gestiona el
+  // día a día de un hotel, no para supervisión general).
+  const usuariosAdmin = d.usuarios.filter(u => u.rol === 'admin');
+  const usuariosHotel = d.usuarios.filter(u => u.rol === 'compras' || u.rol === 'hotel');
+
+  if (_configAvisosTab === 'admin' && !usuariosAdmin.length) {
+    body.innerHTML = `<div style="padding:24px;color:var(--text-secondary)">No hay usuarios con rol admin activos para configurar.</div>`;
+    return;
+  }
+  if (_configAvisosTab === 'hotel' && !usuariosHotel.length) {
+    body.innerHTML = `<div style="padding:24px;color:var(--text-secondary)">No hay usuarios con rol compras u hotel activos para configurar.</div>`;
     return;
   }
 
@@ -6619,15 +6631,15 @@ function renderConfigAvisos() {
     // ── Pestaña Administradores — eventos globales, sin selector de hotel ──
     const eventosGlobales = d.eventos.filter(e => !e.requiere_hotel);
     html = `<table style="width:100%;border-collapse:collapse;font-size:12px">
-      <thead><tr>${cabeceraUsuarios()}</tr></thead>
-      <tbody>${eventosGlobales.map(ev => filaEvento(ev, '')).join('')}</tbody>
+      <thead><tr>${cabeceraUsuarios(usuariosAdmin)}</tr></thead>
+      <tbody>${eventosGlobales.map(ev => filaEvento(ev, '', usuariosAdmin)).join('')}</tbody>
     </table>`;
   } else {
     // ── Pestaña Compradores y Hoteles — eventos por hotel, ligados al selector ──
     const eventosPorHotel = d.eventos.filter(e => e.requiere_hotel);
     html = `<table style="width:100%;border-collapse:collapse;font-size:12px">
-      <thead><tr>${cabeceraUsuarios()}</tr></thead>
-      <tbody>${eventosPorHotel.map(ev => filaEvento(ev, d.hotel_id ?? '')).join('')}</tbody>
+      <thead><tr>${cabeceraUsuarios(usuariosHotel)}</tr></thead>
+      <tbody>${eventosPorHotel.map(ev => filaEvento(ev, d.hotel_id ?? '', usuariosHotel)).join('')}</tbody>
     </table>`;
   }
   body.innerHTML = html;

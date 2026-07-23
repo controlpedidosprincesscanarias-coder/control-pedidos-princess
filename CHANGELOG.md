@@ -1,3 +1,19 @@
+# v12.18.1 — 23 julio 2026
+
+🔔 Configuración de Avisos — cada pestaña muestra solo sus usuarios
+
+**Reportado:** en la pestaña "🏨 Avisos para Compradores y Hoteles" seguían
+apareciendo también los administradores como columna — las dos pestañas
+compartían la misma lista completa de usuarios (admin + compras + hotel).
+
+**Arreglado:** cada pestaña filtra ahora su propia lista:
+- 👑 Administradores → solo usuarios con rol `admin`.
+- 🏨 Compradores y Hoteles → solo usuarios con rol `compras` u `hotel`.
+
+Cambio puramente de frontend (la misma respuesta del backend, filtrada en
+el navegador según la pestaña activa) — no afecta a datos guardados ni
+requiere tocar `notificaciones_config`.
+
 # v12.18.0 — 23 julio 2026
 
 🔔 Configuración de Avisos — dos pestañas: Administradores / Compradores y Hoteles
