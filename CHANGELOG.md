@@ -1,3 +1,56 @@
+# v12.19.1 — 23 julio 2026
+
+🔧 La cola de emails de sistema también la despachan los compradores
+
+**Motivo:** el poller que envía la cola `emails_sistema_pendientes` vía
+EmailJS (incluida la reclamación automática a proveedor de v12.19.0)
+estaba limitado a `rol === 'admin'` solo por una decisión antigua del
+frontend — el backend ya lo permitía a cualquier usuario logueado
+(`@login_required`, no `@admin_required`). Como los compradores ven todos
+los hoteles (no solo los suyos), tiene sentido que también ayuden a
+despachar la cola, en vez de depender solo de que un admin tenga la app
+abierta.
+
+**Cambiado:** el poller ahora se activa para `rol === 'admin'` **o**
+`rol === 'compras'`, en los dos puntos donde arranca (login y recarga de
+sesión). Sin cambios de backend — ya lo permitía.
+
+# v12.19.0 — 23 julio 2026
+
+📨 Reclamación automática por email al proveedor (plazo de entrega vencido)
+
+**Qué hace:** cuando el plazo de entrega informado por el proveedor vence
+(mismo cálculo que ya usan los avisos Telegram por plazo — nivel `urgente`
+en `_alertas_plazo_entrega`) y el pedido sigue en `ENVIADO AL PROVEEDOR` o
+`ENTREGA PARCIAL`, el job diario de alertas encola automáticamente el email
+de reclamación al proveedor — la misma plantilla que ya se usaba para el
+envío manual desde la ficha del pedido — con los compradores del hotel en
+copia (bcc). Un envío por pedido y día natural (deduplicado igual que el
+resto de alertas automáticas, vía `whatsapp_log`).
+
+**Cómo se envía:** igual que el resto de la cola `emails_sistema_pendientes`
+— esta app no tiene SMTP propio, así que el despacho real lo hace EmailJS
+desde el navegador del primer admin que tenga la app abierta (poll cada 5
+min). Es decir: la reclamación se genera y encola sola, sin que nadie tenga
+que abrir el pedido ni pulsar "enviar", pero el envío físico sigue
+dependiendo de que haya una sesión de admin activa en algún momento del día.
+
+**Activación:** desactivado por defecto. Se activa desde Admin →
+Configuración de Alertas → grupo "Plazo entrega" → *"Enviar reclamación
+automática por email al proveedor cuando vence el plazo"*.
+
+**Cambios técnicos:**
+- Nueva clave `activar_reclamacion_proveedor_auto` en `config_alertas`.
+- Nuevas columnas `cc_emails` y `pedido_id` en `emails_sistema_pendientes`
+  (para llevar copia a compradores y trazabilidad del pedido de origen).
+- `_encolar_email_sistema()` acepta ahora `cc_emails` y `pedido_id`.
+- Nueva función `_encolar_reclamacion_proveedor_auto()`, reutiliza
+  `_build_alerta_email()` y `_get_proveedor_emails_principales()`.
+- El job diario (`_job_alertas_diarias_inner`) invoca la nueva función tras
+  el envío de Telegram cuando `nivel == "urgente"`.
+- El frontend (`_enviarEmailsSistemaPendientes`) envía ahora `bcc` a
+  EmailJS con los `cc_emails` de cada fila pendiente.
+
 # v12.18.2 — 23 julio 2026
 
 🐛 Corrige rotura de layout en toda la app tras "Configuración de Avisos"

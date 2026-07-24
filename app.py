@@ -330,6 +330,29 @@ def _auto_migrate():
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (clave) DO NOTHING
                 """, (_clave, _valor, _tipo, _label, _grupo, _orden))
+            # ── v12.19.0 — Reclamación automática por email al proveedor ──────
+            # Cuando el plazo de entrega informado por el proveedor vence
+            # (nivel_alerta == 'urgente' en _alertas_plazo_entrega) y el
+            # pedido sigue en ENVIADO AL PROVEEDOR / ENTREGA PARCIAL, el job
+            # diario encola automáticamente el email de reclamación al
+            # proveedor (reutilizando _build_alerta_email) en vez de esperar
+            # a que un usuario lo envíe manualmente desde la ficha del pedido.
+            cur.execute("""
+                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (clave) DO NOTHING
+            """, ('activar_reclamacion_proveedor_auto', '0', 'bool',
+                  'Enviar reclamación automática por email al proveedor cuando vence el plazo',
+                  'plazo_entrega', 5))
+            # Columnas para que la cola de emails de sistema pueda llevar CC
+            # (compradores del hotel) y quedar vinculada a un pedido concreto
+            # — necesario para las reclamaciones automáticas a proveedor.
+            cur.execute(
+                "ALTER TABLE emails_sistema_pendientes ADD COLUMN IF NOT EXISTS cc_emails TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE emails_sistema_pendientes ADD COLUMN IF NOT EXISTS pedido_id INTEGER"
+            )
             # ── v12.5.0 — Repetición de popups en Agenda por tipo de alerta ────
             # Controla, para cada estado de pedido, si el popup en Organizador
             # Princess se repite mientras el pedido siga en alerta y cada
@@ -1626,21 +1649,29 @@ def _get_solo_admin_emails() -> list:
 
 def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
                            asunto: str, cuerpo_html: str = None, cuerpo_text: str = None,
-                           solicitud_acceso_id: int = None) -> None:
+                           solicitud_acceso_id: int = None,
+                           cc_emails: list = None, pedido_id: int = None) -> None:
     """
-    Encola un email de sistema (no ligado a un pedido) para cada destinatario.
-    Estos avisos se generan desde jobs sin navegador abierto (APScheduler), y
-    esta app no tiene SMTP propio en el backend — el envío real depende de
-    EmailJS en el navegador (igual que el resto de emails de la aplicación).
-    Por eso se encolan en emails_sistema_pendientes: el primer admin que abra
-    la app los envía en segundo plano.
+    Encola un email de sistema para cada destinatario. Estos avisos se
+    generan desde jobs sin navegador abierto (APScheduler), y esta app no
+    tiene SMTP propio en el backend — el envío real depende de EmailJS en
+    el navegador (igual que el resto de emails de la aplicación). Por eso
+    se encolan en emails_sistema_pendientes: el primer admin que abra la
+    app los envía en segundo plano.
 
     solicitud_acceso_id (opcional): vincula la fila a una solicitud de acceso
     concreta, para que el panel admin pueda mostrar si su email de Fase 2
     ya se despachó.
+
+    cc_emails (opcional, v12.19.0): lista de emails en copia (p.ej. los
+    compradores del hotel cuando el destinatario es un proveedor), se
+    guarda como string separado por comas y se envía como bcc en EmailJS.
+    pedido_id (opcional, v12.19.0): vincula la fila a un pedido concreto
+    (reclamaciones automáticas a proveedor) para trazabilidad.
     """
     if not destinatarios_email:
         return
+    cc_str = ",".join([e for e in (cc_emails or []) if e]) or None
     try:
         db = get_db()
         cur = db.cursor()
@@ -1648,9 +1679,10 @@ def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
             cur.execute(
                 """INSERT INTO emails_sistema_pendientes
                    (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
-                    solicitud_acceso_id)
-                   VALUES (%s,%s,%s,%s,%s,%s)""",
-                (evento_codigo, email, asunto, cuerpo_html, cuerpo_text, solicitud_acceso_id)
+                    solicitud_acceso_id, cc_emails, pedido_id)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                (evento_codigo, email, asunto, cuerpo_html, cuerpo_text,
+                 solicitud_acceso_id, cc_str, pedido_id)
             )
         db.commit()
     except Exception as exc:
@@ -2231,6 +2263,7 @@ def get_config() -> dict:
         "plazo_urgente_ciclo": 2,
         "plazo_parcial_aviso_dias_antes": 3,
         "plazo_parcial_urgente_ciclo": 2,
+        "activar_reclamacion_proveedor_auto": 0,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_pct_amarillo": 60,
         "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
@@ -2341,7 +2374,7 @@ def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
 _JOB_PEDIDO_SQL = """
     SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
-           p.plazo_entrega_dias, p.hotel_id,
+           p.plazo_entrega_dias, p.hotel_id, p.proveedor_id,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
@@ -2576,6 +2609,24 @@ def _job_alertas_diarias_inner():
                 db.commit()
             except Exception as exc:
                 log.error("[SCHEDULER] Error guardando log (plazo) pedido %s: %s", p["id"], exc)
+
+            # ── v12.19.0: reclamación automática al proveedor (plazo vencido) ──
+            cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
+            if (cfg_reclamacion_auto and nivel == "urgente"
+                    and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
+                try:
+                    ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
+                    if ok_reclamacion:
+                        db = get_db()
+                        _log_whatsapp(
+                            db, p["id"], "reclamacion_proveedor_auto", "sistema",
+                            f"Reclamación automática encolada al proveedor — {motivo}",
+                            True, None,
+                        )
+                        db.commit()
+                except Exception as exc:
+                    log.error("[SCHEDULER] Error encolando reclamación automática pedido %s: %s", p["id"], exc)
+
             enviados += 1
             continue
         # ── Lógica estándar (sin plazo informado o feature desactivada) ──────────
@@ -3744,6 +3795,50 @@ def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
         s, b = _email_template_pendiente_cotizacion(pedido, dias, urgente, _comprador_email)
         return s, b, True
     return None, None, False
+
+
+def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> bool:
+    """
+    v12.19.0 — Reclamación automática por email al proveedor.
+
+    Se llama desde el job diario de alertas cuando el plazo de entrega
+    informado por el proveedor ya venció (nivel == 'urgente' en
+    _alertas_plazo_entrega) y el pedido sigue en ENVIADO AL PROVEEDOR o
+    ENTREGA PARCIAL. Reutiliza exactamente la misma plantilla que el envío
+    manual (_build_alerta_email) y la encola en emails_sistema_pendientes
+    con los compradores del hotel en copia (bcc), porque esta app no tiene
+    SMTP propio — el despacho real lo hace el navegador de un admin vía
+    EmailJS (mismo patrón que el resto de la cola de sistema).
+
+    Devuelve True si se encoló correctamente, False si se omitió (sin
+    email de proveedor, sin comprador con email para la firma, etc.).
+    """
+    if pedido.get("estado") not in ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL"):
+        return False
+
+    subject, body_html, es_proveedor = _build_alerta_email(pedido, dias, nivel)
+    if not subject or not es_proveedor:
+        return False
+
+    proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"))
+    if not proveedor_emails and pedido.get("proveedor_email"):
+        proveedor_emails = [pedido["proveedor_email"]]
+    if not proveedor_emails:
+        log.warning("[RECLAMACION-AUTO] Pedido %s: proveedor sin email — reclamación automática omitida",
+                    pedido.get("id"))
+        return False
+
+    compradores = _get_compradores_cc(pedido.get("hotel_codigo", ""))
+    cc_emails = [c["email"] for c in compradores if c.get("email")]
+
+    _encolar_email_sistema(
+        "reclamacion_proveedor_auto", proveedor_emails, subject, body_html,
+        cc_emails=cc_emails, pedido_id=pedido.get("id"),
+    )
+    log.info("[RECLAMACION-AUTO] Pedido %s — reclamación encolada a %s (cc: %s)",
+              pedido.get("id"), proveedor_emails, cc_emails)
+    return True
+
 
 def _whatsapp_text(pedido: dict, dias: int, nivel: str) -> str:
     """Genera el texto de WhatsApp/Telegram (plano, sin HTML) para notificación al comprador."""
@@ -9737,7 +9832,8 @@ def api_emails_sistema_pendientes():
     """
     try:
         pendientes = rows_to_list(query(
-            "SELECT id, evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text "
+            "SELECT id, evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text, "
+            "cc_emails, pedido_id "
             "FROM emails_sistema_pendientes WHERE enviado=FALSE ORDER BY id LIMIT 20"
         )) or []
         return jsonify({"ok": True, "pendientes": pendientes})

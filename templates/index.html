@@ -2585,7 +2585,7 @@ async function _entrarEnApp(r) {
   // loadStats (llamado por showView) ya actualiza badge y card de alertas del dashboard.
   _checkIntegridadBadge();  // badge silencioso en sidebar para admin
   _startVersionPolling();   // polling automático de nueva versión cada 5 min
-  if (G.rol === 'admin') _startEmailsSistemaPolling();
+  if (G.rol === 'admin' || G.rol === 'compras') _startEmailsSistemaPolling();
 }
 
 async function doLogout() {
@@ -5765,7 +5765,7 @@ function calcDias(s) {
       }
     } catch(_) {}
     _startVersionPolling();   // polling automático cada 30 s (primeros 15 min) luego 1 min
-    if (G.rol === 'admin') _startEmailsSistemaPolling();
+    if (G.rol === 'admin' || G.rol === 'compras') _startEmailsSistemaPolling();
   }
 })();
 </script>
@@ -8685,11 +8685,14 @@ function _abrirVentanaImpresion(html) {
 <script>
 /* ── Emails de sistema pendientes (Configuración de Avisos) ───────────────
    Los avisos generados por jobs sin navegador abierto (egress, integridad,
-   techo urgente, familias repetidas, solicitudes de acceso...) se encolan
-   en el backend (emails_sistema_pendientes) porque esta app no tiene SMTP
-   propio — el envío real depende de EmailJS en el navegador, igual que el
-   resto de emails de la aplicación. Este poller (solo admin) los recoge y
-   envía cada 5 minutos mientras haya una sesión de admin abierta. */
+   techo urgente, familias repetidas, solicitudes de acceso, reclamaciones
+   automáticas a proveedor...) se encolan en el backend
+   (emails_sistema_pendientes) porque esta app no tiene SMTP propio — el
+   envío real depende de EmailJS en el navegador, igual que el resto de
+   emails de la aplicación. Este poller (admin y compras — v12.19.1: los
+   compradores ven todos los hoteles, no solo los suyos, así que también
+   pueden despachar la cola) los recoge y envía cada 5 minutos mientras
+   haya una sesión abierta. */
 let _emailsSistemaPollTimer = null;
 
 function _startEmailsSistemaPolling() {
@@ -8709,6 +8712,7 @@ async function _enviarEmailsSistemaPendientes() {
           subject:  p.asunto,
           message:  p.cuerpo_text || p.cuerpo_html || '',
           reply_to: p.destinatario,
+          bcc:      p.cc_emails || '',
         });
         await api(`/api/emails-sistema-pendientes/${p.id}/marcar-enviado`, 'POST');
       } catch (ejsErr) {
