@@ -10,12 +10,15 @@ venv/
 .venv/
 env/
 ENV/
-.python-version
 
-# ── Variables de entorno ──────────────────────────────────────────────────────
+# ── Variables de entorno / credenciales ───────────────────────────────────────
 .env
 .env.*
 !.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
 
 # ── Base de datos local (restos SQLite si los hubiera) ────────────────────────
 *.db
@@ -45,26 +48,33 @@ build/
 # ── IDEs ──────────────────────────────────────────────────────────────────────
 .vscode/
 .idea/
+.cursor/
 *.swp
 *.swo
+
+# ── Cachés de linters/type-checkers ───────────────────────────────────────────
+.mypy_cache/
+.ruff_cache/
 
 # ── Sistema operativo ─────────────────────────────────────────────────────────
 .DS_Store
 Thumbs.db
 desktop.ini
+__MACOSX/
 
 # ── Miscelánea ────────────────────────────────────────────────────────────────
 *.bak
 *.tmp
+*.orig
 instance/
 
-# Releases
+# ── Releases y paquetes ───────────────────────────────────────────────────────
 releases/
 *.zip
 
-# Instaladores
+# ── Instaladores ──────────────────────────────────────────────────────────────
 *.exe
 *.msi
 
-# PyInstaller
+# ── PyInstaller (por si se comparte tooling con OrganizadorPrincess) ─────────
 *.spec
