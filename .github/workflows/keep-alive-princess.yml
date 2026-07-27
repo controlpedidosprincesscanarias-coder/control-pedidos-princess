@@ -13,8 +13,8 @@ jobs:
     steps:
       - name: Ping /ping
         run: |
-          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://control-pedidos-princess.onrender.com/ping)
+          STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://control-pedidos-princess-1k69.onrender.com/ping)
           echo "Respuesta: $STATUS"
           if [ "$STATUS" != "200" ]; then
-            echo "::warning::El ping no devolvió 200 (devolvió $STATUS) — normal mientras el servicio siga suspendido hasta el 1 de agosto"
+            echo "::warning::El ping no devolvió 200 (devolvió $STATUS)"
           fi
