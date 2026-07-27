@@ -1,3 +1,41 @@
+# v12.20.0 — 27 julio 2026
+
+🔐 Nuevos endpoints de bridge para el login de Admin sin usuario/contraseña fijos (Organizador de Escritorio)
+
+**Motivo:** el Organizador de Escritorio (`main_agenda`) tenía un usuario y
+contraseña de Administración fijos y hardcodeados en el propio código
+(`ADMIN_USER`/`ADMIN_PASSWORD`). Se sustituye por un sistema que usa el
+usuario de Windows de cada persona y valida su contraseña contra Control
+de Pedidos — este cambio son los dos endpoints nuevos que ese sistema
+necesita en el backend; la parte de escritorio se entrega aparte
+(`main_agenda_4_10_5`).
+
+**Nuevo — `GET /api/bridge/existe`:** dado `usuario_windows`, responde
+`{"existe": true/false}` consultando solo por `username` en `usuarios`
+(`activo=1`) — nunca pide ni revela la contraseña. Lo usa el Organizador
+para decidir si mostrar el formulario de login (usuario ya existe) o el
+de alta (usuario nuevo).
+
+**Nuevo — `POST /api/bridge/solicitar-alta`:** dado `{usuario_windows,
+nombre}`, notifica por Telegram a los administradores (reutiliza
+`_notify_solicitud_telegram`, ya existente) para que creen la cuenta
+manualmente. Devuelve `409` si el usuario ya existe. **Deliberadamente no
+recibe ni almacena la contraseña elegida** — el Organizador la guarda solo
+en local, cifrada; este endpoint únicamente avisa de que hay una
+solicitud pendiente, y el administrador crea la cuenta real desde Admin →
+Usuarios con la contraseña que el usuario le indique por otra vía.
+
+**Sin cambios en `usuarios` ni en el resto de endpoints existentes** —
+`/api/bridge/login`, ya usado por el bridge de avisos, se reutiliza tal
+cual para validar la contraseña de un usuario existente.
+
+⚠️ **Pendiente de aplicar en producción:** estos dos endpoints se
+desarrollaron y verificaron (sintaxis, sin errores) sobre una copia de
+trabajo (`control_pedidos_v12_20_0.zip`) durante una sesión de chat con
+Claude centrada en el Organizador de Escritorio — revisar que este mismo
+cambio esté realmente desplegado antes de dar por completado el nuevo
+login de Admin.
+
 # v12.19.1 — 23 julio 2026
 
 🔧 La cola de emails de sistema también la despachan los compradores

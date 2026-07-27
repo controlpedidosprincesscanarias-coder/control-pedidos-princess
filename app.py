@@ -4351,6 +4351,76 @@ def bridge_login():
 
     return _completar_login(user)
 
+@app.route("/api/bridge/existe", methods=["GET"])
+def bridge_existe_usuario():
+    """
+    Comprueba si un nombre de usuario (login) ya existe y está activo en
+    Control de Pedidos. Usado por main_agenda para decidir, en la ventana
+    'Mi Usuario' de Administración, si debe pedir la contraseña existente
+    (validándola contra la plataforma) o mostrar el formulario de alta de
+    un usuario nuevo.
+
+    Solo confirma existencia por USERNAME — nunca revela ni acepta
+    contraseña en este endpoint, para no debilitar la superficie de
+    ataque de enumeración de cuentas más de lo estrictamente necesario
+    (el username aquí es el usuario de Windows, ya semi-público en la
+    empresa, no un dato sensible por sí solo).
+    """
+    usuario = (request.args.get("usuario_windows") or request.args.get("username") or "").strip().lower()
+    if not usuario:
+        return jsonify({"error": "Falta usuario_windows"}), 400
+    row = query(
+        "SELECT id FROM usuarios WHERE username=%s AND activo=1",
+        (usuario,), one=True
+    )
+    return jsonify({"existe": bool(row)})
+
+
+@app.route("/api/bridge/solicitar-alta", methods=["POST"])
+def bridge_solicitar_alta():
+    """
+    Registra la solicitud de alta de un usuario nuevo desde main_agenda
+    (ventana Admin → Mi Usuario, cuando el usuario de Windows todavía no
+    tiene cuenta en Control de Pedidos).
+
+    Deliberadamente NO recibe ni almacena aquí la contraseña elegida por
+    el usuario: la contraseña la guarda main_agenda solo localmente
+    (cifrada, con hash+salt) hasta que un administrador cree la cuenta
+    real en Control de Pedidos (Admin → Usuarios) con esas mismas
+    credenciales, comunicadas por el usuario directamente al admin. Este
+    endpoint únicamente avisa de que hay una solicitud pendiente.
+    """
+    body            = request.get_json(silent=True) or {}
+    usuario_windows = (body.get("usuario_windows") or "").strip().lower()
+    nombre          = (body.get("nombre") or "").strip()
+
+    if not usuario_windows:
+        return jsonify({"error": "Falta usuario_windows"}), 400
+    if not nombre:
+        return jsonify({"error": "Falta nombre"}), 400
+
+    ya_existe = query(
+        "SELECT id FROM usuarios WHERE username=%s AND activo=1",
+        (usuario_windows,), one=True
+    )
+    if ya_existe:
+        return jsonify({"error": "Ese usuario ya existe en Control de Pedidos"}), 409
+
+    _notify_solicitud_telegram(
+        f"\U0001F195 *[Alta de usuario — OrganizadorPrincess]*\n\n"
+        f"\U0001F4BB Usuario Windows: `{usuario_windows}`\n"
+        f"\U0001F464 Nombre a mostrar: *{nombre}*\n\n"
+        f"Este usuario ha configurado su acceso al panel Admin de "
+        f"OrganizadorPrincess pero todavía no tiene cuenta en Control de "
+        f"Pedidos.\nCréale la cuenta en *Admin \u2192 Usuarios* con el mismo "
+        f"nombre de usuario (`{usuario_windows}`) y la contraseña que él "
+        f"te indique; en cuanto exista, su acceso quedará validado "
+        f"automáticamente."
+    )
+    log.info("Bridge: solicitud de alta registrada para '%s' (%s)", usuario_windows, nombre)
+    return jsonify({"ok": True})
+
+
 @app.route("/api/logout", methods=["POST"])
 def logout():
     session.clear()
