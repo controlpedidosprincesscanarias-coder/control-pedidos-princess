@@ -4710,6 +4710,178 @@ def solicitar_usuario_fase1():
     return jsonify({"ok": True, "sol_id": sol_id, "encolado": True})
 
 
+@app.route("/api/solicitar-usuario/directo", methods=["POST"])
+def solicitar_usuario_directo():
+    """
+    Alta en un solo paso (v12.20.0, desde el Organizador de escritorio).
+
+    Fusiona fase 1 + fase 2 en una sola llamada: el escritorio YA conoce
+    el usuario de Windows (no hace falta el rodeo del .bat/email para
+    detectarlo), así que no tiene sentido generar un token de un solo
+    uso ni esperar a que el usuario abra un email para completar nada —
+    esa comprobación por email solo aportaba valor cuando el origen era
+    un navegador sin autenticar. Aquí el origen es la propia app interna
+    instalada en el equipo del solicitante.
+
+    La solicitud se crea directamente en estado 'completada' —
+    exactamente el mismo estado en el que queda una solicitud tras pasar
+    por las dos fases web — así que cae en la misma cola de aprobación
+    del panel admin (GET /api/admin/solicitudes-acceso) sin ningún
+    cambio ahí. El admin sigue sin intervenir hasta que la vea y la
+    apruebe con /api/admin/solicitudes-acceso/<id>/aprobar, que es
+    donde se genera y envía la contraseña — no aquí.
+    """
+    import re as _re
+
+    body            = request.get_json(silent=True) or {}
+    nombre          = (body.get("nombre") or "").strip()
+    apellidos       = (body.get("apellidos") or "").strip()
+    email_sol       = (body.get("email") or "").strip()
+    movil_sol       = (body.get("movil") or "").strip()
+    hoteles         = (body.get("hoteles") or body.get("hotel") or "").strip()
+    usuario_windows = (body.get("usuario_windows") or "").strip().upper()
+
+    if not nombre:
+        return jsonify({"error": "El nombre es obligatorio"}), 400
+    if not apellidos:
+        return jsonify({"error": "Los apellidos son obligatorios"}), 400
+    if not email_sol:
+        return jsonify({"error": "El correo electrónico es obligatorio"}), 400
+    if not _re.match(r'^[^\s@]+@[^\s@]+\.[^\s@]+$', email_sol):
+        return jsonify({"error": "El formato del correo electrónico no es válido"}), 400
+    if not movil_sol:
+        return jsonify({"error": "El teléfono móvil de empresa es obligatorio"}), 400
+    if not hoteles:
+        return jsonify({"error": "Debes seleccionar al menos un hotel"}), 400
+    if not usuario_windows:
+        return jsonify({"error": "Falta el usuario de Windows"}), 400
+
+    # Mismo check que la fase 2 web — evita duplicar una cuenta que ya
+    # existe y está activa (o avisar si existe pero desactivada).
+    usuario_existente = query(
+        "SELECT id, activo FROM usuarios WHERE LOWER(username)=LOWER(%s)",
+        (usuario_windows,), one=True
+    )
+    if usuario_existente:
+        if usuario_existente["activo"]:
+            return jsonify({
+                "error": f"El usuario Windows '{usuario_windows}' ya tiene una cuenta activa en el sistema.",
+                "ya_existe": True
+            }), 409
+        else:
+            return jsonify({
+                "error": f"El usuario Windows '{usuario_windows}' existe en el sistema pero está desactivado. "
+                         f"Contacta con el administrador para reactivar tu cuenta.",
+                "ya_existe": True,
+                "desactivado": True
+            }), 409
+
+    nombre_completo = f"{nombre} {apellidos}"
+    ip_cliente = request.remote_addr or ""
+
+    db = get_db()
+    with db.cursor() as cur:
+        cur.execute("""
+            INSERT INTO solicitudes_acceso
+                (nombre, apellidos, email, hoteles, movil, usuario_windows,
+                 estado, ip_solicitante, completado_en)
+            VALUES (%s, %s, %s, %s, %s, %s, 'completada', %s, NOW())
+            RETURNING id
+        """, (nombre, apellidos, email_sol, hoteles, movil_sol, usuario_windows, ip_cliente))
+        sol_id = cur.fetchone()["id"]
+    db.commit()
+
+    app_url   = os.environ.get("APP_URL", "").rstrip("/")
+    url_admin = f"{app_url}/admin/solicitudes#{sol_id}" if app_url else ""
+    asunto    = f"[Alta desde Organizador] {nombre_completo} / {usuario_windows}"
+
+    body_html = f"""
+    <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
+                background:#f9f9f9;border-radius:10px;overflow:hidden;
+                border:1px solid #e0e0e0;">
+      <div style="background:#065f46;padding:24px 28px;">
+        <h2 style="margin:0;color:#6ee7b7;font-size:18px;">
+          ✅ Solicitud de acceso — lista para aprobar
+        </h2>
+        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
+          Recibida desde el Organizador de Escritorio (alta en un solo paso)
+        </p>
+      </div>
+      <div style="padding:24px 28px;">
+        <table border="0" cellpadding="0" cellspacing="0"
+               style="width:100%;font-size:14px;border-collapse:collapse;">
+          <tr style="background:#f0fdf4;border-bottom:1px solid #d1fae5;">
+            <td style="padding:12px 14px;color:#065f46;font-weight:700;width:170px;">Usuario Windows</td>
+            <td style="padding:12px 14px;font-family:monospace;font-size:16px;font-weight:700;color:#0f2044;">
+              {usuario_windows}
+            </td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 14px;color:#888;">Nombre completo</td>
+            <td style="padding:10px 14px;font-weight:600;">{nombre_completo}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 14px;color:#888;">Correo electrónico</td>
+            <td style="padding:10px 14px;"><a href="mailto:{email_sol}" style="color:#0f2044;">{email_sol}</a></td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 14px;color:#888;">Móvil empresa</td>
+            <td style="padding:10px 14px;">{movil_sol}</td>
+          </tr>
+          <tr style="border-bottom:1px solid #eee;">
+            <td style="padding:10px 14px;color:#888;">Hotel(es)</td>
+            <td style="padding:10px 14px;">{hoteles}</td>
+          </tr>
+          <tr>
+            <td style="padding:10px 14px;color:#888;">ID solicitud</td>
+            <td style="padding:10px 14px;font-family:monospace;">#{sol_id}</td>
+          </tr>
+        </table>
+        {f'<div style="margin-top:24px;text-align:center;"><a href="{url_admin}" style="display:inline-block;padding:12px 28px;background:#c9a84c;color:#0f2044;border-radius:7px;text-decoration:none;font-weight:700;font-size:14px;">➜ Ver y aprobar</a></div>' if url_admin else ''}
+      </div>
+      <div style="padding:14px 28px;background:#f0f0f0;font-size:11px;color:#aaa;">
+        Mensaje automático · Control Pedidos Princess Canarias
+      </div>
+    </div>
+    """
+
+    body_text = (
+        f"SOLICITUD DE ACCESO — LISTA PARA APROBAR (desde el Organizador)\n"
+        f"{'='*44}\n"
+        f"Usuario Windows : {usuario_windows}\n"
+        f"Nombre          : {nombre_completo}\n"
+        f"Email           : {email_sol}\n"
+        f"Móvil empresa   : {movil_sol}\n"
+        f"Hotel(es)       : {hoteles}\n"
+        f"ID solicitud    : #{sol_id}\n"
+        f"{'='*44}\n"
+        f"Apruébala desde el panel para crear la cuenta y enviar la contraseña."
+    )
+
+    # Telegram siempre, igual que en las dos fases web.
+    _notify_solicitud_telegram(
+        f"\U00002705 *[Alta desde Organizador] Lista para aprobar*\n\n"
+        f"\U0001F464 *{nombre_completo}*\n"
+        f"\U0001F5A5 Usuario Windows: `{usuario_windows}`\n"
+        f"\U0001F4E7 {email_sol}\n"
+        f"\U0001F3E8 {hoteles}\n"
+        f"\U0001F4CB Solicitud `#{sol_id}` — lista para aprobar."
+        + (f"\n\U0001F517 {url_admin}" if url_admin else "")
+    )
+
+    # Igual que fase 1: se encola (no EmailJS en vivo, porque aquí no hay
+    # navegador del solicitante) — lo despacha el primer admin que abra
+    # la app, mismo mecanismo fiable que ya usa el resto de avisos.
+    destinatarios_admin = _get_solo_admin_emails()
+    if destinatarios_admin:
+        _encolar_email_sistema("solicitud_acceso", destinatarios_admin, asunto, body_html, body_text,
+                                solicitud_acceso_id=sol_id)
+    else:
+        log.warning("[SOL_DIRECTO] Sin emails admin configurados. Sol #%s", sol_id)
+
+    return jsonify({"ok": True, "sol_id": sol_id})
+
+
 # ─── ADMIN: listar solicitudes de acceso ──────────────────────────────────────
 
 @app.route("/api/admin/solicitudes-acceso", methods=["GET"])
