@@ -1,4 +1,4 @@
-# v12.21.0 — 28 julio 2026
+# v12.20.2 — 28 julio 2026
 
 🚀 Solicitud de acceso en un solo paso desde el Organizador de Escritorio
 
