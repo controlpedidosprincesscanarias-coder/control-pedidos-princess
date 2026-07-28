@@ -4713,7 +4713,7 @@ def solicitar_usuario_fase1():
 @app.route("/api/solicitar-usuario/directo", methods=["POST"])
 def solicitar_usuario_directo():
     """
-    Alta en un solo paso (v12.20.0, desde el Organizador de escritorio).
+    Alta en un solo paso (v12.21.0, desde el Organizador de escritorio).
 
     Fusiona fase 1 + fase 2 en una sola llamada: el escritorio YA conoce
     el usuario de Windows (no hace falta el rodeo del .bat/email para

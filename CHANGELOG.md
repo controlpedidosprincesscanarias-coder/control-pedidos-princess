@@ -1,3 +1,54 @@
+# v12.21.0 — 28 julio 2026
+
+🚀 Solicitud de acceso en un solo paso desde el Organizador de Escritorio
+
+**Motivo:** el Organizador ya conoce el usuario de Windows de quien lo
+usa — el rodeo de la web (fase 1 con los datos personales → email con
+token → descarga y ejecución de un `.bat` que detecta `%USERNAME%` →
+fase 2) solo existe porque un navegador no tiene forma de leer esa
+información directamente. Desde la app de escritorio ese rodeo es
+innecesario.
+
+**Nuevo — `POST /api/solicitar-usuario/directo`:** fusiona en una sola
+llamada lo que en la web son fase 1 (`nombre`, `apellidos`, `email`,
+`movil`, `hoteles`) + fase 2 (`usuario_windows`). Valida los 6 campos,
+comprueba que el usuario de Windows no tenga ya cuenta activa (mismo
+chequeo que la fase 2 real; `409` con `ya_existe` si ya existe), e
+inserta la solicitud directamente con `estado='completada'` — sin
+generar token ni depender de que el solicitante reciba y abra un
+email — así que cae en la misma cola de aprobación del panel admin
+(`GET /api/admin/solicitudes-acceso`) sin ningún cambio en ese panel.
+Notifica por Telegram y encola el email a admins vía
+`_encolar_email_sistema` (mismo mecanismo fiable que ya usa la fase 1;
+no depende de EmailJS en un navegador del solicitante, que en este
+caso no existe).
+
+**Sin cambios en el flujo de aprobación:** `/api/admin/solicitudes-acceso/<id>/aprobar`
+sigue creando la cuenta y enviando la contraseña exactamente igual que
+hoy, sea cual sea el origen de la solicitud (web en dos fases, o este
+endpoint nuevo en un solo paso).
+
+**Decisión de seguridad asumida:** se pierde la comprobación de
+"propiedad del email" que aportaba el token intermedio de la fase 2
+web — aceptable aquí porque el origen es la app interna instalada en
+el equipo del solicitante, no un navegador sin autenticar.
+
+**No se ha tocado nada del flujo web existente** (`/api/solicitar-usuario`
+fase 1, `/api/solicitar-usuario/completar-fase2` fase 2, ni el wizard
+del frontend) — el endpoint nuevo es una vía paralela exclusiva para
+el Organizador.
+
+**Contraparte de escritorio:** `main_agenda` v4.12.4
+(`admin_auth.solicitar_alta_directa()` + formulario de "Crear acceso"
+rediseñado con los 5 campos de la fase 1 web).
+
+✅ **Verificado en producción el 28/07/2026** — probado con
+`fetch()` desde consola del navegador (solicitud #13, creada, aprobada,
+cuenta activa con rol y hoteles asignados, email de credenciales y
+email de aviso a admins ambos despachados por EmailJS). Pendiente de
+verificar el lado del Organizador de escritorio en un PC real sin
+cuenta previa.
+
 # v12.20.0 — 27 julio 2026
 
 🔐 Nuevos endpoints de bridge para el login de Admin sin usuario/contraseña fijos (Organizador de Escritorio)
@@ -29,12 +80,9 @@ Usuarios con la contraseña que el usuario le indique por otra vía.
 `/api/bridge/login`, ya usado por el bridge de avisos, se reutiliza tal
 cual para validar la contraseña de un usuario existente.
 
-⚠️ **Pendiente de aplicar en producción:** estos dos endpoints se
-desarrollaron y verificaron (sintaxis, sin errores) sobre una copia de
-trabajo (`control_pedidos_v12_20_0.zip`) durante una sesión de chat con
-Claude centrada en el Organizador de Escritorio — revisar que este mismo
-cambio esté realmente desplegado antes de dar por completado el nuevo
-login de Admin.
+✅ **Desplegado y verificado en producción el 27/07/2026** —
+confirmado con el Organizador de Escritorio funcionando de punta a
+punta contra estos dos endpoints (login online + fallback offline).
 
 # v12.19.1 — 23 julio 2026
 
