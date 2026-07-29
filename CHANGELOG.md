@@ -1,3 +1,28 @@
+# v12.20.6 — 29 julio 2026
+
+🔧 Corrección — identificador reconocible en los popups de "Pedido sin avance"
+
+**Motivo:** el título del popup mostraba `pedido.get("id")` — el id
+interno de la fila en la base de datos, un contador global sin
+relación con lo que se ve en la web — en vez de un número
+reconocible. Investigado a fondo con el usuario tras un reporte de
+aparente fallo de seguridad (alertas cruzadas entre hoteles);
+confirmado con una petición de red real (`GET /api/pedidos/13537`)
+que el pedido era correcto y del hotel correcto — el problema era de
+claridad de interfaz, no de segmentación de datos.
+
+**Cambio:** `_enviar_telegram_compradores()` — `titulo_bridge` ahora
+usa `pedido_num` (SAP) si existe, o si no `norden` (el "Nº" de línea
+del panel), con el id interno solo como último recurso — mismo
+criterio que ya aplicaba el cuerpo del mensaje de Telegram.
+
+**Contraparte de escritorio:** `main_agenda` v4.14.0
+(`pedidos_agenda_bridge.py`, `_aviso_para_popup()`), mismo fix para
+el popup que genera el propio Organizador al consultar la lista de
+alertas activas.
+
+Badge de versión del sidebar actualizado a "V 12.20.6".
+
 # v12.20.4 — 28 julio 2026
 
 🧹 Quitado el bloque de Telegram de la solicitud de acceso (fase 1)
