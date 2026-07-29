@@ -1,3 +1,20 @@
+# v12.20.4 — 28 julio 2026
+
+🧹 Quitado el bloque de Telegram de la solicitud de acceso (fase 1)
+
+**Motivo:** el bloque promocional de Telegram (qué es, enlaces de
+descarga para PC/móvil) que aparecía en `#sol-panel-fase1`, entre el
+teléfono y la selección de hoteles, no aporta nada útil en ese
+momento — quien está pidiendo acceso todavía no tiene cuenta ni sabe
+si se la van a aprobar. Esa información ya vive en el manual de
+usuario, que se entrega una vez la cuenta está creada.
+
+**Cambio:** eliminado el bloque completo (icono, texto explicativo,
+botones "Descargar para PC" / "Descargar para móvil") de
+`templates/index.html`. No se ha tocado nada de la fase 2
+("Verificación PC") ni del resto del wizard — se revisó y no tenía
+ninguna mención a Telegram.
+
 # v12.20.2 — 28 julio 2026
 
 🚀 Solicitud de acceso en un solo paso desde el Organizador de Escritorio
