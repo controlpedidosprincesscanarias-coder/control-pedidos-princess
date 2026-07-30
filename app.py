@@ -2354,14 +2354,26 @@ def _dias_desde_fecha(fecha_str):
     if not fecha_str:
         return None
     try:
-        if hasattr(fecha_str, 'date'):
+        # (2026-07-30) FIX CRÍTICO: antes usaba `_d` y `_dt`, dos nombres que
+        # NUNCA se importaron a nivel de esta función (solo existían como
+        # imports locales dentro de otras funciones sin relación). Cada
+        # llamada lanzaba un NameError por dentro, silenciado por el
+        # `except Exception: return None` de más abajo — así que esta
+        # función devolvía SIEMPRE None, para cualquier pedido, sin
+        # excepción. Como todo el job de alertas (incluida la reclamación
+        # automática) depende de "dias" para decidir si hay que avisar,
+        # esto rompía TODO el envío automático en silencio, no solo la
+        # reclamación. Usa los nombres bien importados a nivel de módulo
+        # (línea ~7: `from datetime import datetime, ..., date as _date`).
+        if isinstance(fecha_str, datetime):
             f = fecha_str.date()
-        elif isinstance(fecha_str, _d):
+        elif isinstance(fecha_str, _date):
             f = fecha_str
         else:
-            f = _dt.strptime(str(fecha_str)[:10], "%Y-%m-%d").date()
+            f = datetime.strptime(str(fecha_str)[:10], "%Y-%m-%d").date()
         return (_date.today() - f).days
-    except Exception:
+    except Exception as exc:
+        log.warning("[_dias_desde_fecha] No se pudo interpretar %r: %s", fecha_str, exc)
         return None
 
 def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:

@@ -1,3 +1,53 @@
+# v12.22.8 — 30 julio 2026
+
+🔥 CAUSA RAÍZ ENCONTRADA — `_dias_desde_fecha()` llevaba tiempo devolviendo `None` siempre, para todo
+
+**El hallazgo:** el log de diagnóstico de v12.22.6 mostró `dias=None`
+en TODOS los pedidos evaluados, pese a que `valor_campo` mostraba
+fechas con buena pinta (`2026-06-05`, etc.). La función tenía:
+
+```python
+elif isinstance(fecha_str, _d):
+    f = fecha_str
+else:
+    f = _dt.strptime(...)
+```
+
+`_d` y `_dt` **nunca existieron en el ámbito de esta función** — solo
+como imports locales dentro de otras funciones sin ninguna relación.
+Cada llamada lanzaba un `NameError` por dentro, silenciado por un
+`except Exception: return None` genérico. Resultado: `_dias_desde_fecha()`
+devolvía `None` siempre, para cualquier pedido, sin ninguna excepción.
+
+**Alcance real del bug — bastante más amplio de lo que parecía:**
+esta función se usa en 3 sitios, los tres afectados por igual:
+1. El job diario de alertas (`_job_alertas_diarias_inner`) — origen
+   de toda esta investigación de los últimos días.
+2. La reclamación automática al proveedor (dependía del `dias`
+   calculado aquí).
+3. **La alerta inmediata al cambiar el estado de un pedido** — esta
+   no se había mencionado hasta ahora, pero estaba igual de rota.
+
+Es decir: el sistema de "días sin avance" llevaba, con toda
+probabilidad, tiempo sin disparar NADA nuevo — ni alertas internas,
+ni reclamaciones — más allá de lo que ya estuviera registrado de
+antes. Las notificaciones antiguas que se veían en el panel
+("Notificado hace X días") eran de antes de que este bug entrara en
+el código, no evidencia de que siguiera funcionando.
+
+**Corrección:** usa los nombres correctamente importados a nivel de
+módulo (`datetime` y `date as _date`, línea ~7 del archivo) en vez de
+los inexistentes `_d`/`_dt`. Además, el `except` ahora registra la
+excepción real con `log.warning()` en vez de tragársela en silencio —
+para que un fallo de este tipo nunca vuelva a pasar desapercibido
+tanto tiempo.
+
+**Con este fix, el job de las 07-16h debería empezar a generar
+alertas y reclamaciones normalmente** desde el próximo ciclo — sin
+necesidad de ningún otro cambio.
+
+Badge de versión del sidebar actualizado a "V 12.22.8".
+
 # v12.22.6 — 30 julio 2026
 
 🔍 Solo diagnóstico — el job termina en 336ms con 0/0, la sospecha ahora es que `alertas_raw` viene vacío
