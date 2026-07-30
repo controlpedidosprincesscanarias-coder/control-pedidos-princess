@@ -1932,8 +1932,21 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
     texto = "\n".join(lineas)
 
     # ── Construir título corto para el popup de agenda ────────────────────────
+    # (2026-07-29) Antes usaba pedido.get("id") — el id interno de la base de
+    # datos, que no tiene relación visible con el "Nº" (norden) ni con el
+    # "Pedido DALI/SAP" que se ven en el panel. Un comprador no tiene forma
+    # de saber a qué fila corresponde "Pedido #13537" sin ir a mirarlo en el
+    # navegador. Se usa el mismo criterio que ya tenía el cuerpo del mensaje
+    # de Telegram: SAP si existe, si no el nº de línea — el id interno solo
+    # como último recurso si no hay ninguno de los dos.
     pid_pedido = pedido.get("id")
-    titulo_bridge = f"{emoji} [{nivel_txt}] Pedido #{pid_pedido} · {hotel_cod}"
+    if pedido_sap:
+        identificador_bridge = f"SAP {pedido_sap}"
+    elif norden:
+        identificador_bridge = f"Nº{norden}"
+    else:
+        identificador_bridge = f"#{pid_pedido}"
+    titulo_bridge = f"{emoji} [{nivel_txt}] Pedido {identificador_bridge} · {hotel_cod}"
 
     resultados = []
     for dest in destinatarios_tg:
@@ -2694,6 +2707,32 @@ def _job_alertas_diarias_inner():
             db.commit()
         except Exception as exc:
             log.error("[SCHEDULER] Error guardando log pedido %s: %s", p["id"], exc)
+
+        # ── 2026-07-29: reclamación automática al proveedor, también en el
+        # camino ESTÁNDAR (pedido sin plazo_entrega_dias informado) ───────────
+        # Antes solo estaba conectada al camino con plazo — así que, en la
+        # práctica, nunca se disparaba: la inmensa mayoría de los pedidos
+        # urgentes no tienen ese campo relleno y caen aquí. El panel
+        # "Plazo de entrega proveedor" (Config Alertas) ajusta los umbrales
+        # SOLO cuando el pedido trae un plazo propio informado por el
+        # proveedor — si no lo trae, deben cumplirse igualmente los plazos
+        # generales del panel, que es justo lo que ya calcula `cfg`/`nivel`
+        # más arriba en este mismo camino.
+        cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
+        if (cfg_reclamacion_auto and nivel == "urgente"
+                and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
+            try:
+                ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
+                if ok_reclamacion:
+                    db = get_db()
+                    _log_whatsapp(
+                        db, p["id"], "reclamacion_proveedor_auto", "sistema",
+                        f"Reclamación automática encolada al proveedor — {dias}d sin respuesta",
+                        True, None,
+                    )
+                    db.commit()
+            except Exception as exc:
+                log.error("[SCHEDULER] Error encolando reclamación automática pedido %s: %s", p["id"], exc)
 
         enviados += 1
 

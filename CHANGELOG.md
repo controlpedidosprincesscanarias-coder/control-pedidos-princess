@@ -1,3 +1,39 @@
+# v12.20.8 — 30 julio 2026
+
+🔧 Corrección — reclamación automática al proveedor no se disparaba nunca en la práctica
+
+**Motivo:** el usuario activó la casilla "Enviar reclamación
+automática por email al proveedor cuando vence el plazo" y, tras
+varios días con pedidos urgentes de sobra en el panel de Alertas, la
+tabla `emails_log` seguía sin ninguna fila con
+`tipo='reclamacion_proveedor_auto'`. Investigado con el usuario:
+`_job_alertas_diarias_inner()` clasifica los pedidos en dos caminos —
+(1) **con plazo**: el pedido tiene `plazo_entrega_dias` informado por
+el proveedor, usa `_alertas_plazo_entrega()`; (2) **estándar**: sin
+ese campo, usa los umbrales generales de Config Alertas
+(`_UMBRALES_ALERTAS`). La reclamación automática solo estaba
+conectada al camino (1) — y la inmensa mayoría de los pedidos
+urgentes reales no tienen `plazo_entrega_dias` relleno, así que caen
+siempre en el camino (2), donde la reclamación nunca se llamaba.
+
+**Aclaración del usuario, confirmada como diseño correcto:** el panel
+"Plazo de entrega proveedor" ajusta los umbrales SOLO cuando el
+pedido trae un plazo propio informado por el proveedor; si no lo
+trae, deben cumplirse igualmente los plazos generales del panel — es
+decir, la reclamación automática debía aplicar en ambos caminos, no
+solo en el (1).
+
+**Cambio:** añadido el mismo bloque de reclamación automática
+(idéntico gating: `activar_reclamacion_proveedor_auto` activo,
+`nivel == "urgente"`, no notificado ya hoy) también al camino (2),
+justo después de `_enviar_telegram_compradores()`. La seguridad de
+estado (`ENVIADO AL PROVEEDOR` / `ENTREGA PARCIAL`) ya la comprueba
+internamente `_encolar_reclamacion_proveedor_auto()`, así que llamarla
+sin filtrar por estado en el camino (2) es seguro — para el resto de
+estados (`PENDIENTE COTIZACIÓN`, etc.) simplemente no hace nada.
+
+Badge de versión del sidebar actualizado a "V 12.20.8".
+
 # v12.20.6 — 29 julio 2026
 
 🔧 Corrección — identificador reconocible en los popups de "Pedido sin avance"
