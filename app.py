@@ -3980,12 +3980,25 @@ def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> 
     compradores = _get_compradores_cc(pedido.get("hotel_codigo", ""))
     cc_emails = [c["email"] for c in compradores if c.get("email")]
 
+    # (2026-07-30) FIX: antes se pasaba `proveedor_emails` (una lista) como
+    # `destinatarios_email` a `_encolar_email_sistema()`, que encola UNA fila
+    # — y por tanto UN envío independiente — POR CADA elemento de esa lista.
+    # Si un proveedor tenía 2 o 3 contactos marcados "principal", eso
+    # generaba 2 o 3 reclamaciones separadas para el mismo pedido en la
+    # misma tanda (reportado por el usuario: "el 40130 3 veces..."). Se
+    # quiere un único envío, con todos los contactos principales juntos en
+    # el "Para:" — mismo patrón ya usado en el aviso al cambiar de estado
+    # (`_destino_proveedor = ", ".join(_proveedor_emails)`, más arriba en
+    # este archivo): EmailJS sí admite varias direcciones separadas por
+    # comas en un solo campo "to_email".
+    destino_proveedor = ", ".join(proveedor_emails)
+
     _encolar_email_sistema(
-        "reclamacion_proveedor_auto", proveedor_emails, subject, body_html,
+        "reclamacion_proveedor_auto", [destino_proveedor], subject, body_html,
         cc_emails=cc_emails, pedido_id=pedido.get("id"),
     )
-    log.info("[RECLAMACION-AUTO] Pedido %s — reclamación encolada a %s (cc: %s)",
-              pedido.get("id"), proveedor_emails, cc_emails)
+    log.info("[RECLAMACION-AUTO] Pedido %s — reclamación encolada (1 envío) a %s (cc: %s)",
+              pedido.get("id"), destino_proveedor, cc_emails)
     return True
 
 

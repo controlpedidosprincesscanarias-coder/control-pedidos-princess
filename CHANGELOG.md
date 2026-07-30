@@ -1,3 +1,28 @@
+# v12.23.4 — 30 julio 2026
+
+🔧 Corrección — un pedido recibía tantas reclamaciones como contactos "principal" tuviera el proveedor
+
+**Reportado:** en la misma tanda, el pedido 23979 llegó 2 veces, el
+40130 3 veces, el 15147 2 veces, el 28090 1 vez... Confirmado que no
+eran destinatarios distintos: coincidía exactamente con cuántos
+contactos tiene cada proveedor marcados como "principal" (estrella
+dorada) en su ficha.
+
+**Causa:** `_encolar_reclamacion_proveedor_auto()` pasaba
+`proveedor_emails` (una lista) como `destinatarios_email` a
+`_encolar_email_sistema()` — que encola **una fila, y por tanto un
+envío independiente, por cada elemento de esa lista**. Con 2-3
+contactos "principal", salían 2-3 reclamaciones separadas del mismo
+pedido en la misma pasada del job.
+
+**Corrección:** un único envío, con todos los contactos principales
+juntos en el "Para:" (`", ".join(proveedor_emails)`) — mismo patrón
+que ya usan correctamente los otros dos sitios del código que mandan
+email a proveedor (el aviso al cambiar de estado y el "Re-notificar"
+manual), que nunca tuvieron este problema.
+
+Badge de versión del sidebar actualizado a "V 12.23.4".
+
 # v12.23.2 — 30 julio 2026
 
 🔧 La reclamación estándar reclamaba TODOS los días — ahora respeta el ciclo de Config Alertas
