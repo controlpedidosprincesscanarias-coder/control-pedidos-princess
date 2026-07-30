@@ -2586,6 +2586,7 @@ def _job_alertas_diarias():
 
 def _job_alertas_diarias_inner():
     log.info("▶ [SCHEDULER] Inicio job alertas diarias — %s", _date.today())
+    log.info("BUILD-MARKER v12.22.2 reclamacion-fix activo")
     try:
         alertas_raw = rows_to_list(query(
             _JOB_PEDIDO_SQL + """
@@ -2692,10 +2693,17 @@ def _job_alertas_diarias_inner():
         # propia deduplicación diaria (_ya_notificado_hoy con su propio
         # tipo), antes de llegar a esa lógica de ciclo interno.
         cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
+        if nivel == "urgente":
+            log.info(
+                "RECLAMACION-DEBUG pedido=%s estado=%s dias=%s activo=%s ya_notif_reclamacion_hoy=%s",
+                p["id"], p.get("estado"), dias, cfg_reclamacion_auto,
+                _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto"),
+            )
         if (cfg_reclamacion_auto and nivel == "urgente"
                 and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
             try:
                 ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
+                log.info("RECLAMACION-DEBUG pedido=%s resultado_encolar=%s", p["id"], ok_reclamacion)
                 if ok_reclamacion:
                     db = get_db()
                     _log_whatsapp(
@@ -3879,6 +3887,8 @@ def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> 
     email de proveedor, sin comprador con email para la firma, etc.).
     """
     if pedido.get("estado") not in ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL"):
+        log.info("RECLAMACION-DEBUG pedido=%s omitido: estado=%s no es ENVIADO AL PROVEEDOR/ENTREGA PARCIAL",
+                  pedido.get("id"), pedido.get("estado"))
         return False
 
     # (2026-07-30) Si un comprador ya mandó una reclamación manual al
@@ -3890,6 +3900,8 @@ def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> 
 
     subject, body_html, es_proveedor = _build_alerta_email(pedido, dias, nivel)
     if not subject or not es_proveedor:
+        log.info("RECLAMACION-DEBUG pedido=%s omitido: subject=%s es_proveedor=%s (probable falta de comprador con email en el hotel, o estado no soportado por _build_alerta_email)",
+                  pedido.get("id"), bool(subject), es_proveedor)
         return False
 
     proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"))

@@ -1,3 +1,32 @@
+# v12.22.4 — 30 julio 2026
+
+🔍 Solo diagnóstico — logging detallado para localizar por qué la reclamación seguía sin dispararse
+
+**Contexto:** tras v12.22.2, el pedido #13549 (Fuerteventura, PILSA/GARAU,
+95 días, sin plazo informado, `ENVIADO AL PROVEEDOR`, `URGENTE`) seguía
+sin generar ninguna reclamación pasada más de una hora — y proveedor y
+comprador SÍ tienen email registrado (descartados los dos motivos de
+omisión silenciosa más obvios). No hay Shell disponible en el plan
+Free de Render para inspeccionar el código desplegado directamente.
+
+**Cambio (sin tocar el comportamiento, solo visibilidad):**
+- Línea `BUILD-MARKER v12.22.2 reclamacion-fix activo` al inicio de
+  cada ejecución del job — confirma en los logs que el código
+  desplegado es el correcto, sin necesitar Shell.
+- `RECLAMACION-DEBUG` con `pedido`, `estado`, `dias`, si la casilla
+  está activa, y si ya se notificó la reclamación hoy — para CADA
+  pedido urgente evaluado por el camino estándar.
+- `RECLAMACION-DEBUG pedido=X resultado_encolar=True/False` justo
+  después de intentar encolarla.
+- Dentro de `_encolar_reclamacion_proveedor_auto()`: log explícito en
+  los dos primeros puntos de retorno silencioso (estado no válido /
+  `_build_alerta_email` sin resultado o `es_proveedor=False`) — antes
+  solo el de "proveedor sin email" quedaba registrado.
+
+**Cómo leerlo:** en Render → Logs, buscar `RECLAMACION-DEBUG` o
+`BUILD-MARKER`, en el minuto siguiente a un despliegue o dentro del
+rango horario 07-16h (el job solo corre en ese tramo).
+
 # v12.22.2 — 30 julio 2026
 
 🔧 Corrección más profunda — la reclamación seguía sin dispararse pese al fix de v12.20.8
