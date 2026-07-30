@@ -3,7 +3,8 @@ Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase)
 Despliegue: Render.com  |  BD: Supabase  |  Email: EmailJS (frontend)
 """
 
-import os, json, logging, secrets, atexit, hashlib
+import os, json, logging, secrets, atexit, hashlib, re
+from html import unescape as _html_unescape
 from datetime import datetime, timedelta, timezone, date as _date
 from functools import wraps
 
@@ -1647,6 +1648,34 @@ def _get_solo_admin_emails() -> list:
     return _destinatarios_evento_emails("solicitud_acceso")
 
 
+def _html_a_texto_plano(html: str) -> str:
+    """
+    (2026-07-30) Conversión básica de HTML a texto plano — red de
+    seguridad para cuando se encola un email de sistema sin una versión
+    de texto explícita.
+
+    Motivo: el frontend (EmailJS) arma el mensaje con
+    `message: p.cuerpo_text || p.cuerpo_html || ''` — si `cuerpo_text`
+    queda NULL (como pasaba con las reclamaciones automáticas al
+    proveedor, que solo generaban `cuerpo_html`), EmailJS recibe el HTML
+    crudo como si fuera el cuerpo en texto plano, y la plantilla lo
+    manda tal cual — el destinatario ve literalmente las etiquetas
+    `<div style="...">` en vez de un email legible. Con este fallback,
+    aunque un caller se olvide de pasar `cuerpo_text` explícito (como
+    pasó aquí), `_encolar_email_sistema()` genera uno razonable solo.
+    """
+    if not html:
+        return ""
+    texto = re.sub(r'<br\s*/?>', '\n', html, flags=re.IGNORECASE)
+    texto = re.sub(r'</p>|</div>|</h[1-6]>|</tr>|</li>', '\n', texto, flags=re.IGNORECASE)
+    texto = re.sub(r'<[^>]+>', '', texto)
+    texto = _html_unescape(texto)
+    texto = re.sub(r'[ \t]+', ' ', texto)
+    texto = re.sub(r'\n[ \t]+', '\n', texto)
+    texto = re.sub(r'\n{3,}', '\n\n', texto)
+    return texto.strip()
+
+
 def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
                            asunto: str, cuerpo_html: str = None, cuerpo_text: str = None,
                            solicitud_acceso_id: int = None,
@@ -1671,6 +1700,8 @@ def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
     """
     if not destinatarios_email:
         return
+    if not cuerpo_text and cuerpo_html:
+        cuerpo_text = _html_a_texto_plano(cuerpo_html)
     cc_str = ",".join([e for e in (cc_emails or []) if e]) or None
     try:
         db = get_db()

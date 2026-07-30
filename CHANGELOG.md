@@ -1,3 +1,34 @@
+# v12.23.0 — 30 julio 2026
+
+🔧 Corrección — la reclamación llegaba con el HTML crudo como cuerpo del email
+
+**El hallazgo:** aunque el email de reclamación por fin se disparó
+(v12.22.8 arregló que se generara), el usuario reportó que el
+proveedor lo recibió con etiquetas HTML literales
+(`<div style="font-family:Arial...`) en vez de un email legible.
+
+**Causa:** el frontend arma el envío por EmailJS así:
+```javascript
+message: p.cuerpo_text || p.cuerpo_html || '',
+```
+`_encolar_reclamacion_proveedor_auto()` era la única llamada a
+`_encolar_email_sistema()` de las 5 que hay en el código que **no**
+pasaba `cuerpo_text` (versión en texto plano) — solo `cuerpo_html`.
+Con `cuerpo_text` vacío, la cadena `||` cae al HTML crudo, y EmailJS
+lo manda tal cual como si fuera texto plano — de ahí las etiquetas
+visibles.
+
+**Corrección:** añadida `_html_a_texto_plano()`, un conversor básico
+de HTML a texto (saltos de línea en `<br>`/`</p>`/`</div>`, quita el
+resto de etiquetas, desescapa entidades). Se aplica dentro de
+`_encolar_email_sistema()` — si a alguna llamada (esta u otra futura)
+se le olvida pasar `cuerpo_text` explícito, ahora se genera solo a
+partir del HTML, en vez de dejarlo en blanco. Revisadas las otras 4
+llamadas a esta función — todas ya pasaban su propia versión en texto,
+así que el problema era exclusivo de la reclamación.
+
+Badge de versión del sidebar actualizado a "V 12.23.0".
+
 # v12.22.8 — 30 julio 2026
 
 🔥 CAUSA RAÍZ ENCONTRADA — `_dias_desde_fecha()` llevaba tiempo devolviendo `None` siempre, para todo
