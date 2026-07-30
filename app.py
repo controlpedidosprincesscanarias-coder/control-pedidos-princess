@@ -2383,6 +2383,27 @@ def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
     except Exception:
         return False
 
+
+def _ya_reclamado_hoy_manual(pedido_id: int) -> bool:
+    """
+    (2026-07-30) Devuelve True si ya se envió una alerta MANUAL al proveedor
+    hoy (botón "Re-notificar" del panel, tipo='alerta_proveedor' en
+    emails_log — una tabla distinta de whatsapp_log, que es la que consulta
+    _ya_notificado_hoy). Se usa para que la reclamación AUTOMÁTICA no
+    duplique una que un comprador ya mandó a mano el mismo día.
+    """
+    try:
+        row = query(
+            """SELECT COUNT(*) as n FROM emails_log
+               WHERE pedido_id=%s AND tipo='alerta_proveedor'
+                 AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
+                     (NOW() AT TIME ZONE 'Atlantic/Canary')::date""",
+            (pedido_id,), one=True
+        )
+        return (row["n"] if row else 0) > 0
+    except Exception:
+        return False
+
 # SQL inline para el job (no depende de PEDIDO_SELECT_ALERTA que se define más abajo)
 _JOB_PEDIDO_SQL = """
     SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
@@ -3853,6 +3874,13 @@ def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> 
     email de proveedor, sin comprador con email para la firma, etc.).
     """
     if pedido.get("estado") not in ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL"):
+        return False
+
+    # (2026-07-30) Si un comprador ya mandó una reclamación manual al
+    # proveedor hoy (botón "Re-notificar"), no duplicamos con la automática.
+    if _ya_reclamado_hoy_manual(pedido.get("id")):
+        log.info("[RECLAMACION-AUTO] Pedido %s: ya se envió una reclamación manual hoy — se omite la automática",
+                  pedido.get("id"))
         return False
 
     subject, body_html, es_proveedor = _build_alerta_email(pedido, dias, nivel)
@@ -6920,8 +6948,28 @@ def _resumen_ultima_notificacion(p: dict) -> dict:
     ultima_email = p.get("ultima_notif_email")
     ultima_tg    = p.get("ultima_notif_telegram")
     candidatas   = [v for v in (ultima_email, ultima_tg) if v]
+
+    # ── Reclamación automática al proveedor — indicador aparte (2026-07-30) ──
+    # Se muestra separado del resto (no mezclado en "canales") para que se
+    # vea a simple vista si YA se reclamó automáticamente hoy o hace poco,
+    # y así evitar que alguien mande una reclamación manual duplicando una
+    # que el sistema ya envió solo.
+    reclamacion_auto = None
+    ultima_reclamacion = p.get("ultima_reclamacion_auto")
+    if ultima_reclamacion:
+        try:
+            fecha_ref_r = ultima_reclamacion.date() if hasattr(ultima_reclamacion, "date") else ultima_reclamacion
+            dias_r = (_date_alerta.today() - fecha_ref_r).days
+        except Exception:
+            dias_r = None
+        try:
+            fecha_iso_r = ultima_reclamacion.isoformat()
+        except Exception:
+            fecha_iso_r = str(ultima_reclamacion)
+        reclamacion_auto = {"fecha": fecha_iso_r, "dias": dias_r}
+
     if not candidatas:
-        return {"fecha": None, "canales": [], "dias": None}
+        return {"fecha": None, "canales": [], "dias": None, "reclamacion_auto": reclamacion_auto}
 
     fecha_max = max(candidatas)
     canales = []
@@ -6941,7 +6989,7 @@ def _resumen_ultima_notificacion(p: dict) -> dict:
     except Exception:
         fecha_iso = str(fecha_max)
 
-    return {"fecha": fecha_iso, "canales": canales, "dias": dias}
+    return {"fecha": fecha_iso, "canales": canales, "dias": dias, "reclamacion_auto": reclamacion_auto}
 
 
 def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
@@ -7018,7 +7066,10 @@ PEDIDO_SELECT_STATS = """
                 AND el.tipo IN ('alerta_proveedor','alerta_interno')) AS ultima_notif_email,
            (SELECT MAX(wl.creado_en) FROM whatsapp_log wl
               WHERE wl.pedido_id = p.id
-                AND wl.tipo = 'telegram_auto' AND wl.enviado = 1) AS ultima_notif_telegram
+                AND wl.tipo = 'telegram_auto' AND wl.enviado = 1) AS ultima_notif_telegram,
+           (SELECT MAX(wl2.creado_en) FROM whatsapp_log wl2
+              WHERE wl2.pedido_id = p.id
+                AND wl2.tipo = 'reclamacion_proveedor_auto' AND wl2.enviado = 1) AS ultima_reclamacion_auto
     FROM pedidos p
     LEFT JOIN hoteles       h  ON p.hotel_id        = h.id
     LEFT JOIN departamentos d  ON p.departamento_id = d.id

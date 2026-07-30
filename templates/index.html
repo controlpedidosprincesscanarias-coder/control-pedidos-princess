@@ -1200,7 +1200,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.20.8
+          V 12.22.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5123,7 +5123,7 @@ function _renderAlertasTabla(lista) {
       : '';
 
     // ── Última notificación enviada para esta alerta (email y/o Telegram) ────
-    const notif = p.ultima_notificacion || { fecha: null, canales: [], dias: null };
+    const notif = p.ultima_notificacion || { fecha: null, canales: [], dias: null, reclamacion_auto: null };
     let notifLabel;
     if (notif.fecha) {
       const canalTxt = notif.canales.join(' + ') || '—';
@@ -5131,6 +5131,17 @@ function _renderAlertasTabla(lista) {
       notifLabel = `<span style="font-size:11px;color:#1a7a1a;font-weight:600" title="Última notificación: ${fmtDateTime(notif.fecha)} · Canal: ${canalTxt}">✅ Notificado ${diasTxt}</span><br><span style="font-size:10px;color:#888">${canalTxt} · ${fmtDate(notif.fecha)}</span>`;
     } else {
       notifLabel = `<span style="font-size:11px;color:#b00020;font-weight:600">⛔ Sin notificar</span>`;
+    }
+    // (2026-07-30) Indicador aparte de la reclamación AUTOMÁTICA al
+    // proveedor — a propósito distinto del resto, para que se vea a
+    // simple vista antes de mandar una manual y no duplicarla.
+    if (notif.reclamacion_auto && notif.reclamacion_auto.fecha) {
+      const rDias = notif.reclamacion_auto.dias;
+      const rDiasTxt = rDias === 0 ? 'hoy' : (rDias === 1 ? 'hace 1 día' : `hace ${rDias} días`);
+      notifLabel += `<br><span style="font-size:11px;color:#8a4b00;font-weight:700;background:#fff3e0;
+                     padding:1px 6px;border-radius:4px;display:inline-block;margin-top:2px"
+                     title="Reclamación automática enviada al proveedor: ${fmtDateTime(notif.reclamacion_auto.fecha)}">
+                     🤖 Reclamado auto ${rDiasTxt}</span>`;
     }
     const btnNotifLabel = notif.fecha ? '🔁 Re-notificar' : '✉ Notificar';
     const btnNotifTitle = notif.fecha
@@ -8497,10 +8508,13 @@ async function imprimirAlertas(codigosSeleccionados) {
     var fechaRef   = p.estado === 'PENDIENTE COTIZACI\u00d3N' ? p.fecha_solicitud : p.fecha_tramitacion;
     var fmtFecha   = fechaRef ? new Date(fechaRef).toLocaleDateString('es-ES') : '\u2014';
     var estadoColor= estadoColors[p.estado] || '#495057';
-    var notif      = p.ultima_notificacion || { fecha: null, canales: [], dias: null };
+    var notif      = p.ultima_notificacion || { fecha: null, canales: [], dias: null, reclamacion_auto: null };
     var notifTxt   = notif.fecha
       ? ('\u2705 ' + new Date(notif.fecha).toLocaleDateString('es-ES') + ' (' + notif.canales.join(' + ') + ')')
       : '\u26D4 Sin notificar';
+    if (notif.reclamacion_auto && notif.reclamacion_auto.fecha) {
+      notifTxt += ' | \uD83E\uDD16 Reclamado auto ' + new Date(notif.reclamacion_auto.fecha).toLocaleDateString('es-ES');
+    }
     var notifColor = notif.fecha ? '#1a7a1a' : '#b00020';
     return '<tr style="background:' + bgRow + '">' +
       '<td style="padding:7px 8px;font-size:11px;font-weight:700;border-bottom:1px solid #eee">' + (p.norden || '\u2014') + '</td>' +

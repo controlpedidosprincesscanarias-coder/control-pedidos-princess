@@ -1,3 +1,47 @@
+# v12.22.0 — 30 julio 2026
+
+🚀 Indicador visual de reclamación automática + evita solapar manual y automática el mismo día
+
+**Contexto:** tras corregir en v12.20.8 que la reclamación automática
+nunca se disparaba fuera del camino "con plazo", el usuario preguntó
+si había algún punto visual para ver si ya se había reclamado
+automáticamente — para no mandar una reclamación manual duplicando
+una que el sistema ya envió solo. **También se detectó de paso** que
+la consulta de verificación usada hasta ahora
+(`emails_log WHERE tipo='reclamacion_proveedor_auto'`) nunca iba a
+devolver filas: la reclamación automática registra su envío en
+`whatsapp_log` (vía `_log_whatsapp`), no en `emails_log` — esa tabla
+solo la usa el envío MANUAL (`alerta_proveedor`). Consulta correcta
+para comprobar reclamaciones automáticas:
+```sql
+SELECT creado_en, pedido_id, destinatario, mensaje
+FROM whatsapp_log
+WHERE tipo = 'reclamacion_proveedor_auto' AND enviado = 1
+ORDER BY creado_en DESC LIMIT 20;
+```
+
+**Cambios:**
+1. **Indicador visual** — nuevo campo `reclamacion_auto` en el resumen
+   de última notificación de cada alerta (`_resumen_ultima_notificacion`,
+   alimentado por una nueva subconsulta a `whatsapp_log` en
+   `PEDIDO_SELECT_STATS`). En el panel de Alertas aparece un badge
+   naranja "🤖 Reclamado auto hace Xd" debajo de la notificación
+   normal, sin mezclarse con ella. Incluido también en la vista de
+   impresión.
+2. **Evitar solapamiento manual/automático** — nueva función
+   `_ya_reclamado_hoy_manual()` (consulta `emails_log` por
+   `tipo='alerta_proveedor'` hoy) usada dentro de
+   `_encolar_reclamacion_proveedor_auto()`: si un comprador ya mandó
+   una reclamación manual hoy (botón "Re-notificar"), la automática se
+   omite ese día — centralizado en la función compartida, así que
+   cubre los dos caminos (con plazo y estándar) sin tocar cada uno.
+   No se bloqueó la dirección contraria (mandar manual después de la
+   automática) — el indicador visual ya avisa antes de hacerlo, y
+   forzar un bloqueo ahí quitaría margen a un admin que quiera
+   insistir a propósito.
+
+Badge de versión del sidebar actualizado a "V 12.22.0".
+
 # v12.20.8 — 30 julio 2026
 
 🔧 Corrección — reclamación automática al proveedor no se disparaba nunca en la práctica
