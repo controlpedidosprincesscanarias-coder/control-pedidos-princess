@@ -1,3 +1,27 @@
+# v12.22.6 — 30 julio 2026
+
+🔍 Solo diagnóstico — el job termina en 336ms con 0/0, la sospecha ahora es que `alertas_raw` viene vacío
+
+**Hallazgo:** en la ejecución de las 11:00, el job completó en 336ms
+con "0 alertas enviadas, 0 omitidas" — demasiado rápido para estar
+recorriendo las 33+ alertas urgentes reales que muestra el panel. Como
+`omitidos` también quedó en 0 (y ese contador SÍ se incrementa en el
+primer gate del camino estándar que casi todos los pedidos deberían
+tocar), lo más probable es que la propia consulta SQL del job
+(`alertas_raw`), que es DISTINTA de la que usa el panel de Alertas,
+esté devolviendo 0 filas.
+
+**Cambio (sigue sin tocar comportamiento):**
+- `RECLAMACION-DEBUG alertas_raw=N filas` justo tras la consulta —
+  confirma de una vez si el problema está ahí.
+- Traza por cada pedido al entrar en el camino estándar: estado,
+  si hay configuración de umbrales para ese estado, el campo de
+  fecha de referencia usado, su valor, los días calculados y el
+  umbral de "primera alerta" — para ver exactamente en qué escalón
+  se cae un pedido si `alertas_raw` sí trae filas.
+
+Badge de versión del sidebar actualizado a "V 12.22.6".
+
 # v12.22.4 — 30 julio 2026
 
 🔍 Solo diagnóstico — logging detallado para localizar por qué la reclamación seguía sin dispararse

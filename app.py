@@ -2607,6 +2607,8 @@ def _job_alertas_diarias_inner():
         log.error("[SCHEDULER] Error consultando pedidos: %s", exc)
         return
 
+    log.info("RECLAMACION-DEBUG alertas_raw=%d filas devueltas por la consulta del job", len(alertas_raw))
+
     enviados = 0
     omitidos = 0
     cfg_activar_plazo = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
@@ -2670,11 +2672,14 @@ def _job_alertas_diarias_inner():
         # ── Lógica estándar (sin plazo informado o feature desactivada) ──────────
 
         cfg = _build_umbrales().get(p["estado"])
+        log.info("RECLAMACION-DEBUG pedido=%s estado=%s cfg_encontrado=%s", p["id"], p.get("estado"), bool(cfg))
         if not cfg:
             continue
 
         fecha_ref_campo = cfg.get("fecha_ref", "fecha_tramitacion")
         dias = _dias_desde_fecha(p.get(fecha_ref_campo))
+        log.info("RECLAMACION-DEBUG pedido=%s fecha_ref_campo=%s valor_campo=%s dias=%s umbral_primera=%s",
+                  p["id"], fecha_ref_campo, p.get(fecha_ref_campo), dias, cfg.get("primera"))
         if dias is None or dias < cfg["primera"]:
             continue
 
