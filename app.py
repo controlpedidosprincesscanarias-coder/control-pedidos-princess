@@ -2619,6 +2619,26 @@ def _job_alertas_diarias_inner():
             motivo = info_plazo["motivo"]
             dias   = _dias_desde_fecha(p.get("fecha_tramitacion")) or 0
 
+            # ── 2026-07-30: reclamación automática, ANTES del gate de
+            # "ya notificado hoy" de Telegram (misma razón que en el camino
+            # estándar, un poco más abajo) — con su propia deduplicación
+            # diaria, independiente de si el aviso interno ya salió hoy.
+            cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
+            if (cfg_reclamacion_auto and nivel == "urgente"
+                    and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
+                try:
+                    ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
+                    if ok_reclamacion:
+                        db = get_db()
+                        _log_whatsapp(
+                            db, p["id"], "reclamacion_proveedor_auto", "sistema",
+                            f"Reclamación automática encolada al proveedor — {motivo}",
+                            True, None,
+                        )
+                        db.commit()
+                except Exception as exc:
+                    log.error("[SCHEDULER] Error encolando reclamación automática pedido %s: %s", p["id"], exc)
+
             if _ya_notificado_hoy(p["id"], "telegram_auto"):
                 omitidos += 1
                 continue
@@ -2644,23 +2664,6 @@ def _job_alertas_diarias_inner():
             except Exception as exc:
                 log.error("[SCHEDULER] Error guardando log (plazo) pedido %s: %s", p["id"], exc)
 
-            # ── v12.19.0: reclamación automática al proveedor (plazo vencido) ──
-            cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
-            if (cfg_reclamacion_auto and nivel == "urgente"
-                    and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
-                try:
-                    ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
-                    if ok_reclamacion:
-                        db = get_db()
-                        _log_whatsapp(
-                            db, p["id"], "reclamacion_proveedor_auto", "sistema",
-                            f"Reclamación automática encolada al proveedor — {motivo}",
-                            True, None,
-                        )
-                        db.commit()
-                except Exception as exc:
-                    log.error("[SCHEDULER] Error encolando reclamación automática pedido %s: %s", p["id"], exc)
-
             enviados += 1
             continue
         # ── Lógica estándar (sin plazo informado o feature desactivada) ──────────
@@ -2675,6 +2678,34 @@ def _job_alertas_diarias_inner():
             continue
 
         nivel = "urgente" if (cfg["urgente"] and dias >= cfg["urgente"]) else "aviso"
+
+        # ── 2026-07-30: reclamación automática al proveedor — INDEPENDIENTE
+        # del ciclo de reenvío de Telegram de más abajo ─────────────────────
+        # Antes este bloque estaba DESPUÉS de la lógica de "debe_enviar"
+        # (primer aviso / umbral crítico / ciclo de N días), así que si el
+        # ciclo de Telegram interno decía "todavía no toca reenviar" (p. ej.
+        # se notificó hace 1 día y el ciclo es de 2), el `continue` de esa
+        # rama saltaba TODO lo de después, incluida la reclamación — aunque
+        # llevara semanas sin dispararse nunca por esa razón. La reclamación
+        # al proveedor es una decisión aparte de "hay que darle la turra otra
+        # vez al comprador por Telegram", así que se evalúa aquí, con su
+        # propia deduplicación diaria (_ya_notificado_hoy con su propio
+        # tipo), antes de llegar a esa lógica de ciclo interno.
+        cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
+        if (cfg_reclamacion_auto and nivel == "urgente"
+                and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
+            try:
+                ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
+                if ok_reclamacion:
+                    db = get_db()
+                    _log_whatsapp(
+                        db, p["id"], "reclamacion_proveedor_auto", "sistema",
+                        f"Reclamación automática encolada al proveedor — {dias}d sin respuesta",
+                        True, None,
+                    )
+                    db.commit()
+            except Exception as exc:
+                log.error("[SCHEDULER] Error encolando reclamación automática pedido %s: %s", p["id"], exc)
 
         # No enviar si ya se notificó hoy (evita duplicados por los 60 ciclos diarios)
         if _ya_notificado_hoy(p["id"], "telegram_auto"):
@@ -2728,32 +2759,6 @@ def _job_alertas_diarias_inner():
             db.commit()
         except Exception as exc:
             log.error("[SCHEDULER] Error guardando log pedido %s: %s", p["id"], exc)
-
-        # ── 2026-07-29: reclamación automática al proveedor, también en el
-        # camino ESTÁNDAR (pedido sin plazo_entrega_dias informado) ───────────
-        # Antes solo estaba conectada al camino con plazo — así que, en la
-        # práctica, nunca se disparaba: la inmensa mayoría de los pedidos
-        # urgentes no tienen ese campo relleno y caen aquí. El panel
-        # "Plazo de entrega proveedor" (Config Alertas) ajusta los umbrales
-        # SOLO cuando el pedido trae un plazo propio informado por el
-        # proveedor — si no lo trae, deben cumplirse igualmente los plazos
-        # generales del panel, que es justo lo que ya calcula `cfg`/`nivel`
-        # más arriba en este mismo camino.
-        cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
-        if (cfg_reclamacion_auto and nivel == "urgente"
-                and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
-            try:
-                ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
-                if ok_reclamacion:
-                    db = get_db()
-                    _log_whatsapp(
-                        db, p["id"], "reclamacion_proveedor_auto", "sistema",
-                        f"Reclamación automática encolada al proveedor — {dias}d sin respuesta",
-                        True, None,
-                    )
-                    db.commit()
-            except Exception as exc:
-                log.error("[SCHEDULER] Error encolando reclamación automática pedido %s: %s", p["id"], exc)
 
         enviados += 1
 

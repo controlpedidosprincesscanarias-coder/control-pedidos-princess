@@ -1,3 +1,34 @@
+# v12.22.2 — 30 julio 2026
+
+🔧 Corrección más profunda — la reclamación seguía sin dispararse pese al fix de v12.20.8
+
+**Contexto:** tras desplegar v12.20.8, se probó forzando el reenvío de
+un pedido concreto (borrando su registro de `telegram_auto` de hoy en
+`whatsapp_log`) y seguía sin aparecer ninguna reclamación. Investigado
+con el usuario: el bloque de reclamación estaba colocado DESPUÉS de
+toda la lógica de "¿toca reenviar el Telegram interno hoy?" (primer
+aviso / umbral crítico ≥60 días / ciclo de N días desde el último
+envío). Si esa lógica decidía "todavía no toca" — porque el ciclo de
+reenvío del aviso interno (p. ej. cada 2 días) no había cumplido,
+aunque el pedido llevara semanas urgente — el `continue` de esa rama
+saltaba todo lo de después, incluida la reclamación. Borrar solo el
+registro de HOY no arregla esto: el ciclo mira la ÚLTIMA notificación,
+sea de hoy o de cualquier día anterior.
+
+**Cambio:** el bloque de reclamación automática se movió para
+evaluarse ANTES de esa lógica de ciclo, en los dos caminos (con plazo
+y estándar) — con su propia deduplicación diaria
+(`_ya_notificado_hoy(..., 'reclamacion_proveedor_auto')`),
+completamente independiente de si el aviso interno de Telegram está
+en su turno de reenvío o no. Es una decisión de negocio distinta:
+"reclamar al proveedor" no debería depender de "cuándo le toca
+otro toque de atención interno al comprador".
+
+Eliminado el bloque duplicado que había quedado en v12.20.8 (ahora
+solo hay una copia por camino, movida arriba).
+
+Badge de versión del sidebar actualizado a "V 12.22.2".
+
 # v12.22.0 — 30 julio 2026
 
 🚀 Indicador visual de reclamación automática + evita solapar manual y automática el mismo día
