@@ -2464,24 +2464,24 @@ _JOB_PEDIDO_SQL = """
     LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
 """
 
-def _nunca_notificado(pedido_id: int) -> bool:
-    """Devuelve True si el pedido nunca ha recibido un telegram_auto."""
+def _nunca_notificado(pedido_id: int, tipo: str = "telegram_auto") -> bool:
+    """Devuelve True si el pedido nunca ha recibido una notificación del tipo indicado."""
     try:
         row = query(
-            "SELECT COUNT(*) as n FROM whatsapp_log WHERE pedido_id=%s AND tipo='telegram_auto'",
-            (pedido_id,), one=True
+            "SELECT COUNT(*) as n FROM whatsapp_log WHERE pedido_id=%s AND tipo=%s",
+            (pedido_id, tipo), one=True
         )
         return (row["n"] if row else 0) == 0
     except Exception:
         return True  # En caso de error, asumir que nunca se notificó
 
-def _dias_ultima_notificacion(pedido_id: int):
-    """Devuelve cuántos días han pasado desde la última telegram_auto enviada (enviado=1)."""
+def _dias_ultima_notificacion(pedido_id: int, tipo: str = "telegram_auto"):
+    """Devuelve cuántos días han pasado desde la última notificación de ese tipo (enviado=1)."""
     try:
         row = query(
             """SELECT DATE(MAX(creado_en)) as ultima FROM whatsapp_log
-               WHERE pedido_id=%s AND tipo='telegram_auto' AND enviado=1""",
-            (pedido_id,), one=True
+               WHERE pedido_id=%s AND tipo=%s AND enviado=1""",
+            (pedido_id, tipo), one=True
         )
         if not row or not row["ultima"]:
             return None
@@ -2729,26 +2729,43 @@ def _job_alertas_diarias_inner():
         nivel = "urgente" if (cfg["urgente"] and dias >= cfg["urgente"]) else "aviso"
 
         # ── 2026-07-30: reclamación automática al proveedor — INDEPENDIENTE
-        # del ciclo de reenvío de Telegram de más abajo ─────────────────────
+        # del ciclo de reenvío de Telegram de más abajo, pero respetando el
+        # MISMO "ciclo" configurado para ese estado en Config Alertas ───────
         # Antes este bloque estaba DESPUÉS de la lógica de "debe_enviar"
         # (primer aviso / umbral crítico / ciclo de N días), así que si el
         # ciclo de Telegram interno decía "todavía no toca reenviar" (p. ej.
         # se notificó hace 1 día y el ciclo es de 2), el `continue` de esa
         # rama saltaba TODO lo de después, incluida la reclamación — aunque
-        # llevara semanas sin dispararse nunca por esa razón. La reclamación
-        # al proveedor es una decisión aparte de "hay que darle la turra otra
-        # vez al comprador por Telegram", así que se evalúa aquí, con su
-        # propia deduplicación diaria (_ya_notificado_hoy con su propio
-        # tipo), antes de llegar a esa lógica de ciclo interno.
+        # llevara semanas sin dispararse nunca por esa razón.
+        #
+        # 2026-07-30 (2ª vuelta): la primera versión de este bloque solo
+        # evitaba mandar dos veces EL MISMO DÍA (_ya_notificado_hoy), pero
+        # no respetaba ningún ciclo de varios días — así que, tal cual,
+        # reclamaría TODOS los días mientras el pedido siguiera urgente, en
+        # vez de cada N días como el aviso interno. A petición del usuario,
+        # ahora reutiliza el mismo `cfg["ciclo"]` que ya se configura por
+        # estado en Config Alertas — así se controla desde el mismo panel,
+        # sin un ajuste aparte que mantener sincronizado a mano.
         cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
-        if nivel == "urgente":
+        debe_reclamar = False
+        if cfg_reclamacion_auto and nivel == "urgente":
+            if _nunca_notificado(p["id"], tipo="reclamacion_proveedor_auto"):
+                debe_reclamar = True
+            else:
+                ciclo_reclamacion = cfg.get("ciclo")
+                dias_desde_ultima_reclamacion = _dias_ultima_notificacion(
+                    p["id"], tipo="reclamacion_proveedor_auto")
+                if ciclo_reclamacion and dias_desde_ultima_reclamacion is not None:
+                    debe_reclamar = dias_desde_ultima_reclamacion >= ciclo_reclamacion
+            # Red de seguridad final: nunca dos veces el mismo día, aunque
+            # el job se dispare más de una vez por algún motivo.
+            if debe_reclamar and _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto"):
+                debe_reclamar = False
             log.info(
-                "RECLAMACION-DEBUG pedido=%s estado=%s dias=%s activo=%s ya_notif_reclamacion_hoy=%s",
-                p["id"], p.get("estado"), dias, cfg_reclamacion_auto,
-                _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto"),
+                "RECLAMACION-DEBUG pedido=%s estado=%s dias=%s activo=%s ciclo=%s debe_reclamar=%s",
+                p["id"], p.get("estado"), dias, cfg_reclamacion_auto, cfg.get("ciclo"), debe_reclamar,
             )
-        if (cfg_reclamacion_auto and nivel == "urgente"
-                and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
+        if debe_reclamar:
             try:
                 ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
                 log.info("RECLAMACION-DEBUG pedido=%s resultado_encolar=%s", p["id"], ok_reclamacion)

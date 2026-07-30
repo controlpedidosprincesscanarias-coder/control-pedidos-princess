@@ -1,3 +1,35 @@
+# v12.23.2 — 30 julio 2026
+
+🔧 La reclamación estándar reclamaba TODOS los días — ahora respeta el ciclo de Config Alertas
+
+**Reportado por el usuario:** tras confirmar que la reclamación
+automática ya se dispara, notó que solo evitaba mandarse dos veces
+*el mismo día* — pero no respetaba ningún ciclo de varios días, así
+que un pedido urgente recibiría reclamación TODOS los días hasta
+resolverse, en vez de cada N días.
+
+**Petición:** que siga las mismas pautas ya configuradas en Config
+Alertas, para poder controlarlas desde el panel de administración.
+
+**Cambio:**
+- `_nunca_notificado()` y `_dias_ultima_notificacion()` — ahora
+  aceptan un parámetro `tipo` (antes fijo a `'telegram_auto'`),
+  compatible hacia atrás (mismo comportamiento si no se pasa).
+- Camino **estándar** (sin plazo informado): la reclamación ahora
+  reutiliza el mismo `cfg["ciclo"]` que ya se configura por estado en
+  Config Alertas — el mismo número que controla cada cuántos días se
+  reenvía el aviso interno. Sin ciclo definido para un estado (p. ej.
+  "Pendiente Cotización" en la captura del usuario, que solo tiene
+  "1ª alerta" y "Urgente" sin ciclo), no se repite tras la primera vez.
+- Camino **con plazo informado**: sin cambios — ya respetaba su
+  propio ciclo ("Plazo entrega — Ciclo urgente tras vencer", panel
+  "Plazo de entrega proveedor") desde el principio, integrado en
+  `_alertas_plazo_entrega()`.
+- Se mantiene la protección de "nunca dos veces el mismo día" como
+  red de seguridad final, aunque el job se dispare más de una vez.
+
+Badge de versión del sidebar actualizado a "V 12.23.2".
+
 # v12.23.0 — 30 julio 2026
 
 🔧 Corrección — la reclamación llegaba con el HTML crudo como cuerpo del email
