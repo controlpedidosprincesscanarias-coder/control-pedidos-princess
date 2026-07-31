@@ -114,6 +114,19 @@ def _auto_migrate():
                   AND (TRIM(COALESCE(contacto,''))!='' OR TRIM(COALESCE(email,''))!=''
                        OR TRIM(COALESCE(telefono,''))!='' OR TRIM(COALESCE(movil,''))!='')
             """)
+            # ── v12.27.4 — Correos específicos por hotel en contactos de proveedor.
+            # Un contacto puede quedar "general" (sin fila aquí → se usa para
+            # todos los hoteles del proveedor, comportamiento de siempre) o
+            # "restringido" a uno o varios hoteles concretos — ver
+            # _get_proveedor_emails_principales(proveedor_id, hotel_id).
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS proveedor_contacto_hoteles (
+                    contacto_id INTEGER NOT NULL REFERENCES proveedor_contactos(id) ON DELETE CASCADE,
+                    hotel_id    INTEGER NOT NULL REFERENCES hoteles(id) ON DELETE CASCADE,
+                    PRIMARY KEY (contacto_id, hotel_id)
+                )
+            """)
+            cur.execute("CREATE INDEX IF NOT EXISTS idx_prov_contacto_hoteles_hotel ON proveedor_contacto_hoteles(hotel_id)")
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_adjuntos (
                     id            SERIAL PRIMARY KEY,
@@ -1425,7 +1438,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     if not pedido:
         return pendientes
 
-    _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"))
+    _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"), pedido.get("hotel_id"))
     _usuarios_hotel   = _get_todos_usuarios_hotel(pedido.get("hotel_codigo",""))
     _emails_compradores = [e for u in _usuarios_hotel["compradores"] for e in _emails_usuario(u)]
     _emails_hotel_users = [e for u in _usuarios_hotel["hotel_users"]  for e in _emails_usuario(u)]
@@ -3819,19 +3832,42 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
         log.error("[TECHO] Error enviando telegram techo pedido %s: %s", pedido_id, exc)
 
 
-def _get_proveedor_emails_principales(proveedor_id) -> list:
-    """Devuelve la lista de emails de TODOS los contactos marcados como
+def _get_proveedor_emails_principales(proveedor_id, hotel_id=None) -> list:
+    """Devuelve la lista de emails de los contactos marcados como
     principales (es_principal=1) para un proveedor, en el orden definido
     por `orden`. Un proveedor puede tener varios contactos marcados a la
     vez con la estrella dorada — todos reciben las notificaciones como
-    destinatario directo ("Para:"), no en copia."""
+    destinatario directo ("Para:"), no en copia.
+
+    v12.27.4 — Correos específicos por hotel: si se pasa hotel_id y el
+    proveedor tiene contactos principales asignados específicamente a ese
+    hotel (proveedor_contacto_hoteles), se usan SOLO esos — para que, si
+    un proveedor sirve a varios hoteles con interlocutores distintos, la
+    reclamación llegue al que corresponde y no a todos a la vez. Si no
+    hay ninguno asignado a ese hotel (o no se pasa hotel_id), se cae al
+    comportamiento de siempre: los contactos "generales" — principales
+    sin ningún hotel asignado en absoluto.
+    """
     if not proveedor_id:
         return []
+    if hotel_id:
+        rows_hotel = query(
+            """SELECT DISTINCT pc.email, pc.orden, pc.id FROM proveedor_contactos pc
+               JOIN proveedor_contacto_hoteles pch ON pch.contacto_id = pc.id
+               WHERE pc.proveedor_id=%s AND pc.es_principal=1
+                 AND pc.email IS NOT NULL AND pc.email != ''
+                 AND pch.hotel_id=%s
+               ORDER BY pc.orden, pc.id""",
+            (proveedor_id, hotel_id)
+        ) or []
+        if rows_hotel:
+            return [r["email"] for r in rows_hotel]
     rows = query(
-        """SELECT email FROM proveedor_contactos
-           WHERE proveedor_id=%s AND es_principal=1
-             AND email IS NOT NULL AND email != ''
-           ORDER BY orden, id""",
+        """SELECT pc.email FROM proveedor_contactos pc
+           WHERE pc.proveedor_id=%s AND pc.es_principal=1
+             AND pc.email IS NOT NULL AND pc.email != ''
+             AND NOT EXISTS (SELECT 1 FROM proveedor_contacto_hoteles pch WHERE pch.contacto_id = pc.id)
+           ORDER BY pc.orden, pc.id""",
         (proveedor_id,)
     ) or []
     return [r["email"] for r in rows]
@@ -4278,7 +4314,7 @@ def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> 
                   pedido.get("id"), bool(subject), es_proveedor)
         return False
 
-    proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"))
+    proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"), pedido.get("hotel_id"))
     if not proveedor_emails and pedido.get("proveedor_email"):
         proveedor_emails = [pedido["proveedor_email"]]
     if not proveedor_emails:
@@ -4392,7 +4428,7 @@ def alerta_email_preview(pedido_id):
 
     # Destinatario principal
     if es_proveedor:
-        _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"))
+        _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"), pedido.get("hotel_id"))
         to_email   = ", ".join(_proveedor_emails)
         to_nombre  = pedido.get("proveedor_nombre") or ""
     else:
@@ -6454,14 +6490,23 @@ def delete_usuario(uid):
 # ── API Proveedores ────────────────────────────────────────────────────────────
 
 def _prov_with_contactos(rows):
-    """Añade lista de contactos a cada proveedor."""
+    """Añade lista de contactos a cada proveedor (con los hoteles
+    específicos asignados a cada uno, si tiene)."""
     result = rows_to_list(rows)
     if not result:
         return result
     ids = [p["id"] for p in result]
     placeholders = ",".join(["%s"] * len(ids))
     contactos_rows = rows_to_list(query(
-        f"SELECT proveedor_id,nombre,telefono,movil,email,es_principal FROM proveedor_contactos WHERE proveedor_id IN ({placeholders}) ORDER BY proveedor_id,es_principal DESC,orden,id",
+        f"""SELECT pc.id, pc.proveedor_id, pc.nombre, pc.telefono, pc.movil, pc.email, pc.es_principal,
+                   COALESCE(
+                       (SELECT array_agg(pch.hotel_id ORDER BY pch.hotel_id)
+                        FROM proveedor_contacto_hoteles pch WHERE pch.contacto_id = pc.id),
+                       ARRAY[]::INTEGER[]
+                   ) AS hotel_ids
+            FROM proveedor_contactos pc
+            WHERE pc.proveedor_id IN ({placeholders})
+            ORDER BY pc.proveedor_id, pc.es_principal DESC, pc.orden, pc.id""",
         tuple(ids)
     ))
     # Agrupar por proveedor_id
@@ -6474,6 +6519,7 @@ def _prov_with_contactos(rows):
             "movil":        c["movil"] or "",
             "email":        c["email"] or "",
             "es_principal": bool(c["es_principal"]),
+            "hotel_ids":    list(c["hotel_ids"] or []),
         })
     for p in result:
         p["contactos"] = cmap.get(p["id"], [])
@@ -6539,10 +6585,16 @@ def create_proveedor():
         email_c     = (c.get("email") or "").strip() or None
         principal_c = 1 if c.get("es_principal") else 0
         if nombre_c or tel_c or movil_c or email_c:
-            execute(
-                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            cur_c = execute(
+                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                 (new_id, nombre_c, tel_c, movil_c, email_c, principal_c, i)
             )
+            contacto_id = cur_c.fetchone()["id"]
+            for hid in (c.get("hotel_ids") or []):
+                execute(
+                    "INSERT INTO proveedor_contacto_hoteles (contacto_id, hotel_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                    (contacto_id, hid)
+                )
     db.commit()
     return jsonify({"ok": True, "id": new_id, "nombre": nombre}), 201
 
@@ -6573,7 +6625,8 @@ def update_proveedor(pid):
         "UPDATE proveedores SET codigo=%s,nombre=%s,observaciones=%s WHERE id=%s",
         (codigo, nombre, data.get("observaciones",""), pid)
     )
-    # Reemplazar contactos
+    # Reemplazar contactos (el DELETE cascada también borra sus filas en
+    # proveedor_contacto_hoteles vía ON DELETE CASCADE)
     execute("DELETE FROM proveedor_contactos WHERE proveedor_id=%s", (pid,))
     contactos = data.get("contactos", [])
     for i, c in enumerate(contactos):
@@ -6583,10 +6636,16 @@ def update_proveedor(pid):
         email_c     = (c.get("email") or "").strip() or None
         principal_c = 1 if c.get("es_principal") else 0
         if nombre_c or tel_c or movil_c or email_c:
-            execute(
-                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            cur_c = execute(
+                "INSERT INTO proveedor_contactos (proveedor_id,nombre,telefono,movil,email,es_principal,orden) VALUES (%s,%s,%s,%s,%s,%s,%s) RETURNING id",
                 (pid, nombre_c, tel_c, movil_c, email_c, principal_c, i)
             )
+            contacto_id = cur_c.fetchone()["id"]
+            for hid in (c.get("hotel_ids") or []):
+                execute(
+                    "INSERT INTO proveedor_contacto_hoteles (contacto_id, hotel_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
+                    (contacto_id, hid)
+                )
     db.commit()
     return jsonify({"ok": True})
 
@@ -7778,6 +7837,7 @@ def update_pedido(pid):
 
         # 0a. Proveedor asignado obligatorio
         proveedor_id_val = data.get("proveedor_id", pedido_actual.get("proveedor_id"))
+        hotel_id_val = data.get("hotel_id", pedido_actual.get("hotel_id"))
         if not proveedor_id_val:
             errores_envio.append(
                 "No se puede pasar a ENVIADO AL PROVEEDOR porque el pedido no tiene proveedor asignado. "
@@ -7785,7 +7845,7 @@ def update_pedido(pid):
             )
         else:
             # 0b. El proveedor debe tener al menos un contacto principal con email
-            emails_proveedor = _get_proveedor_emails_principales(proveedor_id_val)
+            emails_proveedor = _get_proveedor_emails_principales(proveedor_id_val, hotel_id_val)
             if not emails_proveedor:
                 # Obtener el nombre del proveedor para dar un mensaje más claro
                 prov_row = query("SELECT nombre FROM proveedores WHERE id=%s", (proveedor_id_val,), one=True)

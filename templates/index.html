@@ -1200,7 +1200,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.27.2
+          V 12.27.4
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2271,6 +2271,12 @@ tbody tr:last-child{border-bottom:none}
         <label class="form-label" style="margin:0;font-weight:700">Contactos</label>
         <button type="button" class="btn btn-ghost btn-sm" onclick="pvAddContacto()"
                 style="padding:2px 10px;font-size:.82rem">+ Añadir contacto</button>
+      </div>
+      <div style="font-size:.78rem;color:var(--text-secondary);margin:-2px 0 8px">
+        Si un contacto ★ principal tiene hoteles asignados, las reclamaciones de pedidos de
+        esos hoteles se le enviarán a él en exclusiva (en vez de a todos los principales
+        generales). Un contacto sin hoteles asignados sigue siendo "general" — se usa para
+        cualquier hotel que no tenga un contacto específico.
       </div>
       <div id="pv-contactos-list" style="display:flex;flex-direction:column;gap:10px;max-height:420px;overflow-y:auto;padding-right:4px"></div>
       <div id="pv-contactos-empty" style="color:var(--text-secondary);font-size:.85rem;padding:8px 0 4px">
@@ -5252,6 +5258,9 @@ async function loadProveedores() {
   _provCache = {};
   d.forEach(p => { _provCache[p.id] = p; });
   tbody.innerHTML = d.map(p => {
+    const _hotelCodMap = (G.maestros && G.maestros.hoteles)
+      ? Object.fromEntries(G.maestros.hoteles.map(h => [h.id, h.codigo]))
+      : {};
     const contactos = (p.contactos && p.contactos.length)
       ? p.contactos.map(c => {
           const parts = [];
@@ -5260,6 +5269,10 @@ async function loadProveedores() {
           if (c.telefono) parts.push(`<span style="color:var(--text-secondary)">📞 ${esc(c.telefono)}</span>`);
           if (c.movil)    parts.push(`<span style="color:var(--text-secondary)">📱 ${esc(c.movil)}</span>`);
           if (c.email)    parts.push(`<a href="mailto:${esc(c.email)}" style="color:var(--gold)">✉ ${esc(c.email)}</a>`);
+          if (c.hotel_ids && c.hotel_ids.length) {
+            const cods = c.hotel_ids.map(hid => _hotelCodMap[hid] || hid).join(', ');
+            parts.push(`<span title="Solo para pedidos de estos hoteles" style="color:#8B0000;font-weight:600">🏨 ${esc(cods)}</span>`);
+          }
           return `<div style="margin-bottom:2px">${parts.join(' · ')}</div>`;
         }).join('')
       : '<span style="color:var(--text-secondary)">—</span>';
@@ -5308,6 +5321,13 @@ function pvContactoRow(c = {}, idx) {
         <input class="form-control pv-c-email" placeholder="Email" type="email" value="${esc(c.email||'')}" style="font-size:.88rem;padding-left:28px">
       </div>
     </div>
+    <div>
+      <div style="font-size:.76rem;color:#888;margin-bottom:3px">🏨 Hoteles asignados a este contacto (vacío = general, todos los hoteles)</div>
+      <div class="pv-c-hoteles-list" data-selected="${(c.hotel_ids||[]).join(',')}"
+           style="display:flex;flex-wrap:wrap;gap:3px 10px;max-height:78px;overflow-y:auto;padding:6px 8px;background:#fff;border:1px solid var(--border,#e2e8f0);border-radius:6px">
+        <span style="color:#999;font-size:.78rem">Cargando…</span>
+      </div>
+    </div>
   </div>`;
 }
 function pvSetPrincipal(btn) {
@@ -5334,6 +5354,26 @@ function pvSetPrincipal(btn) {
     badgeExistente.remove();
   }
 }
+let _pvHotelesCache = null;
+async function _pvGetHoteles() {
+  if (_pvHotelesCache) return _pvHotelesCache;
+  const maestros = await api('/api/maestros');
+  _pvHotelesCache = (maestros && maestros.hoteles) || [];
+  return _pvHotelesCache;
+}
+async function _pvFillContactoHoteles(listEl) {
+  const hoteles = await _pvGetHoteles();
+  const selected = (listEl.dataset.selected || '').split(',').filter(Boolean).map(Number);
+  if (!hoteles.length) {
+    listEl.innerHTML = '<span style="color:#999;font-size:.78rem">No hay hoteles disponibles</span>';
+    return;
+  }
+  listEl.innerHTML = hoteles.map(h => `
+    <label style="display:flex;align-items:center;gap:4px;font-size:.78rem;cursor:pointer;white-space:nowrap">
+      <input type="checkbox" class="pv-c-hotel-chk" data-hotel-id="${h.id}" ${selected.includes(h.id) ? 'checked' : ''}>
+      ${esc(h.codigo)}
+    </label>`).join('');
+}
 function pvAddContacto(c = {}) {
   const list = document.getElementById('pv-contactos-list');
   const idx  = list.children.length;
@@ -5341,6 +5381,9 @@ function pvAddContacto(c = {}) {
   if (idx === 0 && !c.es_principal) c = Object.assign({}, c, {es_principal: true});
   list.insertAdjacentHTML('beforeend', pvContactoRow(c, idx));
   document.getElementById('pv-contactos-empty').style.display = 'none';
+  const nuevaFila = list.lastElementChild;
+  const hotelesList = nuevaFila.querySelector('.pv-c-hoteles-list');
+  if (hotelesList) _pvFillContactoHoteles(hotelesList);
 }
 function pvRemoveContacto(btn) {
   btn.closest('.pv-contacto-row').remove();
@@ -5355,12 +5398,15 @@ function pvGetContactos() {
   return rows.map((row, i) => {
     const btnPrincipal = row.querySelector('.pv-c-principal-btn');
     const esPrincipal  = btnPrincipal ? (btnPrincipal.getAttribute('data-principal') === '1') : (i === 0 && !hayPrincipal);
+    const hotelIds = Array.from(row.querySelectorAll('.pv-c-hotel-chk:checked'))
+      .map(chk => parseInt(chk.dataset.hotelId));
     return {
       nombre:       row.querySelector('.pv-c-nombre').value.trim(),
       telefono:     row.querySelector('.pv-c-tel').value.trim(),
       movil:        row.querySelector('.pv-c-movil').value.trim(),
       email:        row.querySelector('.pv-c-email').value.trim(),
       es_principal: esPrincipal,
+      hotel_ids:    hotelIds,
     };
   }).filter(c => c.nombre || c.telefono || c.movil || c.email);
 }

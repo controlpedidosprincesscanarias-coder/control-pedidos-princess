@@ -47,6 +47,15 @@ SQL_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_prov_contactos ON proveedor_contactos(proveedor_id)",
+    # ── Hoteles asignados a un contacto de proveedor (opcional) ────────────────
+    """
+    CREATE TABLE IF NOT EXISTS proveedor_contacto_hoteles (
+        contacto_id INTEGER NOT NULL REFERENCES proveedor_contactos(id) ON DELETE CASCADE,
+        hotel_id    INTEGER NOT NULL REFERENCES hoteles(id) ON DELETE CASCADE,
+        PRIMARY KEY (contacto_id, hotel_id)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_prov_contacto_hoteles_hotel ON proveedor_contacto_hoteles(hotel_id)",
     # ── Usuarios ──────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS usuarios (

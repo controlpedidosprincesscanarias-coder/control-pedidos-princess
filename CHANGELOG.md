@@ -1,3 +1,37 @@
+# v12.27.4 — 31 julio 2026
+
+🏨 Correos específicos por hotel en la ficha de proveedores
+
+**Petición:** poder asignar en la ficha de un proveedor uno o varios
+hoteles a cada contacto, de forma que las reclamaciones automáticas
+vayan al contacto responsable del hotel del pedido en concreto (en
+vez de a todos los contactos "principal" generales del proveedor),
+manteniendo la copia al comprador del hotel (ya existía).
+
+**Cómo funciona:**
+- Nueva tabla `proveedor_contacto_hoteles` (contacto ↔ hotel).
+- Un contacto **sin** hoteles asignados sigue siendo "general" — se
+  usa para cualquier hotel del proveedor, comportamiento de siempre.
+- Un contacto **con** hoteles asignados solo se usa para pedidos de
+  esos hoteles — si existe al menos un contacto ★ principal asignado
+  al hotel del pedido, se usa(n) SOLO ese(s); si no hay ninguno
+  específico para ese hotel, se cae a los generales.
+- `_get_proveedor_emails_principales(proveedor_id, hotel_id)` ahora
+  recibe el hotel del pedido — actualizado en los 5 puntos donde se
+  llama (correo al cambiar a Enviado al Proveedor, reclamación
+  automática, vista previa/envío manual, validación al pasar a Enviado
+  al Proveedor).
+- Ficha de proveedor: cada contacto tiene ahora una sección "🏨
+  Hoteles asignados a este contacto" con checkboxes de todos los
+  hoteles (vacío = general). La lista de proveedores también muestra
+  un indicador 🏨 con los hoteles cuando un contacto tiene alguno
+  asignado.
+- El CC al comprador del hotel en la reclamación automática no
+  cambia — seguía y sigue funcionando igual, independientemente de a
+  qué contacto del proveedor vaya el "Para:".
+
+Badge de versión del sidebar actualizado a "V 12.27.4".
+
 # v12.27.2 — 31 julio 2026
 
 ✍️ Correo interno de cambio de estado — redacción mejorada + ENVIADO AL PROVEEDOR + quién hizo el cambio

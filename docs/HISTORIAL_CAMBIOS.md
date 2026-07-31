@@ -8,6 +8,49 @@
 
 ---
 
+## 2026-07-31 (12)
+
+### [Control Pedidos] v12.27.4 — Correos específicos por hotel en contactos de proveedor
+- Petición: poder asignar en la ficha de un proveedor uno o varios
+  hoteles a cada contacto, para que las reclamaciones automáticas
+  vayan al contacto responsable del hotel del pedido en concreto (no
+  a todos los principales generales del proveedor a la vez),
+  manteniendo la copia al comprador de ese hotel (ya existía desde
+  antes, sin cambios).
+- Nueva tabla `proveedor_contacto_hoteles` (contacto_id, hotel_id, PK
+  compuesta, ON DELETE CASCADE en ambos sentidos) — migración
+  incremental en `app.py` (CREATE TABLE IF NOT EXISTS) y definición en
+  `models.py` para instalaciones nuevas.
+- `_get_proveedor_emails_principales(proveedor_id, hotel_id=None)`:
+  si se pasa `hotel_id` y hay contactos ★ principal asignados
+  específicamente a ese hotel, se usan SOLO esos; si no hay ninguno
+  (o no se pasa hotel_id), cae al comportamiento de siempre —
+  contactos principales SIN ningún hotel asignado (generales). Un
+  contacto sin filas en la tabla nueva sigue siendo general.
+- Actualizados los 5 puntos donde se llama a esa función para pasar
+  también `pedido.get("hotel_id")` (o el hotel_id calculado en el
+  caso de la validación al pasar a ENVIADO AL PROVEEDOR, que antes
+  solo se calculaba dentro de un `if` de techo de gastos — ahora se
+  calcula siempre que hace falta).
+- `_prov_with_contactos()` (listado de proveedores) ahora también
+  devuelve `hotel_ids` por contacto (array_agg vía subconsulta
+  correlacionada). `create_proveedor()` y `update_proveedor()`
+  guardan los `hotel_ids` de cada contacto tras el INSERT (usando el
+  id devuelto por `RETURNING id`) — el patrón de "borrar y
+  reinsertar todos los contactos" que ya usaba la ficha se mantiene
+  igual, y el `ON DELETE CASCADE` limpia solo la tabla nueva.
+- Frontend: cada fila de contacto en la ficha de proveedor tiene ahora
+  una sección "🏨 Hoteles asignados a este contacto" con checkboxes
+  de todos los hoteles (cargados una vez, cacheados en
+  `_pvHotelesCache`, vía `/api/maestros`); vacío = general. La tabla
+  de listado de proveedores muestra un indicador 🏨 con los códigos
+  de hotel cuando un contacto tiene alguno asignado. Añadida nota
+  explicativa sobre el comportamiento junto al título "Contactos".
+- Badge de versión del sidebar actualizado a "V 12.27.4"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
 ## 2026-07-31 (11)
 
 ### [Control Pedidos] v12.27.2 — Correo interno de cambio de estado mejorado
