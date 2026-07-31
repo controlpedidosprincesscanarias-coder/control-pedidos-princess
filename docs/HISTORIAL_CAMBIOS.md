@@ -8,6 +8,111 @@
 
 ---
 
+## 2026-07-31 (23)
+
+### [Control Pedidos] v12.27.21 — Fix: logo no aparecía en 3 de las 6 cabeceras + contraste del subtítulo
+- Reportado con captura real del correo "[FASE 1] Nueva solicitud de
+  acceso": la franja navy no mostraba el logo (ni siquiera el icono
+  de imagen rota) y el subtítulo "Control de Pedidos · Princess
+  Canarias" apenas se distinguía.
+- Causa raíz del logo: 3 de las 6 plantillas tocadas en v12.27.20
+  (Fase 1 a admins, alta desde el Organizador, Fase 2 completada)
+  calculaban `app_url` con `os.environ.get("APP_URL", "")` — fallback
+  vacío. Si la variable de entorno `APP_URL` no está definida en
+  Render, el `src` de la imagen queda como ruta relativa
+  (`/static/logo-sidebar.png`), que no resuelve dentro de un cliente
+  de correo (no hay "página actual" de la que colgar la ruta) — de
+  ahí que no se viera ni el icono de imagen rota, directamente no se
+  intentaba cargar. Igualado el fallback en las 3 al mismo que ya
+  usaban las otras 3 plantillas: `https://control-pedidos-princess.onrender.com`.
+- Causa raíz del contraste: el subtítulo usaba
+  `color:rgba(255,255,255,.6)`. Clientes de correo basados en el
+  motor de Word (Outlook de escritorio clásico) son conocidos por
+  ignorar `rgba()` en `color`, cayendo a un color por defecto poco
+  legible sobre fondo navy. Cambiado a un hex sólido
+  (`color:#b9c3dc`) en las 5 cabeceras que llevan subtítulo, para
+  que se renderice igual en todos los clientes.
+- Alcance: los 3 fallbacks de `app_url` corregidos son exactamente
+  los mismos 3 tocados en v12.27.20 más el compacto de "Cuenta
+  creada automáticamente" (que reutiliza el `app_url` ya corregido
+  de la misma función). No se ha tocado el `app_url` de la línea
+  5917 (usado solo para el enlace de fallback por Telegram, no
+  aparece en el cuerpo del email).
+- Badge de versión del sidebar actualizado a "V 12.27.21".
+- Pendiente de confirmar tras desplegar: probar con una solicitud
+  nueva (no un correo ya recibido antes del despliegue) para
+  verificar que ahora sí carga el logo.
+
+---
+
+## 2026-07-31 (22)
+
+### [Control Pedidos] v12.27.20 — Logo aplicado a todas las cabeceras de email restantes
+- Petición: extender a todos el mismo tratamiento de logo aplicado en
+  v12.27.19 al correo de "Verificación de acceso".
+- Localizadas 6 plantillas de email con cabecera en banda de color +
+  título + (opcional) subtítulo. Solo 3 son estrictamente "navy"
+  (`#0f2044`): Fase 1 a admins, Fase 2 (hecha en v12.27.19) y
+  bienvenida al usuario (ya tenía logo, pero en otra posición —
+  ver abajo). Las otras 3 usan la misma estructura en verde (`#065f46`):
+  alta desde el Organizador, Fase 2 completada, y el aviso compacto
+  "Cuenta creada automáticamente" a admins. Se ha aplicado el mismo
+  patrón a las 6, no solo a las navy, para que todo el sistema de
+  emails quede visualmente consistente.
+- Cabecera del email de bienvenida (única que ya llevaba logo)
+  reconvertida al mismo patrón de tabla de dos columnas: antes el
+  logo iba apilado arriba del título (38px, `margin-bottom`); ahora
+  va a la derecha ocupando la franja completa (64px), igual que el
+  resto.
+- Aviso compacto "Cuenta creada automáticamente" (banda más baja,
+  sin subtítulo) recibe un logo más pequeño (40px) con paddings
+  proporcionalmente más ajustados (10px/20px) para no desbordar esa
+  franja, que es más corta que las demás.
+- `app_url` no estaba definida en el ámbito de la función de "Fase 2
+  completada" (`solicitar_usuario_fase2`) — no hacía falta hasta
+  ahora porque esa plantilla no usaba ninguna URL en el cuerpo del
+  email. Añadida la asignación (`os.environ.get("APP_URL", "")`)
+  justo antes del `body_html` para poder referenciar el logo.
+- Todas las cabeceras usan ahora `<table>` de dos columnas en vez de
+  `<div>` — más fiable en Outlook, que ignora flex/grid.
+- Badge de versión del sidebar actualizado a "V 12.27.20".
+
+---
+
+## 2026-07-31 (21)
+
+### [Control Pedidos] v12.27.19 — Logo en la cabecera del email de "Verificación de acceso" (Fase 2)
+- Petición: añadir el logo a la cabecera navy del correo "Verificación
+  de acceso" (el que lleva el enlace "Continuar verificación →" tras
+  una solicitud de alta), agrandado y a la derecha de la franja,
+  ocupando su alto.
+- Corregido un matiz sobre el origen de esta plantilla: pese a que en
+  la petición se atribuía a `_email_html_simple()`, ese correo en
+  realidad se construye en `_construir_email_fase2()`, con su propia
+  cabecera fija (`<div style="background:#0f2044...">`), estructuralmente
+  igual a la del email de bienvenida pero sin logo. `_email_html_simple()`
+  no lleva cabecera propia — solo genera el cuerpo (párrafos/botón) que
+  se inserta en la plantilla externa de EmailJS, así que no era el sitio
+  a tocar.
+- Cabecera pasada de `<div>` a una `<table>` de dos columnas (más fiable
+  en clientes de correo tipo Outlook, que ignoran flex/grid): columna
+  izquierda con el título + subtítulo igual que antes, columna derecha
+  con `<img src=".../logo-sidebar.png">` a 64px de alto, alineada a la
+  derecha (`align="right"`, `margin-left:auto`).
+- Alturas de padding cuadradas a propósito entre ambas columnas
+  (texto: `24px 0 24px 28px`; logo: `14px 28px 14px 16px`) para que el
+  logo quede centrado verticalmente y visualmente ocupe la franja
+  completa con un margen de 14px arriba/abajo, en vez de tocar los
+  bordes.
+- Alcance: solo este correo (Fase 2 / verificación de acceso). El
+  resto de plantillas con la misma cabecera navy sin logo (aviso Fase 1
+  a admins, aviso de alta a admins, y las que use en el futuro
+  `_email_html_simple()` si se le añade cabecera propia) se quedan
+  igual, pendientes de que se pida explícitamente.
+- Badge de versión del sidebar actualizado a "V 12.27.19".
+
+---
+
 ## 2026-07-31 (20)
 
 ### [Control Pedidos] v12.27.18 — Aviso de nueva versión: sin cierre sin recargar + cuenta atrás

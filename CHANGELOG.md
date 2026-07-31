@@ -1,3 +1,73 @@
+# v12.27.21 — 31 julio 2026
+
+🐞 Fix — logo no aparecía en 3 de las 6 cabeceras + subtítulo poco legible
+
+**Motivo:** captura real del email "[FASE 1] Nueva solicitud de acceso"
+mostrando la franja navy sin logo (ni siquiera icono de imagen rota) y
+el subtítulo "Control de Pedidos · Princess Canarias" casi invisible.
+
+**Causas y cambios:**
+- Logo ausente: 3 de las 6 plantillas tocadas en v12.27.20 (Fase 1 a
+  admins, alta desde el Organizador, Fase 2 completada) calculaban
+  `app_url` con fallback vacío (`os.environ.get("APP_URL", "")`). Sin
+  esa variable definida en Render, el logo quedaba con `src` relativo,
+  que no resuelve dentro de un cliente de correo. Igualado el
+  fallback en las 3 al que ya usaban las otras 3:
+  `https://control-pedidos-princess.onrender.com`.
+- Subtítulo poco legible: usaba `color:rgba(255,255,255,.6)`, que
+  Outlook de escritorio clásico (motor Word) suele ignorar,
+  cayendo a un color por defecto sobre fondo navy. Cambiado a un hex
+  sólido (`color:#b9c3dc`) en las 5 cabeceras con subtítulo.
+
+Badge de versión del sidebar actualizado a "V 12.27.21".
+
+# v12.27.20 — 31 julio 2026
+
+🖼️ Logo aplicado a todas las cabeceras de email restantes
+
+**Petición:** extender a todos el tratamiento de logo aplicado en
+v12.27.19 al email de "Verificación de acceso".
+
+**Cambios:**
+- Localizadas 6 plantillas con cabecera en banda de color + título +
+  subtítulo: 3 navy (`#0f2044`) — Fase 1 a admins, Fase 2, bienvenida
+  al usuario — y 3 verdes (`#065f46`) — alta desde el Organizador,
+  Fase 2 completada, "Cuenta creada automáticamente" (compacto).
+  Aplicado el mismo patrón a las 6, no solo a las navy.
+- Cabecera de bienvenida (única que ya llevaba logo) reconvertida al
+  mismo patrón: antes el logo iba apilado arriba del título (38px);
+  ahora va a la derecha ocupando la franja completa (64px), igual que
+  el resto.
+- Aviso compacto "Cuenta creada automáticamente" recibe un logo más
+  pequeño (40px) con paddings ajustados a su franja, más corta que
+  las demás.
+- Todas las cabeceras pasan de `<div>` a `<table>` de dos columnas —
+  más fiable en Outlook, que ignora flex/grid.
+- Añadida la asignación de `app_url` (que faltaba) en la función de
+  "Fase 2 completada", necesaria para poder referenciar el logo ahí.
+
+Badge de versión del sidebar actualizado a "V 12.27.20".
+
+# v12.27.19 — 31 julio 2026
+
+🖼️ Logo en la cabecera del email de "Verificación de acceso" (Fase 2)
+
+**Petición:** añadir el logo a la cabecera navy del correo con el
+enlace "Continuar verificación →" tras una solicitud de alta,
+agrandado y a la derecha de la franja, ocupando su alto.
+
+**Cambios:**
+- Cabecera pasada de `<div>` a `<table>` de dos columnas (más fiable
+  en Outlook): título + subtítulo a la izquierda, logo de 64px de
+  alto a la derecha.
+- Alturas de padding cuadradas entre ambas columnas para que el logo
+  quede centrado verticalmente, ocupando la franja con un margen de
+  14px arriba/abajo en vez de tocar los bordes.
+- Alcance inicial: solo este correo (Fase 2). El resto de plantillas
+  con cabecera similar se dejaron pendientes — ver v12.27.20.
+
+Badge de versión del sidebar actualizado a "V 12.27.19".
+
 # v12.27.18 — 31 julio 2026
 
 🔒 Aviso de nueva versión — ya no se puede cerrar sin recargar

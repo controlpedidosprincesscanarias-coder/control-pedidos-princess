@@ -5230,7 +5230,7 @@ def solicitar_usuario_fase1():
     sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
     email_fase2 = _construir_email_fase2(sol)
 
-    app_url   = os.environ.get("APP_URL", "").rstrip("/")
+    app_url   = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
     url_admin = f"{app_url}/admin/solicitudes#{sol_id}" if app_url else ""
     asunto    = f"[FASE 1] Nueva solicitud de acceso — {nombre_completo}"
 
@@ -5238,14 +5238,22 @@ def solicitar_usuario_fase1():
     <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
                 background:#f9f9f9;border-radius:10px;overflow:hidden;
                 border:1px solid #e0e0e0;">
-      <div style="background:#0f2044;padding:24px 28px;">
-        <h2 style="margin:0;color:#c9a84c;font-size:18px;">
-          📋 Nueva solicitud de acceso — Fase 1
-        </h2>
-        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
-          Control de Pedidos · Princess Canarias
-        </p>
-      </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f2044;">
+        <tr>
+          <td style="padding:24px 0 24px 28px;vertical-align:middle;" valign="middle">
+            <h2 style="margin:0;color:#c9a84c;font-size:18px;">
+              📋 Nueva solicitud de acceso — Fase 1
+            </h2>
+            <p style="margin:6px 0 0;color:#b9c3dc;font-size:13px;">
+              Control de Pedidos · Princess Canarias
+            </p>
+          </td>
+          <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
+            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
+                 style="height:64px;width:auto;display:block;margin-left:auto;">
+          </td>
+        </tr>
+      </table>
       <div style="padding:24px 28px;">
         <p style="margin:0 0 16px;font-size:14px;color:#333;">
           Se ha recibido una nueva solicitud. El email con el enlace de
@@ -5412,7 +5420,7 @@ def solicitar_usuario_directo():
         sol_id = cur.fetchone()["id"]
     db.commit()
 
-    app_url   = os.environ.get("APP_URL", "").rstrip("/")
+    app_url   = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
     url_admin = f"{app_url}/admin/solicitudes#{sol_id}" if app_url else ""
     asunto    = f"[Alta desde Organizador] {nombre_completo} / {usuario_windows}"
 
@@ -5420,14 +5428,22 @@ def solicitar_usuario_directo():
     <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
                 background:#f9f9f9;border-radius:10px;overflow:hidden;
                 border:1px solid #e0e0e0;">
-      <div style="background:#065f46;padding:24px 28px;">
-        <h2 style="margin:0;color:#6ee7b7;font-size:18px;">
-          ✅ Solicitud de acceso — lista para aprobar
-        </h2>
-        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
-          Recibida desde el Organizador de Escritorio (alta en un solo paso)
-        </p>
-      </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#065f46;">
+        <tr>
+          <td style="padding:24px 0 24px 28px;vertical-align:middle;" valign="middle">
+            <h2 style="margin:0;color:#6ee7b7;font-size:18px;">
+              ✅ Solicitud de acceso — lista para aprobar
+            </h2>
+            <p style="margin:6px 0 0;color:#b9c3dc;font-size:13px;">
+              Recibida desde el Organizador de Escritorio (alta en un solo paso)
+            </p>
+          </td>
+          <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
+            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
+                 style="height:64px;width:auto;display:block;margin-left:auto;">
+          </td>
+        </tr>
+      </table>
       <div style="padding:24px 28px;">
         <table border="0" cellpadding="0" cellspacing="0"
                style="width:100%;font-size:14px;border-collapse:collapse;">
@@ -5615,12 +5631,20 @@ def _construir_email_fase2(sol: dict) -> dict:
     <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
                 background:#f9f9f9;border-radius:10px;overflow:hidden;
                 border:1px solid #e0e0e0;">
-      <div style="background:#0f2044;padding:24px 28px;">
-        <h2 style="margin:0;color:#c9a84c;font-size:18px;">Verifica tu acceso al sistema</h2>
-        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
-          Control de Pedidos · Princess Canarias
-        </p>
-      </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f2044;">
+        <tr>
+          <td style="padding:24px 0 24px 28px;vertical-align:middle;" valign="middle">
+            <h2 style="margin:0;color:#c9a84c;font-size:18px;">Verifica tu acceso al sistema</h2>
+            <p style="margin:6px 0 0;color:#b9c3dc;font-size:13px;">
+              Control de Pedidos · Princess Canarias
+            </p>
+          </td>
+          <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
+            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
+                 style="height:64px;width:auto;display:block;margin-left:auto;">
+          </td>
+        </tr>
+      </table>
       <div style="padding:28px;">
         <p style="margin:0 0 12px;font-size:15px;color:#333;">
           Hola, <strong>{nombre_c}</strong>
@@ -5816,19 +5840,28 @@ def solicitar_usuario_fase2():
 
     nombre_c = f"{sol['nombre']} {sol['apellidos']}"
     asunto   = f"[FASE 2 COMPLETADA] Alta usuario — {nombre_c} / {usuario_windows}"
+    app_url  = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
 
     body_html = f"""
     <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
                 background:#f9f9f9;border-radius:10px;overflow:hidden;
                 border:1px solid #e0e0e0;">
-      <div style="background:#065f46;padding:24px 28px;">
-        <h2 style="margin:0;color:#6ee7b7;font-size:18px;">
-          ✅ Solicitud completa — Crear cuenta de usuario
-        </h2>
-        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
-          Control de Pedidos · Princess Canarias
-        </p>
-      </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#065f46;">
+        <tr>
+          <td style="padding:24px 0 24px 28px;vertical-align:middle;" valign="middle">
+            <h2 style="margin:0;color:#6ee7b7;font-size:18px;">
+              ✅ Solicitud completa — Crear cuenta de usuario
+            </h2>
+            <p style="margin:6px 0 0;color:#b9c3dc;font-size:13px;">
+              Control de Pedidos · Princess Canarias
+            </p>
+          </td>
+          <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
+            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
+                 style="height:64px;width:auto;display:block;margin-left:auto;">
+          </td>
+        </tr>
+      </table>
       <div style="padding:24px 28px;">
         <p style="margin:0 0 16px;font-size:14px;color:#333;">
           El usuario ha completado la verificación.
@@ -6006,14 +6039,20 @@ def admin_aprobar_solicitud(sol_id):
     <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
                 background:#f9f9f9;border-radius:10px;overflow:hidden;
                 border:1px solid #e0e0e0;">
-      <div style="background:#0f2044;padding:20px 28px 24px;">
-        <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
-             style="height:38px;width:auto;display:block;margin-bottom:14px;">
-        <h2 style="margin:0;color:#c9a84c;font-size:18px;">🎉 ¡Tu cuenta ha sido creada!</h2>
-        <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
-          Control de Pedidos · Princess Canarias
-        </p>
-      </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#0f2044;">
+        <tr>
+          <td style="padding:24px 0 24px 28px;vertical-align:middle;" valign="middle">
+            <h2 style="margin:0;color:#c9a84c;font-size:18px;">🎉 ¡Tu cuenta ha sido creada!</h2>
+            <p style="margin:6px 0 0;color:#b9c3dc;font-size:13px;">
+              Control de Pedidos · Princess Canarias
+            </p>
+          </td>
+          <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
+            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
+                 style="height:64px;width:auto;display:block;margin-left:auto;">
+          </td>
+        </tr>
+      </table>
       <div style="padding:28px;">
         <p style="margin:0 0 16px;font-size:15px;color:#333;">
           Hola, <strong>{nombre_c}</strong>
@@ -6079,9 +6118,17 @@ def admin_aprobar_solicitud(sol_id):
     <div style="font-family:sans-serif;max-width:580px;margin:0 auto;
                 background:#f9f9f9;border-radius:10px;overflow:hidden;
                 border:1px solid #e0e0e0;">
-      <div style="background:#065f46;padding:20px 24px;">
-        <h2 style="margin:0;color:#6ee7b7;font-size:16px;">✅ Cuenta creada automáticamente</h2>
-      </div>
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#065f46;">
+        <tr>
+          <td style="padding:20px 0 20px 24px;vertical-align:middle;" valign="middle">
+            <h2 style="margin:0;color:#6ee7b7;font-size:16px;">✅ Cuenta creada automáticamente</h2>
+          </td>
+          <td style="padding:10px 24px 10px 14px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
+            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
+                 style="height:40px;width:auto;display:block;margin-left:auto;">
+          </td>
+        </tr>
+      </table>
       <div style="padding:20px 24px;font-size:14px;color:#333;">
         <p>La solicitud #{sol_id} de <strong>{nombre_c}</strong> ha sido aprobada.</p>
         <table border="0" cellpadding="0" cellspacing="0" style="font-size:13px;width:100%;">
