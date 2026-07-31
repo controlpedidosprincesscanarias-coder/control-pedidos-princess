@@ -1,3 +1,33 @@
+# v12.27.2 — 31 julio 2026
+
+✍️ Correo interno de cambio de estado — redacción mejorada + ENVIADO AL PROVEEDOR + quién hizo el cambio
+
+**Petición:** el correo interno de cambio de estado (Entregado,
+Entrega Parcial, Cancelado) llegaba muy básico. Se pidió: redacción
+más cuidada y profesional, extenderlo también a ENVIADO AL PROVEEDOR
+(antes solo cubierto por el BCC del correo externo al proveedor, sin
+un aviso interno propio), y que indique quién realizó el cambio de
+estado (dato que no puede salir en el correo al proveedor).
+
+**Cambios:**
+- `enviar_emails_estado()` acepta ahora `usuario_nombre` — se pasa
+  desde `_notificar_cambio_estado()` (cambios de estado manuales) y
+  desde `create_pedido()` (alta directa en un estado con correo
+  interno). Se añade como línea "Realizado por:" en el correo interno,
+  solo si hay nombre disponible.
+- El correo interno ahora también se genera para ENVIADO AL PROVEEDOR
+  (antes excluido a propósito) — se envía ADEMÁS del correo externo al
+  proveedor, no en su lugar.
+- Redacción: icono por estado (📤 enviado, 📦 entrega parcial, ✅
+  entregado, ❌ cancelado) en asunto y cabecera del cuerpo, separadores
+  visuales, secciones "📋 Datos del pedido" y "📦 [histórico de
+  entregas]", pie de aviso automático. Aplicado tanto al texto plano
+  (el que realmente se entrega — ver EmailJS) como al HTML.
+- Destinatarios sin cambios: comprador(es) + usuario(s) hotel del
+  hotel del pedido, ya combinados en `_todos_internos`.
+
+Badge de versión del sidebar actualizado a "V 12.27.2".
+
 # v12.27.0 — 31 julio 2026
 
 🔧 Corrección — el email de usuario no debe ser obligatorio para guardar

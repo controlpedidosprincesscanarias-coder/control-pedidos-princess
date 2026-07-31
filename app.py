@@ -1390,7 +1390,8 @@ def _log_email(db, pedido_id, tipo, destinatario, asunto, enviado, error=None):
             (pedido_id, tipo, destinatario, asunto, 1 if enviado else 0, error)
         )
 
-def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str = None):
+def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str = None,
+                          usuario_nombre: str = ""):
     """
     Construye los correos de notificación de cambio de estado (proveedor +
     internos) y los registra en _log_email. El envío lo hace el frontend
@@ -1398,6 +1399,10 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     se devuelve una lista de correos pendientes para
     que el caller (create_pedido / update_pedido) la incluya en su respuesta
     JSON y el frontend los envíe vía EmailJS justo después de guardar.
+
+    usuario_nombre: quién realizó el cambio (o creó el pedido) — se incluye
+    en el correo interno ("Realizado por:"), nunca en el correo al
+    proveedor (es un dato interno, no debe salir fuera de la empresa).
 
     Devuelve: list[dict] — cada dict trae lo necesario para emailjs.send:
         {"tipo", "to_email", "bcc", "asunto", "body_text"}
@@ -1497,13 +1502,16 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 "body_text": body_text,
             })
 
-    # ── Correo interno (ENTREGA PARCIAL, ENTREGADO, CANCELADO) ───────────────
+    # ── Correo interno (ENVIADO AL PROVEEDOR, ENTREGA PARCIAL, ENTREGADO, CANCELADO) ──
     # Para:  primer comprador del hotel
     # BCC:   resto de compradores + usuarios hotel del mismo hotel
-    # Nota:  ENVIADO AL PROVEEDOR queda excluido aquí — ya está cubierto
-    #        por el BCC del correo al proveedor enviado arriba.
-    ESTADOS_EMAIL_INTERNO_SIN_PROVEEDOR = ESTADOS_EMAIL_INTERNO - ESTADOS_EMAIL_PROVEEDOR
-    if estado_nuevo in ESTADOS_EMAIL_INTERNO_SIN_PROVEEDOR and _todos_internos:
+    # Nota:  para ENVIADO AL PROVEEDOR este correo interno se manda ADEMÁS
+    #        del correo al proveedor de arriba (que también lleva a los
+    #        internos en BCC) — el de arriba es la comunicación externa al
+    #        proveedor; este es el aviso interno propiamente dicho, con
+    #        datos que nunca deben salir fuera de la empresa (quién hizo el
+    #        cambio).
+    if estado_nuevo in ESTADOS_EMAIL_INTERNO and _todos_internos:
         _resumen_ent = _resumen_entregas(pedido, estado_nuevo)
 
         # Días transcurridos desde la tramitación, para contexto de seguimiento
@@ -1518,23 +1526,34 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _importe_txt    = f"{pedido.get('importe'):.2f} €" if pedido.get('importe') is not None else '—'
         _fecha_tram_txt = _fecha_es(pedido.get('fecha_tramitacion')) or '—'
         _dias_txt       = f" ({_dias_transcurridos} día(s) desde tramitación)" if _dias_transcurridos is not None else ''
+        _usuario_txt    = (usuario_nombre or '').strip()
+
+        _ICONO_ESTADO = {
+            "ENVIADO AL PROVEEDOR": "📤",
+            "ENTREGA PARCIAL":      "📦",
+            "ENTREGADO":            "✅",
+            "CANCELADO":            "❌",
+        }
+        _icono = _ICONO_ESTADO.get(estado_nuevo, "🔔")
 
         _INTRO_ESTADO = {
-            "ENTREGA PARCIAL": "Se ha registrado una <strong>entrega parcial</strong> en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
-            "ENTREGADO":        "El pedido ha sido marcado como <strong>ENTREGADO</strong> (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
-            "CANCELADO":        "El pedido ha sido <strong>CANCELADO</strong>.",
+            "ENVIADO AL PROVEEDOR": "El pedido se ha tramitado y enviado al proveedor. En cuanto haya novedades de entrega o cotización recibirás un nuevo aviso.",
+            "ENTREGA PARCIAL":      "Se ha registrado una <strong>entrega parcial</strong> en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
+            "ENTREGADO":            "El pedido ha sido marcado como <strong>ENTREGADO</strong> (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
+            "CANCELADO":            "El pedido ha sido <strong>CANCELADO</strong>.",
         }
         _intro_html = _INTRO_ESTADO.get(estado_nuevo, "")
         _intro_html_block = f"<p>{_intro_html}</p>" if _intro_html else ""
 
-        subject_i = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {estado_nuevo}"
+        subject_i = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {_icono} {estado_nuevo}"
         if estado_nuevo == "ENTREGADO" and _resumen_ent["ultima_fecha_es"]:
             subject_i += f" ({_resumen_ent['ultima_fecha_es']})"
         elif estado_nuevo == "ENTREGA PARCIAL" and _resumen_ent["ultima_fecha_es"]:
             subject_i += f" — última entrega {_resumen_ent['ultima_fecha_es']}"
 
+        _fila_usuario_html = f'<tr><td><b>Realizado por</b></td><td>{_usuario_txt}</td></tr>' if _usuario_txt else ''
         body_html_i = f"""
-        <p>Cambio de estado en el sistema de Control de Pedidos:</p>
+        <p style="font-size:15px"><strong>{_icono} {estado_nuevo}</strong> — Pedido {pedido.get('pedido_num','—')} · {pedido.get('hotel_codigo','')}</p>
         {_intro_html_block}
         <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">
           <tr><td><b>Hotel</b></td><td>{pedido.get('hotel_nombre','')} ({pedido.get('hotel_codigo','')})</td></tr>
@@ -1546,37 +1565,50 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
           <tr><td><b>Estado anterior</b></td><td>{estado_antes or '—'}</td></tr>
           <tr><td><b>Estado nuevo</b></td><td><b>{estado_nuevo}</b></td></tr>
           <tr><td><b>Fecha tramitación</b></td><td>{_fecha_tram_txt}{_dias_txt}</td></tr>
+          {_fila_usuario_html}
         </table>
         {_html_bloque_entregas(_resumen_ent, estado_nuevo)}
         """
         if estado_nuevo == "CANCELADO" and pedido.get("observaciones"):
             body_html_i += f'<p style="margin-top:14px"><b>Observaciones / motivo:</b><br>{pedido.get("observaciones")}</p>'
+        body_html_i += '<p style="margin-top:18px;font-size:11.5px;color:#888">Aviso automático del sistema de Control de Pedidos — Princess Hotels &amp; Resorts.</p>'
 
         _INTRO_ESTADO_TXT = {
-            "ENTREGA PARCIAL": "Se ha registrado una entrega parcial en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
-            "ENTREGADO":        "El pedido ha sido marcado como ENTREGADO (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
-            "CANCELADO":        "El pedido ha sido CANCELADO.",
+            "ENVIADO AL PROVEEDOR": "El pedido se ha tramitado y enviado al proveedor. En cuanto haya novedades de entrega o cotización recibirás un nuevo aviso.",
+            "ENTREGA PARCIAL":      "Se ha registrado una entrega parcial en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
+            "ENTREGADO":            "El pedido ha sido marcado como ENTREGADO (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
+            "CANCELADO":            "El pedido ha sido CANCELADO.",
         }
         _intro_text = _INTRO_ESTADO_TXT.get(estado_nuevo, "")
 
+        _SEP = "─" * 42
+        _datos_lineas = [
+            f"   Hotel:              {pedido.get('hotel_nombre','')} ({pedido.get('hotel_codigo','')})",
+            f"   Departamento:       {pedido.get('departamento_nombre','')}",
+            f"   Pedido Nº:          {pedido.get('pedido_num','—')}",
+            f"   Presupuesto Nº:     {pedido.get('presupuesto_num') or '—'}",
+            f"   Proveedor:          {pedido.get('proveedor_nombre','—')}",
+            f"   Importe:            {_importe_txt}",
+            f"   Estado anterior:    {estado_antes or '—'}",
+            f"   Estado nuevo:       {estado_nuevo}",
+            f"   Fecha tramitación:  {_fecha_tram_txt}{_dias_txt}",
+        ]
+        if _usuario_txt:
+            _datos_lineas.append(f"   Realizado por:      {_usuario_txt}")
+
         body_text_i = (
-            f"Cambio de estado en el sistema de Control de Pedidos:\n\n"
+            f"{_icono} {estado_nuevo} — Pedido {pedido.get('pedido_num','—')} · {pedido.get('hotel_codigo','')}\n"
+            f"{_SEP}\n\n"
             + (f"{_intro_text}\n\n" if _intro_text else "")
-            + f"Hotel: {pedido.get('hotel_nombre','')} ({pedido.get('hotel_codigo','')})\n"
-            + f"Departamento: {pedido.get('departamento_nombre','')}\n"
-            + f"Pedido Nº: {pedido.get('pedido_num','—')}\n"
-            + f"Presupuesto Nº: {pedido.get('presupuesto_num') or '—'}\n"
-            + f"Proveedor: {pedido.get('proveedor_nombre','—')}\n"
-            + f"Importe: {_importe_txt}\n"
-            + f"Estado anterior: {estado_antes or '—'}\n"
-            + f"Estado nuevo: {estado_nuevo}\n"
-            + f"Fecha tramitación: {_fecha_tram_txt}{_dias_txt}"
+            + "📋 Datos del pedido\n"
+            + "\n".join(_datos_lineas)
         )
         _bloque_text_ent = _text_bloque_entregas(_resumen_ent, estado_nuevo)
         if _bloque_text_ent:
-            body_text_i += "\n\n" + _bloque_text_ent
+            body_text_i += "\n\n📦 " + _bloque_text_ent
         if estado_nuevo == "CANCELADO" and pedido.get("observaciones"):
             body_text_i += f"\n\nObservaciones / motivo:\n{pedido.get('observaciones')}"
+        body_text_i += f"\n\n{_SEP}\nAviso automático del sistema de Control de Pedidos — Princess Hotels & Resorts."
 
         for dest in _todos_internos:
             _log_email(db, pedido_id, "interno", dest, subject_i, False, "Pendiente de envío vía EmailJS")
@@ -2338,7 +2370,8 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
     - es_cambio_manual=True queda encapsulado: el caller no necesita saber
       el detalle de la supresión de alertas contradictorias.
     """
-    pendientes = enviar_emails_estado(db, pedido_id, estado_nuevo, estado_antes)
+    pendientes = enviar_emails_estado(db, pedido_id, estado_nuevo, estado_antes,
+                                       usuario_nombre=usuario_nombre)
     _telegram_cambio_estado(db, pedido_id, estado_nuevo, estado_antes,
                              usuario_nombre=usuario_nombre,
                              es_cambio_manual=True)
@@ -7661,7 +7694,7 @@ def create_pedido():
     )
     db.commit()
 
-    _pendientes_email = enviar_emails_estado(db, pedido_id, estado)
+    _pendientes_email = enviar_emails_estado(db, pedido_id, estado, usuario_nombre=session.get("nombre", ""))
 
     # ── Telegram inmediato si el pedido está sujeto al techo de gastos ────────
     if sujeto_techo:

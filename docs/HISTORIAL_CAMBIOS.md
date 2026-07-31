@@ -8,6 +8,48 @@
 
 ---
 
+## 2026-07-31 (11)
+
+### [Control Pedidos] v12.27.2 — Correo interno de cambio de estado mejorado
+- Petición: el correo interno de cambio de estado (mostrado con
+  captura real de un ENTREGADO) llegaba muy básico — se pidió
+  redacción más cuidada/profesional, extenderlo también a ENVIADO AL
+  PROVEEDOR (antes solo cubierto por el BCC del correo externo, sin
+  aviso interno propio), y que indique el nombre del usuario que
+  realizó el cambio (dato que nunca debe salir en el correo al
+  proveedor).
+- `enviar_emails_estado()` ahora acepta `usuario_nombre` — se pasa
+  desde `_notificar_cambio_estado()` (cambios manuales, ya recibía
+  `usuario_nombre` para Telegram pero no lo pasaba a los emails) y
+  desde `create_pedido()` (alta directa en un estado con correo
+  interno, usando `session.get("nombre")`). Se añade como línea
+  "Realizado por:" en el correo interno (HTML y texto), solo si hay
+  nombre disponible.
+- Quitada la exclusión de ENVIADO AL PROVEEDOR del bloque de correo
+  interno (antes `ESTADOS_EMAIL_INTERNO - ESTADOS_EMAIL_PROVEEDOR`,
+  ahora directamente `ESTADOS_EMAIL_INTERNO`, que ya lo incluía) —
+  para ese estado ahora se envían DOS correos: el externo al
+  proveedor (con BCC a los internos, sin cambios) y este interno
+  nuevo, dirigido solo a comprador(es) + usuario(s) hotel.
+- Redacción del cuerpo: icono por estado en asunto y cabecera (📤
+  enviado al proveedor, 📦 entrega parcial, ✅ entregado, ❌
+  cancelado), separador visual (línea de guiones), secciones "📋
+  Datos del pedido" y "📦 [histórico de entregas]" cuando aplica, pie
+  de aviso automático al final. Aplicado igual en `body_text_i` (el
+  que realmente se entrega, ya que EmailJS usa `cuerpo_text ||
+  cuerpo_html`) y en `body_html_i`.
+- Destinatarios sin cambios — `_todos_internos` ya combinaba
+  compradores + usuarios hotel del hotel del pedido (con soporte de
+  `email2` desde v12.25.8); simplemente ahora también se usa para
+  ENVIADO AL PROVEEDOR.
+- Probado con datos de ejemplo (Pedido 23979, TUI Blue Suite Princess)
+  reproduciendo el caso de la captura — salida verificada limpia y
+  bien estructurada.
+- Badge de versión del sidebar actualizado a "V 12.27.2"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
 ## 2026-07-31 (10)
 
 ### [Control Pedidos] v12.27.0 — El email de usuario no debe bloquear el guardado
