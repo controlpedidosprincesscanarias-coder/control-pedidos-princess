@@ -359,6 +359,13 @@ def _auto_migrate():
                 "CREATE INDEX IF NOT EXISTS idx_bridge_notif_usuario_leido "
                 "ON bridge_notificaciones(usuario, leido)"
             )
+            # v12.29.1 — url_accion: enlace opcional (p.ej. "aprobar esta
+            # solicitud de acceso") para que el popup del Organizador pueda
+            # ofrecer un botón "🌐 Acceso web" que abra la página exacta en
+            # el navegador, en vez de solo mostrar texto plano.
+            cur.execute(
+                "ALTER TABLE bridge_notificaciones ADD COLUMN IF NOT EXISTS url_accion TEXT"
+            )
             # ── v11.4.0 — Plazo de entrega por pedido ─────────────────────────
             cur.execute(
                 "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS plazo_entrega_dias INTEGER"
@@ -1912,7 +1919,7 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
                       titulo_bridge: str = None, pedido_id_bridge: int = None,
                       nivel_bridge: str = "urgente", tipo_bridge: str = "supervision",
                       asunto_email: str = None, cuerpo_email_html: str = None,
-                      cuerpo_email_text: str = None) -> None:
+                      cuerpo_email_text: str = None, url_accion_bridge: str = None) -> None:
     """
     Punto único de envío para avisos de sistema/administración configurables.
     Resuelve destinatarios desde notificaciones_config y despacha por
@@ -1920,6 +1927,11 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
     independiente entre sí (v12.17.0: antes el popup viajaba siempre pegado
     a la lista de Telegram; ahora cada uno tiene su propio checkbox en el
     panel de admin).
+
+    url_accion_bridge (opcional, v12.29.1): si se indica, viaja SOLO al
+    canal popup (el Organizador la usa para pintar un botón "🌐 Acceso
+    web") — Telegram y email ya llevan su propio enlace embebido en el
+    texto/HTML, así que no hace falta duplicarlo ahí.
     """
     destinatarios_tg = _destinatarios_evento(evento_codigo, "telegram")
     for dest in destinatarios_tg:
@@ -1941,6 +1953,7 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
             mensaje=texto_telegram.replace("*", ""),
             nivel=nivel_bridge,
             pedido_id=pedido_id_bridge,
+            url_accion=url_accion_bridge,
         )
 
     if asunto_email:
@@ -1948,16 +1961,22 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
         _encolar_email_sistema(evento_codigo, destinatarios_email, asunto_email, cuerpo_email_html, cuerpo_email_text)
 
 
-def _notify_solicitud_telegram(texto: str) -> None:
+def _notify_solicitud_telegram(texto: str, url_admin: str = None) -> None:
     """
     Notifica una nueva solicitud de acceso (Fase 1 / Fase 2) a los usuarios
     configurados para el evento 'solicitud_acceso'.
+
+    url_admin (opcional, v12.29.1): enlace directo a la solicitud
+    (`{app_url}/admin/solicitudes#{sol_id}`) para que el popup del
+    Organizador pueda ofrecer un botón "🌐 Acceso web" que la abra sin
+    tener que ir a buscarla a mano en el panel.
     """
     _notificar_evento(
         "solicitud_acceso", texto,
         titulo_bridge="📋 Nueva solicitud de acceso",
         nivel_bridge="aviso",
         tipo_bridge="solicitud_acceso",
+        url_accion_bridge=url_admin,
     )
 
 
@@ -2078,7 +2097,8 @@ def _send_telegram(chat_id: str, text: str) -> dict:
 
 
 def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: str,
-                                  nivel: str = "aviso", pedido_id: int = None) -> None:
+                                  nivel: str = "aviso", pedido_id: int = None,
+                                  url_accion: str = None) -> None:
     """
     Inserta una fila en bridge_notificaciones para que el bridge de main_agenda
     la recoja en la próxima consulta a /api/bridge/notificaciones.
@@ -2087,20 +2107,23 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
     garantizando paridad total entre los avisos de Telegram y los de main_agenda.
 
     Parámetros:
-        usuario   – username del destinatario (igual que en la tabla usuarios)
-        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida' | 'supervision'
-        titulo    – línea resumen (se mostrará como título del popup)
-        mensaje   – cuerpo completo del aviso
-        nivel     – 'aviso' | 'urgente'
-        pedido_id – id del pedido (None para alertas de techo sin pedido concreto)
+        usuario    – username del destinatario (igual que en la tabla usuarios)
+        tipo       – 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida' | 'supervision'
+        titulo     – línea resumen (se mostrará como título del popup)
+        mensaje    – cuerpo completo del aviso
+        nivel      – 'aviso' | 'urgente'
+        pedido_id  – id del pedido (None para alertas de techo sin pedido concreto)
+        url_accion – (opcional, v12.29.1) URL absoluta de la página relacionada
+                     (p.ej. la solicitud de acceso a aprobar); si viene, el
+                     Organizador pinta un botón "🌐 Acceso web" en el popup.
     """
     try:
         db = get_db()
         db.cursor().execute(
             """INSERT INTO bridge_notificaciones
-               (usuario, tipo, pedido_id, titulo, mensaje, nivel)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
-            (usuario.lower(), tipo, pedido_id, titulo, mensaje, nivel)
+               (usuario, tipo, pedido_id, titulo, mensaje, nivel, url_accion)
+               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+            (usuario.lower(), tipo, pedido_id, titulo, mensaje, nivel, url_accion)
         )
         db.commit()
     except Exception as exc:
@@ -5386,7 +5409,8 @@ def solicitar_usuario_fase1():
         f"\U0001F4CB Solicitud `#{sol_id}`\n\n"
         f"\u26A0\uFE0F *Abre la aplicaci\u00f3n* para que el email de verificaci\u00f3n "
         f"(Fase 2) se env\u00ede autom\u00e1ticamente al usuario."
-        + (f"\n\U0001F517 {url_admin}" if url_admin else "")
+        + (f"\n\U0001F517 {url_admin}" if url_admin else ""),
+        url_admin=url_admin,
     )
 
     # Se encolan ambos emails — el de Fase 2 al usuario y el aviso a los
@@ -5569,7 +5593,8 @@ def solicitar_usuario_directo():
         f"\U0001F4E7 {email_sol}\n"
         f"\U0001F3E8 {hoteles}\n"
         f"\U0001F4CB Solicitud `#{sol_id}` — lista para aprobar."
-        + (f"\n\U0001F517 {url_admin}" if url_admin else "")
+        + (f"\n\U0001F517 {url_admin}" if url_admin else ""),
+        url_admin=url_admin,
     )
 
     # Igual que fase 1: se encola (no EmailJS en vivo, porque aquí no hay
@@ -8894,6 +8919,7 @@ def bridge_notificaciones_usuario():
                 "titulo": "...",
                 "mensaje": "...",
                 "nivel": "urgente",           -- 'aviso'|'urgente'
+                "url_accion": null,           -- v12.29.1: enlace opcional (p.ej. aprobar una solicitud de acceso)
                 "creado_en": "2026-05-25T..."
             }, ...
         ],
@@ -8907,7 +8933,7 @@ def bridge_notificaciones_usuario():
 
     try:
         rows = rows_to_list(query(
-            """SELECT id, tipo, pedido_id, titulo, mensaje, nivel, creado_en
+            """SELECT id, tipo, pedido_id, titulo, mensaje, nivel, url_accion, creado_en
                FROM bridge_notificaciones
                WHERE usuario = %s AND leido = FALSE
                ORDER BY creado_en ASC""",
