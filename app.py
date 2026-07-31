@@ -3948,11 +3948,7 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
                                      comprador_nombre: str = "", comprador_movil: str = "") -> tuple:
     """Pedido con entrega parcial sin cierre."""
     subject = f"[Seguimiento] Pedido Nº {pedido.get('pedido_num','—')} — Entrega parcial pendiente de completar"
-    _firma_contacto = (
-        (f'<strong>{comprador_nombre}</strong><br>' if comprador_nombre else "")
-        + f'<a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a>'
-        + (f" · Móvil: {comprador_movil}" if comprador_movil else "")
-    )
+    _firma_contacto = _firma_comprador_html(comprador_nombre, comprador_email, comprador_movil)
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
@@ -3991,11 +3987,7 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
     """Pedido pendiente de cotización del proveedor."""
     nivel = "URGENTE" if urgente else "Solicitud de cotización"
     subject = f"[{nivel}] Cotización solicitada — {pedido.get('hotel_nombre','Princess Hotels')} — Princess Hotels & Resorts"
-    _firma_contacto = (
-        (f'<strong>{comprador_nombre}</strong><br>' if comprador_nombre else "")
-        + f'<a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a>'
-        + (f" · Móvil: {comprador_movil}" if comprador_movil else "")
-    )
+    _firma_contacto = _firma_comprador_html(comprador_nombre, comprador_email, comprador_movil)
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">

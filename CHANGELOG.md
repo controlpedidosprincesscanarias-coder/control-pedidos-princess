@@ -1,3 +1,31 @@
+# v12.25.6 — 31 julio 2026
+
+🔧 Corrección — 2 de las 3 plantillas se quedaron con la firma antigua
+
+**Reportado:** con capturas reales de Gmail (carpeta Enviados),
+confirmando que la firma seguía saliendo en el formato antiguo
+("Nombre / email · Móvil: xxx") en vez del corporativo (v12.25.0),
+en un correo de "Solicitud de cotización" — pero el arreglo de
+espaciado de v12.25.4 sí se veía correctamente aplicado.
+
+**Causa:** al aplicar la firma corporativa en v12.25.0, el reemplazo
+masivo solo tocó el bloque de visualización final (quitar las líneas
+"Dpto. Central de Compras Princess en Canarias" / "Princess Hotels &
+Resorts" duplicadas) en las 3 plantillas de alerta, pero la
+construcción de la variable `_firma_contacto` en sí — la que arma
+nombre/email/móvil — solo se actualizó a `_firma_comprador_html()` en
+`_email_template_enviado_proveedor`. `_email_template_entrega_parcial`
+y `_email_template_pendiente_cotizacion` se quedaron con la
+construcción manual antigua (`· Móvil:`, sin departamento ni
+dirección), sin que se notara porque ambas compilaban perfectamente.
+
+**Corrección:** las 3 plantillas usan ahora, de forma consistente,
+`_firma_contacto = _firma_comprador_html(comprador_nombre,
+comprador_email, comprador_movil)`. Verificado que no queda ningún
+rastro de "· Móvil:" en todo `app.py`.
+
+Badge de versión del sidebar actualizado a "V 12.25.6".
+
 # v12.25.4 — 31 julio 2026
 
 🔧 Corrección — correos automáticos llegaban con líneas en blanco duplicadas
