@@ -1212,7 +1212,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.27.10
+          V 12.27.12
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2479,7 +2479,7 @@ async function doLogin(reenvio=false) {
       if (!reenvio) document.getElementById('login-codigo').focus();
 
       if (r.email) {
-        const enviado = await _enviarCodigoVerificacion(r.email, r.subject, r.message);
+        const enviado = await _enviarCodigoVerificacion(r.email, r.subject, r.body_html);
         if (!enviado) {
           // Antes este fallo se tragaba en silencio (catch vacío) y el
           // usuario se quedaba esperando un email que nunca llegó, dando
@@ -2697,16 +2697,7 @@ async function enviarSolicitudReset() {
           await enviarEmailJS({
             to_email: r.email,
             subject:  'Restablecimiento de contraseña – Control de Pedidos',
-            message:  `Hola ${r.nombre || usuario},
-
-Hemos recibido una solicitud para restablecer tu contraseña.
-
-Usa este enlace (válido 2 horas):
-${r.link}
-
-Si no lo solicitaste, ignora este mensaje.
-
-Control de Pedidos · Princess Canarias`,
+            message:  r.body_html,
             reply_to: r.email,
           });
           // EmailJS envió — mostrar confirmación normal
@@ -2882,7 +2873,7 @@ async function sol_enviarFase2() {
           await enviarEmailJS({
             to_email: dest,
             subject:  r.asunto  || '[FASE 2 COMPLETADA] Alta usuario',
-            message:  r.body_text || 'El usuario ha completado la verificación. Accede al panel para aprobar la cuenta.',
+            message:  r.body_html || r.body_text || 'El usuario ha completado la verificación. Accede al panel para aprobar la cuenta.',
             reply_to: r.reply_to || ''
           });
         }
@@ -3090,7 +3081,7 @@ async function adminEnviarFase2(solId) {
         await enviarEmailJS({
           to_email: toEmail,
           subject:  r.asunto || 'Verificación de acceso — Control de Pedidos Princess',
-          message:  r.body_text || `Hola,\n\nTu solicitud de acceso ha sido revisada.\n\nCompleta la verificación aquí:\n${r.url_token}\n\nEl enlace caduca en 72 horas.\n\nControl Pedidos Princess Canarias`,
+          message:  r.body_html || r.body_text || `Hola,<br><br>Tu solicitud de acceso ha sido revisada.<br><br>Completa la verificación aquí:<br>${r.url_token}<br><br>El enlace caduca en 72 horas.<br><br>Control Pedidos Princess Canarias`,
           reply_to: toEmail,
         });
         toast(`✅ EmailJS aceptó el envío a ${toEmail} — confírmalo con el usuario, no siempre llega`, 'success');
@@ -3141,7 +3132,7 @@ async function adminAprobarSolicitud(solId) {
         await enviarEmailJS({
           to_email: r.email_usuario_pendiente.to_email,
           subject:  r.email_usuario_pendiente.asunto,
-          message:  r.email_usuario_pendiente.body_text,
+          message:  r.email_usuario_pendiente.body_html || r.email_usuario_pendiente.body_text,
           bcc:      '',
           email:    r.email_usuario_pendiente.to_email,
         });
@@ -3156,7 +3147,7 @@ async function adminAprobarSolicitud(solId) {
         await enviarEmailJS({
           to_email: r.email_admins_pendiente.destinatarios[0],
           subject:  r.email_admins_pendiente.asunto,
-          message:  r.email_admins_pendiente.body_text,
+          message:  r.email_admins_pendiente.body_html || r.email_admins_pendiente.body_text,
           bcc:      r.email_admins_pendiente.destinatarios.slice(1).join(',') || '',
           email:    r.email_admins_pendiente.destinatarios[0],
         });
@@ -4816,7 +4807,7 @@ async function _enviarEmailsPendientesEstado(pendientes) {
       await enviarEmailJS({
         to_email: p.to_email,
         subject:  p.asunto,
-        message:  p.body_text,
+        message:  p.body_html || p.body_text,
         bcc:      (p.bcc || []).join(',') || '',
         email:    p.to_email,
       });
@@ -7709,7 +7700,7 @@ async function meaEnviarEmail() {
     await enviarEmailJS({
       to_email: toEmail,
       subject:  subject,
-      message:  bodyText,
+      message:  _meaData.body_html || bodyText,
       bcc:      ccList.join(',') || '',
       email:    toEmail,
     });
@@ -8870,7 +8861,7 @@ async function _enviarEmailsSistemaPendientes() {
         await enviarEmailJS({
           to_email: p.destinatario,
           subject:  p.asunto,
-          message:  p.cuerpo_text || p.cuerpo_html || '',
+          message:  p.cuerpo_html || p.cuerpo_text || '',
           reply_to: p.destinatario,
           bcc:      p.cc_emails || '',
         });

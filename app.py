@@ -1780,15 +1780,13 @@ def _html_a_texto_plano(html: str) -> str:
     seguridad para cuando se encola un email de sistema sin una versión
     de texto explícita.
 
-    Motivo: el frontend (EmailJS) arma el mensaje con
-    `message: p.cuerpo_text || p.cuerpo_html || ''` — si `cuerpo_text`
-    queda NULL (como pasaba con las reclamaciones automáticas al
-    proveedor, que solo generaban `cuerpo_html`), EmailJS recibe el HTML
-    crudo como si fuera el cuerpo en texto plano, y la plantilla lo
-    manda tal cual — el destinatario ve literalmente las etiquetas
-    `<div style="...">` en vez de un email legible. Con este fallback,
-    aunque un caller se olvide de pasar `cuerpo_text` explícito (como
-    pasó aquí), `_encolar_email_sistema()` genera uno razonable solo.
+    (2026-07-31) La plantilla de EmailJS ya usa `{{{{message}}}}` (triple
+    llave, sin escapar), así que el frontend ahora prioriza
+    `message: p.cuerpo_html || p.cuerpo_text || ''` — el HTML SÍ se
+    renderiza como email real. `cuerpo_text` deja de ser lo que ve el
+    destinatario en el caso normal; queda como respaldo para el caso
+    (raro) de que `cuerpo_html` también falte, y esta función sigue
+    generándolo solo, aunque un caller se olvide de pasarlo explícito.
 
     (2026-07-31) FIX: los `body_html` de las plantillas son f-strings
     Python escritas en varias líneas con indentación — esos saltos de
@@ -4010,6 +4008,41 @@ def _firma_comprador_text(nombre: str, email: str, movil: str) -> str:
     return "\n".join(lineas)
 
 
+def _email_html_simple(nombre: str, parrafos: list, boton: dict = None,
+                        pie_extra: str = None) -> str:
+    """
+    (2026-07-31) Helper reutilizable para emails cortos tipo "código /
+    enlace" (verificación de login, reset de contraseña, avisos simples),
+    para no repetir el mismo bloque de estilos inline en cada f-string.
+    Devuelve HTML listo para el {{{{message}}}} de EmailJS (triple llave,
+    sin escapar) — ver plantilla template_1zrv4ze.
+
+    nombre:    para el saludo ("Hola <strong>nombre</strong>,"). Si viene
+               vacío, se omite el saludo.
+    parrafos:  lista de strings; cada uno se envuelve en su propio <p>.
+               El contenido ya puede traer HTML propio (p.ej. <strong>,
+               <br>, el bloque del código en monoespaciado).
+    boton:     opcional, {"texto": ..., "url": ...} — genera el mismo
+               botón rojo que ya usábamos en el reset de contraseña.
+    pie_extra: opcional, línea adicional en gris antes de la firma fija.
+    """
+    partes = []
+    if nombre:
+        partes.append(f"<p>Hola <strong>{nombre}</strong>,</p>")
+    for p in parrafos:
+        partes.append(f"<p>{p}</p>")
+    if boton:
+        partes.append(
+            f'<p><a href="{boton["url"]}" style="background:#8B0000;color:#fff;'
+            f'padding:10px 20px;border-radius:4px;text-decoration:none;'
+            f'display:inline-block;">{boton["texto"]}</a></p>'
+        )
+    if pie_extra:
+        partes.append(f'<p style="color:#666;font-size:12px;">{pie_extra}</p>')
+    partes.append('<p style="color:#666;font-size:12px;">Control de Pedidos · Princess Canarias</p>')
+    return "\n    ".join(partes)
+
+
 # ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
 
 def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, comprador_email: str = "",
@@ -4797,6 +4830,18 @@ def login():
             f"Si no has sido tú, ignora este mensaje y avisa al administrador.\n\n"
             f"Control de Pedidos · Princess Canarias"
         )
+        body_html = _email_html_simple(
+            nombre=user["nombre"],
+            parrafos=[
+                "Detectamos que hace tiempo que no accedes a Control de Pedidos. "
+                "Por seguridad, confirma que eres tú introduciendo este código:",
+                f'<span style="font-size:22px;font-weight:700;letter-spacing:4px;'
+                f'display:inline-block;padding:8px 16px;background:#f5f5f5;'
+                f'border-radius:4px;">{codigo}</span>',
+                "Válido durante <strong>10 minutos</strong>.<br>"
+                "Si no has sido tú, ignora este mensaje y avisa al administrador.",
+            ],
+        )
         return jsonify({
             "ok": True,
             "requiere_verificacion": True,
@@ -4805,6 +4850,7 @@ def login():
             "nombre":   user.get("nombre", user.get("username", "")),
             "subject":  subject,
             "message":  mensaje,
+            "body_html": body_html,
         })
 
     if requiere_verificacion and not user.get("email"):
@@ -5860,6 +5906,7 @@ def solicitar_usuario_fase2():
         "sin_email":     True,
         "destinatarios": destinatarios,
         "asunto":        asunto,
+        "body_html":     body_html,
         "body_text":     body_text,
         "url_admin":     url_admin,
         "reply_to":      sol["email"],
@@ -6072,11 +6119,13 @@ def admin_aprobar_solicitud(sol_id):
         "email_usuario_pendiente": (not res_u.get("ok", False)) and {
             "to_email":  sol["email"],
             "asunto":    asunto_u,
+            "body_html": body_html_u,
             "body_text": body_text_u,
         } or None,
         "email_admins_pendiente": (not admins_email_enviado and destinatarios) and {
             "destinatarios": destinatarios,
             "asunto":        asunto_a,
+            "body_html":     body_html_a,
             "body_text":     body_text_a,
         } or None,
         "abrir_edicion":          True,

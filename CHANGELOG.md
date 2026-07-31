@@ -1,3 +1,45 @@
+# v12.27.12 — 31 julio 2026
+
+📧 Correos EmailJS en HTML real (antes texto plano) — plantilla con triple llave
+
+**Motivo:** los correos vía EmailJS se enviaban en texto plano
+(`{{message}}`), aunque casi todos los endpoints ya construían una
+versión `body_html` cuidada con estilos que simplemente se
+descartaba antes de llegar al frontend. Con la plantilla EmailJS
+(`template_1zrv4ze`) cambiada a `{{{message}}}` (triple llave, sin
+escapar), se recupera ese HTML en vez de reconstruir el mensaje a
+mano en texto plano.
+
+**Backend (`app.py`):**
+- 3 endpoints que ya generaban `body_html`/`body_html_u`/`body_html_a`
+  pero no lo incluían en la respuesta JSON ahora lo devuelven junto
+  al `body_text` existente (fase 2 completada → aviso admin, y alta
+  de usuario/admins al aprobar solicitud).
+- Nuevo helper `_email_html_simple()` — genera el HTML de correos
+  cortos tipo "código / enlace" (saludo, párrafos, botón opcional)
+  reutilizando el mismo estilo visual (tarjeta, botón `#8B0000`,
+  pie gris) sin repetirlo en cada f-string.
+- El código de verificación de login (único caso sin versión HTML
+  previa) ahora también genera `body_html` con `_email_html_simple()`.
+- Comentario de `_html_a_texto_plano()` actualizado: deja de ser la
+  ruta principal (`cuerpo_html` pasa por delante de `cuerpo_text` en
+  el frontend) y queda como generador de respaldo.
+
+**Frontend (`index.html`):**
+- Los 8 puntos que llaman a `enviarEmailJS(...)` pasan a usar el
+  `body_html`/`cuerpo_html` correspondiente en el campo `message`,
+  con `body_text` como respaldo si faltara (login, reset de
+  contraseña, fase 2, aprobar solicitud ×2, cambios de estado de
+  pedido, preview de alerta manual, cola de emails de sistema).
+- Reset de contraseña: eliminada la plantilla de texto plano
+  duplicada a mano en el frontend — usa directamente el `body_html`
+  que el backend ya construía.
+- Preview de alerta manual (`meaEnviarEmail`): envía
+  `_meaData.body_html` directo en vez de convertirlo primero a texto
+  plano con `construirTextoCorreoPlano()`.
+
+Badge de versión del sidebar actualizado a "V 12.27.12".
+
 # v12.27.10 — 31 julio 2026
 
 📧 Backup EmailJS — cambio bidireccional (1↔2) con reinicio de contador
