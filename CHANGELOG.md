@@ -1,4 +1,46 @@
-# v12.28.0 — 31 julio 2026
+# v12.29.0 — 31 julio 2026
+
+📉 Techo de gastos — importe máximo (€) también configurable por hotel/mes **y familia**
+
+**Petición:** tras el límite de Nº de pedidos por hotel/mes y familia
+(v12.28.0), se pide el mismo control pero en importe: hasta ahora el único
+tope en € era el mensual **por hotel** (`techo_max_mes`, Regla 3 de
+`_check_techo`); no había forma de limitar cuánto podía gastar **una
+familia concreta** en el mes sin tocar código.
+
+**Cambio:** nuevo parámetro editable **"Techo — Importe máximo mensual por
+hotel y familia (€)"** (`techo_max_mes_familia`), en el mismo grupo 💳
+*Techo de gastos*. Por defecto **0 = sin límite** (no cambia nada en
+producción hasta que un admin ponga un valor > 0).
+
+**Apartados revisados y actualizados:**
+- `_check_techo()` — nueva Regla 4: suma el importe de los pedidos de esa
+  familia en el hotel/mes y, si `techo_max_mes_familia > 0`, bloquea el
+  pedido si el acumulado de la familia superaría ese importe (igual que la
+  Regla 3 ya hacía a nivel de hotel/mes total).
+- `/api/techo/resumen` y `/api/techo/resumen-historico` — devuelven ahora
+  también `familias_importe` (€ acumulado por familia) y
+  `max_importe_familia`.
+- Pestaña **📉 Techo de gastos** (tarjetas por hotel) — la línea "Familias:"
+  añade el importe acumulado de cada familia frente al nuevo límite
+  (`Nombre (n/max pedidos · importe/max €)`) cuando el límite en € está
+  activo, y resalta en ámbar tanto por Nº de pedidos como por importe.
+- Exportación/impresión del resumen de Techo de gastos — el resaltado de
+  "familia repetida" ahora también se dispara si el importe acumulado de
+  la familia alcanza el nuevo límite en €, no solo por Nº de pedidos.
+- Migración `ON CONFLICT DO NOTHING` para instalaciones ya desplegadas +
+  seed para instalaciones nuevas — no requiere ninguna acción manual en
+  Supabase.
+
+No se ha añadido (todavía) un aviso automático dedicado por Telegram/popup
+cuando se supera este importe por familia — solo bloquea la creación del
+pedido y se ve reflejado en el resumen/dashboard. Si se quiere una alerta
+proactiva como la de "Familia repetida", habría que darla de alta como
+nuevo evento en `eventos_aviso` (fuera del alcance de esta petición).
+
+Badge de versión del sidebar actualizado a "V 12.29.0".
+
+
 
 📉 Techo de gastos — límite de pedidos configurable por hotel/mes **y familia**
 

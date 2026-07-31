@@ -296,7 +296,8 @@ def _auto_migrate():
                     ("techo_max_mes",         "6000", "numero", "Techo — Importe máximo mensual por hotel (€)",      "techo",             2),
                     ("techo_max_pedidos",        "2", "numero", "Techo — Nº máximo de pedidos por hotel/mes",        "techo",             3),
                     ("techo_max_pedidos_familia", "1", "numero", "Techo — Nº máximo de pedidos por hotel/mes y familia", "techo",           4),
-                    ("techo_pct_amarillo",      "60", "numero", "Techo — % consumido para alerta 🟡 amarilla (defecto 60%)",  "techo",             5),
+                    ("techo_max_mes_familia",      "0", "numero", "Techo — Importe máximo mensual por hotel y familia (€) (0 = sin límite)", "techo", 5),
+                    ("techo_pct_amarillo",      "60", "numero", "Techo — % consumido para alerta 🟡 amarilla (defecto 60%)",  "techo",             6),
                 ]
                 cur.executemany(
                     "INSERT INTO config_alertas (clave,valor,tipo,label,grupo,orden) VALUES (%s,%s,%s,%s,%s,%s)",
@@ -463,6 +464,19 @@ def _auto_migrate():
                 ON CONFLICT (clave) DO NOTHING
             """, ('techo_max_pedidos_familia', '1', 'numero',
                   'Techo — Nº máximo de pedidos por hotel/mes y familia', 'techo', 4))
+            # ── v12.29.0 — Techo de importe (€) también por hotel/mes y familia ──
+            # Complementa a techo_max_pedidos_familia (que limita el Nº de
+            # pedidos): ahora también se puede limitar el IMPORTE acumulado
+            # de una familia concreta en el mes, igual que techo_max_mes ya
+            # limitaba el acumulado del hotel entero. Por defecto 0 = sin
+            # límite (no cambia nada en producción hasta que un admin ponga
+            # un valor > 0 desde Config alertas → Techo de gastos).
+            cur.execute("""
+                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (clave) DO NOTHING
+            """, ('techo_max_mes_familia', '0', 'numero',
+                  'Techo — Importe máximo mensual por hotel y familia (€) (0 = sin límite)', 'techo', 5))
             # ── v12.23.6 — Reclamación automática también para Pendiente Cotización ──
             # A petición del usuario, se extiende la reclamación automática al
             # proveedor (activar_reclamacion_proveedor_auto) al estado
@@ -2505,7 +2519,7 @@ def get_config() -> dict:
         "plazo_parcial_urgente_ciclo": 2,
         "activar_reclamacion_proveedor_auto": 0,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
-        "techo_max_pedidos": 2, "techo_max_pedidos_familia": 1, "techo_pct_amarillo": 60,
+        "techo_max_pedidos": 2, "techo_max_pedidos_familia": 1, "techo_max_mes_familia": 0, "techo_pct_amarillo": 60,
         "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
         "firma_compras_popup_repetir": 1, "firma_compras_popup_horas_critico": 1, "firma_compras_popup_horas_normal": 24,
         "firma_hotel_popup_repetir": 1, "firma_hotel_popup_horas_critico": 1, "firma_hotel_popup_horas_normal": 24,
@@ -7328,9 +7342,12 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
     # pedidos por hotel/mes (techo_max_pedidos, Regla 1 más arriba).
     max_pedidos_familia = cfg["techo_max_pedidos_familia"]
     pedidos_familia = [p for p in pedidos_mes if p["familia_id"] == int(familia_id)]
-    if len(pedidos_familia) >= max_pedidos_familia:
+    nuevo_importe   = float(importe) if importe else 0.0
+    fname = None
+    if len(pedidos_familia) >= max_pedidos_familia or cfg["techo_max_mes_familia"]:
         familia_row = query("SELECT nombre FROM familias WHERE id=%s", (familia_id,), one=True)
         fname = familia_row["nombre"] if familia_row else "ID {}".format(familia_id)
+    if len(pedidos_familia) >= max_pedidos_familia:
         errores.append(
             f"🚫 Ya hay {len(pedidos_familia)} pedido(s) de la familia \u00ab{fname}\u00bb este mes "
             f"para este hotel (máximo {max_pedidos_familia} por hotel/mes/familia)."
@@ -7339,13 +7356,27 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
     # Regla 3: acumulado mensual no puede superar el techo mensual
     techo_mes     = cfg["techo_max_mes"]
     acumulado     = sum(float(p["importe"]) for p in pedidos_mes)
-    nuevo_importe = float(importe) if importe else 0.0
     if acumulado + nuevo_importe > techo_mes:
         errores.append(
             f"⚠️ El acumulado del mes sería {acumulado + nuevo_importe:,.2f} € "
             f"(actual {acumulado:,.2f} € + nuevo {nuevo_importe:,.2f} €), "
             f"superando el techo mensual de {techo_mes:,.0f} €."
         )
+
+    # Regla 4 (v12.29.0): acumulado mensual de la FAMILIA no puede superar el
+    # techo mensual por hotel/mes/familia (techo_max_mes_familia). 0 = sin
+    # límite específico por familia (solo aplica la Regla 3, sobre el total
+    # del hotel).
+    techo_mes_familia = cfg["techo_max_mes_familia"]
+    if techo_mes_familia:
+        acumulado_familia = sum(float(p["importe"]) for p in pedidos_familia)
+        if acumulado_familia + nuevo_importe > techo_mes_familia:
+            errores.append(
+                f"⚠️ El acumulado de la familia \u00ab{fname}\u00bb este mes sería "
+                f"{acumulado_familia + nuevo_importe:,.2f} € "
+                f"(actual {acumulado_familia:,.2f} € + nuevo {nuevo_importe:,.2f} €), "
+                f"superando el techo de {techo_mes_familia:,.0f} € por hotel/mes/familia."
+            )
 
     return errores
 
@@ -7372,6 +7403,7 @@ def techo_resumen():
     techo_max_pedido = cfg["techo_max_pedido"]
     techo_max_ped_n  = cfg["techo_max_pedidos"]   # max numero de pedidos
     techo_max_ped_fam = cfg["techo_max_pedidos_familia"]   # max numero de pedidos por familia
+    techo_max_mes_fam = cfg["techo_max_mes_familia"]        # max importe (€) por hotel/mes/familia (0=sin límite)
     pct_amarillo     = cfg["techo_pct_amarillo"]
     umbral_amarillo  = techo_max_mes * pct_amarillo / 100
 
@@ -7426,6 +7458,15 @@ def techo_resumen():
             if fn:
                 familias_conteo[fn] = familias_conteo.get(fn, 0) + 1
 
+        # v12.29.0 — importe acumulado por familia, para avisar cuando una
+        # familia concreta esté en (o supere) su propio techo de importe
+        # mensual (techo_max_mes_familia), independiente del total del hotel.
+        familias_importe: dict = {}
+        for p in pedidos:
+            fn = p["familia_nombre"]
+            if fn:
+                familias_importe[fn] = familias_importe.get(fn, 0) + float(p["importe"] or 0)
+
         # Semaforo:
         #   ROJO     -> acumulado >= techo_max_mes  O  num_pedidos > techo_max_ped_n
         #   AMARILLO -> acumulado >= umbral_amarillo O  num_pedidos >= techo_max_ped_n
@@ -7448,6 +7489,8 @@ def techo_resumen():
             "familias_usadas": familias_usadas,
             "familias_conteo": familias_conteo,
             "max_pedidos_familia": techo_max_ped_fam,
+            "familias_importe": familias_importe,
+            "max_importe_familia": techo_max_mes_fam,
             "semaforo":        semaforo,
             "pedidos":         pedidos,
         })
@@ -7481,6 +7524,7 @@ def techo_resumen_historico():
     techo_max_pedido = cfg["techo_max_pedido"]
     techo_max_ped_n  = cfg["techo_max_pedidos"]
     techo_max_ped_fam = cfg["techo_max_pedidos_familia"]
+    techo_max_mes_fam = cfg["techo_max_mes_familia"]
     pct_amarillo     = cfg["techo_pct_amarillo"]
     umbral_amarillo  = techo_max_mes * pct_amarillo / 100
 
@@ -7549,6 +7593,12 @@ def techo_resumen_historico():
             if fn:
                 familias_conteo[fn] = familias_conteo.get(fn, 0) + 1
 
+        familias_importe: dict = {}
+        for p in pedidos:
+            fn = p["familia_nombre"]
+            if fn:
+                familias_importe[fn] = familias_importe.get(fn, 0) + float(p["importe"] or 0)
+
         if acumulado >= techo_max_mes or num_pedidos > techo_max_ped_n:
             semaforo = "rojo"
         elif acumulado >= umbral_amarillo or num_pedidos >= techo_max_ped_n:
@@ -7568,6 +7618,8 @@ def techo_resumen_historico():
             "familias_usadas": familias_usadas,
             "familias_conteo": familias_conteo,
             "max_pedidos_familia": techo_max_ped_fam,
+            "familias_importe": familias_importe,
+            "max_importe_familia": techo_max_mes_fam,
             "semaforo":        semaforo,
             "pedidos":         pedidos,
         })

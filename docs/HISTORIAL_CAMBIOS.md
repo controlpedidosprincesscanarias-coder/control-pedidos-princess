@@ -8,6 +8,89 @@
 
 ---
 
+## 2026-07-31 (26)
+
+### [Control Pedidos] v12.29.0 — Techo de gastos: importe máximo (€) también configurable por hotel/mes y familia
+- Petición del usuario, continuación directa de v12.28.0: además de limitar
+  el **Nº de pedidos** por hotel/mes y familia, se pide poder limitar el
+  **importe (€)** que puede acumular una familia concreta en el mes —
+  hasta ahora el único tope en € era el mensual del hotel entero
+  (`techo_max_mes`, Regla 3 de `_check_techo`).
+- Nuevo parámetro editable en Config alertas → 💳 Techo de gastos:
+  **"Techo — Importe máximo mensual por hotel y familia (€)"**
+  (nueva clave `techo_max_mes_familia`, independiente de
+  `techo_max_pedidos_familia` que ya limitaba el Nº de pedidos).
+  Por defecto **0 = sin límite**, para no cambiar nada en producción hasta
+  que un admin ponga un valor > 0.
+- `_check_techo()`: nueva **Regla 4** — suma el importe de los pedidos de
+  esa familia en el hotel/mes y, si `techo_max_mes_familia > 0`, bloquea
+  el pedido cuando ese acumulado superaría el límite (mismo mecanismo que
+  ya usaba la Regla 3 a nivel de hotel/mes total, incluido el "forzar"
+  para usuarios con permiso).
+- `/api/techo/resumen` y `/api/techo/resumen-historico`: devuelven ahora
+  también `familias_importe` (€ acumulado por familia este mes) y
+  `max_importe_familia`, además de los campos ya añadidos en v12.28.0.
+- Pestaña 📉 Techo de gastos (tarjetas por hotel): la línea "Familias:"
+  añade el importe acumulado de cada familia frente al nuevo límite
+  (`Nombre (n/máx pedidos · importe/máx €)`) cuando el límite en € está
+  activo, y resalta en ámbar tanto por Nº de pedidos como por importe.
+- Exportación/impresión del resumen de Techo de gastos: el resaltado de
+  "familia repetida" ahora también se dispara si el importe acumulado de
+  la familia alcanza el nuevo límite en €, no solo por Nº de pedidos.
+- Migración `ON CONFLICT DO NOTHING` (auto-ejecutada por `_auto_migrate()`
+  al arrancar la app) + seed para instalaciones nuevas — **no requiere
+  ninguna acción manual en Supabase**.
+- Pendiente / fuera de alcance de esta petición: no se ha dado de alta un
+  aviso automático dedicado (Telegram/popup) para cuando se supera este
+  importe por familia — de momento solo bloquea la creación del pedido y
+  se ve reflejado en el resumen/dashboard. Para una alerta proactiva
+  habría que registrar un nuevo evento en `eventos_aviso`, igual que
+  existe para "Familia repetida".
+- Badge de versión del sidebar → "V 12.29.0".
+
+## 2026-07-31 (25)
+
+### [Control Pedidos] v12.28.0 — Techo de gastos: Nº de pedidos configurable por hotel/mes y familia (antes fijo a 1)
+- Petición del usuario: hasta ahora una familia de artículos solo podía
+  usarse **una vez al mes por hotel** — regla fija en código dentro de
+  `_check_techo()` (Regla 2: "Ya existe un pedido de la familia... solo
+  puede usarse una vez al mes"). El único número editable desde Config
+  alertas → 💳 Techo de gastos era el máximo de pedidos **totales** por
+  hotel/mes (`techo_max_pedidos`), no el máximo por familia.
+- Nuevo parámetro editable **"Techo — Nº máximo de pedidos por hotel/mes y
+  familia"** (`techo_max_pedidos_familia`), por defecto **1** (mismo
+  comportamiento que antes hasta que un admin lo cambie), en el mismo
+  grupo que los 4 campos existentes de Techo de gastos.
+- `_check_techo()`: la Regla 2 deja de bloquear con un mensaje fijo de
+  "ya usada este mes" y pasa a comparar el nº de pedidos de esa familia
+  en el hotel/mes contra el nuevo límite configurable (mismo patrón que
+  la Regla 1, que ya hacía esto a nivel de hotel/mes total).
+- Job `_job_familia_repetida_inner` (alerta 🔴 "Familia/Partida REPETIDA"
+  a comprador y admins, cada 2 días por defecto): el `HAVING COUNT(*) > 1`
+  fijo en SQL pasa a `HAVING COUNT(*) >= techo_max_pedidos_familia`, para
+  que dispare exactamente en el mismo umbral que ahora bloquea la
+  creación del pedido — antes de este cambio, con el límite en 1, esta
+  alerta y el bloqueo de creación ya coincidían por casualidad (>1 y
+  bloqueo a partir de 1 repetición); con el límite configurable, sin este
+  ajuste se habrían desincronizado.
+- `/api/techo/resumen` y `/api/techo/resumen-historico`: devuelven ahora
+  `familias_conteo` (nº de pedidos por familia este mes) y
+  `max_pedidos_familia`, además de los campos ya existentes.
+- Pestaña 📉 Techo de gastos (tarjetas por hotel): la línea "Familias:"
+  pasa de listar solo nombres a mostrar el conteo de cada familia frente
+  al límite (`Nombre (n/máximo)`), resaltando en ámbar las que están al
+  límite o por encima.
+- Exportación/impresión del resumen de Techo de gastos: el resaltado de
+  "familia repetida" (antes fijo a `> 1`) usa ahora el mismo límite
+  configurable por hotel.
+- No hizo falta tocar el HTML de Config alertas: el panel se pinta
+  dinámicamente desde la tabla `config_alertas`, así que el nuevo campo
+  aparece solo en cuanto existe la fila en BD.
+- Migración `ON CONFLICT DO NOTHING` (auto-ejecutada por `_auto_migrate()`
+  al arrancar la app) + seed para instalaciones nuevas — **no requiere
+  ninguna acción manual en Supabase**.
+- Badge de versión del sidebar → "V 12.28.0".
+
 ## 2026-07-31 (24)
 
 ### [Control Pedidos] v12.27.22 — Cabecera con logo también en emails de proveedor / internos de pedidos
