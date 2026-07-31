@@ -1,3 +1,34 @@
+# v12.23.6 — 31 julio 2026
+
+📧 Firma de correos con nombre y móvil del comprador + reclamación automática también para Pendiente Cotización
+
+**1. Firma de correos — nombre y móvil junto al email del comprador**
+En todos los correos que llevan firma de comprador (confirmación de
+recepción al proveedor, y las plantillas de alerta de Enviado al
+Proveedor / Entrega Parcial / Pendiente Cotización, incluida la
+reclamación automática que las reutiliza), la firma ahora muestra
+nombre en negrita, el email (mailto) y "· Móvil: XXXXXXXXX" si el
+comprador tiene móvil registrado. `_get_todos_usuarios_hotel()` ahora
+también selecciona el móvil de los compradores.
+
+**2. Reclamación automática al proveedor, extendida a Pendiente Cotización**
+Antes limitada a Enviado al Proveedor y Entrega Parcial. Nueva clave
+de configuración `cotizacion_ciclo` (Admin → Config Alertas → grupo
+"💬 Pendiente cotización", default 3 días) — antes ese estado no
+repetía nunca el aviso. Efecto esperado: el reenvío de Telegram de
+Pendiente Cotización también pasa a repetirse cada `cotizacion_ciclo`
+días, igual que en el resto de estados con ciclo.
+
+**3. Pendiente Cotización sin proveedor asignado → aviso al comprador**
+Cuando la reclamación automática de Pendiente Cotización no encuentra
+proveedor asignado en el pedido, ya no se omite en silencio: envía un
+único correo interno a los compradores del hotel, indicando la fecha
+de la solicitud, los días en espera y "Proveedor: Sin proveedor
+asignado hasta la fecha". Reutiliza el mismo ciclo/dedup que la
+reclamación normal.
+
+Badge de versión del sidebar actualizado a "V 12.23.6".
+
 # v12.23.4 — 30 julio 2026
 
 🔧 Corrección — un pedido recibía tantas reclamaciones como contactos "principal" tuviera el proveedor

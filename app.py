@@ -244,6 +244,7 @@ def _auto_migrate():
                     ("entrega_parcial_ciclo",   "10", "numero", "Entrega Parcial — Ciclo repetición (días)",         "estado_entrega",    3),
                     ("cotizacion_primera",       "2", "numero", "Pendiente Cotización — 1ª alerta (días)",           "estado_cotizacion", 1),
                     ("cotizacion_urgente",       "3", "numero", "Pendiente Cotización — Urgente (días)",             "estado_cotizacion", 2),
+                    ("cotizacion_ciclo",         "3", "numero", "Pendiente Cotización — Ciclo repetición (días)",    "estado_cotizacion", 3),
                     ("dias_critico",            "60", "numero", "Días crítico global (fuerza reenvío urgente)",      "global",            1),
                     ("activar_uso_plazo_entrega","1",  "bool",   "Activar alertas basadas en plazo de entrega del proveedor", "global", 2),
                     ("plazo_aviso_dias_antes",   "5",  "numero", "Plazo entrega — Aviso previo (días antes de la entrega)",   "plazo_entrega", 1),
@@ -397,6 +398,20 @@ def _auto_migrate():
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (clave) DO NOTHING
                 """, (_clave, _valor, _tipo, _label, _grupo, _orden))
+            # ── v12.23.6 — Reclamación automática también para Pendiente Cotización ──
+            # A petición del usuario, se extiende la reclamación automática al
+            # proveedor (activar_reclamacion_proveedor_auto) al estado
+            # PENDIENTE COTIZACIÓN, igual que ya funcionaba para ENVIADO AL
+            # PROVEEDOR y ENTREGA PARCIAL. Antes ese estado no tenía "ciclo"
+            # configurado (solo se avisaba una vez al hacerse urgente); se
+            # añade cotizacion_ciclo para que, con la reclamación automática
+            # activada, se repita cada N días mientras siga sin cotización.
+            cur.execute("""
+                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (clave) DO NOTHING
+            """, ('cotizacion_ciclo', '3', 'numero',
+                  'Pendiente Cotización — Ciclo repetición (días)', 'estado_cotizacion', 3))
             # ── v11.9.0 — Cola de restauración de backups (Opción C) ──────────
             # El panel web inserta filas aquí; un agente local (restore_agent.py)
             # ejecutado en el PC con acceso a la carpeta de red las procesa.
@@ -1408,7 +1423,19 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             log.warning("[EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email a proveedor omitido",
                         pedido_id, pedido.get("hotel_codigo",""))
         else:
-            _email_comprador_firma = _compradores_firma[0]["email"]
+            _email_comprador_firma  = _compradores_firma[0]["email"]
+            _nombre_comprador_firma = _compradores_firma[0].get("nombre") or ""
+            _movil_comprador_firma  = _compradores_firma[0].get("movil") or ""
+            _firma_contacto_html = (
+                (f"<strong>{_nombre_comprador_firma}</strong><br>" if _nombre_comprador_firma else "")
+                + f'<a href="mailto:{_email_comprador_firma}">{_email_comprador_firma}</a>'
+                + (f" · Móvil: {_movil_comprador_firma}" if _movil_comprador_firma else "")
+            )
+            _firma_contacto_text = (
+                (f"{_nombre_comprador_firma}\n" if _nombre_comprador_firma else "")
+                + _email_comprador_firma
+                + (f" · Móvil: {_movil_comprador_firma}" if _movil_comprador_firma else "")
+            )
             body_html = f"""
             <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
               ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
@@ -1433,7 +1460,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                Atentamente,<br>
                <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
                Princess Hotels &amp; Resorts<br>
-               <a href="mailto:{_email_comprador_firma}">{_email_comprador_firma}</a>
+               {_firma_contacto_html}
             </p>
             <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
               Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
@@ -1451,7 +1478,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 f"a la dirección de correo que figura en la firma de este mensaje: {_email_comprador_firma}\n\n"
                 f"Quedamos a su disposición para cualquier consulta.\n\n"
                 f"Atentamente,\nDpto. Central de Compras Princess en Canarias\n"
-                f"Princess Hotels & Resorts\n{_email_comprador_firma}\n\n"
+                f"Princess Hotels & Resorts\n{_firma_contacto_text}\n\n"
                 f"Este correo es exclusivo para notificaciones automáticas. "
                 f"Por favor, responda única y exclusivamente a la dirección que firma este comunicado."
             )
@@ -2300,7 +2327,7 @@ def get_config() -> dict:
         "firma_compras_primera": 8, "firma_compras_urgente": 0, "firma_compras_ciclo": 8,
         "firma_hotel_primera": 5, "firma_hotel_urgente": 0, "firma_hotel_ciclo": 5,
         "entrega_parcial_primera": 10, "entrega_parcial_urgente": 0, "entrega_parcial_ciclo": 10,
-        "cotizacion_primera": 2, "cotizacion_urgente": 3,
+        "cotizacion_primera": 2, "cotizacion_urgente": 3, "cotizacion_ciclo": 3,
         "dias_critico": 60,
         "activar_uso_plazo_entrega": 1,
         "plazo_aviso_dias_antes": 5,
@@ -2356,7 +2383,7 @@ def _build_umbrales() -> dict:
         "PENDIENTE COTIZACIÓN": {
             "primera": c["cotizacion_primera"],
             "urgente": c["cotizacion_urgente"] or None,
-            "ciclo":   None,
+            "ciclo":   c["cotizacion_ciclo"],
             "fecha_ref": "fecha_solicitud",
         },
     }
@@ -3706,7 +3733,9 @@ def _get_todos_usuarios_hotel(hotel_codigo: str) -> dict:
     Devuelve todos los usuarios activos asignados a un hotel, separados por rol:
       - "compradores": rol='compras' en usuario_comprador_hoteles
       - "hotel_users": rol='hotel'   en usuario_hoteles
-    Cada lista contiene dicts con {id, username, nombre, email}.
+    Cada lista contiene dicts con {id, username, nombre, email} para
+    "hotel_users", y {id, username, nombre, email, movil} para "compradores"
+    (movil se usa para incluirlo en la firma de los correos al proveedor).
     Uso: determinar destinatarios de correos internos de cambio de estado,
     incluyendo tanto el comprador responsable como el usuario del hotel.
     """
@@ -3719,7 +3748,7 @@ def _get_todos_usuarios_hotel(hotel_codigo: str) -> dict:
     hotel_id = hotel_row["id"]
 
     compradores = rows_to_list(query(
-        """SELECT u.id, u.username, u.nombre, u.email
+        """SELECT u.id, u.username, u.nombre, u.email, u.movil
            FROM usuarios u
            JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
            WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'
@@ -3748,9 +3777,15 @@ def _get_compradores_cc(hotel_codigo: str):
 
 # ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
 
-def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, comprador_email: str = "") -> tuple:
+def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, comprador_email: str = "",
+                                       comprador_nombre: str = "", comprador_movil: str = "") -> tuple:
     """Pedido enviado al proveedor sin acuse de recibo tras varios días."""
     nivel = "URGENTE" if urgente else "Recordatorio"
+    _firma_contacto = (
+        (f'<strong>{comprador_nombre}</strong><br>' if comprador_nombre else "")
+        + f'<a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a>'
+        + (f" · Móvil: {comprador_movil}" if comprador_movil else "")
+    )
     subject = f"[{nivel}] Seguimiento pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
@@ -3780,7 +3815,7 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
         <p style="font-size:12px;color:#666">Atentamente,<br>
            <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
            Princess Hotels &amp; Resorts<br>
-           <a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a></p>
+           {_firma_contacto}</p>
         <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
           Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
         </p>
@@ -3832,9 +3867,15 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
     """
     return subject, body
 
-def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: str = "") -> tuple:
+def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: str = "",
+                                     comprador_nombre: str = "", comprador_movil: str = "") -> tuple:
     """Pedido con entrega parcial sin cierre."""
     subject = f"[Seguimiento] Pedido Nº {pedido.get('pedido_num','—')} — Entrega parcial pendiente de completar"
+    _firma_contacto = (
+        (f'<strong>{comprador_nombre}</strong><br>' if comprador_nombre else "")
+        + f'<a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a>'
+        + (f" · Móvil: {comprador_movil}" if comprador_movil else "")
+    )
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
@@ -3861,7 +3902,7 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
         <p style="font-size:12px;color:#666">Atentamente,<br>
            <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
            Princess Hotels &amp; Resorts<br>
-           <a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a></p>
+           {_firma_contacto}</p>
         <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
           Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
         </p>
@@ -3870,10 +3911,16 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
     """
     return subject, body
 
-def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool, comprador_email: str = "") -> tuple:
+def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool, comprador_email: str = "",
+                                          comprador_nombre: str = "", comprador_movil: str = "") -> tuple:
     """Pedido pendiente de cotización del proveedor."""
     nivel = "URGENTE" if urgente else "Solicitud de cotización"
     subject = f"[{nivel}] Cotización solicitada — {pedido.get('hotel_nombre','Princess Hotels')} — Princess Hotels & Resorts"
+    _firma_contacto = (
+        (f'<strong>{comprador_nombre}</strong><br>' if comprador_nombre else "")
+        + f'<a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a>'
+        + (f" · Móvil: {comprador_movil}" if comprador_movil else "")
+    )
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
       <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
@@ -3899,7 +3946,7 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
         <p style="font-size:12px;color:#666">Atentamente,<br>
            <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
            Princess Hotels &amp; Resorts<br>
-           <a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a></p>
+           {_firma_contacto}</p>
         <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
           Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
         </p>
@@ -3919,40 +3966,132 @@ def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
         log.warning("[ALERTA EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email de alerta omitido",
                     pedido.get("id"), pedido.get("hotel_codigo",""))
         return None, None, False
-    _comprador_email = _compradores[0]["email"]
+    _comprador_email  = _compradores[0]["email"]
+    _comprador_nombre = _compradores[0].get("nombre") or ""
+    _comprador_movil  = _compradores[0].get("movil") or ""
     if estado == "ENVIADO AL PROVEEDOR":
-        s, b = _email_template_enviado_proveedor(pedido, dias, urgente, _comprador_email)
+        s, b = _email_template_enviado_proveedor(pedido, dias, urgente, _comprador_email,
+                                                   _comprador_nombre, _comprador_movil)
         return s, b, True
     elif estado in ("PENDIENTE FIRMA DIRECCION COMPRAS", "PENDIENTE DE FIRMA DIRECCION HOTEL"):
         s, b = _email_template_pendiente_firma(pedido, dias, estado)
         return s, b, False
     elif estado == "ENTREGA PARCIAL":
-        s, b = _email_template_entrega_parcial(pedido, dias, _comprador_email)
+        s, b = _email_template_entrega_parcial(pedido, dias, _comprador_email,
+                                                 _comprador_nombre, _comprador_movil)
         return s, b, True
     elif estado == "PENDIENTE COTIZACIÓN":
-        s, b = _email_template_pendiente_cotizacion(pedido, dias, urgente, _comprador_email)
+        s, b = _email_template_pendiente_cotizacion(pedido, dias, urgente, _comprador_email,
+                                                       _comprador_nombre, _comprador_movil)
         return s, b, True
     return None, None, False
+
+
+def _email_template_cotizacion_sin_proveedor(pedido: dict, dias: int) -> tuple:
+    """
+    Aviso interno al comprador del hotel cuando un pedido lleva días en
+    PENDIENTE COTIZACIÓN pero todavía no tiene proveedor asignado — no hay
+    a quién reclamar, así que se avisa a quien puede resolverlo.
+    """
+    fecha_sol = pedido.get("fecha_solicitud")
+    if fecha_sol and hasattr(fecha_sol, "strftime"):
+        fecha_str = fecha_sol.strftime("%d/%m/%Y")
+    elif fecha_sol:
+        parts = str(fecha_sol)[:10].split("-")
+        fecha_str = "/".join(reversed(parts)) if len(parts) == 3 else str(fecha_sol)[:10]
+    else:
+        fecha_str = "—"
+
+    subject = f"[Recordatorio] Cotización pendiente sin proveedor asignado — Pedido Nº {pedido.get('pedido_num','—')}"
+    body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
+      <div style="background:#1a3a6b;padding:16px 24px;border-radius:6px 6px 0 0">
+        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
+        <p style="color:#a8c0e8;margin:4px 0 0;font-size:13px">Control de Pedidos — Aviso interno</p>
+      </div>
+      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+        <p>Te recordamos que tenemos pendiente la cotización referente a la solicitud
+           con fecha <strong>{fecha_str}</strong>, que lleva <strong>{dias} días</strong> sin resolver.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold;width:40%">Pedido Nº</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('pedido_num','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Nº de Orden</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('norden','—')}</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Hotel</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('hotel_nombre','—')}</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Departamento</td>
+              <td style="padding:8px 12px;border:1px solid #ddd">{pedido.get('departamento_nombre','—')}</td></tr>
+          <tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Proveedor</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">Sin proveedor asignado hasta la fecha</td></tr>
+          <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días en espera</td>
+              <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">{dias} días</td></tr>
+          {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
+        </table>
+        <p>Por favor, asigna un proveedor y solicita la cotización a la mayor brevedad
+           posible para no retrasar la tramitación del pedido.</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+        <p style="font-size:12px;color:#666">Mensaje automático generado por el sistema de Control de Pedidos.<br>
+           <strong>Princess Hotels &amp; Resorts</strong></p>
+      </div>
+    </div>
+    """
+    return subject, body
+
+
+def _encolar_aviso_cotizacion_sin_proveedor(pedido: dict, dias: int) -> bool:
+    """
+    Sustituye a la reclamación automática al proveedor cuando un pedido en
+    PENDIENTE COTIZACIÓN aún no tiene proveedor asignado: en vez de omitir
+    en silencio, envía un único email interno (todos los compradores del
+    hotel juntos en "Para:") avisando de la cotización pendiente y de que
+    no hay proveedor asignado. Comparte tipo/dedup ('reclamacion_proveedor_auto')
+    con la reclamación normal, así que respeta el mismo ciclo/umbral crítico
+    configurado en Config Alertas para PENDIENTE COTIZACIÓN.
+    """
+    compradores = _get_compradores_cc(pedido.get("hotel_codigo", ""))
+    destinos = [c["email"] for c in compradores if c.get("email")]
+    if not destinos:
+        log.warning("[RECLAMACION-AUTO] Pedido %s: PENDIENTE COTIZACIÓN sin proveedor y sin comprador con email — aviso omitido",
+                    pedido.get("id"))
+        return False
+
+    subject, body_html = _email_template_cotizacion_sin_proveedor(pedido, dias)
+    destino = ", ".join(destinos)
+    _encolar_email_sistema(
+        "reclamacion_proveedor_auto", [destino], subject, body_html,
+        pedido_id=pedido.get("id"),
+    )
+    log.info("[RECLAMACION-AUTO] Pedido %s — sin proveedor asignado, aviso interno encolado (1 envío) a comprador(es) %s",
+              pedido.get("id"), destino)
+    return True
 
 
 def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> bool:
     """
     v12.19.0 — Reclamación automática por email al proveedor.
+    v12.23.6 — extendida también a PENDIENTE COTIZACIÓN.
 
-    Se llama desde el job diario de alertas cuando el plazo de entrega
-    informado por el proveedor ya venció (nivel == 'urgente' en
-    _alertas_plazo_entrega) y el pedido sigue en ENVIADO AL PROVEEDOR o
-    ENTREGA PARCIAL. Reutiliza exactamente la misma plantilla que el envío
+    Se llama desde el job diario de alertas cuando:
+      - el plazo de entrega informado por el proveedor ya venció (nivel ==
+        'urgente' en _alertas_plazo_entrega) y el pedido sigue en ENVIADO AL
+        PROVEEDOR o ENTREGA PARCIAL, o
+      - el pedido lleva sin cotizar más de lo configurado en Config Alertas
+        (estado PENDIENTE COTIZACIÓN, nivel 'urgente' vía _build_umbrales).
+    Reutiliza exactamente la misma plantilla que el envío
     manual (_build_alerta_email) y la encola en emails_sistema_pendientes
     con los compradores del hotel en copia (bcc), porque esta app no tiene
     SMTP propio — el despacho real lo hace el navegador de un admin vía
     EmailJS (mismo patrón que el resto de la cola de sistema).
 
     Devuelve True si se encoló correctamente, False si se omitió (sin
-    email de proveedor, sin comprador con email para la firma, etc.).
+    comprador con email para la firma, sin destinatario alguno, etc.).
+    Caso particular: si es PENDIENTE COTIZACIÓN y el pedido aún no tiene
+    proveedor asignado, no reclama a nadie externo — en su lugar avisa
+    por email al/los comprador(es) del hotel (ver
+    _encolar_aviso_cotizacion_sin_proveedor).
     """
-    if pedido.get("estado") not in ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL"):
-        log.info("RECLAMACION-DEBUG pedido=%s omitido: estado=%s no es ENVIADO AL PROVEEDOR/ENTREGA PARCIAL",
+    if pedido.get("estado") not in ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL", "PENDIENTE COTIZACIÓN"):
+        log.info("RECLAMACION-DEBUG pedido=%s omitido: estado=%s no es ENVIADO AL PROVEEDOR/ENTREGA PARCIAL/PENDIENTE COTIZACIÓN",
                   pedido.get("id"), pedido.get("estado"))
         return False
 
@@ -3973,6 +4112,14 @@ def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> 
     if not proveedor_emails and pedido.get("proveedor_email"):
         proveedor_emails = [pedido["proveedor_email"]]
     if not proveedor_emails:
+        # (2026-07-31) PENDIENTE COTIZACIÓN sin proveedor asignado todavía:
+        # no hay a quién reclamar, así que en vez de omitir en silencio se
+        # avisa por email únicamente al/los comprador(es) del hotel, para
+        # que gestionen la asignación de proveedor. El resto de estados
+        # (ENVIADO AL PROVEEDOR / ENTREGA PARCIAL) siempre tienen proveedor
+        # ya asignado en ese punto del flujo, así que solo aplica aquí.
+        if pedido.get("estado") == "PENDIENTE COTIZACIÓN":
+            return _encolar_aviso_cotizacion_sin_proveedor(pedido, dias)
         log.warning("[RECLAMACION-AUTO] Pedido %s: proveedor sin email — reclamación automática omitida",
                     pedido.get("id"))
         return False
