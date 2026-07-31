@@ -8,6 +8,24 @@
 
 ---
 
+## 2026-07-31 (16)
+
+### [Control Pedidos] Verificación end-to-end del backup automático EmailJS — cerrado
+- v12.27.10 desplegada y confirmada en el panel Admin → Config
+  Alertas → EmailJS: cuenta 1 (principal) en uso con sus 3
+  credenciales correctas, cuenta 2 (backup) rellena con la cuenta
+  EmailJS anterior (`service_dwwha2g` / `template_krpvmda` /
+  `WCiU7q8WT1i8AQTbR`).
+- Prueba real solicitada al usuario: envío de una notificación real
+  desde Alertas → el contador subió de 8 a 9 correctamente,
+  confirmando que `enviarEmailJS()` + `/api/emailjs/registrar-envio`
+  funcionan de punta a punta en producción (no solo la pantalla).
+- Asunto cerrado: backup automático de cuenta EmailJS (contador,
+  cambio bidireccional 1↔2 con reinicio, panel de administración e
+  Integridad) queda dado por bueno en producción.
+
+---
+
 ## 2026-07-31 (15)
 
 ### [Control Pedidos] v12.27.10 — Backup EmailJS bidireccional + reinicio de contador
