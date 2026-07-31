@@ -6006,7 +6006,9 @@ def admin_aprobar_solicitud(sol_id):
     <div style="font-family:sans-serif;max-width:620px;margin:0 auto;
                 background:#f9f9f9;border-radius:10px;overflow:hidden;
                 border:1px solid #e0e0e0;">
-      <div style="background:#0f2044;padding:24px 28px;">
+      <div style="background:#0f2044;padding:20px 28px 24px;">
+        <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
+             style="height:38px;width:auto;display:block;margin-bottom:14px;">
         <h2 style="margin:0;color:#c9a84c;font-size:18px;">🎉 ¡Tu cuenta ha sido creada!</h2>
         <p style="margin:6px 0 0;color:rgba(255,255,255,.6);font-size:13px;">
           Control de Pedidos · Princess Canarias
