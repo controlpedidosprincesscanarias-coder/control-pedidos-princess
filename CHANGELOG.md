@@ -1,3 +1,26 @@
+# v12.27.18 — 31 julio 2026
+
+🔒 Aviso de nueva versión — ya no se puede cerrar sin recargar
+
+**Petición:** tras el fix de v12.27.16 (pestañas obsoletas seguían
+despachando correos), reforzar el propio aviso: quitar la forma de
+cerrarlo sin recargar, y que se recargue sola pasados 5 minutos por
+si nadie está delante de la pantalla.
+
+**Cambios:**
+- Quitado el botón "Ahora no" — el modal de nueva versión ahora solo
+  tiene "↻ Recargar ahora". No hay backdrop-click ni tecla Escape que
+  lo cierre (ya no los había; se confirmó explícitamente).
+- Eliminada `_cerrarModalVersion()` — era la única vía para
+  descartarlo sin recargar, ya no tiene sentido mantenerla.
+- Nuevo temporizador `_iniciarCuentaAtrasNuevaVersion()`: cuenta atrás
+  visible en el propio modal (`5:00` → `0:00`) que, al llegar a cero,
+  llama sola a `_recargarConVersion()`. Pensado para pestañas de
+  fondo sin nadie delante — si el usuario recarga antes a mano, el
+  temporizador se limpia sin más.
+
+Badge de versión del sidebar actualizado a "V 12.27.18".
+
 # v12.27.16 — 31 julio 2026
 
 🛑 Fix — pestañas con versión desactualizada seguían despachando la cola de emails

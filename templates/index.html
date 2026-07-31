@@ -1212,7 +1212,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.27.16
+          V 12.27.18
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -8801,33 +8801,22 @@ function _abrirVentanaImpresion(html) {
       </div>
     </div>
 
-    <!-- Footer: botones -->
+    <!-- Footer: botón único — no se puede cerrar sin recargar -->
     <div style="padding:24px 36px 28px;display:flex;align-items:center;
                 justify-content:space-between;gap:12px;">
-      <span style="font-size:.78rem;color:#6b7a99;">
-        ⏱ Comprobación automática cada 5 min
+      <span id="modal-nv-countdown" style="font-size:.78rem;color:#6b7a99;">
+        ⏱ Se recargará sola en <strong id="modal-nv-countdown-num">5:00</strong> min si no lo haces antes
       </span>
-      <div style="display:flex;gap:10px;">
-        <button onclick="_cerrarModalVersion()"
-                style="padding:10px 22px;border:1.5px solid #d5daea;border-radius:9px;
-                       cursor:pointer;background:#fff;font-size:.88rem;font-weight:500;
-                       color:#1c2b45;font-family:'DM Sans',sans-serif;
-                       transition:background .15s,border-color .15s;"
-                onmouseover="this.style.background='#f4f6fa';this.style.borderColor='#b0b8cc'"
-                onmouseout="this.style.background='#fff';this.style.borderColor='#d5daea'">
-          Ahora no
-        </button>
-        <button onclick="_recargarConVersion()"
-                style="padding:10px 26px;border:none;border-radius:9px;cursor:pointer;
-                       background:linear-gradient(135deg,#0f2044,#1a3a6b);color:#fff;
-                       font-weight:600;font-size:.88rem;font-family:'DM Sans',sans-serif;
-                       box-shadow:0 4px 14px rgba(15,32,68,.25);
-                       transition:box-shadow .15s,transform .1s;"
-                onmouseover="this.style.boxShadow='0 6px 20px rgba(15,32,68,.35)';this.style.transform='translateY(-1px)'"
-                onmouseout="this.style.boxShadow='0 4px 14px rgba(15,32,68,.25)';this.style.transform='translateY(0)'">
-          ↻ &nbsp;Recargar ahora
-        </button>
-      </div>
+      <button onclick="_recargarConVersion()"
+              style="padding:10px 26px;border:none;border-radius:9px;cursor:pointer;
+                     background:linear-gradient(135deg,#0f2044,#1a3a6b);color:#fff;
+                     font-weight:600;font-size:.88rem;font-family:'DM Sans',sans-serif;
+                     box-shadow:0 4px 14px rgba(15,32,68,.25);
+                     transition:box-shadow .15s,transform .1s;"
+              onmouseover="this.style.boxShadow='0 6px 20px rgba(15,32,68,.35)';this.style.transform='translateY(-1px)'"
+              onmouseout="this.style.boxShadow='0 4px 14px rgba(15,32,68,.25)';this.style.transform='translateY(0)'">
+        ↻ &nbsp;Recargar ahora
+      </button>
     </div>
 
   </div>
@@ -9030,9 +9019,9 @@ async function _mostrarModalNuevaVersion() {
   // (2026-07-31) En cuanto hay versión nueva, esta pestaña deja de ser
   // fiable para despachar la cola de emails de sistema — seguiría
   // ejecutando el JS antiguo (p.ej. la prioridad cuerpo_html/cuerpo_text)
-  // indefinidamente, incluso después de "Ahora no" (que solo silencia el
-  // aviso, no recarga). Se para aquí para que sea otra pestaña —ya
-  // actualizada— la que la despache correctamente.
+  // indefinidamente si el aviso se queda abierto sin recargar. Se para
+  // aquí para que sea otra pestaña —ya actualizada— la que la despache
+  // correctamente mientras tanto.
   if (_emailsSistemaPollTimer) {
     clearInterval(_emailsSistemaPollTimer);
     _emailsSistemaPollTimer = null;
@@ -9048,26 +9037,38 @@ async function _mostrarModalNuevaVersion() {
   }
   modal.classList.remove('nv-hidden');
   modal.style.display = 'flex';
+  _iniciarCuentaAtrasNuevaVersion();
 }
 
-function _cerrarModalVersion() {
-  const modal = document.getElementById('modal-nueva-version');
-  modal.classList.add('nv-hidden');
-  modal.style.display = 'none';
-  // Actualizar el hash conocido para no volver a avisar por esta misma versión
-  fetch('/api/version?_=' + Date.now())
-    .then(r => r.ok ? r.json() : null)
-    .then(d => {
-      if (d && d.version) {
-        G._appVersion = d.version;
-        localStorage.setItem('app_version_hash', d.version);
-      }
-    })
-    .catch(() => {});
+// (2026-07-31) El aviso de nueva versión no se puede cerrar sin recargar —
+// solo tiene el botón "Recargar ahora". Para que igualmente no se quede
+// bloqueando el flujo indefinidamente si nadie está delante de la pantalla
+// (p.ej. una pestaña de fondo), se fuerza la recarga sola a los 5 minutos.
+let _nvCountdownTimer = null;
+function _iniciarCuentaAtrasNuevaVersion() {
+  if (_nvCountdownTimer) return; // ya en marcha, no duplicar
+  const DURACION_MS = 5 * 60 * 1000;
+  const fin = Date.now() + DURACION_MS;
+  const numEl = document.getElementById('modal-nv-countdown-num');
+  _nvCountdownTimer = setInterval(() => {
+    const restante = fin - Date.now();
+    if (restante <= 0) {
+      clearInterval(_nvCountdownTimer);
+      _nvCountdownTimer = null;
+      _recargarConVersion();
+      return;
+    }
+    if (numEl) {
+      const mm = Math.floor(restante / 60000);
+      const ss = Math.floor((restante % 60000) / 1000);
+      numEl.textContent = `${mm}:${String(ss).padStart(2, '0')}`;
+    }
+  }, 1000);
 }
 
 // Función de test — ejecutar en consola del navegador: _testModalVersion()
 function _recargarConVersion() {
+  if (_nvCountdownTimer) { clearInterval(_nvCountdownTimer); _nvCountdownTimer = null; }
   // Guardar la versión nueva en localStorage ANTES de recargar
   // para que al volver a entrar no vuelva a saltar el modal
   fetch('/api/version?_=' + Date.now())

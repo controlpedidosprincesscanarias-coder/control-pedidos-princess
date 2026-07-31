@@ -8,6 +8,35 @@
 
 ---
 
+## 2026-07-31 (20)
+
+### [Control Pedidos] v12.27.18 — Aviso de nueva versión: sin cierre sin recargar + cuenta atrás
+- Petición: tras el fix de v12.27.16 (pestañas obsoletas seguían
+  despachando la cola de emails con lógica antigua), reforzar el
+  propio aviso de nueva versión — que no se pueda cerrar sin recargar,
+  y que se recargue sola pasados 5 minutos por si nadie está delante
+  de la pantalla en ese momento.
+- Quitado el botón "Ahora no" del modal — ahora solo queda "↻
+  Recargar ahora". Comprobado que no había backdrop-click ni tecla
+  Escape que lo cerrasen (el listener de Escape ya existente solo
+  afecta a `modal-backup-log` y `modal-restore`, no a este).
+- Eliminada `_cerrarModalVersion()` — era la única vía para
+  descartar el aviso sin recargar (guardaba el hash de versión y
+  ocultaba el modal sin más); sin uso una vez quitado el botón que la
+  llamaba.
+- Nuevo temporizador `_iniciarCuentaAtrasNuevaVersion()`: al mostrar
+  el modal arranca una cuenta atrás de 5:00 minutos visible en el
+  propio aviso (`<strong id="modal-nv-countdown-num">`); al llegar a
+  0:00 llama sola a `_recargarConVersion()`. Guardado contra
+  duplicados (`if (_nvCountdownTimer) return`) por si
+  `_mostrarModalNuevaVersion()` se invoca más de una vez estando ya
+  visible. Se limpia (`clearInterval`) si el usuario recarga a mano
+  antes de que termine la cuenta atrás.
+- Badge de versión del sidebar actualizado a "V 12.27.18"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
 ## 2026-07-31 (19)
 
 ### [Control Pedidos] v12.27.16 — Fix: pestañas con versión desactualizada seguían despachando la cola de emails
