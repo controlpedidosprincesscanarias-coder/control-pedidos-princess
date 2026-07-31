@@ -295,7 +295,8 @@ def _auto_migrate():
                     ("techo_max_pedido",      "3000", "numero", "Techo — Importe máximo por pedido (€)",             "techo",             1),
                     ("techo_max_mes",         "6000", "numero", "Techo — Importe máximo mensual por hotel (€)",      "techo",             2),
                     ("techo_max_pedidos",        "2", "numero", "Techo — Nº máximo de pedidos por hotel/mes",        "techo",             3),
-                    ("techo_pct_amarillo",      "60", "numero", "Techo — % consumido para alerta 🟡 amarilla (defecto 60%)",  "techo",             4),
+                    ("techo_max_pedidos_familia", "1", "numero", "Techo — Nº máximo de pedidos por hotel/mes y familia", "techo",           4),
+                    ("techo_pct_amarillo",      "60", "numero", "Techo — % consumido para alerta 🟡 amarilla (defecto 60%)",  "techo",             5),
                 ]
                 cur.executemany(
                     "INSERT INTO config_alertas (clave,valor,tipo,label,grupo,orden) VALUES (%s,%s,%s,%s,%s,%s)",
@@ -448,6 +449,20 @@ def _auto_migrate():
                     VALUES (%s, %s, %s, %s, %s, %s)
                     ON CONFLICT (clave) DO NOTHING
                 """, (_clave, _valor, _tipo, _label, _grupo, _orden))
+            # ── v12.28.0 — Techo por familia configurable (antes fijo a 1) ─────
+            # Hasta ahora una familia de artículos solo podía usarse UNA vez al
+            # mes por hotel (regla fija en código). A petición del usuario se
+            # convierte en un límite editable: Nº máximo de pedidos por
+            # hotel/mes Y familia (no solo el total de pedidos por hotel/mes,
+            # que ya existía en 'techo_max_pedidos'). Se inicializa a 1 para
+            # no cambiar el comportamiento actual en producción hasta que un
+            # admin lo modifique desde Config alertas → Techo de gastos.
+            cur.execute("""
+                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (clave) DO NOTHING
+            """, ('techo_max_pedidos_familia', '1', 'numero',
+                  'Techo — Nº máximo de pedidos por hotel/mes y familia', 'techo', 4))
             # ── v12.23.6 — Reclamación automática también para Pendiente Cotización ──
             # A petición del usuario, se extiende la reclamación automática al
             # proveedor (activar_reclamacion_proveedor_auto) al estado
@@ -2490,7 +2505,7 @@ def get_config() -> dict:
         "plazo_parcial_urgente_ciclo": 2,
         "activar_reclamacion_proveedor_auto": 0,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
-        "techo_max_pedidos": 2, "techo_pct_amarillo": 60,
+        "techo_max_pedidos": 2, "techo_max_pedidos_familia": 1, "techo_pct_amarillo": 60,
         "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
         "firma_compras_popup_repetir": 1, "firma_compras_popup_horas_critico": 1, "firma_compras_popup_horas_normal": 24,
         "firma_hotel_popup_repetir": 1, "firma_hotel_popup_horas_critico": 1, "firma_hotel_popup_horas_normal": 24,
@@ -3157,6 +3172,13 @@ def _job_familia_repetida_inner() -> None:
         log.error("[FAM-REP] Error consultando hoteles: %s", exc)
         return
 
+    # v12.28.0 — antes "repetida" era fijo a >1 pedido de la misma familia en
+    # el mes; ahora se compara contra el límite configurable
+    # techo_max_pedidos_familia (Config alertas → Techo de gastos), para que
+    # esta alerta refleje el mismo límite que aplica _check_techo al crear/
+    # editar un pedido.
+    max_pedidos_familia = get_config()["techo_max_pedidos_familia"]
+
     enviados = 0
 
     for hotel in hoteles:
@@ -3164,7 +3186,7 @@ def _job_familia_repetida_inner() -> None:
         hotel_codigo = (hotel["codigo"] or "").upper()
         hotel_nombre = hotel["nombre"] or ""
 
-        # ── Detectar familias que aparecen más de una vez este mes ─────────
+        # ── Detectar familias que superan el máximo de pedidos/mes/familia ─
         try:
             familias_repetidas = rows_to_list(query("""
                 SELECT p.familia_id, f.nombre as familia_nombre,
@@ -3178,9 +3200,9 @@ def _job_familia_repetida_inner() -> None:
                   AND EXTRACT(MONTH FROM p.creado_en) = %s
                   AND p.familia_id IS NOT NULL
                 GROUP BY p.familia_id, f.nombre
-                HAVING COUNT(*) > 1
+                HAVING COUNT(*) >= %s
                 ORDER BY f.nombre
-            """, (hotel_id, year, month)))
+            """, (hotel_id, year, month, max_pedidos_familia)))
         except Exception as exc:
             log.error("[FAM-REP] Error consultando pedidos hotel %s: %s", hotel_codigo, exc)
             continue
@@ -7300,14 +7322,18 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
             f"(máximo {max_pedidos})."
         )
 
-    # Regla 2: no puede repetirse la familia en el mismo hotel/mes
-    familias_usadas = [p["familia_id"] for p in pedidos_mes]
-    if int(familia_id) in familias_usadas:
+    # Regla 2: máximo N pedidos por hotel/mes Y familia (antes v12.28.0: fijo
+    # a 1, es decir "la familia no puede repetirse"). Ahora es configurable
+    # vía techo_max_pedidos_familia, independiente del máximo total de
+    # pedidos por hotel/mes (techo_max_pedidos, Regla 1 más arriba).
+    max_pedidos_familia = cfg["techo_max_pedidos_familia"]
+    pedidos_familia = [p for p in pedidos_mes if p["familia_id"] == int(familia_id)]
+    if len(pedidos_familia) >= max_pedidos_familia:
         familia_row = query("SELECT nombre FROM familias WHERE id=%s", (familia_id,), one=True)
         fname = familia_row["nombre"] if familia_row else "ID {}".format(familia_id)
         errores.append(
-            f"🚫 Ya existe un pedido de la familia \u00ab{fname}\u00bb este mes para este hotel. "
-            f"Cada familia solo puede usarse una vez al mes por hotel."
+            f"🚫 Ya hay {len(pedidos_familia)} pedido(s) de la familia \u00ab{fname}\u00bb este mes "
+            f"para este hotel (máximo {max_pedidos_familia} por hotel/mes/familia)."
         )
 
     # Regla 3: acumulado mensual no puede superar el techo mensual
@@ -7345,6 +7371,7 @@ def techo_resumen():
     techo_max_mes    = cfg["techo_max_mes"]
     techo_max_pedido = cfg["techo_max_pedido"]
     techo_max_ped_n  = cfg["techo_max_pedidos"]   # max numero de pedidos
+    techo_max_ped_fam = cfg["techo_max_pedidos_familia"]   # max numero de pedidos por familia
     pct_amarillo     = cfg["techo_pct_amarillo"]
     umbral_amarillo  = techo_max_mes * pct_amarillo / 100
 
@@ -7390,6 +7417,15 @@ def techo_resumen():
         num_pedidos     = len(pedidos)
         familias_usadas = [p["familia_nombre"] for p in pedidos if p["familia_nombre"]]
 
+        # v12.28.0 — conteo por familia, para poder avisar en el frontend
+        # cuando una familia concreta está en (o supera) su propio límite
+        # mensual por hotel (techo_max_pedidos_familia), no solo el total.
+        familias_conteo: dict = {}
+        for p in pedidos:
+            fn = p["familia_nombre"]
+            if fn:
+                familias_conteo[fn] = familias_conteo.get(fn, 0) + 1
+
         # Semaforo:
         #   ROJO     -> acumulado >= techo_max_mes  O  num_pedidos > techo_max_ped_n
         #   AMARILLO -> acumulado >= umbral_amarillo O  num_pedidos >= techo_max_ped_n
@@ -7410,6 +7446,8 @@ def techo_resumen():
             "techo_mes":       techo_max_mes,
             "techo_pedido":    techo_max_pedido,
             "familias_usadas": familias_usadas,
+            "familias_conteo": familias_conteo,
+            "max_pedidos_familia": techo_max_ped_fam,
             "semaforo":        semaforo,
             "pedidos":         pedidos,
         })
@@ -7442,6 +7480,7 @@ def techo_resumen_historico():
     techo_max_mes    = cfg["techo_max_mes"]
     techo_max_pedido = cfg["techo_max_pedido"]
     techo_max_ped_n  = cfg["techo_max_pedidos"]
+    techo_max_ped_fam = cfg["techo_max_pedidos_familia"]
     pct_amarillo     = cfg["techo_pct_amarillo"]
     umbral_amarillo  = techo_max_mes * pct_amarillo / 100
 
@@ -7504,6 +7543,12 @@ def techo_resumen_historico():
         num_pedidos     = len(pedidos)
         familias_usadas = [p["familia_nombre"] for p in pedidos if p["familia_nombre"]]
 
+        familias_conteo: dict = {}
+        for p in pedidos:
+            fn = p["familia_nombre"]
+            if fn:
+                familias_conteo[fn] = familias_conteo.get(fn, 0) + 1
+
         if acumulado >= techo_max_mes or num_pedidos > techo_max_ped_n:
             semaforo = "rojo"
         elif acumulado >= umbral_amarillo or num_pedidos >= techo_max_ped_n:
@@ -7521,6 +7566,8 @@ def techo_resumen_historico():
             "techo_mes":       techo_max_mes,
             "techo_pedido":    techo_max_pedido,
             "familias_usadas": familias_usadas,
+            "familias_conteo": familias_conteo,
+            "max_pedidos_familia": techo_max_ped_fam,
             "semaforo":        semaforo,
             "pedidos":         pedidos,
         })

@@ -1212,7 +1212,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.27.22
+          V 12.28.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6169,6 +6169,16 @@ async function loadTecho() {
   grid.innerHTML = d.hoteles.map(h => {
     const pct = Math.min(100, (h.acumulado / h.techo_mes) * 100);
     const barColor = h.semaforo === 'rojo' ? '#dc3545' : h.semaforo === 'amarillo' ? '#ffc107' : '#28a745';
+    const maxFam = h.max_pedidos_familia || 1;
+    const famConteo = h.familias_conteo || {};
+    const familiasHtml = Object.keys(famConteo).length
+      ? Object.entries(famConteo).map(([fn, n]) => {
+          const alLimite = n >= maxFam;
+          return alLimite
+            ? `<span style="color:#b45309;font-weight:700">${fn} (${n}/${maxFam})</span>`
+            : `<span>${fn} (${n}/${maxFam})</span>`;
+        }).join(', ')
+      : '—';
     const pedidosHtml = h.pedidos.length ? h.pedidos.map(p => `
       <div style="padding:4px 0;border-bottom:1px solid #eee">
         <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px">
@@ -6198,7 +6208,7 @@ async function loadTecho() {
       </div>
       <div style="display:flex;justify-content:space-between;font-size:11px;color:#888;margin-bottom:8px">
         <span>Pedidos usados: <strong>${h.num_pedidos} / ${h.max_pedidos}</strong></span>
-        <span>Familias: ${h.familias_usadas.length ? h.familias_usadas.join(', ') : '—'}</span>
+        <span>Familias: ${familiasHtml}</span>
       </div>
       <div style="border-top:1px solid #eee;padding-top:8px">${pedidosHtml}</div>
     </div>`;
@@ -8587,7 +8597,7 @@ async function imprimirTecho(codigosSeleccionados) {
            var estColors = {'PENDIENTE COTIZACIÓN':'#856404','EN TRAMITACIÓN':'#004085','RECIBIDO':'#155724','CANCELADO':'#721c24'};
            var estColor = estColors[p.estado] || '#495057';
            var fn = p.familia_nombre || 'Sin familia';
-           var repetida = _famCount[fn] > 1;
+           var repetida = _famCount[fn] >= (h.max_pedidos_familia || 1);
            var famCell = repetida
              ? '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;background:#fff8e1">'
                + '<span style="font-weight:700;color:#b45309">' + fn + '</span>'

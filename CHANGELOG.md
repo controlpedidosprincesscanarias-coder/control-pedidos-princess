@@ -1,4 +1,46 @@
-# v12.27.22 — 31 julio 2026
+# v12.28.0 — 31 julio 2026
+
+📉 Techo de gastos — límite de pedidos configurable por hotel/mes **y familia**
+
+**Petición:** hasta ahora, "Familia/partida repetida" era una regla fija en
+código: una familia de artículos solo podía usarse **una vez al mes por
+hotel** (Regla 2 de `_check_techo`), y el único número configurable desde
+Config alertas → Techo de gastos era el máximo de pedidos **totales** por
+hotel/mes (`techo_max_pedidos`). No se podía permitir, por ejemplo, 2 o 3
+pedidos de la misma familia al mes sin tocar código.
+
+**Cambio:** nuevo parámetro editable **"Techo — Nº máximo de pedidos por
+hotel/mes y familia"** (`techo_max_pedidos_familia`, por defecto **1** —
+mismo comportamiento que antes hasta que un admin lo cambie), en el mismo
+grupo 💳 *Techo de gastos* que los 4 campos existentes.
+
+**Apartados revisados y actualizados:**
+- `_check_techo()` — la Regla 2 ya no bloquea "familia ya usada este mes";
+  ahora compara el nº de pedidos de esa familia en el hotel/mes contra el
+  nuevo límite configurable (igual que la Regla 1 ya hacía a nivel de
+  hotel/mes total).
+- Job `_job_familia_repetida_inner` (alerta 🔴 "Familia/Partida REPETIDA" a
+  comprador y admins) — el `HAVING COUNT(*) > 1` fijo en SQL pasa a
+  `HAVING COUNT(*) >= techo_max_pedidos_familia`, para que dispare
+  exactamente en el mismo umbral que ahora bloquea la creación del pedido.
+- `/api/techo/resumen` y `/api/techo/resumen-historico` — devuelven ahora
+  `familias_conteo` (nº de pedidos por familia) y `max_pedidos_familia`,
+  además de los campos existentes.
+- Pestaña **📉 Techo de gastos** (tarjetas por hotel) — la línea "Familias:"
+  muestra ahora el conteo de cada familia frente al límite
+  (`Nombre (n/max)`) y resalta en ámbar las que están al límite o por
+  encima.
+- Exportación/impresión del resumen de Techo de gastos — el resaltado de
+  "familia repetida" (antes fijo a `> 1`) usa ahora el mismo límite
+  configurable por hotel.
+- No fue necesario tocar el HTML de Config alertas: el panel se pinta
+  dinámicamente desde `config_alertas`, así que el nuevo campo aparece solo
+  en cuanto existe la fila en BD (migración `ON CONFLICT DO NOTHING` para
+  instalaciones ya desplegadas + seed para instalaciones nuevas).
+
+Badge de versión del sidebar actualizado a "V 12.28.0".
+
+
 
 🖼️ Logo aplicado también a los emails de proveedor / internos de pedidos
 
