@@ -1,3 +1,52 @@
+# v12.27.16 — 31 julio 2026
+
+🛑 Fix — pestañas con versión desactualizada seguían despachando la cola de emails
+
+**Motivo:** en pruebas reales tras v12.27.12, un email de "[FASE 1] Nueva
+solicitud de acceso" llegó en texto plano pese a que backend y frontend
+ya estaban desplegados con la prioridad `cuerpo_html` corregida. Causa:
+ese correo lo despachó automáticamente la pestaña de un admin que
+llevaba abierta desde antes del despliegue — el aviso de "nueva
+versión disponible" es solo informativo, y cerrarlo con "Ahora no"
+silencia el aviso **sin recargar la página**, así que esa pestaña
+seguía ejecutando el JS antiguo (con la prioridad `cuerpo_text`) de
+forma indefinida.
+
+**Cambio:**
+- `_mostrarModalNuevaVersion()` — llamada desde los 4 puntos donde se
+  detecta versión nueva (chequeo al cargar, polling periódico,
+  `refreshCurrentView`) — ahora detiene el poller de la cola de
+  emails de sistema (`_emailsSistemaPollTimer`) en cuanto se dispara.
+  Así una pestaña obsoleta deja de despachar correos con lógica
+  antigua; la cola queda a la espera de otra pestaña ya actualizada
+  (o de que esta se recargue).
+
+Badge de versión del sidebar actualizado a "V 12.27.16".
+
+# v12.27.14 — 31 julio 2026
+
+🖼️ Logo de empresa en el email de bienvenida
+
+**Petición:** tras confirmar que el email de "cuenta creada" ya
+llegaba con el HTML completo (cabecera navy, tarjeta de credenciales,
+botón), se pidió añadir el logo de la empresa en la cabecera.
+
+**Cambio:**
+- Cabecera de `body_html_u` (email de bienvenida al aprobar una
+  solicitud de acceso): añadido `<img>` con `/static/logo-sidebar.png`
+  — el mismo logo que ya se usa en el sidebar de la app sobre fondo
+  navy, para que se vea igual de bien en la cabecera del correo.
+- La URL del logo se construye con `app_url` (el mismo valor que ya
+  usa esta función para el botón "Acceder al sistema") porque un
+  email necesita una URL absoluta — una ruta relativa no resolvería
+  en el cliente de correo.
+- Alcance deliberadamente limitado a este email — hay otras ~5
+  plantillas con la misma cabecera navy (aviso Fase 1 a admins, Fase
+  2, aviso de alta a admins...) que de momento se quedan sin logo, a
+  la espera de que se pida extenderlo.
+
+Badge de versión del sidebar actualizado a "V 12.27.14".
+
 # v12.27.12 — 31 julio 2026
 
 📧 Correos EmailJS en HTML real (antes texto plano) — plantilla con triple llave

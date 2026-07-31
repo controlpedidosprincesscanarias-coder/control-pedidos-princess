@@ -1212,7 +1212,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.27.12
+          V 12.27.16
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -9027,6 +9027,17 @@ async function _obtenerChangelog() {
 }
 
 async function _mostrarModalNuevaVersion() {
+  // (2026-07-31) En cuanto hay versión nueva, esta pestaña deja de ser
+  // fiable para despachar la cola de emails de sistema — seguiría
+  // ejecutando el JS antiguo (p.ej. la prioridad cuerpo_html/cuerpo_text)
+  // indefinidamente, incluso después de "Ahora no" (que solo silencia el
+  // aviso, no recarga). Se para aquí para que sea otra pestaña —ya
+  // actualizada— la que la despache correctamente.
+  if (_emailsSistemaPollTimer) {
+    clearInterval(_emailsSistemaPollTimer);
+    _emailsSistemaPollTimer = null;
+    console.warn('[VERSION] Nueva versión detectada — poller de emails de sistema detenido en esta pestaña.');
+  }
   const modal = document.getElementById('modal-nueva-version');
   const el = document.getElementById('modal-nv-changelog');
   try {

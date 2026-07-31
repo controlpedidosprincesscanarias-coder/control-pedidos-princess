@@ -8,6 +8,91 @@
 
 ---
 
+## 2026-07-31 (19)
+
+### [Control Pedidos] v12.27.16 — Fix: pestañas con versión desactualizada seguían despachando la cola de emails
+- Detectado en pruebas reales: un email de "[FASE 1] Nueva solicitud
+  de acceso" llegó al administrador en texto plano (con separadores
+  `====`), pese a que el usuario confirmó que tanto `app.py` como
+  `index.html` de v12.27.12 ya estaban desplegados (index desplegado
+  primero, app.py después).
+- Causa raíz encontrada revisando `_cerrarModalVersion()`: al pulsar
+  "Ahora no" en el aviso de nueva versión, la pestaña actualiza su
+  hash de versión conocido **sin recargar la página** — deja de
+  avisar de nuevo, pero sigue ejecutando el JS antiguo indefinidamente.
+  Ese correo de Fase 1 se envía automáticamente vía la cola
+  `emails_sistema_pendientes`, despachada por "el primer admin que
+  tenga la app abierta" — si esa pestaña es una que quedó desactualizada,
+  usa la lógica antigua (`cuerpo_text` antes que `cuerpo_html`) sin que
+  nadie se entere.
+- Fix: `_mostrarModalNuevaVersion()` (punto único llamado desde los 4
+  sitios donde se detecta versión nueva: chequeo al cargar, polling
+  cada 30s/60s, `refreshCurrentView`) ahora para el timer del poller
+  de emails de sistema (`_emailsSistemaPollTimer`) en cuanto se
+  dispara — una pestaña obsoleta deja de despachar correos con lógica
+  vieja; la cola queda pendiente para otra pestaña actualizada.
+- No corrige el correo de Fase 1 ya enviado (histórico), solo evita
+  que se repita hacia adelante.
+- Badge de versión del sidebar actualizado a "V 12.27.16"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
+## 2026-07-31 (18)
+
+### [Control Pedidos] v12.27.14 — Logo de empresa en el email de bienvenida
+- Tras confirmar por captura que el email de "cuenta creada" ya
+  llegaba con el HTML completo (cabecera navy, tarjeta de
+  credenciales, botón dorado), se pidió añadir el logo de la empresa.
+- Preguntado el alcance (solo este email vs. las ~5 plantillas con la
+  misma cabecera navy): el usuario eligió limitarlo solo al email de
+  bienvenida.
+- Añadido `<img src="{app_url}/static/logo-sidebar.png">` en la
+  cabecera de `body_html_u`, reutilizando el mismo logo que ya se usa
+  en el sidebar de la app (pensado para fondo navy) y el mismo
+  `app_url` que ya usaba esta función para el botón "Acceder al
+  sistema" — necesario porque un email requiere URL absoluta.
+- Badge de versión del sidebar actualizado a "V 12.27.14"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
+## 2026-07-31 (17)
+
+### [Control Pedidos] v12.27.12 — Correos EmailJS en HTML real (antes texto plano)
+- Motivo: los correos vía EmailJS salían en texto plano
+  (`{{message}}`, doble llave) aunque casi todos los endpoints ya
+  construían un `body_html` cuidado con estilos que se descartaba
+  antes de llegar al frontend. El usuario cambió la plantilla EmailJS
+  (`template_1zrv4ze`) a `{{{message}}}` (triple llave, sin escapar,
+  en modo Code editor) para poder aprovecharlo.
+- Backend (`app.py`): 3 endpoints que ya generaban `body_html` /
+  `body_html_u` / `body_html_a` pero no lo devolvían en el JSON ahora
+  sí lo incluyen (fase 2 completada → aviso admin; alta de
+  usuario/admins al aprobar solicitud). Nuevo helper reutilizable
+  `_email_html_simple()` para correos cortos tipo código/enlace, usado
+  en el nuevo `body_html` del código de verificación de login (único
+  caso que no tenía versión HTML previa).
+- Frontend (`index.html`): los 8 puntos que llaman a
+  `enviarEmailJS(...)` pasan a priorizar `body_html`/`cuerpo_html`
+  sobre `body_text`/`cuerpo_text` en el campo `message` (login, reset
+  de contraseña, fase 2, aprobar solicitud ×2, cambios de estado de
+  pedido, preview de alerta manual, cola de emails de sistema).
+- Verificado con capturas reales del usuario: plantilla EmailJS
+  guardada correctamente con triple llave, campos `to_email` /
+  `reply_to` / `bcc` alineados con el payload, y el email de
+  bienvenida llegando ya con el HTML completo (cabecera navy, tarjeta
+  de credenciales, botón).
+- Fix adicional durante la verificación: quitado `white-space:
+  pre-wrap` de la plantilla EmailJS (a petición, editado por el
+  usuario) — con HTML real ese estilo hacía que el navegador respetara
+  también los saltos de línea/indentación "de formato del código
+  fuente" de los f-strings Python, duplicando el espaciado.
+- Badge de versión del sidebar actualizado a "V 12.27.12"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
 ## 2026-07-31 (16)
 
 ### [Control Pedidos] Verificación end-to-end del backup automático EmailJS — cerrado
