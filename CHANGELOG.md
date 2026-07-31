@@ -1,3 +1,30 @@
+# v12.25.2 — 31 julio 2026
+
+🔑 Cambio de cuenta EmailJS (cuota de 200 peticiones/mes agotándose)
+
+**Motivo:** la cuenta EmailJS anterior (`service_dwwha2g`) se quedó a
+5 peticiones de agotar el límite gratuito del mes, con 15 días aún
+por delante hasta el reset del ciclo (14 agosto) — muchas pruebas y
+ajustes de la aplicación consumieron la cuota.
+
+**Solución:** cuenta EmailJS nueva, independiente, con su propio
+contador de 200/mes desde cero. Mismo Gmail conectado
+(`controlpedidosprincess.canarias@gmail.com`), plantilla replicada
+con los mismos campos (`to_email`, `bcc`, `reply_to` en destinatarios;
+`{{subject}}` / `{{message}}` en asunto y cuerpo, con
+`white-space: pre-wrap` para respetar los saltos de línea del texto
+plano que le manda la app).
+
+Credenciales actualizadas en `templates/index.html`:
+- Public Key: `WCiU7q8WT1i8AQTbR` → `bxFzHypsIrNqcDh15`
+- Service ID: `service_dwwha2g` → `service_shvrzuv`
+- Template ID: `template_krpvmda` → `template_1zrv4ze`
+
+La cuenta anterior no se ha borrado — sigue existiendo con su propio
+ciclo, disponible como reserva si hiciera falta.
+
+Badge de versión del sidebar actualizado a "V 12.25.2".
+
 # v12.25.0 — 31 julio 2026
 
 ✍️ Firma corporativa estándar en los correos al proveedor
