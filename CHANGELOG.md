@@ -1,3 +1,34 @@
+# v12.27.6 — 31 julio 2026
+
+🏨 Correos por hotel — invertido el criterio por defecto
+
+**Petición:** en vez de "vacío = general (todos los hoteles)" como
+estado invisible en la ficha, que cada contacto nazca con **todos**
+los hoteles marcados explícitamente, y sea el admin quien desmarque
+los que no le correspondan — operación inversa a como se planteó en
+v12.27.4. Y que los contactos que ya existen en este momento queden
+marcados así, sin tener que hacerlo a mano uno por uno.
+
+**Cambios:**
+- Migración automática (una sola vez, idempotente): marca todos los
+  hoteles a cada contacto que a día de hoy no tenga ninguno asignado
+  en `proveedor_contacto_hoteles` — es decir, todos los contactos
+  existentes, porque la función es nueva. Solo toca contactos sin
+  ninguna fila, así que nunca vuelve a tocar un contacto ya
+  restringido a mano después.
+- Ficha de proveedor: las casillas de hoteles de un contacto ahora
+  aparecen **todas marcadas por defecto** cuando no tiene ninguna
+  restricción guardada (contacto nuevo, o caso residual) — antes
+  aparecían todas vacías. Textos de ayuda actualizados en
+  consecuencia ("desmarca los que no le correspondan").
+- Sin cambios en el backend de envío
+  (`_get_proveedor_emails_principales`) ni en el guardado — el
+  resultado de "todo marcado" ya se guardaba correctamente como lista
+  explícita de hoteles, solo cambiaba lo que se veía por defecto en
+  pantalla.
+
+Badge de versión del sidebar actualizado a "V 12.27.6".
+
 # v12.27.4 — 31 julio 2026
 
 🏨 Correos específicos por hotel en la ficha de proveedores

@@ -127,6 +127,28 @@ def _auto_migrate():
                 )
             """)
             cur.execute("CREATE INDEX IF NOT EXISTS idx_prov_contacto_hoteles_hotel ON proveedor_contacto_hoteles(hotel_id)")
+            # ── v12.27.6 — Por defecto TODOS los hoteles marcados por contacto ──
+            # A petición del usuario: en vez de "vacío = general (todos los
+            # hoteles)" como estado invisible, cada contacto debe nacer con
+            # TODOS los hoteles marcados explícitamente, y el admin desmarca
+            # los que no le correspondan (operación inversa a como se planteó
+            # en v12.27.4). Esta migración marca de una vez todos los hoteles
+            # a cada contacto que a día de hoy no tenga ninguno asignado —
+            # es decir, TODOS los contactos existentes, porque la función es
+            # nueva y nadie ha marcado nada todavía. Es idempotente: solo
+            # toca contactos sin ninguna fila en proveedor_contacto_hoteles,
+            # así que no se repite en contactos ya restringidos a mano más
+            # adelante.
+            cur.execute("""
+                INSERT INTO proveedor_contacto_hoteles (contacto_id, hotel_id)
+                SELECT pc.id, h.id
+                FROM proveedor_contactos pc
+                CROSS JOIN hoteles h
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM proveedor_contacto_hoteles pch WHERE pch.contacto_id = pc.id
+                )
+                ON CONFLICT DO NOTHING
+            """)
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS pedido_adjuntos (
                     id            SERIAL PRIMARY KEY,

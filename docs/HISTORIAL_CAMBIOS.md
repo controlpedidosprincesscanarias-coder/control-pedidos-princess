@@ -8,6 +8,44 @@
 
 ---
 
+## 2026-07-31 (13)
+
+### [Control Pedidos] v12.27.6 — Correos por hotel: invertido el criterio por defecto
+- Petición: tras implementar v12.27.4, el usuario pidió invertir el
+  planteamiento — que cada contacto nazca con TODOS los hoteles
+  marcados (en vez de ninguno = "general" invisible), y que el admin
+  desmarque los que no le correspondan. Y que los contactos que ya
+  existen en este momento queden marcados así automáticamente, sin
+  tener que hacerlo uno por uno a mano.
+- Migración automática añadida junto a la de v12.27.4 (misma sección
+  del arranque, ejecutada en cada deploy pero solo con efecto la
+  primera vez): `INSERT ... SELECT pc.id, h.id FROM
+  proveedor_contactos pc CROSS JOIN hoteles h WHERE NOT EXISTS
+  (SELECT 1 FROM proveedor_contacto_hoteles WHERE contacto_id=pc.id)`
+  — marca todos los hoteles a cada contacto que a día de hoy no tenga
+  ninguna fila en `proveedor_contacto_hoteles`, es decir, todos los
+  contactos existentes (la función es nueva, nadie ha marcado nada
+  todavía). Es idempotente por construcción: un contacto que ya tenga
+  al menos una fila (porque se restringió a mano después) queda fuera
+  del `NOT EXISTS` y no se vuelve a tocar.
+- Frontend (`_pvFillContactoHoteles`): cuando un contacto no tiene
+  ninguna restricción guardada (`selected.length === 0` — contacto
+  nuevo, o caso residual), las casillas de hoteles se muestran ahora
+  TODAS marcadas por defecto, en vez de todas vacías. Si ya tiene una
+  selección guardada, se respeta tal cual sin cambios.
+- Textos de ayuda actualizados (cabecera "Contactos" y por-fila) para
+  reflejar "desmarca los que no le correspondan" en vez de "vacío =
+  general".
+- Sin cambios en `_get_proveedor_emails_principales()` ni en el
+  guardado de contactos — ya guardaban correctamente lo que estuviera
+  marcado; solo cambiaba qué se veía marcado por defecto en pantalla,
+  y ahora además hay datos reales en BD para los contactos ya
+  existentes en vez de depender del fallback implícito.
+- Badge de versión del sidebar actualizado a "V 12.27.6"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
 ## 2026-07-31 (12)
 
 ### [Control Pedidos] v12.27.4 — Correos específicos por hotel en contactos de proveedor
