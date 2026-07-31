@@ -1,4 +1,85 @@
+# v12.25.0 — 31 julio 2026
+
+✍️ Firma corporativa estándar en los correos al proveedor
+
+**Petición:** sustituir la firma que llevaban los correos con firma de
+comprador por el formato corporativo ya usado en el resto de
+correspondencia de Compras (nombre, departamento, dirección física,
+teléfono con prefijo y email), cambiando nombre/teléfono/email por
+los del comprador que corresponda en cada caso.
+
+**Antes:**
+```
+Atentamente,
+Dpto. Central de Compras Princess en Canarias
+Princess Hotels & Resorts
+{Nombre}
+{email} · Móvil: {móvil}
+```
+
+**Ahora:**
+```
+Atentamente,
+{Nombre}
+Dpto. Central de Compras Canarias
+
+Av. Touroperador Tui, s/n
+35100 - Maspalomas (Gran Canaria)
+(+34) {móvil}
+{email}
+```
+
+**Implementación:** dos funciones nuevas y compartidas,
+`_firma_comprador_html()` / `_firma_comprador_text()` — dirección y
+departamento fijos, nombre/teléfono/email según el comprador (se
+omiten sin dejar hueco si el comprador no tiene móvil o nombre
+registrado). Sustituye la firma en los 4 puntos que ya llevaban firma
+de comprador: correo de confirmación de recepción al proveedor, y las
+plantillas `_email_template_enviado_proveedor`,
+`_email_template_entrega_parcial` y `_email_template_pendiente_cotizacion`
+(esta última reutilizada también por la reclamación automática). Los
+avisos internos al comprador (firma pendiente, cotización sin
+proveedor) no llevan firma personal — sin cambios ahí.
+
+Badge de versión del sidebar actualizado a "V 12.25.0".
+
+# v12.23.8 — 31 julio 2026
+
+📧 Aviso automático al comprador en Pendiente Firma Dirección Compras / Dirección Hotel
+
+**Petición:** que estos dos estados también avisen por email
+automáticamente al comprador del hotel de lo que está pendiente,
+igual que ya se hacía con Pendiente Cotización.
+
+**Criterio de disparo:** decidido junto con el usuario — estos dos
+estados tienen el umbral "Urgente" en 0 = nunca por defecto, así que
+en vez de exigir nivel urgente (que nunca se alcanzaría), el email se
+dispara con el mismo criterio que ya usa el Telegram automático para
+estos estados: 1ª alerta + repetición por ciclo (Config Alertas).
+
+**Implementación:**
+- Nueva función `_encolar_aviso_firma_pendiente_auto()`, bajo el mismo
+  interruptor maestro que el resto de avisos automáticos por email
+  (`activar_reclamacion_proveedor_auto`) — reetiquetado en el panel
+  admin a "Enviar avisos automáticos por email (reclamación a
+  proveedor y avisos internos) cuando corresponda", porque ya cubre
+  más que solo la reclamación al proveedor.
+- Reutiliza la plantilla `_email_template_pendiente_firma()` ya
+  existente (antes solo se usaba para la propuesta manual desde el
+  panel) — un único envío con todos los compradores del hotel juntos
+  en "Para:". Se ajustó su frase de cierre ("gestione con Dirección de
+  Compras/Hotel...") para que tenga sentido yendo al comprador, que no
+  es quien firma.
+- `_ya_reclamado_hoy_manual()` generalizada para aceptar un `tipo`
+  (antes fija a `alerta_proveedor`); ahora también soporta
+  `alerta_interno`, para que el aviso automático no duplique un envío
+  manual del mismo día desde el panel.
+
+Badge de versión del sidebar actualizado a "V 12.23.8".
+
 # v12.23.6 — 31 julio 2026
+
+
 
 📧 Firma de correos con nombre y móvil del comprador + reclamación automática también para Pendiente Cotización
 

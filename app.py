@@ -355,6 +355,15 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE emails_sistema_pendientes ADD COLUMN IF NOT EXISTS pedido_id INTEGER"
             )
+            # ── v12.23.8 — La etiqueta se queda corta: ese mismo interruptor
+            # ahora también gobierna el aviso automático al comprador en
+            # Pendiente Cotización sin proveedor y en Pendiente Firma
+            # Compras/Hotel — se actualiza el texto para reflejarlo (UPDATE,
+            # no INSERT ON CONFLICT, porque la fila ya existe en producción).
+            cur.execute("""
+                UPDATE config_alertas SET label = %s WHERE clave = %s
+            """, ('Enviar avisos automáticos por email (reclamación a proveedor y avisos internos) cuando corresponda',
+                  'activar_reclamacion_proveedor_auto'))
             # ── v12.5.0 — Repetición de popups en Agenda por tipo de alerta ────
             # Controla, para cada estado de pedido, si el popup en Organizador
             # Princess se repite mientras el pedido siga en alerta y cada
@@ -1426,16 +1435,8 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             _email_comprador_firma  = _compradores_firma[0]["email"]
             _nombre_comprador_firma = _compradores_firma[0].get("nombre") or ""
             _movil_comprador_firma  = _compradores_firma[0].get("movil") or ""
-            _firma_contacto_html = (
-                (f"<strong>{_nombre_comprador_firma}</strong><br>" if _nombre_comprador_firma else "")
-                + f'<a href="mailto:{_email_comprador_firma}">{_email_comprador_firma}</a>'
-                + (f" · Móvil: {_movil_comprador_firma}" if _movil_comprador_firma else "")
-            )
-            _firma_contacto_text = (
-                (f"{_nombre_comprador_firma}\n" if _nombre_comprador_firma else "")
-                + _email_comprador_firma
-                + (f" · Móvil: {_movil_comprador_firma}" if _movil_comprador_firma else "")
-            )
+            _firma_contacto_html = _firma_comprador_html(_nombre_comprador_firma, _email_comprador_firma, _movil_comprador_firma)
+            _firma_contacto_text = _firma_comprador_text(_nombre_comprador_firma, _email_comprador_firma, _movil_comprador_firma)
             body_html = f"""
             <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
               ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
@@ -1458,8 +1459,6 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             </p>
             <p>Quedamos a su disposición para cualquier consulta.<br><br>
                Atentamente,<br>
-               <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
-               Princess Hotels &amp; Resorts<br>
                {_firma_contacto_html}
             </p>
             <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
@@ -1477,8 +1476,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 f"Para confirmar la recepción del pedido y facilitar la fecha estimada de entrega, por favor responda\n"
                 f"a la dirección de correo que figura en la firma de este mensaje: {_email_comprador_firma}\n\n"
                 f"Quedamos a su disposición para cualquier consulta.\n\n"
-                f"Atentamente,\nDpto. Central de Compras Princess en Canarias\n"
-                f"Princess Hotels & Resorts\n{_firma_contacto_text}\n\n"
+                f"Atentamente,\n{_firma_contacto_text}\n\n"
                 f"Este correo es exclusivo para notificaciones automáticas. "
                 f"Por favor, responda única y exclusivamente a la dirección que firma este comunicado."
             )
@@ -2454,21 +2452,25 @@ def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
         return False
 
 
-def _ya_reclamado_hoy_manual(pedido_id: int) -> bool:
+def _ya_reclamado_hoy_manual(pedido_id: int, tipo: str = "alerta_proveedor") -> bool:
     """
-    (2026-07-30) Devuelve True si ya se envió una alerta MANUAL al proveedor
-    hoy (botón "Re-notificar" del panel, tipo='alerta_proveedor' en
-    emails_log — una tabla distinta de whatsapp_log, que es la que consulta
-    _ya_notificado_hoy). Se usa para que la reclamación AUTOMÁTICA no
-    duplique una que un comprador ya mandó a mano el mismo día.
+    (2026-07-30) Devuelve True si ya se envió una alerta MANUAL hoy para
+    este pedido (botón "Notificar"/"Re-notificar" del panel), del tipo
+    indicado en emails_log — una tabla distinta de whatsapp_log, que es la
+    que consulta _ya_notificado_hoy.
+    tipo='alerta_proveedor' (default): email manual al proveedor — evita
+      que la reclamación automática al proveedor la duplique el mismo día.
+    tipo='alerta_interno' (v12.23.8): email manual interno (p.ej. aviso de
+      firma pendiente al comprador) — evita que el aviso automático
+      equivalente la duplique el mismo día.
     """
     try:
         row = query(
             """SELECT COUNT(*) as n FROM emails_log
-               WHERE pedido_id=%s AND tipo='alerta_proveedor'
+               WHERE pedido_id=%s AND tipo=%s
                  AND DATE(creado_en AT TIME ZONE 'Atlantic/Canary') =
                      (NOW() AT TIME ZONE 'Atlantic/Canary')::date""",
-            (pedido_id,), one=True
+            (pedido_id, tipo), one=True
         )
         return (row["n"] if row else 0) > 0
     except Exception:
@@ -2859,6 +2861,29 @@ def _job_alertas_diarias_inner():
             db.commit()
         except Exception as exc:
             log.error("[SCHEDULER] Error guardando log pedido %s: %s", p["id"], exc)
+
+        # ── v12.23.8: aviso automático al comprador por email, en Pendiente
+        # Firma Dirección Compras / Dirección Hotel — mismo disparo que el
+        # Telegram de arriba (1ª alerta + ciclo), no depende de "urgente"
+        # (a petición del usuario: esos dos estados tienen el umbral
+        # urgente en 0=nunca por defecto, así que exigir "urgente" para el
+        # email lo dejaría sin efecto). Bajo el mismo interruptor maestro
+        # que el resto de avisos automáticos por email (Config Alertas →
+        # "activar_reclamacion_proveedor_auto").
+        if p["estado"] in ("PENDIENTE FIRMA DIRECCION COMPRAS", "PENDIENTE DE FIRMA DIRECCION HOTEL") \
+                and bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0)):
+            try:
+                ok_aviso = _encolar_aviso_firma_pendiente_auto(p, dias, p["estado"])
+                if ok_aviso:
+                    db = get_db()
+                    _log_whatsapp(
+                        db, p["id"], "aviso_firma_auto", "sistema",
+                        f"Aviso de firma pendiente encolado al comprador — {dias}d sin firmar",
+                        True, None,
+                    )
+                    db.commit()
+            except Exception as exc:
+                log.error("[SCHEDULER] Error encolando aviso de firma pendiente pedido %s: %s", p["id"], exc)
 
         enviados += 1
 
@@ -3775,17 +3800,47 @@ def _get_compradores_cc(hotel_codigo: str):
     Usa _get_compradores_hotel() para obtener los compradores dinámicamente desde BD."""
     return _get_compradores_hotel(hotel_codigo)
 
+# ── Firma estándar de correo saliente (v12.24.0) ───────────────────────────────
+# Mismo formato ya usado en el resto de correspondencia de Compras: nombre,
+# departamento, dirección fija del departamento, teléfono con prefijo (+34) y
+# email como enlace. Solo nombre/teléfono/email cambian según el comprador
+# que firma; departamento y dirección son fijos.
+
+def _firma_comprador_html(nombre: str, email: str, movil: str) -> str:
+    nombre_html = f"<strong>{nombre}</strong><br>" if nombre else ""
+    tel_html    = f"(+34) {movil}<br>" if movil else ""
+    email_html  = f'<a href="mailto:{email}">{email}</a>' if email else ""
+    return (
+        f"{nombre_html}"
+        "Dpto. Central de Compras Canarias<br><br>"
+        "Av. Touroperador Tui, s/n<br>"
+        "35100 - Maspalomas (Gran Canaria)<br>"
+        f"{tel_html}"
+        f"{email_html}"
+    )
+
+def _firma_comprador_text(nombre: str, email: str, movil: str) -> str:
+    lineas = []
+    if nombre:
+        lineas.append(nombre)
+    lineas.append("Dpto. Central de Compras Canarias")
+    lineas.append("")
+    lineas.append("Av. Touroperador Tui, s/n")
+    lineas.append("35100 - Maspalomas (Gran Canaria)")
+    if movil:
+        lineas.append(f"(+34) {movil}")
+    if email:
+        lineas.append(email)
+    return "\n".join(lineas)
+
+
 # ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
 
 def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, comprador_email: str = "",
                                        comprador_nombre: str = "", comprador_movil: str = "") -> tuple:
     """Pedido enviado al proveedor sin acuse de recibo tras varios días."""
     nivel = "URGENTE" if urgente else "Recordatorio"
-    _firma_contacto = (
-        (f'<strong>{comprador_nombre}</strong><br>' if comprador_nombre else "")
-        + f'<a href="mailto:{comprador_email}" style="color:#8B0000">{comprador_email}</a>'
-        + (f" · Móvil: {comprador_movil}" if comprador_movil else "")
-    )
+    _firma_contacto = _firma_comprador_html(comprador_nombre, comprador_email, comprador_movil)
     subject = f"[{nivel}] Seguimiento pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
@@ -3813,8 +3868,6 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
         <p>Muchas gracias por su colaboración.</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <p style="font-size:12px;color:#666">Atentamente,<br>
-           <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
-           Princess Hotels &amp; Resorts<br>
            {_firma_contacto}</p>
         <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
           Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
@@ -3857,8 +3910,8 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
               <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">{dias} días</td></tr>
           {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
         </table>
-        <p>Por favor, proceda con la revisión y firma del pedido a la mayor brevedad posible
-           para no retrasar el proceso de compra.</p>
+        <p>Por favor, gestione con {dest_label} la revisión y firma del pedido
+           a la mayor brevedad posible para no retrasar el proceso de compra.</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <p style="font-size:12px;color:#666">Mensaje automático generado por el sistema de Control de Pedidos.<br>
            <strong>Princess Hotels &amp; Resorts</strong></p>
@@ -3900,8 +3953,6 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
         <p>Muchas gracias.</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <p style="font-size:12px;color:#666">Atentamente,<br>
-           <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
-           Princess Hotels &amp; Resorts<br>
            {_firma_contacto}</p>
         <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
           Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
@@ -3944,8 +3995,6 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
         {'<p style="color:#dc2626;font-weight:bold;border:1px solid #fca5a5;background:#fee2e2;padding:10px;border-radius:4px">⚠️ URGENTE: Necesitamos su cotización hoy para no retrasar la tramitación del pedido.</p>' if urgente else '<p>Le agradecemos que nos envíe su mejor oferta a la mayor brevedad posible.</p>'}
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
         <p style="font-size:12px;color:#666">Atentamente,<br>
-           <strong>Dpto. Central de Compras Princess en Canarias</strong><br>
-           Princess Hotels &amp; Resorts<br>
            {_firma_contacto}</p>
         <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
           Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
@@ -4062,6 +4111,49 @@ def _encolar_aviso_cotizacion_sin_proveedor(pedido: dict, dias: int) -> bool:
         pedido_id=pedido.get("id"),
     )
     log.info("[RECLAMACION-AUTO] Pedido %s — sin proveedor asignado, aviso interno encolado (1 envío) a comprador(es) %s",
+              pedido.get("id"), destino)
+    return True
+
+
+def _encolar_aviso_firma_pendiente_auto(pedido: dict, dias: int, estado: str) -> bool:
+    """
+    v12.23.8 — Aviso automático al comprador cuando un pedido lleva días
+    pendiente de firma (Dirección de Compras o Dirección del Hotel).
+
+    A diferencia de la reclamación al proveedor, este aviso es interno y
+    va SIEMPRE al/los comprador(es) del hotel — no hay proveedor implicado
+    en estos dos estados. Se dispara con el mismo criterio que ya usa el
+    Telegram automático para estos estados (1ª alerta + repetición por
+    ciclo, configurado en Config Alertas), sin depender del nivel "urgente"
+    (que para estos dos estados está desactivado por defecto, 0 = nunca) —
+    lo decide el caller (_job_alertas_diarias_inner) pasando por aquí
+    exactamente cuando también envía el Telegram automático.
+
+    Reutiliza la plantilla _email_template_pendiente_firma() ya existente
+    (antes solo se usaba para la propuesta manual desde el panel).
+
+    Devuelve True si se encoló correctamente, False si se omitió (ya se
+    mandó a mano hoy, o no hay comprador con email para este hotel).
+    """
+    if _ya_reclamado_hoy_manual(pedido.get("id"), tipo="alerta_interno"):
+        log.info("[AVISO-FIRMA-AUTO] Pedido %s: ya se envió un aviso manual interno hoy — se omite el automático",
+                  pedido.get("id"))
+        return False
+
+    compradores = _get_compradores_cc(pedido.get("hotel_codigo", ""))
+    destinos = [c["email"] for c in compradores if c.get("email")]
+    if not destinos:
+        log.warning("[AVISO-FIRMA-AUTO] Pedido %s: sin comprador con email en el hotel %s — aviso omitido",
+                    pedido.get("id"), pedido.get("hotel_codigo", ""))
+        return False
+
+    subject, body_html = _email_template_pendiente_firma(pedido, dias, estado)
+    destino = ", ".join(destinos)
+    _encolar_email_sistema(
+        "aviso_firma_pendiente_auto", [destino], subject, body_html,
+        pedido_id=pedido.get("id"),
+    )
+    log.info("[AVISO-FIRMA-AUTO] Pedido %s — aviso de firma pendiente encolado (1 envío) a comprador(es) %s",
               pedido.get("id"), destino)
     return True
 
