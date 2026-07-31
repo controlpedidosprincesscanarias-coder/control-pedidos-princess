@@ -8,6 +8,27 @@
 
 ---
 
+## 2026-07-31 (24)
+
+### [Control Pedidos] v12.27.22 — Cabecera con logo también en emails de proveedor / internos de pedidos
+- Petición del usuario: el logo aplicado en v12.27.19-21 solo cubría
+  los emails de acceso/admin (verificación, Fase 1, Fase 2...). Faltaban
+  los emails "de negocio" — proveedores y avisos internos de pedidos.
+- Localizados 7 puntos de envío sin el patrón de cabecera con logo:
+  enviado al proveedor, entrega parcial, pendiente de cotización,
+  pendiente de firma (Dirección de Compras / Dirección del Hotel),
+  cotización sin proveedor asignado, confirmación de recepción al
+  proveedor y aviso interno de cambio de estado. Los 5 primeros tenían
+  una banda de color plana sin logo; los 2 últimos no llevaban ninguna
+  cabecera.
+- Creada una única función `_email_header_html(...)` que genera la
+  cabecera estándar (título/subtítulo a la izquierda, logo Princess a
+  la derecha) — es ahora el único punto de configuración de la
+  cabecera para todos los emails de la app, presentes y futuros.
+  Las 7 plantillas se han migrado a usarla, respetando el color rojo
+  (proveedor) o navy (interno) que ya tenían.
+- Badge de versión del sidebar → "V 12.27.22".
+
 ## 2026-07-31 (23)
 
 ### [Control Pedidos] v12.27.21 — Fix: logo no aparecía en 3 de las 6 cabeceras + contraste del subtítulo

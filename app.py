@@ -1512,32 +1512,38 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             _firma_contacto_html = _firma_comprador_html(_nombre_comprador_firma, _email_comprador_firma, _movil_comprador_firma)
             _firma_contacto_text = _firma_comprador_text(_nombre_comprador_firma, _email_comprador_firma, _movil_comprador_firma)
             body_html = f"""
-            <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
-              ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
-            </p>
-            <p>Estimado/a proveedor/a,</p>
-            <p>
-              Recientemente habrá recibido, a través de nuestro sistema habitual de pedidos, el pedido que se detalla a continuación.
-              El presente correo tiene como finalidad <strong>confirmar su recepción</strong> y solicitarle que, a la mayor brevedad posible,
-              nos indique si ha recibido dicho pedido y nos facilite la <strong>fecha estimada de entrega en el hotel</strong>.
-            </p>
-            <p style="background:#f5f8ff;border-left:4px solid #1a3c6e;padding:12px 16px;border-radius:0 4px 4px 0;margin:18px 0">
-              <strong>Pedido Nº:</strong> {pedido.get('pedido_num','—')}<br>
-              <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
-              <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}
-            </p>
-            <p>
-              Para confirmar la recepción del pedido y facilitar la fecha estimada de entrega, por favor responda
-              a la dirección de correo que figura en la firma de este mensaje:
-              <a href="mailto:{_email_comprador_firma}">{_email_comprador_firma}</a>
-            </p>
-            <p>Quedamos a su disposición para cualquier consulta.<br><br>
-               Atentamente,<br>
-               {_firma_contacto_html}
-            </p>
-            <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
-              Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
-            </p>
+            <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+              {_email_header_html("Princess Hotels &amp; Resorts", "Dpto. Central de Compras Princess en Canarias",
+                                    color_fondo="#8B0000", color_subtitulo="#f5c6c6")}
+              <div style="padding:24px">
+                <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
+                  ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+                </p>
+                <p>Estimado/a proveedor/a,</p>
+                <p>
+                  Recientemente habrá recibido, a través de nuestro sistema habitual de pedidos, el pedido que se detalla a continuación.
+                  El presente correo tiene como finalidad <strong>confirmar su recepción</strong> y solicitarle que, a la mayor brevedad posible,
+                  nos indique si ha recibido dicho pedido y nos facilite la <strong>fecha estimada de entrega en el hotel</strong>.
+                </p>
+                <p style="background:#f5f8ff;border-left:4px solid #1a3c6e;padding:12px 16px;border-radius:0 4px 4px 0;margin:18px 0">
+                  <strong>Pedido Nº:</strong> {pedido.get('pedido_num','—')}<br>
+                  <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
+                  <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}
+                </p>
+                <p>
+                  Para confirmar la recepción del pedido y facilitar la fecha estimada de entrega, por favor responda
+                  a la dirección de correo que figura en la firma de este mensaje:
+                  <a href="mailto:{_email_comprador_firma}">{_email_comprador_firma}</a>
+                </p>
+                <p>Quedamos a su disposición para cualquier consulta.<br><br>
+                   Atentamente,<br>
+                   {_firma_contacto_html}
+                </p>
+                <p style="font-size:11.5px;color:#8a6d00;background:#fff7e6;border:1px solid #f0c36d;padding:8px 12px;border-radius:4px;margin-top:14px">
+                  Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
+                </p>
+              </div>
+            </div>
             """
             body_text = (
                 f"Estimado/a proveedor/a,\n\n"
@@ -1616,6 +1622,10 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 
         _fila_usuario_html = f'<tr><td><b>Realizado por</b></td><td>{_usuario_txt}</td></tr>' if _usuario_txt else ''
         body_html_i = f"""
+        <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+          {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
+                                color_fondo="#1a3a6b", color_subtitulo="#a8c0e8")}
+          <div style="padding:24px">
         <p style="font-size:15px"><strong>{_icono} {estado_nuevo}</strong> — Pedido {pedido.get('pedido_num','—')} · {pedido.get('hotel_codigo','')}</p>
         {_intro_html_block}
         <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">
@@ -1635,6 +1645,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         if estado_nuevo == "CANCELADO" and pedido.get("observaciones"):
             body_html_i += f'<p style="margin-top:14px"><b>Observaciones / motivo:</b><br>{pedido.get("observaciones")}</p>'
         body_html_i += '<p style="margin-top:18px;font-size:11.5px;color:#888">Aviso automático del sistema de Control de Pedidos — Princess Hotels &amp; Resorts.</p>'
+        body_html_i += '</div></div>'
 
         _INTRO_ESTADO_TXT = {
             "ENVIADO AL PROVEEDOR": "El pedido se ha tramitado y enviado al proveedor. En cuanto haya novedades de entrega o cotización recibirás un nuevo aviso.",
@@ -4008,6 +4019,35 @@ def _firma_comprador_text(nombre: str, email: str, movil: str) -> str:
     return "\n".join(lineas)
 
 
+def _email_header_html(titulo: str, subtitulo: str, color_fondo: str = "#0f2044",
+                        color_titulo: str = "#ffffff", color_subtitulo: str = "#b9c3dc") -> str:
+    """
+    (2026-07-31) Cabecera estándar y ÚNICA para TODOS los emails de la app
+    (proveedores, internos, cambio de estado, pendiente de firma,
+    cotizaciones, verificación de acceso, etc.): barra superior con
+    título/subtítulo a la izquierda y el logo de Princess a la derecha.
+
+    Para cambiar el logo, el texto por defecto o los colores de TODOS los
+    emails a la vez, basta con tocar esta única función — todas las
+    plantillas la usan en vez de repetir su propia cabecera.
+    """
+    app_url = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
+    return f"""
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{color_fondo};">
+      <tr>
+        <td style="padding:16px 0 16px 24px;vertical-align:middle;" valign="middle">
+          <h2 style="margin:0;color:{color_titulo};font-size:18px;">{titulo}</h2>
+          <p style="margin:4px 0 0;color:{color_subtitulo};font-size:13px;">{subtitulo}</p>
+        </td>
+        <td style="padding:12px 24px 12px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
+          <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels &amp; Resorts"
+               style="height:56px;width:auto;display:block;margin-left:auto;">
+        </td>
+      </tr>
+    </table>
+    """
+
+
 def _email_html_simple(nombre: str, parrafos: list, boton: dict = None,
                         pie_extra: str = None) -> str:
     """
@@ -4052,12 +4092,10 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
     _firma_contacto = _firma_comprador_html(comprador_nombre, comprador_email, comprador_movil)
     subject = f"[{nivel}] Seguimiento pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
     body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-      <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
-        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
-      </div>
-      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+      {_email_header_html("Princess Hotels &amp; Resorts", "Dpto. Central de Compras Princess en Canarias",
+                            color_fondo="#8B0000", color_subtitulo="#f5c6c6")}
+      <div style="padding:24px">
         <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
           ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
         </p>
@@ -4096,12 +4134,10 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
         accion = "firma por parte de la Dirección del Hotel"
     subject = f"[Recordatorio] Pedido Nº {pedido.get('pedido_num','—')} pendiente de {accion}"
     body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-      <div style="background:#1a3a6b;padding:16px 24px;border-radius:6px 6px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
-        <p style="color:#a8c0e8;margin:4px 0 0;font-size:13px">Control de Pedidos — Aviso interno</p>
-      </div>
-      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+      {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
+                            color_fondo="#1a3a6b", color_subtitulo="#a8c0e8")}
+      <div style="padding:24px">
         <p>Se le notifica que el siguiente pedido lleva <strong>{dias} días</strong>
            pendiente de {accion}:</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
@@ -4135,12 +4171,10 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
     subject = f"[Seguimiento] Pedido Nº {pedido.get('pedido_num','—')} — Entrega parcial pendiente de completar"
     _firma_contacto = _firma_comprador_html(comprador_nombre, comprador_email, comprador_movil)
     body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-      <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
-        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
-      </div>
-      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+      {_email_header_html("Princess Hotels &amp; Resorts", "Dpto. Central de Compras Princess en Canarias",
+                            color_fondo="#8B0000", color_subtitulo="#f5c6c6")}
+      <div style="padding:24px">
         <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
           ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
         </p>
@@ -4174,12 +4208,10 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
     subject = f"[{nivel}] Cotización solicitada — {pedido.get('hotel_nombre','Princess Hotels')} — Princess Hotels & Resorts"
     _firma_contacto = _firma_comprador_html(comprador_nombre, comprador_email, comprador_movil)
     body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-      <div style="background:#8B0000;padding:16px 24px;border-radius:6px 6px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
-        <p style="color:#f5c6c6;margin:4px 0 0;font-size:13px">Dpto. Central de Compras Princess en Canarias</p>
-      </div>
-      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+      {_email_header_html("Princess Hotels &amp; Resorts", "Dpto. Central de Compras Princess en Canarias",
+                            color_fondo="#8B0000", color_subtitulo="#f5c6c6")}
+      <div style="padding:24px">
         <p style="background:#fff7e6;border:1px solid #f0c36d;color:#7a5b00;padding:10px 14px;border-radius:4px;font-size:12.5px;margin:0 0 18px">
           ⚠️ Este correo es exclusivo para notificaciones automáticas. Por favor, responda única y exclusivamente a la dirección que firma este comunicado.
         </p>
@@ -4254,12 +4286,10 @@ def _email_template_cotizacion_sin_proveedor(pedido: dict, dias: int) -> tuple:
 
     subject = f"[Recordatorio] Cotización pendiente sin proveedor asignado — Pedido Nº {pedido.get('pedido_num','—')}"
     body = f"""
-    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto">
-      <div style="background:#1a3a6b;padding:16px 24px;border-radius:6px 6px 0 0">
-        <h2 style="color:#fff;margin:0;font-size:18px">Princess Hotels &amp; Resorts</h2>
-        <p style="color:#a8c0e8;margin:4px 0 0;font-size:13px">Control de Pedidos — Aviso interno</p>
-      </div>
-      <div style="border:1px solid #e0e0e0;border-top:none;padding:24px;border-radius:0 0 6px 6px">
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+      {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
+                            color_fondo="#1a3a6b", color_subtitulo="#a8c0e8")}
+      <div style="padding:24px">
         <p>Te recordamos que tenemos pendiente la cotización referente a la solicitud
            con fecha <strong>{fecha_str}</strong>, que lleva <strong>{dias} días</strong> sin resolver.</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">

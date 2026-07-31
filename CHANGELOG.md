@@ -1,3 +1,39 @@
+# v12.27.22 — 31 julio 2026
+
+🖼️ Logo aplicado también a los emails de proveedor / internos de pedidos
+
+**Petición:** el logo de la cabecera (v12.27.19-21) solo se había aplicado
+a los emails de acceso/admin. Faltaban los emails "de negocio": los que
+se mandan a proveedores y los internos de cambio de estado, firmas
+pendientes y cotizaciones.
+
+**Causa:** esos 7 puntos de envío no usaban el patrón de cabecera con
+tabla + logo; unos llevaban una banda de color plana sin logo
+(`_email_template_enviado_proveedor`, `_email_template_pendiente_firma`,
+`_email_template_entrega_parcial`, `_email_template_pendiente_cotizacion`,
+`_email_template_cotizacion_sin_proveedor`) y otros dos no llevaban
+ninguna cabecera (el email de confirmación al proveedor y el aviso
+interno de cambio de estado, ambos dentro de `enviar_emails_estado`).
+
+**Cambios:**
+- Nueva función única `_email_header_html(titulo, subtitulo, color_fondo,
+  color_titulo, color_subtitulo)` — genera la cabecera estándar (tabla
+  con título/subtítulo a la izquierda y el logo `logo-sidebar.png` a la
+  derecha). Es el único sitio que hay que tocar para cambiar el logo,
+  los textos por defecto o los colores de cabecera en toda la app.
+- Las 7 plantillas de arriba ahora llaman a `_email_header_html(...)` en
+  vez de repetir su propia banda de color:
+  - Proveedor (rojo `#8B0000`): enviado al proveedor, entrega parcial,
+    pendiente de cotización, confirmación de recepción de pedido.
+  - Interno (navy `#1a3a6b`): pendiente de firma (Dirección de Compras /
+    Dirección del Hotel), cotización sin proveedor asignado, aviso de
+    cambio de estado de pedido.
+- Contenedor exterior de cada plantilla ajustado (`border-radius` +
+  `overflow:hidden`) para que la cabecera en tabla mantenga las esquinas
+  redondeadas que antes daba la banda de color.
+
+Badge de versión del sidebar actualizado a "V 12.27.22".
+
 # v12.27.21 — 31 julio 2026
 
 🐞 Fix — logo no aparecía en 3 de las 6 cabeceras + subtítulo poco legible
