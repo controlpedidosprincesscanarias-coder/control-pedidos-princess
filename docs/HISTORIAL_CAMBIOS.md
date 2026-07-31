@@ -8,6 +8,32 @@
 
 ---
 
+## 2026-07-31 (10)
+
+### [Control Pedidos] v12.27.0 — El email de usuario no debe bloquear el guardado
+- Corrección sobre v12.25.8: el usuario aclaró que la ficha de usuario
+  SÍ debe poder guardarse sin email — la falta de email en
+  compradores/admins activos ya se detecta y avisa en Admin →
+  Integridad (`_validar_integridad_operativa()`, claves
+  `compradores_sin_email` / `admins_sin_email`), así que bloquear el
+  guardado era redundante e innecesariamente restrictivo. Además, un
+  admin debe poder dejar el email vacío A PROPÓSITO como forma de
+  anular el envío de correos a un usuario concreto sin tener que
+  desactivar la cuenta entera.
+- Quitada la validación "El email es obligatorio" tanto en
+  `/api/usuarios` (POST `create_usuario` y PUT `update_usuario`) como
+  en `saveUsuario()` del frontend.
+- Ficha de usuario: quitado el asterisco de obligatorio del campo
+  Email, añadida nota explicando que dejarlo vacío anula los envíos a
+  ese usuario y que Integridad lo señalará como aviso informativo si
+  corresponde (sin bloquear nada).
+- `email2` no se ve afectado por este cambio, sigue opcional sin
+  ninguna validación.
+- Badge de versión del sidebar actualizado a "V 12.27.0"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
 ## 2026-07-31 (9)
 
 ### [Control Pedidos] v12.25.8 — Segundo email opcional por usuario

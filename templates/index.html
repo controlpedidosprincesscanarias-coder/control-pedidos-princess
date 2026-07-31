@@ -1200,7 +1200,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.25.8
+          V 12.27.0
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1824,8 +1824,13 @@ tbody tr:last-child{border-bottom:none}
       </div>
 
       <div>
-        <label class="form-label">Email *</label>
+        <label class="form-label">Email</label>
         <input class="form-control" id="usr-email" type="email" placeholder="usuario@princess.es">
+        <div style="font-size:11px;color:#888;margin-top:3px">
+          Déjalo vacío para anular el envío de correos a este usuario sin
+          desactivar la cuenta. Si es comprador o admin activo, aparecerá
+          como aviso en Admin → Integridad (no bloquea nada, es informativo).
+        </div>
       </div>
 
       <div>
@@ -7191,7 +7196,6 @@ async function saveUsuario() {
   const activo   = document.getElementById('usr-activo').checked;
 
   if (!nombre) { toast('El nombre es obligatorio', 'error'); return; }
-  if (!email)  { toast('El email es obligatorio (el segundo email es opcional)', 'error'); return; }
 
   let r;
   if (id) {

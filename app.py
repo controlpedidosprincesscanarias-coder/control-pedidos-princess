@@ -6094,8 +6094,11 @@ def create_usuario():
     email2   = (data.get("email2")   or "").strip()
     if not username or not nombre or not password:
         return jsonify({"error": "username, nombre y contraseña son obligatorios"}), 400
-    if not email:
-        return jsonify({"error": "El email es obligatorio (email2 es opcional)"}), 400
+    # (2026-07-31) El email NO es obligatorio: un admin puede dejarlo vacío
+    # a propósito para anular el envío de correos a ese usuario sin tener
+    # que desactivar la cuenta entera. La falta de email en compradores/
+    # admins activos ya se detecta y avisa en Admin → Integridad, no hace
+    # falta bloquear el guardado aquí.
     existing = query("SELECT id FROM usuarios WHERE username=%s", (username,), one=True)
     if existing:
         return jsonify({"error": "Ya existe un usuario con ese username"}), 409
@@ -6125,10 +6128,11 @@ def update_usuario(uid):
     if "nombre" in data:
         fields.append("nombre=%s"); args.append(data["nombre"].strip())
     if "email" in data:
-        _email = (data["email"] or "").strip()
-        if not _email:
-            return jsonify({"error": "El email es obligatorio (email2 es opcional)"}), 400
-        fields.append("email=%s"); args.append(_email)
+        # (2026-07-31) Se permite vaciarlo a propósito — es la forma de que
+        # un admin anule el envío de correos a este usuario sin desactivar
+        # la cuenta. Se detecta y avisa en Admin → Integridad si el usuario
+        # sigue activo con rol comprador/admin.
+        fields.append("email=%s"); args.append((data["email"] or "").strip())
     if "email2" in data:
         fields.append("email2=%s"); args.append((data["email2"] or "").strip() or None)
     if "movil" in data:

@@ -1,3 +1,25 @@
+# v12.27.0 — 31 julio 2026
+
+🔧 Corrección — el email de usuario no debe ser obligatorio para guardar
+
+**Motivo:** en v12.25.8 se añadió una validación que bloqueaba guardar
+la ficha de usuario sin email. Correcto según el planteamiento
+inicial, pero el usuario aclaró: la falta de email en compradores/
+admins activos ya se detecta y avisa en Admin → Integridad
+(`compradores_sin_email`, `admins_sin_email`), así que bloquear el
+guardado es innecesario — y además le quita a un admin la posibilidad
+de dejar el email vacío a propósito para anular el envío de correos a
+un usuario concreto, sin tener que desactivar la cuenta entera.
+
+**Corrección:** quitada la validación de email obligatorio en
+`/api/usuarios` (POST y PUT) y en el formulario del frontend. La
+ficha de usuario ahora explica junto al campo Email que dejarlo vacío
+anula los envíos a ese usuario, y que Integridad lo señalará como
+aviso informativo si corresponde. `email2` no se ve afectado, sigue
+opcional sin cambios.
+
+Badge de versión del sidebar actualizado a "V 12.27.0".
+
 # v12.25.8 — 31 julio 2026
 
 📧 Segundo email opcional por usuario (ficha de usuarios)
