@@ -1,3 +1,38 @@
+# v12.25.4 — 31 julio 2026
+
+🔧 Corrección — correos automáticos llegaban con líneas en blanco duplicadas
+
+**Reportado:** un correo real de "Entrega parcial" (56 días,
+departamento Cocina) llegó con líneas en blanco entre casi cada dato
+(Pedido Nº, Hotel, Departamento, Estado actual...), muy desorganizado
+— excepto entre "Días transcurridos" y "Observaciones", que sí salían
+pegados sin línea en blanco.
+
+**Causa:** `_html_a_texto_plano()` (red de seguridad que convierte el
+`body_html` de un correo a texto plano cuando no se le pasa un
+`cuerpo_text` explícito — el caso de la reclamación automática al
+proveedor, el aviso de firma pendiente y el aviso de cotización sin
+proveedor) no tenía en cuenta que las plantillas HTML son f-strings
+Python escritas en varias líneas con indentación: esos saltos de línea
+"de formato del código fuente" son ruido invisible en HTML (el
+navegador los ignora), pero la función los dejaba intactos y ADEMÁS
+insertaba su propio salto de línea al convertir cada `<br>`/`</p>` —
+resultado: doble salto de línea en casi cualquier sitio, EXCEPTO en el
+único punto donde el `<br>` estaba en la misma línea de código que el
+texto siguiente (la excepción "Observaciones" pegado, que fue la pista
+que confirmó la causa).
+
+**Corrección:** ahora se colapsa primero todo el espacio en blanco
+crudo (saltos de línea, tabulaciones, espacios repetidos) a un único
+espacio — igual que hace un navegador al renderizar HTML — y solo
+después se insertan los saltos de línea con significado real
+(`<br>` → salto simple; cierre de párrafo/bloque/título → línea en
+blanco; cierre de fila/elemento de lista → salto simple). Probado
+contra un HTML equivalente al del correo real reportado — resultado
+limpio.
+
+Badge de versión del sidebar actualizado a "V 12.25.4".
+
 # v12.25.2 — 31 julio 2026
 
 🔑 Cambio de cuenta EmailJS (cuota de 200 peticiones/mes agotándose)

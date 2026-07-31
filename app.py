@@ -1688,15 +1688,39 @@ def _html_a_texto_plano(html: str) -> str:
     `<div style="...">` en vez de un email legible. Con este fallback,
     aunque un caller se olvide de pasar `cuerpo_text` explícito (como
     pasó aquí), `_encolar_email_sistema()` genera uno razonable solo.
+
+    (2026-07-31) FIX: los `body_html` de las plantillas son f-strings
+    Python escritas en varias líneas con indentación — esos saltos de
+    línea/espacios "de formato del código fuente" son ruido invisible en
+    HTML (el navegador los ignora), pero antes esta función los dejaba
+    intactos y ADEMÁS insertaba su propio '\\n' al convertir cada
+    `<br>`/`</p>` — el resultado eran líneas en blanco dobles/triples
+    entre casi cualquier par de líneas ("muy desorganizado", reportado
+    por el usuario). Ahora se colapsa TODO el espacio en blanco crudo
+    (incluidos saltos de línea) a un único espacio ANTES de insertar los
+    saltos de línea con significado — igual que hace un navegador al
+    renderizar HTML — así el único origen de saltos de línea en el
+    resultado son las etiquetas que realmente los representan.
     """
     if not html:
         return ""
-    texto = re.sub(r'<br\s*/?>', '\n', html, flags=re.IGNORECASE)
-    texto = re.sub(r'</p>|</div>|</h[1-6]>|</tr>|</li>', '\n', texto, flags=re.IGNORECASE)
+    # 1) Neutralizar el formato del código fuente: todo salto de línea /
+    #    tabulación / espacios repetidos de la plantilla Python se colapsa
+    #    a un único espacio, igual que haría un navegador con el HTML.
+    texto = re.sub(r'\s+', ' ', html)
+    # 2) Insertar los saltos de línea con significado real:
+    #    - <br> → salto de línea simple
+    #    - cierre de párrafo/bloque/título → salto de línea doble (línea en blanco)
+    #    - cierre de fila/elemento de lista → salto de línea simple
+    texto = re.sub(r'<br\s*/?>', '\n', texto, flags=re.IGNORECASE)
+    texto = re.sub(r'</p>|</div>|</h[1-6]>', '\n\n', texto, flags=re.IGNORECASE)
+    texto = re.sub(r'</tr>|</li>', '\n', texto, flags=re.IGNORECASE)
     texto = re.sub(r'<[^>]+>', '', texto)
     texto = _html_unescape(texto)
+    # 3) Limpieza final: espacios sueltos alrededor de cada salto de línea,
+    #    y como mucho una línea en blanco seguida entre bloques.
     texto = re.sub(r'[ \t]+', ' ', texto)
-    texto = re.sub(r'\n[ \t]+', '\n', texto)
+    texto = re.sub(r' *\n *', '\n', texto)
     texto = re.sub(r'\n{3,}', '\n\n', texto)
     return texto.strip()
 
