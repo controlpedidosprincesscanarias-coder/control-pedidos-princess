@@ -139,6 +139,12 @@ def _auto_migrate():
             """)
             # ── Columna móvil en usuarios (v9.5) ─────────────────────────────
             cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS movil TEXT")
+            # ── Columna email2 en usuarios (v12.25.8) — segundo email opcional.
+            # El primero (email) sigue siendo obligatorio y es el único que se
+            # usa en la firma; email2, si existe, se añade como destinatario
+            # adicional (BCC/CC según el correo) en todos los envíos a ese
+            # usuario, pero nunca aparece en la firma.
+            cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email2 TEXT")
             # ── Columnas nombre cache en pedidos e historial (v9.9.7) ─────────
             cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS creado_por_nombre TEXT")
             cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS modificado_por_nombre TEXT")
@@ -1416,8 +1422,8 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 
     _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"))
     _usuarios_hotel   = _get_todos_usuarios_hotel(pedido.get("hotel_codigo",""))
-    _emails_compradores = [u["email"] for u in _usuarios_hotel["compradores"] if u.get("email")]
-    _emails_hotel_users = [u["email"] for u in _usuarios_hotel["hotel_users"]  if u.get("email")]
+    _emails_compradores = [e for u in _usuarios_hotel["compradores"] for e in _emails_usuario(u)]
+    _emails_hotel_users = [e for u in _usuarios_hotel["hotel_users"]  for e in _emails_usuario(u)]
     # Todos los internos del hotel (compradores + usuarios hotel) para BCC
     _todos_internos = list(dict.fromkeys(_emails_compradores + _emails_hotel_users))  # sin duplicados
 
@@ -1840,6 +1846,27 @@ def _enviar_supervision_admins(texto: str, evento_codigo: str,
     )
 
 
+def _emails_usuario(u: dict) -> list:
+    """
+    v12.25.8 — Devuelve [email] o [email, email2] de un dict de usuario
+    (compradores u otros roles), sin duplicados ni vacíos.
+
+    Uso: SOLO para listas de destinatarios (Para/CC/BCC) — nunca para la
+    firma, que sigue usando exclusivamente el email principal (primero,
+    obligatorio) vía _firma_comprador_html()/_firma_comprador_text().
+    """
+    if not u:
+        return []
+    out = []
+    e1 = (u.get("email") or "").strip()
+    e2 = (u.get("email2") or "").strip()
+    if e1:
+        out.append(e1)
+    if e2 and e2 != e1:
+        out.append(e2)
+    return out
+
+
 def _get_compradores_hotel(hotel_codigo: str) -> list:
     """
     Devuelve lista de dicts {username, nombre, email, movil, telegram_chat_id}
@@ -1856,7 +1883,7 @@ def _get_compradores_hotel(hotel_codigo: str) -> list:
         return []
     hotel_id = hotel_row["id"]
     rows = rows_to_list(query(
-        """SELECT u.id, u.username, u.nombre, u.email, u.movil, u.telegram_chat_id
+        """SELECT u.id, u.username, u.nombre, u.email, u.email2, u.movil, u.telegram_chat_id
            FROM usuarios u
            JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
            WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'
@@ -3783,8 +3810,10 @@ def _get_todos_usuarios_hotel(hotel_codigo: str) -> dict:
       - "compradores": rol='compras' en usuario_comprador_hoteles
       - "hotel_users": rol='hotel'   en usuario_hoteles
     Cada lista contiene dicts con {id, username, nombre, email} para
-    "hotel_users", y {id, username, nombre, email, movil} para "compradores"
-    (movil se usa para incluirlo en la firma de los correos al proveedor).
+    "hotel_users", y {id, username, nombre, email, email2, movil} para
+    "compradores" (movil se usa para incluirlo en la firma de los correos
+    al proveedor; email2, si existe, se añade como destinatario extra en
+    BCC pero nunca en la firma — ver _emails_usuario()).
     Uso: determinar destinatarios de correos internos de cambio de estado,
     incluyendo tanto el comprador responsable como el usuario del hotel.
     """
@@ -3797,7 +3826,7 @@ def _get_todos_usuarios_hotel(hotel_codigo: str) -> dict:
     hotel_id = hotel_row["id"]
 
     compradores = rows_to_list(query(
-        """SELECT u.id, u.username, u.nombre, u.email, u.movil
+        """SELECT u.id, u.username, u.nombre, u.email, u.email2, u.movil
            FROM usuarios u
            JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
            WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'
@@ -4114,7 +4143,7 @@ def _encolar_aviso_cotizacion_sin_proveedor(pedido: dict, dias: int) -> bool:
     configurado en Config Alertas para PENDIENTE COTIZACIÓN.
     """
     compradores = _get_compradores_cc(pedido.get("hotel_codigo", ""))
-    destinos = [c["email"] for c in compradores if c.get("email")]
+    destinos = [e for c in compradores for e in _emails_usuario(c)]
     if not destinos:
         log.warning("[RECLAMACION-AUTO] Pedido %s: PENDIENTE COTIZACIÓN sin proveedor y sin comprador con email — aviso omitido",
                     pedido.get("id"))
@@ -4157,7 +4186,7 @@ def _encolar_aviso_firma_pendiente_auto(pedido: dict, dias: int, estado: str) ->
         return False
 
     compradores = _get_compradores_cc(pedido.get("hotel_codigo", ""))
-    destinos = [c["email"] for c in compradores if c.get("email")]
+    destinos = [e for c in compradores for e in _emails_usuario(c)]
     if not destinos:
         log.warning("[AVISO-FIRMA-AUTO] Pedido %s: sin comprador con email en el hotel %s — aviso omitido",
                     pedido.get("id"), pedido.get("hotel_codigo", ""))
@@ -4233,7 +4262,7 @@ def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> 
         return False
 
     compradores = _get_compradores_cc(pedido.get("hotel_codigo", ""))
-    cc_emails = [c["email"] for c in compradores if c.get("email")]
+    cc_emails = [e for c in compradores for e in _emails_usuario(c)]
 
     # (2026-07-30) FIX: antes se pasaba `proveedor_emails` (una lista) como
     # `destinatarios_email` a `_encolar_email_sistema()`, que encola UNA fila
@@ -4334,11 +4363,13 @@ def alerta_email_preview(pedido_id):
         to_email   = ", ".join(_proveedor_emails)
         to_nombre  = pedido.get("proveedor_nombre") or ""
     else:
-        # Email interno: comprador responsable como destinatario
-        to_email  = compradores[0]["email"] if compradores else ""
+        # Email interno: comprador responsable como destinatario (con su
+        # email2 también, si tiene uno asignado — ver _emails_usuario())
+        to_email  = ", ".join(_emails_usuario(compradores[0])) if compradores else ""
         to_nombre = compradores[0]["nombre"] if compradores else ""
 
-    cc_emails = [c["email"] for c in compradores if c.get("email") and c["email"] != to_email]
+    _to_emails_set = {e.strip() for e in to_email.split(",") if e.strip()}
+    cc_emails = [e for c in compradores for e in _emails_usuario(c) if e not in _to_emails_set]
 
     # WhatsApp text para compradores (legacy manual)
     wa_text = _whatsapp_text(pedido, dias, nivel)
@@ -4397,10 +4428,14 @@ def alerta_enviar_email(pedido_id):
     if pedido_data:
         hotel_codigo = pedido_data.get("hotel_codigo", "")
         compradores_hotel = _get_compradores_cc(hotel_codigo)
-        # CC = todos los compradores del hotel excepto si su email coincide con el TO principal
+        # CC = todos los emails (principal + email2) de los compradores del
+        # hotel, excepto los que ya estén en el TO principal (el TO puede
+        # traer varias direcciones separadas por coma si el destinatario
+        # tiene email2)
+        _to_emails_set = {e.strip() for e in to_email.split(",") if e.strip()}
         cc_emails_backend = [
-            c["email"] for c in compradores_hotel
-            if c.get("email") and c["email"].strip() != to_email
+            e for c in compradores_hotel for e in _emails_usuario(c)
+            if e not in _to_emails_set
         ]
     else:
         cc_emails_backend = []
@@ -6044,7 +6079,7 @@ def delete_familia(fid):
 @admin_required
 def get_usuarios():
     rows = rows_to_list(query(
-        "SELECT id, username, nombre, email, movil, rol, activo, creado_en, telegram_chat_id FROM usuarios ORDER BY nombre"
+        "SELECT id, username, nombre, email, email2, movil, rol, activo, creado_en, telegram_chat_id FROM usuarios ORDER BY nombre"
     ))
     return jsonify(rows)
 
@@ -6055,8 +6090,12 @@ def create_usuario():
     username = (data.get("username") or "").strip().lower()
     nombre   = (data.get("nombre")   or "").strip()
     password = (data.get("password") or "").strip()
+    email    = (data.get("email")    or "").strip()
+    email2   = (data.get("email2")   or "").strip()
     if not username or not nombre or not password:
         return jsonify({"error": "username, nombre y contraseña son obligatorios"}), 400
+    if not email:
+        return jsonify({"error": "El email es obligatorio (email2 es opcional)"}), 400
     existing = query("SELECT id FROM usuarios WHERE username=%s", (username,), one=True)
     if existing:
         return jsonify({"error": "Ya existe un usuario con ese username"}), 409
@@ -6065,8 +6104,8 @@ def create_usuario():
     if rol not in ("admin", "user", "hotel", "compras"):
         rol = "user"
     cur = execute(
-        "INSERT INTO usuarios (username, nombre, email, movil, password, rol, activo, telegram_chat_id) VALUES (%s,%s,%s,%s,%s,%s,1,%s) RETURNING id",
-        (username, nombre, data.get("email",""), data.get("movil",""), password, rol,
+        "INSERT INTO usuarios (username, nombre, email, email2, movil, password, rol, activo, telegram_chat_id) VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s) RETURNING id",
+        (username, nombre, email, email2 or None, data.get("movil",""), password, rol,
          (data.get("telegram_chat_id") or "").strip() or None)
     )
     new_id = cur.fetchone()["id"]
@@ -6086,7 +6125,12 @@ def update_usuario(uid):
     if "nombre" in data:
         fields.append("nombre=%s"); args.append(data["nombre"].strip())
     if "email" in data:
-        fields.append("email=%s"); args.append(data["email"].strip())
+        _email = (data["email"] or "").strip()
+        if not _email:
+            return jsonify({"error": "El email es obligatorio (email2 es opcional)"}), 400
+        fields.append("email=%s"); args.append(_email)
+    if "email2" in data:
+        fields.append("email2=%s"); args.append((data["email2"] or "").strip() or None)
     if "movil" in data:
         fields.append("movil=%s"); args.append((data["movil"] or "").strip())
     if "rol" in data and data["rol"] in ("admin", "user", "hotel", "compras"):

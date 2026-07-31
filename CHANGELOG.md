@@ -1,3 +1,31 @@
+# v12.25.8 — 31 julio 2026
+
+📧 Segundo email opcional por usuario (ficha de usuarios)
+
+**Petición:** poder asignar un segundo email (opcional) a cada
+usuario, de forma que cuando un comprador tenga los 2 asignados,
+todos los correos que se envíen sobre sus hoteles lleguen a ambos —
+pero que la firma siga usando solo el primero (obligatorio).
+
+**Implementación:**
+- Nueva columna `email2` en `usuarios` (opcional; `email` pasa a ser
+  obligatorio, validado tanto en el backend — `/api/usuarios` POST/PUT
+  — como en el propio formulario del frontend).
+- Nuevo helper `_emails_usuario(u)` → `[email]` o `[email, email2]`,
+  usado en TODOS los puntos donde el email de un comprador se usa como
+  **destinatario** (BCC del correo al proveedor al cambiar de estado,
+  CC de la reclamación automática, destinatarios de los avisos
+  internos de firma pendiente y cotización sin proveedor, y TO/CC de
+  los envíos manuales desde el panel de alertas) — nunca en la firma,
+  que sigue usando en exclusiva `_firma_comprador_html()`/
+  `_firma_comprador_text()` con el email principal.
+- Ficha de usuario (Admin → Usuarios): nuevo campo "Email 2
+  (opcional)" con nota explicativa; el email principal ahora se marca
+  como obligatorio (`Email *`). La tabla de usuarios muestra el
+  segundo email debajo del principal cuando existe.
+
+Badge de versión del sidebar actualizado a "V 12.25.8".
+
 # v12.25.6 — 31 julio 2026
 
 🔧 Corrección — 2 de las 3 plantillas se quedaron con la firma antigua

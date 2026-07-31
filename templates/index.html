@@ -1200,7 +1200,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.25.6
+          V 12.25.8
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1824,8 +1824,19 @@ tbody tr:last-child{border-bottom:none}
       </div>
 
       <div>
-        <label class="form-label">Email</label>
+        <label class="form-label">Email *</label>
         <input class="form-control" id="usr-email" type="email" placeholder="usuario@princess.es">
+      </div>
+
+      <div>
+        <label class="form-label">Email 2 (opcional)</label>
+        <input class="form-control" id="usr-email2" type="email" placeholder="segundo.email@princess.es">
+        <div style="font-size:11px;color:#888;margin-top:3px">
+          Si se rellena, todos los correos que se envíen a este usuario (como
+          destinatario de aviso, no como remitente) llegarán también a esta
+          segunda dirección. La firma de los correos salientes solo usa el
+          email principal.
+        </div>
       </div>
 
       <div>
@@ -7043,7 +7054,7 @@ async function loadUsuarios() {
     return `<tr>
       <td class="monospace" style="font-size:13px">${u.username}</td>
       <td>${u.nombre}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
-      <td style="font-size:12px;color:#666">${u.email||'—'}</td>
+      <td style="font-size:12px;color:#666">${u.email||'—'}${u.email2 ? `<div style="font-size:10.5px;color:#999">+ ${u.email2}</div>` : ''}</td>
       <td>${movilLink}</td>
       <td>${tgCell}</td>
       <td>${rolBadge}</td>
@@ -7063,6 +7074,7 @@ function openModalUsuario(id=null) {
   document.getElementById('usr-username').value  = '';
   document.getElementById('usr-nombre').value    = '';
   document.getElementById('usr-email').value     = '';
+  document.getElementById('usr-email2').value    = '';
   document.getElementById('usr-movil').value     = '';
   document.getElementById('usr-telegram-chat-id').value = '';
   document.getElementById('usr-telegram-status').textContent = '';
@@ -7087,6 +7099,7 @@ function openModalUsuario(id=null) {
       document.getElementById('usr-username').value = u.username;
       document.getElementById('usr-nombre').value   = u.nombre;
       document.getElementById('usr-email').value    = u.email || '';
+      document.getElementById('usr-email2').value   = u.email2 || '';
       document.getElementById('usr-movil').value    = u.movil || '';
       const tgVal = u.telegram_chat_id || '';
       document.getElementById('usr-telegram-chat-id').value = tgVal;
@@ -7170,6 +7183,7 @@ async function saveUsuario() {
   const username = document.getElementById('usr-username').value.trim().toLowerCase();
   const nombre   = document.getElementById('usr-nombre').value.trim();
   const email    = document.getElementById('usr-email').value.trim();
+  const email2   = document.getElementById('usr-email2').value.trim();
   const movil    = document.getElementById('usr-movil').value.trim();
   const telegram_chat_id = document.getElementById('usr-telegram-chat-id').value.trim();
   const rol      = document.getElementById('usr-rol').value;
@@ -7177,16 +7191,17 @@ async function saveUsuario() {
   const activo   = document.getElementById('usr-activo').checked;
 
   if (!nombre) { toast('El nombre es obligatorio', 'error'); return; }
+  if (!email)  { toast('El email es obligatorio (el segundo email es opcional)', 'error'); return; }
 
   let r;
   if (id) {
-    const body = { nombre, email, movil, telegram_chat_id, rol, activo };
+    const body = { nombre, email, email2, movil, telegram_chat_id, rol, activo };
     if (password) body.password = password;
     r = await api(`/api/usuarios/${id}`, 'PUT', body);
   } else {
     if (!username) { toast('El username es obligatorio', 'error'); return; }
     if (!password) { toast('La contraseña es obligatoria', 'error'); return; }
-    r = await api('/api/usuarios', 'POST', { username, nombre, email, movil, telegram_chat_id, rol, password });
+    r = await api('/api/usuarios', 'POST', { username, nombre, email, email2, movil, telegram_chat_id, rol, password });
   }
 
   if (r.error) { toast(r.error, 'error'); return; }

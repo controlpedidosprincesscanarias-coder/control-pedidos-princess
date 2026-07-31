@@ -54,6 +54,7 @@ SQL_STATEMENTS = [
         username  TEXT NOT NULL UNIQUE,
         nombre    TEXT NOT NULL,
         email     TEXT,
+        email2    TEXT,
         movil     TEXT,
         password  TEXT NOT NULL,
         rol       TEXT NOT NULL DEFAULT 'user',
