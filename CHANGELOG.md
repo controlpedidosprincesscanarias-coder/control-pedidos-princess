@@ -1,3 +1,63 @@
+# v12.27.10 — 31 julio 2026
+
+📧 Backup EmailJS — cambio bidireccional (1↔2) con reinicio de contador
+
+**Confirmado con el usuario:** cuenta 1 activa con contador en 8, y
+una cuenta 2 de backup (otra cuenta EmailJS ya existente) lista para
+usar. Aclarado que el contador debe reiniciarse a 0 en cada cambio,
+de forma que cada cuenta cuente siempre de 1 a 195 en su ciclo.
+
+**Corregido respecto a v12.27.8** (que solo cambiaba 1→2 una vez y
+no reiniciaba el contador):
+- El cambio automático ahora es bidireccional: al llegar al umbral
+  cambia a la OTRA cuenta, sea cual sea la activa (1→2 o 2→1).
+- El contador se reinicia a 0 en el mismo cambio — cada cuenta cuenta
+  siempre de 1 a 195 en su propio ciclo, indefinidamente.
+- Pensado para que, cuando la segunda cuenta también llegue al
+  umbral, la primera ya se haya renovado del lado de EmailJS (su
+  ciclo gratuito es mensual) y pueda reutilizarse como backup de la
+  backup — round-robin continuo entre las 2 cuentas.
+- Integridad y la nota del panel de administración actualizadas para
+  reflejar el comportamiento bidireccional.
+
+Badge de versión del sidebar actualizado a "V 12.27.10".
+
+# v12.27.8 — 31 julio 2026
+
+📧 Backup automático de cuenta EmailJS al acercarse al límite gratuito
+
+**Motivo:** a raíz de haberse quedado sin cuota EmailJS (200/mes) a
+mitad de ciclo por exceso de pruebas — se pidió un recuento de
+correos enviados que, al llegar a 195 (5 antes del límite), cambie
+solo las 3 credenciales para que los envíos sigan sin cortarse,
+dejando constancia del cambio en Integridad.
+
+**Cómo funciona:**
+- Las credenciales EmailJS ya NO van fijas en el código — el
+  frontend las pide al backend al cargar la página
+  (`GET /api/emailjs/config`), que decide qué cuenta (1 o 2) está
+  activa. Un cambio de cuenta se aplica sin desplegar nada.
+- Nuevo helper central `enviarEmailJS()` — sustituye a las 9 llamadas
+  directas a `emailjs.send(...)` de toda la app. Tras cada envío
+  correcto, registra el envío en el backend
+  (`POST /api/emailjs/registrar-envio`), que incrementa un contador de
+  forma atómica.
+- Al llegar el contador al umbral (195 por defecto, configurable) con
+  la cuenta 1 activa: si la cuenta 2 (backup) tiene sus 3 credenciales
+  completas, el sistema cambia solo a la cuenta 2 y registra la fecha
+  del cambio. Si la cuenta 2 no está lista, NO cambia (para no
+  dejar la app sin poder enviar) y queda como aviso urgente.
+- Nuevo panel en Admin → Config Alertas ("📧 EmailJS — cuentas y
+  backup automático"): credenciales de las 2 cuentas, contador y
+  umbral editables, y quién está activa ahora mismo — con una nota de
+  cómo forzar la vuelta a la cuenta 1 tras crear otra de backup.
+- Admin → Integridad: nueva tarjeta "📧 Cuenta EmailJS" — avisa si ya
+  se hizo un cambio automático, si se alcanzó el umbral sin backup
+  listo (crítico), o si se está cerca del umbral sin backup
+  configurado (aviso).
+
+Badge de versión del sidebar actualizado a "V 12.27.8".
+
 # v12.27.6 — 31 julio 2026
 
 🏨 Correos por hotel — invertido el criterio por defecto

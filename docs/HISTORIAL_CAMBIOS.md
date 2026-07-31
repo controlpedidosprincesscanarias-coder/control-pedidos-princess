@@ -8,6 +8,99 @@
 
 ---
 
+## 2026-07-31 (15)
+
+### [Control Pedidos] v12.27.10 — Backup EmailJS bidireccional + reinicio de contador
+- El usuario confirmó los datos de v12.27.8 (cuenta 1 activa,
+  contador en 8) y aportó una cuenta 2 de backup ya existente (otra
+  cuenta EmailJS previa: `service_dwwha2g` / `template_krpvmda` /
+  Public Key `WCiU7q8WT1i8AQTbR`), aclarando que el contador debe
+  reiniciarse a 0 en cada cambio — "siempre empieza en 1 y termina en
+  195".
+- `POST /api/emailjs/registrar-envio` corregido: antes solo cambiaba
+  1→2 una vez y nunca reiniciaba el contador (seguía subiendo por
+  encima de 195 indefinidamente tras el cambio). Ahora:
+  - El cambio es bidireccional — calcula `destino = 2 if activa==1
+    else 1` y cambia a esa cuenta sea cual sea la activa.
+  - El contador se reinicia a `0` en la misma transacción del
+    cambio, para que la cuenta recién activada empiece su propio
+    ciclo de 1 a 195.
+  - Pensado para funcionar como round-robin continuo entre las 2
+    cuentas: cuando la segunda también llegue al umbral, lo normal es
+    que la primera ya se haya renovado del lado de EmailJS (ciclo
+    gratuito mensual), y vuelva a servir de backup.
+- Comprobación de Integridad (`_validar_integridad_operativa`)
+  generalizada del mismo modo: en vez de asumir siempre "activa=1,
+  backup=2", calcula `_otra = 2 if _activa==1 else 1` y evalúa la
+  completitud de las credenciales de esa cuenta, sea cual sea.
+- Nota del panel Admin → Config Alertas → EmailJS actualizada
+  ("rellena ambas cuentas... cambia a la OTRA cuenta... reinicia el
+  contador a 0").
+- Nota: las credenciales reales de las 2 cuentas ya confirmadas por
+  el usuario NO se tocan por migración (viven como datos ya
+  existentes en la base de datos de producción, con
+  `ON CONFLICT DO NOTHING`) — se rellenan/confirman directamente
+  desde el panel de administración ya construido en v12.27.8.
+- Badge de versión del sidebar actualizado a "V 12.27.10"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
+## 2026-07-31 (14)
+
+### [Control Pedidos] v12.27.8 — Backup automático de cuenta EmailJS
+- Motivo: a raíz de haberse quedado sin cuota EmailJS (200/mes) a
+  mitad de ciclo por exceso de pruebas — se pidió un recuento de
+  correos enviados que, al llegar a 195 (5 antes del límite), cambie
+  solo las 3 credenciales para que los envíos sigan sin cortarse,
+  dejando constancia del cambio en Integridad.
+- Nuevas claves en `config_alertas` (grupo `emailjs`, migración
+  `ON CONFLICT DO NOTHING`): `emailjs_public_key_1/2`,
+  `emailjs_service_id_1/2`, `emailjs_template_id_1/2` (cuenta 1 =
+  activa por defecto, inicializada con las credenciales ya en uso en
+  producción; cuenta 2 = backup, vacía hasta que el admin la rellene),
+  `emailjs_cuenta_activa`, `emailjs_contador`, `emailjs_umbral_cambio`
+  (195 por defecto) y `emailjs_cambio_automatico_en`.
+- `GET /api/emailjs/config` (sin login, igual que antes con las
+  constantes hardcodeadas — el public key ya era público de por sí):
+  credenciales de la cuenta activa + contador/umbral, para que el
+  frontend inicialice `emailjs.init()` dinámicamente.
+- `POST /api/emailjs/registrar-envio` (con login): incrementa el
+  contador de forma atómica (`UPDATE ... RETURNING`, sin razas entre
+  usuarios concurrentes). Si se alcanza el umbral con la cuenta 1
+  activa y la cuenta 2 tiene las 3 credenciales completas, cambia a
+  la cuenta 2 y registra la fecha (`pytz Atlantic/Canary`, mismo
+  criterio de zona horaria que el resto de la app). Si la cuenta 2 no
+  está lista, NO cambia — para no dejar la app sin poder enviar — y
+  se marca como aviso urgente en Integridad.
+- Frontend: `emailjs.init()` en `<head>` ahora es asíncrono
+  (`window._emailjsCfgReady`), cargado desde `/api/emailjs/config` en
+  vez de una Public Key fija. Nuevo helper central `enviarEmailJS()`
+  que sustituye a las 9 llamadas directas a
+  `emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, ...)` — tras
+  cada envío correcto llama a `/api/emailjs/registrar-envio` y, si el
+  backend indica que hubo cambio de cuenta, reinicializa
+  `emailjs.init()` con la nueva Public Key sobre la marcha (sin
+  recargar la página) para que el resto de envíos de esa misma sesión
+  ya usen la cuenta nueva.
+- Admin → Config Alertas: nuevo panel especial "📧 EmailJS — cuentas
+  y backup automático" (renderizado aparte del bucle genérico
+  numero/bool, porque necesita campos de texto) — barra de progreso
+  contador/umbral, cuenta activa, y las 3 credenciales de cada una de
+  las 2 cuentas en cajas separadas; reutiliza el mismo
+  `saveConfigAlertas()` genérico (ya recogía cualquier
+  `input[id^="cfg_"]`, sin cambios ahí).
+- Admin → Integridad: nueva clave `emailjs` en
+  `_validar_integridad_operativa()` con 3 posibles avisos (cambio ya
+  realizado / umbral alcanzado sin backup — crítico / cerca del
+  umbral sin backup — aviso), y su tarjeta correspondiente en el
+  panel visual ("📧 Cuenta EmailJS", gravedad dinámica según el tipo
+  de aviso).
+- Badge de versión del sidebar actualizado a "V 12.27.8"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
 ## 2026-07-31 (13)
 
 ### [Control Pedidos] v12.27.6 — Correos por hotel: invertido el criterio por defecto

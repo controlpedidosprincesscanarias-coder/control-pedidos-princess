@@ -678,7 +678,19 @@ tbody tr:last-child{border-bottom:none}
   <!-- EmailJS SDK — envío real desde Gmail sin servidor SMTP -->
   <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
   <script>
-    emailjs.init({ publicKey: "bxFzHypsIrNqcDh15" });
+    // v12.27.8 — Credenciales ya NO hardcodeadas: se piden al backend, que
+    // decide qué cuenta EmailJS está activa (1 o 2). Así, si el sistema
+    // cambia de cuenta automáticamente al llegar al umbral de envíos, el
+    // cambio se aplica sin necesidad de desplegar nada — basta con recargar.
+    window._emailjsCfg = null;
+    window._emailjsCfgReady = fetch('/api/emailjs/config')
+      .then(r => r.json())
+      .then(d => {
+        window._emailjsCfg = d;
+        if (d && d.ok && d.public_key) emailjs.init({ publicKey: d.public_key });
+        return d;
+      })
+      .catch(err => { console.error('No se pudo cargar la configuración de EmailJS', err); return null; });
   </script>
 </head>
 <body>
@@ -1200,7 +1212,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.27.6
+          V 12.27.10
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2498,7 +2510,7 @@ async function _enviarCodigoVerificacion(email, subject, message) {
   const payload = { to_email: email, subject, message, reply_to: email };
   for (let intento = 1; intento <= 2; intento++) {
     try {
-      await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, payload);
+      await enviarEmailJS(payload);
       return true;
     } catch (e) {
       console.warn(`[login] Envío de código de verificación (intento ${intento}/2) falló:`, e);
@@ -2682,7 +2694,7 @@ async function enviarSolicitudReset() {
       // Backend devuelve sin_email: true — enviar con EmailJS desde el navegador
       if (r.email) {
         try {
-          await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+          await enviarEmailJS({
             to_email: r.email,
             subject:  'Restablecimiento de contraseña – Control de Pedidos',
             message:  `Hola ${r.nombre || usuario},
@@ -2867,7 +2879,7 @@ async function sol_enviarFase2() {
     if (r.sin_email && r.destinatarios && r.destinatarios.length) {
       try {
         for (const dest of r.destinatarios) {
-          await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+          await enviarEmailJS({
             to_email: dest,
             subject:  r.asunto  || '[FASE 2 COMPLETADA] Alta usuario',
             message:  r.body_text || 'El usuario ha completado la verificación. Accede al panel para aprobar la cuenta.',
@@ -3075,7 +3087,7 @@ async function adminEnviarFase2(solId) {
     if (r.sin_email && r.url_token && r.destinatarios && r.destinatarios[0]) {
       const toEmail = r.destinatarios[0];
       try {
-        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+        await enviarEmailJS({
           to_email: toEmail,
           subject:  r.asunto || 'Verificación de acceso — Control de Pedidos Princess',
           message:  r.body_text || `Hola,\n\nTu solicitud de acceso ha sido revisada.\n\nCompleta la verificación aquí:\n${r.url_token}\n\nEl enlace caduca en 72 horas.\n\nControl Pedidos Princess Canarias`,
@@ -3126,7 +3138,7 @@ async function adminAprobarSolicitud(solId) {
     let usuarioEmailOk = !r.email_usuario_pendiente;  // si no hay pendiente, ya se envió por backend
     if (r.email_usuario_pendiente) {
       try {
-        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+        await enviarEmailJS({
           to_email: r.email_usuario_pendiente.to_email,
           subject:  r.email_usuario_pendiente.asunto,
           message:  r.email_usuario_pendiente.body_text,
@@ -3141,7 +3153,7 @@ async function adminAprobarSolicitud(solId) {
 
     if (r.email_admins_pendiente && r.email_admins_pendiente.destinatarios?.length) {
       try {
-        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+        await enviarEmailJS({
           to_email: r.email_admins_pendiente.destinatarios[0],
           subject:  r.email_admins_pendiente.asunto,
           message:  r.email_admins_pendiente.body_text,
@@ -4801,7 +4813,7 @@ async function _enviarEmailsPendientesEstado(pendientes) {
   if (!pendientes || !pendientes.length) return;
   for (const p of pendientes) {
     try {
-      await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+      await enviarEmailJS({
         to_email: p.to_email,
         subject:  p.asunto,
         message:  p.body_text,
@@ -6458,6 +6470,7 @@ const GRUPOS_LABEL = {
   techo:             '💳 Techo de gastos',
   popup_repeticion:  '🔁 Repetición de Popups en Agenda (compradores)',
   reenvio_admin:     '📮 Reenvío a Admins (Techo / Familia repetida)',
+  emailjs:           '📧 EmailJS — cuentas y backup automático',
 };
 
 async function loadConfigAlertas() {
@@ -6469,6 +6482,69 @@ async function loadConfigAlertas() {
     let html = '';
     for (const [grupo, items] of Object.entries(grupos)) {
       const label = GRUPOS_LABEL[grupo] || grupo;
+
+      if (grupo === 'emailjs') {
+        const get = clave => (items.find(i => i.clave === clave) || {}).valor || '';
+        const contador  = parseInt(get('emailjs_contador') || '0', 10);
+        const umbral    = parseInt(get('emailjs_umbral_cambio') || '195', 10);
+        const activa    = parseInt(get('emailjs_cuenta_activa') || '1', 10);
+        const cambioEn  = get('emailjs_cambio_automatico_en');
+        const pct       = umbral > 0 ? Math.min(100, Math.round(contador / umbral * 100)) : 0;
+        const pctColor  = pct >= 100 ? '#dc3545' : pct >= 80 ? '#ffc107' : '#28a745';
+        html += `<div style="margin:10px 0 6px;padding:0 16px">
+          <div style="font-weight:700;font-size:13px;color:#1a73e8;border-bottom:2px solid #e8f0fe;padding-bottom:5px;margin-bottom:10px">${label}</div>
+
+          <div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:12px 14px;margin-bottom:12px">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+              <span style="font-size:13px;font-weight:700;color:${activa === 2 ? '#8B0000' : '#1a73e8'}">
+                Cuenta en uso ahora mismo: ${activa}${activa === 2 ? ' (backup — ya se activó el cambio automático)' : ''}
+              </span>
+              ${cambioEn ? `<span style="font-size:11px;color:#888">Último cambio automático: ${esc(cambioEn)}</span>` : ''}
+            </div>
+            <div style="height:10px;background:#e9ecef;border-radius:5px;overflow:hidden;margin-bottom:6px">
+              <div style="height:100%;width:${pct}%;background:${pctColor}"></div>
+            </div>
+            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:11.5px;color:#555">
+              <span>Envíos contados: <input type="number" min="0" id="cfg_emailjs_contador" value="${contador}"
+                style="width:70px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
+              <span>Cambiar de cuenta al llegar a: <input type="number" min="1" id="cfg_emailjs_umbral_cambio" value="${umbral}"
+                style="width:60px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
+              <span>Cuenta activa (1 o 2): <input type="number" min="1" max="2" id="cfg_emailjs_cuenta_activa" value="${activa}"
+                style="width:40px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
+            </div>
+            <div style="font-size:10.5px;color:#888;margin-top:6px">
+              Para forzar la vuelta a la cuenta 1 (por ejemplo tras renovar/crear otra cuenta EmailJS),
+              pon "Cuenta activa" a 1 y "Envíos contados" a 0, y guarda.
+            </div>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            ${[1, 2].map(n => `
+              <div style="background:${activa === n ? '#eef6ff' : '#fafafa'};border:1px solid ${activa === n ? '#b6d4fe' : '#e9ecef'};border-radius:8px;padding:10px 12px">
+                <div style="font-size:12px;font-weight:700;color:${activa === n ? '#1a73e8' : '#555'};margin-bottom:8px">
+                  Cuenta ${n} ${n === 1 ? '(principal)' : '(backup)'} ${activa === n ? ' · en uso' : ''}
+                </div>
+                <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Public Key</label>
+                <input type="text" id="cfg_emailjs_public_key_${n}" value="${esc(get('emailjs_public_key_' + n))}"
+                       placeholder="Public Key" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
+                <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Service ID</label>
+                <input type="text" id="cfg_emailjs_service_id_${n}" value="${esc(get('emailjs_service_id_' + n))}"
+                       placeholder="service_xxxxxxx" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
+                <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Template ID</label>
+                <input type="text" id="cfg_emailjs_template_id_${n}" value="${esc(get('emailjs_template_id_' + n))}"
+                       placeholder="template_xxxxxxx" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px">
+              </div>`).join('')}
+          </div>
+          <div style="font-size:10.5px;color:#888;margin-top:8px">
+            Rellena ambas cuentas con las 3 credenciales (misma plantilla en las dos, mismos campos
+            <code>to_email</code>/<code>bcc</code>/<code>reply_to</code>/<code>subject</code>/<code>message</code>) —
+            en cuanto los "Envíos contados" lleguen al umbral, el sistema cambia solo a la OTRA cuenta
+            (1→2 o 2→1) y reinicia el contador a 0, sin desplegar nada. Se avisará en 🔍 Integridad.
+          </div>
+        </div>`;
+        continue;
+      }
+
       html += `<div style="margin:10px 0 6px;padding:0 16px">
         <div style="font-weight:700;font-size:13px;color:#1a73e8;border-bottom:2px solid #e8f0fe;padding-bottom:5px;margin-bottom:8px">${label}</div>
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px">`;
@@ -6840,6 +6916,15 @@ async function loadIntegridad() {
       desc: 'Anómalo — el índice uq_comprador_hotel debería impedirlo.',
       renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.hotel_codigo}</td><td style="padding:6px 10px">${u.hotel_nombre}</td><td style="padding:6px 10px;color:#dc3545;font-weight:700">${u.n_compradores}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Código</th><th style="padding:6px 10px;text-align:left">Hotel</th><th style="padding:6px 10px;text-align:left">Nº compradores</th></tr>',
+    },
+    {
+      key: 'emailjs',
+      titulo: '📧 Cuenta EmailJS',
+      // gravedad dinámica: umbral sin backup = crítico; cambio ya hecho o cerca del umbral = aviso
+      gravedad: (probs.emailjs && probs.emailjs[0] && probs.emailjs[0].tipo === 'umbral_alcanzado_sin_backup') ? 'critico' : 'aviso',
+      desc: 'Estado del contador de envíos y del backup automático de cuenta (ver Config Alertas → EmailJS).',
+      renderFila: u => `<tr><td style="padding:6px 10px">${u.mensaje}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Detalle</th></tr>',
     },
   ];
 
@@ -7522,10 +7607,40 @@ function _meaGetCCs() {
   ).map(el => el.dataset.email);
 }
 
-// ── Configuración EmailJS ────────────────────────────────────────────────────
-const EMAILJS_SERVICE_ID  = 'service_shvrzuv';
-const EMAILJS_TEMPLATE_ID = 'template_1zrv4ze';
-// Public Key inicializada en <head>
+// ── Configuración EmailJS (v12.27.8 — dinámica, con backup automático) ──────
+// Sustituye a las constantes EMAILJS_SERVICE_ID/EMAILJS_TEMPLATE_ID fijas de
+// antes. Cualquier envío debe pasar por aquí (nunca llamar a emailjs.send()
+// directamente) para que el contador de envíos y el cambio automático de
+// cuenta al llegar al umbral funcionen.
+async function enviarEmailJS(payload) {
+  await window._emailjsCfgReady;
+  const cfg = window._emailjsCfg;
+  if (!cfg || !cfg.ok || !cfg.service_id || !cfg.template_id) {
+    throw new Error('Configuración de EmailJS no disponible — revisa Admin → EmailJS.');
+  }
+  const resultado = await emailjs.send(cfg.service_id, cfg.template_id, payload);
+  // Registrar el envío en el backend (contador + posible cambio automático de
+  // cuenta). No debe bloquear ni romper el envío ya realizado si falla.
+  try {
+    const reg = await api('/api/emailjs/registrar-envio', 'POST');
+    if (reg && reg.ok) {
+      window._emailjsCfg = Object.assign({}, cfg, {
+        cuenta_activa: reg.cuenta_activa,
+        public_key:    reg.public_key || cfg.public_key,
+        service_id:    reg.service_id || cfg.service_id,
+        template_id:   reg.template_id || cfg.template_id,
+        contador:      reg.contador,
+      });
+      if (reg.cambiada) {
+        console.warn(`[EmailJS] Cambio automático a la cuenta ${reg.cuenta_activa} de backup (umbral alcanzado).`);
+        if (reg.public_key) emailjs.init({ publicKey: reg.public_key });
+      }
+    }
+  } catch (e) {
+    console.error('No se pudo registrar el envío EmailJS (contador)', e);
+  }
+  return resultado;
+}
 
 // ── construirTextoCorreoPlano ────────────────────────────────────────────────
 // Extrae texto plano del HTML del preview (para EmailJS y fallbacks).
@@ -7591,7 +7706,7 @@ async function meaEnviarEmail() {
 
   try {
     // ── Capa 1: EmailJS — envío real desde Gmail de princess ────────────────
-    await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+    await enviarEmailJS({
       to_email: toEmail,
       subject:  subject,
       message:  bodyText,
@@ -8752,7 +8867,7 @@ async function _enviarEmailsSistemaPendientes() {
     if (!r || !r.ok || !r.pendientes || !r.pendientes.length) return;
     for (const p of r.pendientes) {
       try {
-        await emailjs.send(EMAILJS_SERVICE_ID, EMAILJS_TEMPLATE_ID, {
+        await enviarEmailJS({
           to_email: p.destinatario,
           subject:  p.asunto,
           message:  p.cuerpo_text || p.cuerpo_html || '',
