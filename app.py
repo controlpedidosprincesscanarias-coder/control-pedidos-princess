@@ -442,6 +442,55 @@ def _auto_migrate():
             """)
             if cur.rowcount:
                 log.info("[MIGRACION] Hotel de pruebas 'PR' insertado")
+            # ── v12.29.33 — FIX: tabla expediente_exceso nunca se creó en
+            # producción ────────────────────────────────────────────────────
+            # Mismo bug que el hotel "PR" de arriba: expediente_exceso (y sus
+            # índices) solo estaban en SQL_STATEMENTS (models.py), que únicamente
+            # ejecuta init_db.py a mano en el primer despliegue — nadie lo
+            # vuelve a correr sobre una base de datos ya existente. Resultado:
+            # /api/techo/resumen hacía SELECT sobre una tabla inexistente,
+            # el backend devolvía 500, _fetchTecho() lo capturaba y devolvía
+            # null, y loadTecho() petaba en `d.mes` dejando la vista
+            # "Techo de gastos" colgada en "Cargando…" para siempre.
+            # Se repite aquí, en _auto_migrate() (la función que sí corre en
+            # cada arranque), con CREATE TABLE/INDEX IF NOT EXISTS — no
+            # duplica nada si ya se llegó a ejecutar init_db.py.
+            # v12.29.35 — DEBUG temporal: try/except propio para esta migración
+            # concreta, con logging detallado (tipo de excepción + repr, no
+            # solo str(e)) — así, si vuelve a fallar, sabremos exactamente cuál
+            # de las 4 sentencias es y por qué, sin depender de adivinar por
+            # la posición en el código. Quitar (o simplificar) una vez
+            # confirmado que la tabla se crea correctamente.
+            try:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS expediente_exceso (
+                        id                              SERIAL PRIMARY KEY,
+                        pedido_id                       INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+                        hotel_id                        INTEGER NOT NULL REFERENCES hoteles(id),
+                        familia_id                      INTEGER REFERENCES familias(id),
+                        mes                             TEXT NOT NULL,
+                        importe_pedido                  NUMERIC(10,2),
+                        consumo_previo                  NUMERIC(10,2),
+                        exceso                          NUMERIC(10,2),
+                        motivo_solicitud                TEXT,
+                        usuario_solicitante_id          INTEGER REFERENCES usuarios(id),
+                        resultado                       TEXT NOT NULL DEFAULT 'pendiente',
+                        usuario_resuelve_id             INTEGER REFERENCES usuarios(id),
+                        fecha_resolucion                TIMESTAMPTZ,
+                        observaciones_direccion_general TEXT,
+                        consumido_en_solicitud          NUMERIC(10,2),
+                        disponible_en_solicitud         NUMERIC(10,2),
+                        creado_en                       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                log.info("[MIGRACION] Tabla expediente_exceso — CREATE TABLE ejecutado")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_expediente_pedido ON expediente_exceso(pedido_id)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_expediente_hotel_familia_mes ON expediente_exceso(hotel_id, familia_id, mes)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_expediente_resultado ON expediente_exceso(resultado)")
+                log.info("[MIGRACION] Tabla expediente_exceso — índices OK")
+            except Exception as _e_exp:
+                log.error(f"[MIGRACION] FALLO creando expediente_exceso — tipo={type(_e_exp).__name__} repr={_e_exp!r}")
+                raise
             for _clave, _valor, _tipo, _label, _grupo, _orden in [
                 ('activar_uso_plazo_entrega',      '1', 'bool',   'Activar alertas basadas en plazo de entrega del proveedor', 'global',        2),
                 ('plazo_aviso_dias_antes',          '5', 'numero', 'Plazo entrega — Aviso previo (días antes de la entrega)',   'plazo_entrega', 1),
@@ -1074,6 +1123,13 @@ def _auto_migrate():
         log.info("Auto-migración OK")
     except Exception as e:
         log.warning(f"Auto-migración omitida: {e}")
+        # v12.29.35 — DEBUG temporal: el mensaje corto (str(e)) no basta para
+        # localizar en qué sentencia exacta falla _auto_migrate() (p.ej. el
+        # caso real que motivó esto: "Auto-migración omitida: 0", un mensaje
+        # inútil sin más contexto). log.exception() vuelca aquí el traceback
+        # completo con número de línea, para diagnosticar sin tener que
+        # adivinar. Quitar una vez identificada y corregida la causa.
+        log.exception("Auto-migración — traceback completo del fallo:")
 
 with app.app_context():
     _auto_migrate()

@@ -1,3 +1,33 @@
+# v12.29.35 — 2 agosto 2026
+
+🔍 Diagnóstico — la migración de expediente_exceso sigue sin aplicarse; añadido logging detallado
+
+**Reportado:** tras desplegar la v12.29.33/34, `/api/techo/resumen` seguía
+dando `psycopg2.errors.UndefinedTable: relation "expediente_exceso" does
+not exist`. Revisando los logs de Render se confirmó que
+`_auto_migrate()` está lanzando `Auto-migración omitida: 0` justo
+después de insertar el hotel "PR" — es decir, justo donde se añadió el
+bloque de `expediente_exceso` en la v12.29.33. El mensaje `"0"` no da
+ninguna pista real: `_auto_migrate()` solo registraba `str(e)` de la
+excepción, sin traceback, así que era imposible saber en qué línea
+exacta fallaba ni por qué.
+
+**Cambio (solo diagnóstico, no arregla nada todavía):**
+- El `except` general de `_auto_migrate()` ahora vuelca el traceback
+  completo con `log.exception(...)` además del mensaje corto.
+- El bloque de creación de `expediente_exceso` se ha envuelto en su
+  propio `try/except`, que registra el tipo de excepción y su `repr()`
+  completo (`[MIGRACION] FALLO creando expediente_exceso — tipo=...
+  repr=...`) antes de relanzarla — así se sabrá con certeza si el fallo
+  está en el `CREATE TABLE`, en algún `CREATE INDEX`, o en otro punto.
+
+Con esto desplegado, el próximo arranque del servidor dejará en los
+logs de Render la causa real y exacta del fallo, que se corregirá en la
+siguiente versión.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.35".
+
 # v12.29.34 — 2 agosto 2026
 
 📄 Documentación — README general de la aplicación
