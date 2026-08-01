@@ -10,6 +10,45 @@
 
 ## 2026-08-01
 
+### [Control Pedidos] v12.29.32 — Corrección real: el hotel "PR" nunca llegaba a insertarse
+- Usuario reportó, con capturas y el log de Render, que el hotel de
+  pruebas seguía sin aparecer incluso tras desplegar el zip correcto
+  y verificado (`expediente_exceso` presente, `PR` presente en
+  `models.py`, versión correcta) y reiniciar el servidor.
+- Causa real, encontrada revisando la estructura de arranque de
+  `app.py`: el `INSERT` del hotel `PR` (v12.29.28) se había añadido a
+  `SQL_STATEMENTS` (`models.py`) — pero esa lista **solo la ejecuta
+  `init_db.py`**, un script MANUAL pensado para "el primer
+  despliegue" sobre una base de datos nueva y vacía (así lo dice su
+  propio docstring: "Uso: python init_db.py"). La función que sí
+  corre automáticamente en cada arranque del servidor es otra
+  completamente distinta, `_auto_migrate()` (llamada en el startup
+  de la app, `db.autocommit=True`, cada `ALTER`/`CREATE`/`INSERT` se
+  confirma al momento) — ahí es donde vivían correctamente las 8
+  fases del rediseño de Techo (`fecha_entrega_especifica`,
+  `mes_consumo_techo`, `no_autorizado_previo`, el backfill de la Fase
+  7...), por eso esas sí se aplicaron solas sin que nadie tuviera que
+  hacer nada manual. El hotel, en cambio, se quedó en el sitio
+  equivocado — nadie vuelve a ejecutar `init_db.py` a mano sobre una
+  base de datos de producción ya existente, así que nunca llegaba a
+  crearse pese a que el código desplegado era correcto de principio a
+  fin.
+- Corregido: el mismo `INSERT INTO hoteles (...) VALUES ('PR', ...)
+  ON CONFLICT DO NOTHING` se repite ahora también dentro de
+  `_auto_migrate()`, justo después del backfill de la Fase 7 — se
+  ejecutará solo, en el próximo arranque del servidor. Se deja
+  también en `models.py`/`SQL_STATEMENTS` sin tocar, para que las
+  instalaciones nuevas de verdad (`init_db.py` en un despliegue desde
+  cero) lo sigan teniendo — el `ON CONFLICT DO NOTHING` en ambos
+  sitios hace que no haya ningún riesgo de duplicado si alguna vez
+  coinciden.
+- Nuevo log `[MIGRACION] Hotel de pruebas 'PR' insertado` — solo sale
+  la primera vez que corre y de verdad inserta la fila (`cur.rowcount`
+  tras el `ON CONFLICT DO NOTHING`), para poder confirmarlo en el
+  arranque sin tener que consultar la base de datos directamente.
+- `app.py` compila sin errores. Badge de versión del sidebar
+  actualizado a "V 12.29.32"; entrada añadida en `CHANGELOG.md`.
+
 ### [Control Pedidos] v12.29.30 — Corrección: 4 modales sin scroll interno
 - Reportado (con captura): no se podía llegar a la sección de hoteles
   asignados en el modal "Editar usuario" para marcar el hotel de

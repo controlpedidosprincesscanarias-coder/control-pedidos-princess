@@ -421,6 +421,27 @@ def _auto_migrate():
             if _backfill_techo_n:
                 log.info("[MIGRACION] Backfill mes_consumo_techo (rediseño Techo Fase 7): %s pedido(s) actualizado(s)",
                          _backfill_techo_n)
+            # ── v12.29.32 — Hotel de pruebas "PR" ──────────────────────────────
+            # (2026-08-01) FIX: se había añadido este INSERT a SQL_STATEMENTS
+            # (models.py) en v12.29.28, asumiendo que se ejecutaba en cada
+            # arranque igual que las migraciones de aquí abajo — pero
+            # SQL_STATEMENTS solo la ejecuta init_db.py, un script MANUAL
+            # pensado para "el primer despliegue" sobre una base de datos
+            # nueva y vacía (ver su propio docstring). Como esta base de
+            # datos ya existe y nadie vuelve a correr init_db.py sobre una
+            # base de datos en producción, el hotel nunca llegó a
+            # insertarse pese a que el código estaba desplegado
+            # correctamente. Se repite aquí, en _auto_migrate() (la función
+            # que sí corre siempre, en cada arranque), con el mismo
+            # ON CONFLICT DO NOTHING — no duplica nada si alguna vez sí se
+            # llegó a ejecutar init_db.py.
+            cur.execute("""
+                INSERT INTO hoteles (codigo, nombre) VALUES
+                    ('PR', '⚠️ HOTEL PRUEBAS — no usar en operativa real')
+                ON CONFLICT DO NOTHING
+            """)
+            if cur.rowcount:
+                log.info("[MIGRACION] Hotel de pruebas 'PR' insertado")
             for _clave, _valor, _tipo, _label, _grupo, _orden in [
                 ('activar_uso_plazo_entrega',      '1', 'bool',   'Activar alertas basadas en plazo de entrega del proveedor', 'global',        2),
                 ('plazo_aviso_dias_antes',          '5', 'numero', 'Plazo entrega — Aviso previo (días antes de la entrega)',   'plazo_entrega', 1),

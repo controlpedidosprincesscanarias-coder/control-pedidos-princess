@@ -1,3 +1,34 @@
+# v12.29.32 — 1 agosto 2026
+
+🔧 Corrección real — el hotel de pruebas "PR" nunca llegaba a insertarse en despliegues existentes
+
+**Causa encontrada tras revisar logs y código, no un problema del despliegue del
+usuario**: el `INSERT` del hotel `PR` (v12.29.28) se añadió a `SQL_STATEMENTS`
+(`models.py`) — pero esa lista **solo la ejecuta `init_db.py`**, un script
+manual pensado para "el primer despliegue" sobre una base de datos nueva
+y vacía (así lo dice su propio docstring). La función que sí corre
+automáticamente en cada arranque del servidor es otra completamente
+distinta, `_auto_migrate()` — ahí es donde vivían correctamente las 8
+fases del rediseño de Techo (por eso esas sí funcionaron), pero el hotel
+se quedó en el sitio equivocado. Como nadie vuelve a ejecutar
+`init_db.py` a mano sobre una base de datos de producción ya existente,
+el hotel nunca llegaba a crearse pese a que el código desplegado era
+correcto.
+
+**Corregido**: el mismo `INSERT ... ON CONFLICT DO NOTHING` se repite
+ahora también dentro de `_auto_migrate()`, justo después del backfill de
+la Fase 7 — se ejecutará solo, en el próximo arranque del servidor, sin
+tocar nada más. Se deja también en `models.py`/`SQL_STATEMENTS` para que
+las instalaciones nuevas de verdad (`init_db.py` en un despliegue desde
+cero) lo sigan teniendo — el `ON CONFLICT DO NOTHING` en ambos sitios
+hace que no haya ningún riesgo de duplicado.
+
+Nuevo log `[MIGRACION] Hotel de pruebas 'PR' insertado` para poder
+confirmarlo en el arranque.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.32".
+
 # v12.29.30 — 1 agosto 2026
 
 🔧 Corrección — 4 modales sin scroll interno (no dejaban llegar a los campos de abajo)
