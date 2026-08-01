@@ -1,3 +1,305 @@
+# v12.29.28 — 1 agosto 2026
+
+🏨 Nuevo hotel "PR — Hotel Pruebas", para poder probar el rediseño de Techo de Gastos sin tocar datos reales
+
+Los hoteles están hardcodeados (`models.py`, sin ningún endpoint `/api/hoteles` para crearlos desde el panel) — se añade uno nuevo por el mismo mecanismo ya existente: una fila más en el `INSERT ... ON CONFLICT DO NOTHING` que ya corre en cada arranque, así que no hace falta ninguna migración aparte y no toca los 10 hoteles reales.
+
+- Código `PR`, nombre `⚠️ HOTEL PRUEBAS — no usar en operativa real` (deliberadamente imposible de confundir con uno real en cualquier desplegable o listado).
+- Pensado para ejecutar el checklist manual del rediseño de Techo de Gastos (`tests/CHECKLIST_PRUEBAS_MANUALES_TECHO.md`) sin arriesgar datos de producción — crea un comprador de pruebas y asígnalo a este hotel.
+- Recuerda: los límites de techo (`techo_max_pedido`, `techo_max_mes`, etc.) son una configuración global, no por hotel — no los toques para forzar el circuito, diseña los importes de prueba para que los superen a propósito.
+
+`app.py`/`models.py` compilan sin errores. Badge de versión del sidebar actualizado a "V 12.29.28".
+
+# v12.29.26 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 8: pruebas (cierre del rediseño)
+
+**Última fase del alcance** (la Fase 9, aprobación parcial, queda fuera
+según el propio documento de diseño). Con esto se cierran las 9 fases del
+rediseño completo, iniciado con el modelo de datos (v12.29.8) y terminado
+aquí.
+
+**Nuevo `tests/test_techo_gastos.py`** — 23 pruebas automáticas,
+**ejecutadas de verdad contra el código actual** (no contra una copia):
+extrae con `ast` el código fuente exacto de `_check_techo()`,
+`_techo_snapshot()`, `_calcular_fecha_entrega_prevista()` y
+`_resolver_fecha_entrega_prevista()` directamente de `app.py`, lo ejecuta
+en un espacio aislado con mocks controlados de `query()`/`get_config()`
+(sin necesidad de una base de datos real ni de Flask), y comprueba cada
+regla con asserts — incluida una prueba de regresión específica para el
+bug `_d`/`_dt` que se encontró y corrigió en la Fase 1 del rediseño.
+**Resultado: 23/23 superadas.** Se ejecuta con
+`python3 tests/test_techo_gastos.py`, sin dependencias del proyecto.
+
+**Nuevo `tests/CHECKLIST_PRUEBAS_MANUALES_TECHO.md`** — 11 bloques de
+pruebas manuales para todo lo que necesita servidor + base de datos
+reales (circuito completo, expedientes, aprobar/denegar, cancelar con
+liberación de techo, informe imprimible con snapshot congelado, alertas,
+backfill, regresión) — pensado para ejecutarse contra un entorno real
+antes de dar el rediseño por completamente probado en producción.
+
+`app.py` compila sin errores (sin cambios de backend en esta fase, solo
+los 2 archivos de test nuevos). Badge de versión del sidebar actualizado
+a "V 12.29.26".
+
+# v12.29.24 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 7: migración/backfill
+
+**⚠️ Esta versión modifica datos existentes en producción al desplegarse**
+— léelo antes de subir.
+
+Los pedidos que ya estaban en `ENVIADO AL PROVEEDOR`/`ENTREGA PARCIAL`/
+`ENTREGADO` **antes** de que existiera la columna `mes_consumo_techo`
+(Fase 1) se habrían quedado con ella vacía para siempre — y por tanto
+invisibles para el cálculo del techo del mes en que de verdad se
+enviaron, tanto en el resumen del mes actual como sobre todo en el
+histórico por meses.
+
+**Cambio:** nuevo `UPDATE` en el bloque de migraciones de arranque —
+rellena `mes_consumo_techo` una sola vez para esos pedidos, con el mismo
+criterio de fallback que usaba el endpoint histórico antes de
+simplificarse en la Fase 4 (`COALESCE` entre el último registro de "pasó
+a ENVIADO AL PROVEEDOR" en `historial_estados`, `fecha_tramitacion`, y
+`creado_en` como último recurso). Es **idempotente**: el propio
+`WHERE mes_consumo_techo IS NULL` hace que, en cualquier arranque
+posterior (o en una base de datos ya migrada), no actualice ninguna fila.
+Queda registrado en el log del servidor cuántos pedidos se vieron
+afectados la primera vez que corre.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.24".
+
+# v12.29.22 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 6 (parte 2 de 2, cierre): pantalla de Techo y acciones
+
+Cierra la Fase 6 (frontend). Decisiones de alcance, comunicadas al
+usuario: en vez de una página aparte de "panel de expedientes", las
+acciones quedan como acciones rápidas en las propias tarjetas de la
+pantalla de Techo (que ya es donde se ve todo lo demás); y la "tabla
+cronológica" del punto 11 se considera ya cubierta por el informe
+imprimible de la Fase 5, sin duplicar una vista en pantalla solo para eso.
+`GET /api/expedientes` (histórico completo, Fase 4) sigue sin pantalla de
+navegación propia — pendiente si se pide explícitamente.
+
+**Cambios:**
+- Pantalla de Techo (`loadTecho()`): semáforo con el nuevo caso 🔵 azul
+  (color, icono, barra de progreso); nuevo bloque "🧮 Compromiso
+  potencial" (solo visible si hay algo pendiente); nuevo bloque "🔵
+  Pendientes de Vº Bº Dirección General" por tarjeta, con acciones
+  directas ✅ Aprobar / ❌ Denegar / 🖨️ Imprimir por cada expediente; nuevo
+  bloque "✅ Excesos autorizados este mes" (resumen + botón imprimir por
+  fila).
+- Nueva función `resolverExpedienteTecho(eid, accion)`: captura la nota
+  (obligatoria al denegar, opcional al aprobar) con `prompt()` — elección
+  pragmática para esta primera versión, contenida a una sola función si
+  se prefiere un modal más adelante — y llama a
+  `/api/expedientes/<id>/aprobar` o `/denegar` (Fase 2).
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.22".
+
+# v12.29.20 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 6 (parte 1 de 2): guardado y validaciones
+
+Entrega parcial de la Fase 6 (frontend) por su tamaño — el panel de
+expedientes y la pantalla de Techo actualizada llegan en la parte 2.
+
+**Cambios:**
+- Quitado el `confirm()` de JS obsoleto en el guardado de pedidos (nunca
+  más lo dispara el backend desde la Fase 2) — sustituido por un toast
+  informativo cuando el pedido queda pendiente de Vº Bº de Dirección
+  General.
+- `create_pedido()`/`update_pedido()` devuelven ahora `estado_final` y
+  `requiere_autorizacion_dg` para que el frontend sepa si el estado
+  guardado coincide con el solicitado.
+- `onEstadoChange()` y la validación de guardado: nota obligatoria
+  extendida a `DENEGADO POR DIRECCION GENERAL` (mismo mecanismo que ya
+  existía para reactivar desde `CANCELADO`, punto 8 del rediseño).
+- Marca visual "⚠️ SIN AUTORIZAR" en el listado de pedidos cuando
+  `no_autorizado_previo = TRUE` (punto 5).
+- De propina: los 2 estados nuevos no tenían color de badge propio (caían
+  en el de "pendiente compras", confuso) — añadidos `--s-pendiente-dg` /
+  `--s-denegado-dg` y sus clases `.badge-*`.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.20".
+
+# v12.29.18 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 5: informe imprimible
+
+**Cambios:**
+- Nuevo endpoint `GET /api/expedientes/<id>/informe` — todo lo necesario
+  para el informe en una sola llamada: el expediente con su fotografía
+  presupuestaria **congelada** (nunca recalculada, punto 10 — para eso
+  ya está `/api/techo/resumen` si se quiere la situación en vivo), datos
+  del pedido, histórico cronológico de reintentos de ese mismo pedido, e
+  histórico de excesos anteriores ya resueltos del mismo hotel+familia
+  (contexto para Dirección General).
+- Nueva función `imprimirExpediente(eid)` en el frontend — **reutiliza
+  `_abrirVentanaImpresion()`**, el mismo mecanismo que ya usan
+  `imprimirTecho()` e `imprimirAlertas()` desde v11.5.4/v11.5.8. No se ha
+  creado ningún sistema de impresión nuevo.
+- El informe incluye: datos generales, situación del techo (snapshot),
+  motivo de la solicitud, resolución (o espacio para firma/observaciones
+  manuscritas si sigue pendiente), cronología de reintentos, y excesos
+  anteriores del hotel/familia.
+- **Sin botón en la interfaz todavía** — la función queda lista para
+  conectarse al panel de expedientes de la Fase 6, que es donde tiene
+  sentido el botón "🖨️ Imprimir informe".
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.18".
+
+# v12.29.16 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 4: endpoints de consulta
+
+**Cambios:**
+- `/api/techo/resumen`: filtro cambiado a `mes_consumo_techo`. Nuevos
+  bloques por hotel — `pendientes_dg` / `excesos_autorizados` (listas de
+  expedientes, Sección 8), `compromiso_potencial` = consumido + pendiente
+  DG (punto 9), y semáforo con nuevo caso **azul** cuando hay algún
+  expediente pendiente (punto 12) — se superpone a rojo/amarillo/verde.
+- `/api/techo/resumen-historico`: simplificado — antes calculaba la fecha
+  de envío con un `COALESCE(historial_estados, fecha_tramitacion,
+  creado_en)` + `DATE_TRUNC`, y exigía `estado='ENVIADO AL PROVEEDOR'`,
+  lo que **excluía incorrectamente** cualquier pedido que ya hubiera
+  avanzado a ENTREGA PARCIAL/ENTREGADO desde entonces (un pedido de hace
+  3 meses ya entregado desaparecía de su mes histórico). Ahora usa
+  `mes_consumo_techo` directamente — más simple y más correcto. Mismos
+  bloques nuevos que el resumen del mes actual.
+- Nuevo `GET /api/expedientes` (Sección 9 — histórico completo, nunca se
+  borra): filtros opcionales `hotel_id`, `familia_id`, `resultado`, `mes`.
+- Nuevo `GET /api/expedientes/pedido/<pedido_id>` (punto 11 — histórico
+  cronológico dentro de un expediente concreto): todas las filas de ese
+  pedido, ordenadas por fecha — gratis, porque cada reintento tras
+  denegación ya es una fila independiente desde la Fase 1/2.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.16".
+
+# v12.29.14 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 3 (cierre): job de familia repetida
+
+Confirmado por el usuario: `_job_familia_repetida_inner()` (alerta de
+"familia repetida", `techo_max_pedidos_familia`) también migrada de
+`EXTRACT(YEAR/MONTH FROM p.creado_en)` a `mes_consumo_techo = %s`, igual
+criterio que los otros 2 jobs de techo — ahora los 3 jobs de alertas de
+techo son consistentes entre sí. Con esto se cierra del todo la Fase 3.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.14".
+
+# v12.29.12 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 3: jobs de alertas
+
+**Cambios:**
+- `_job_techo_urgente_admins_inner()` y `_job_alertas_techo_mensual_inner()`:
+  filtro cambiado de `EXTRACT(YEAR/MONTH FROM p.creado_en)` a
+  `mes_consumo_techo = %s`, igual que `_check_techo()` — ahora ambos jobs
+  cuentan pedidos por consumo real, no por fecha de creación.
+- Nueva alerta específica por Telegram a admins cuando se detecta
+  `no_autorizado_previo = TRUE` en algún pedido — visibilidad inmediata del
+  caso anómalo, además de la constancia permanente ya guardada en
+  `historial_estados`. Deduplicada por pedido (una sola vez).
+
+**⚠️ Encontrado, sin tocar — pendiente de confirmación:** `_job_familia_repetida_inner()`
+(alerta de "familia repetida", relacionada con `techo_max_pedidos_familia`)
+sigue filtrando por `creado_en`, con la misma inconsistencia semántica que
+los 2 jobs de arriba tenían antes de esta fase. No estaba nombrada
+explícitamente en la Fase 3 del documento de diseño, así que no se ha
+tocado — a la espera de confirmar si también debe migrarse a
+`mes_consumo_techo` o si se deja aparte a propósito.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.12".
+
+# v12.29.10 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 2: lógica de negocio central
+
+**Decisión de arquitectura** (en vez del endpoint separado
+`/solicitar-autorizacion` del documento original): el circuito de
+Dirección General queda enganchado **dentro** de `update_pedido()`, en el
+único punto por el que pasa cualquier vía que intente cambiar el estado a
+`ENVIADO AL PROVEEDOR` — evita duplicar toda la validación de "proveedor
+obligatorio / PDF obligatorio" en un endpoint aparte y cumple de forma
+natural el chequeo de integridad. El frontend no necesita ningún botón
+nuevo — el flujo normal de "cambiar estado" simplemente puede terminar en
+`PENDIENTE Vº Bº DIRECCIÓN GENERAL` en vez de `ENVIADO AL PROVEEDOR`.
+
+**Cambios:**
+- `_check_techo()` reescrita: filtra por `mes_consumo_techo` en vez de
+  `creado_en` (solo pedidos ya enviados cuentan); eliminada la antigua
+  Regla 1 (límite agregado de nº pedidos por hotel — decisión de negocio:
+  solo queda el límite por hotel+familia). Ya no bloquea el guardado, solo
+  devuelve motivos.
+- Nueva función `_techo_snapshot()` — fotografía consumido/disponible del
+  hotel/mes, usada para congelar `consumido_en_solicitud`/
+  `disponible_en_solicitud` en el expediente (nunca se recalcula después).
+- `create_pedido()` / `update_pedido()`: eliminado el bloqueo por techo al
+  crear/editar (`_forzar_techo` ya no existe). El único chequeo real ahora
+  vive dentro de la validación de `ENVIADO AL PROVEEDOR`: si sujeto a
+  techo y hay motivos (y no hay ya un expediente aprobado para ese mes), se
+  abre un `expediente_exceso` y el pedido queda en
+  `PENDIENTE Vº Bº DIRECCIÓN GENERAL` en vez de enviarse.
+- `mes_consumo_techo` se rellena solo al pasar de verdad a `ENVIADO AL
+  PROVEEDOR`, y se libera (vuelve a NULL) si se cancela después — con nota
+  de trazabilidad completa en `historial_estados` (nº pedido, importe,
+  quién dio el visto bueno original, quién cancela).
+- Nuevos endpoints `POST /api/expedientes/<id>/aprobar` y `/denegar` —
+  aprobar reutiliza `_notificar_cambio_estado()` (mismo email/aviso que
+  cualquier cambio de estado); denegar exige motivo obligatorio.
+- Fuera de alcance de esta fase: la recarga masiva desde Excel
+  (`reset_e_importar`, herramienta de admin) no pasa por este circuito —
+  su interacción con `mes_consumo_techo` la cubrirá el backfill de la
+  Fase 7.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.10".
+
+# v12.29.8 — 1 agosto 2026
+
+🏗️ Rediseño de Techo de Gastos — Fase 1: modelo de datos
+
+**Contexto:** primera fase de un rediseño grande del módulo de Techo de
+Gastos (informe técnico de actuación aportado por el usuario, diseño
+cerrado en 9 fases), que lo convierte de "preventivo sin autoridad real"
+(aviso saltable por cualquiera) a un circuito de autorización real con
+trazabilidad completa vía Dirección General, separando el **Techo de
+Gasto** (situación presupuestaria del mes) del **Expediente de Exceso**
+(registro permanente de cada autorización extraordinaria).
+
+**Esta entrega es solo la Fase 1 (modelo de datos)** — todavía no cambia
+ningún comportamiento visible; las fases siguientes (lógica de negocio,
+jobs, endpoints, informe, frontend, migración/backfill, pruebas) llegarán
+en próximas entregas.
+
+**Cambios:**
+- `ESTADOS_VALIDOS` (`models.py`): 2 estados nuevos —
+  `PENDIENTE Vº Bº DIRECCIÓN GENERAL` y `DENEGADO POR DIRECCION GENERAL`
+  (reabrible, cuenta como denegación en el histórico aunque el pedido
+  nunca haya consumido techo).
+- Nueva tabla `expediente_exceso` — un pedido puede tener varias filas si
+  es reabrible (cada intento es una fila independiente, nunca se
+  sobrescribe); incluye desde ya las columnas de "fotografía
+  presupuestaria congelada" (`consumido_en_solicitud`,
+  `disponible_en_solicitud`) para que el informe de Fase 5 nunca tenga que
+  recalcular el histórico.
+- 2 columnas nuevas en `pedidos`: `mes_consumo_techo` (se rellena solo al
+  pasar a `ENVIADO AL PROVEEDOR`, se vacía al cancelar) y
+  `no_autorizado_previo` (flag de integridad).
+- Migraciones con `IF NOT EXISTS`, mismo patrón que el resto de `app.py` —
+  sin acción manual en Supabase.
+
+Badge de versión del sidebar actualizado a "V 12.29.8".
+
 # v12.29.6 — 1 agosto 2026
 
 🎨 Ajuste visual — "Plazo entrega (días)" y "Fecha de entrega específica" juntos

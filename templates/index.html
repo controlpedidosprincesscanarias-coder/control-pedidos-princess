@@ -34,6 +34,9 @@
   --s-parcial:           #fff3cd;
   --s-entregado:         #c8f2d8;
   --s-anulado:           #ffd6d6;
+  /* (2026-08-01 — rediseño Techo de Gastos) Estados del circuito de Dirección General */
+  --s-pendiente-dg:      #cfe2ff;
+  --s-denegado-dg:       #f5c2c7;
 }
 html,body{min-height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);color:var(--text);font-size:14px}
 
@@ -292,6 +295,8 @@ tbody tr:last-child{border-bottom:none}
 .badge-entregado        {background:var(--s-entregado);color:#065f46}
 .badge-anulado          {background:var(--s-anulado);color:#991b1b}
 .badge-cancelado        {background:var(--s-anulado);color:#991b1b}
+.badge-pendiente-dg     {background:var(--s-pendiente-dg);color:#084298}
+.badge-denegado-dg      {background:var(--s-denegado-dg);color:#842029}
 
 /* Bool badge */
 .bool-si{color:#059669;font-weight:600}
@@ -591,6 +596,7 @@ tbody tr:last-child{border-bottom:none}
 }
 .toast.success{background:#065f46}
 .toast.error{background:#991b1b}
+.toast.warning{background:#92400e}
 @keyframes toastIn{from{transform:translateX(40px);opacity:0}to{transform:translateX(0);opacity:1}}
 
 /* ── Utilidades ─────────────────────────────────────────────────────────── */
@@ -1212,7 +1218,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.6
+          V 12.29.28
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3980,6 +3986,8 @@ function estadoBadge(estado) {
     'PENDIENTE FIRMA DIRECCION COMPRAS': 'pendiente-compras',
     'PENDIENTE DE FIRMA DIRECCION HOTEL': 'pendiente-hotel',
     'PENDIENTE COTIZACIÓN': 'pendiente-cotizacion',
+    'PENDIENTE Vº Bº DIRECCIÓN GENERAL': 'pendiente-dg',
+    'DENEGADO POR DIRECCION GENERAL': 'denegado-dg',
     'ENVIADO AL PROVEEDOR': 'enviado',
     'ENTREGA PARCIAL': 'parcial',
     'ENTREGADO': 'entregado',
@@ -3997,13 +4005,19 @@ function renderPedidosTable(pedidos) {
   const tbody = document.getElementById('pedidos-tbody');
   tbody.innerHTML = pedidos.map(p => {
     const techo = p.sujeto_techo ? `<span title="Techo de gastos: ${p.familia_nombre||'familia'} — ${p.importe!=null?Number(p.importe).toLocaleString('es-ES',{minimumFractionDigits:2})+'€':'sin importe'}" style="display:inline-block;background:#fff3cd;border:1px solid #ffc107;color:#856404;border-radius:4px;font-size:10px;padding:1px 5px;margin-left:4px;font-weight:600">📉 TECHO</span>` : '';
+    // (2026-08-01 — rediseño Techo de Gastos, Fase 6, punto 5) Marca visual
+    // cuando un pedido llegó a ENVIADO AL PROVEEDOR sin pasar por el
+    // circuito de autorización cuando debería — caso anómalo, ya
+    // registrado en historial_estados y alertado a admins por Telegram
+    // (Fase 3); esto solo lo hace visible también en el propio listado.
+    const noAutoriz = p.no_autorizado_previo ? `<span title="Este pedido llegó a ENVIADO AL PROVEEDOR sin pasar por el circuito de autorización de Dirección General — revisar" style="display:inline-block;background:#f8d7da;border:1px solid #dc3545;color:#721c24;border-radius:4px;font-size:10px;padding:1px 5px;margin-left:4px;font-weight:700">⚠️ SIN AUTORIZAR</span>` : '';
     return `
     <tr onclick="openPedidoModal(${p.id})">
       <td class="monospace">${p.norden||'—'}</td>
       <td><strong>${p.hotel_codigo||'—'}</strong></td>
       <td>${p.departamento_nombre||'—'}</td>
       <td>${fmtDate(p.fecha_solicitud)}</td>
-      <td class="monospace">${p.pedido_num||'—'}${techo}</td>
+      <td class="monospace">${p.pedido_num||'—'}${techo}${noAutoriz}</td>
       <td>${estadoBadge(p.estado)}</td>
       <td>${fmtDate(p.fecha_tramitacion)}</td>
       <td>${p.proveedor_nombre||'—'}</td>
@@ -4679,8 +4693,13 @@ function onEstadoChange() {
   const estadoBD       = G.currentPedidoData ? G.currentPedidoData.estado : null;
   const erasCancelado  = (estadoBD === 'CANCELADO') || (_estadoSelectorPrevio === 'CANCELADO');
 
-  // Nota es OBLIGATORIA si se está cambiando DESDE CANCELADO a otro estado
-  const notaObligatoria = erasCancelado && estadoNuevo && estadoNuevo !== 'CANCELADO';
+  // Nota es OBLIGATORIA si se está cambiando DESDE CANCELADO a otro estado,
+  // O si el estado destino es DENEGADO POR DIRECCION GENERAL (2026-08-01 —
+  // rediseño Techo de Gastos, Fase 6, punto 8: motivo obligatorio al
+  // denegar — mismo mecanismo ya existente para CANCELADO, solo se le
+  // añade este segundo caso).
+  const vaADenegarDG = estadoNuevo === 'DENEGADO POR DIRECCION GENERAL';
+  const notaObligatoria = (erasCancelado && estadoNuevo && estadoNuevo !== 'CANCELADO') || vaADenegarDG;
 
   // Sincronizar checkbox de CANCELADO con el selector
   const chkCancelado = document.getElementById('chk-cancelado');
@@ -4694,16 +4713,20 @@ function onEstadoChange() {
   }
 
   if (notaLabel) {
-    notaLabel.textContent = notaObligatoria
-      ? 'Nota (obligatorio — motivo del cambio desde CANCELADO) *'
-      : 'Nota (para historial, opcional)';
+    notaLabel.textContent = vaADenegarDG
+      ? 'Nota (obligatorio — motivo de la denegación) *'
+      : notaObligatoria
+        ? 'Nota (obligatorio — motivo del cambio desde CANCELADO) *'
+        : 'Nota (para historial, opcional)';
     notaLabel.style.color = notaObligatoria ? '#991b1b' : '';
     notaLabel.style.fontWeight = notaObligatoria ? '700' : '';
   }
   if (notaInput) {
-    notaInput.placeholder = notaObligatoria
-      ? 'Indica el motivo por el que se reactiva este pedido…'
-      : 'Motivo del cambio de estado…';
+    notaInput.placeholder = vaADenegarDG
+      ? 'Indica el motivo de la denegación…'
+      : notaObligatoria
+        ? 'Indica el motivo por el que se reactiva este pedido…'
+        : 'Motivo del cambio de estado…';
     notaInput.style.borderColor = notaObligatoria ? '#f5c6cb' : '';
   }
 
@@ -4870,17 +4893,21 @@ async function savePedido() {
   const depto = document.getElementById('p-depto').value;
   if (!hotel) { toast('Selecciona un hotel','error'); return; }
 
-  // Validar nota obligatoria si se cambia desde CANCELADO
-  // (tanto si el estado en BD era CANCELADO como si se puso CANCELADO manualmente en esta sesión)
+  // Validar nota obligatoria si se cambia desde CANCELADO, o si el destino
+  // es DENEGADO POR DIRECCION GENERAL (2026-08-01 — rediseño Techo de
+  // Gastos, Fase 6, punto 8: motivo obligatorio al denegar).
   const estadoAnteriorSave = G.currentPedidoData ? G.currentPedidoData.estado : null;
   const estadoNuevoSave    = val('p-estado');
   const veniaDeCANCELADO   = (estadoAnteriorSave === 'CANCELADO') || (_estadoSelectorPrevio === 'CANCELADO');
-  if (veniaDeCANCELADO && estadoNuevoSave !== 'CANCELADO') {
+  const vaADenegarDGSave   = estadoNuevoSave === 'DENEGADO POR DIRECCION GENERAL';
+  if ((veniaDeCANCELADO && estadoNuevoSave !== 'CANCELADO') || vaADenegarDGSave) {
     const notaSave = document.getElementById('p-nota').value.trim();
     if (!notaSave) {
       document.getElementById('p-nota').focus();
       document.getElementById('p-nota').style.borderColor = '#dc3545';
-      toast('Debes indicar el motivo del cambio desde estado CANCELADO', 'error');
+      toast(vaADenegarDGSave
+        ? 'Debes indicar el motivo de la denegación'
+        : 'Debes indicar el motivo del cambio desde estado CANCELADO', 'error');
       return;
     }
   }
@@ -4984,17 +5011,16 @@ Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva 
     } else {
       r = await api('/api/pedidos', 'POST', body);
     }
-    if (r.techo_errores && r.techo_errores.length) {
-      const msg = r.techo_errores.join('\n\n');
-      const forzar = confirm(`Se han detectado problemas con el techo de gastos:\n\n${msg}\n\n¿Deseas guardar igualmente?`);
-      if (!forzar) return;
-      // Reintentar sin validación (añadimos flag)
-      body._forzar_techo = true;
-      r = G.editingPedidoId
-        ? await api(`/api/pedidos/${G.editingPedidoId}`, 'PUT', body)
-        : await api('/api/pedidos', 'POST', body);
-    }
     if (r.error) { toast(r.error,'error'); return; }
+    // (2026-08-01 — rediseño Techo de Gastos, Fase 6) Antes aquí se
+    // interpretaba `r.techo_errores` con un confirm() de JS que cualquiera
+    // podía saltarse sin dejar rastro (_forzar_techo). Ya no existe: el
+    // backend decide solo si el pedido puede pasar a ENVIADO AL PROVEEDOR
+    // o si necesita autorización de Dirección General, y lo indica en
+    // `estado_final`/`requiere_autorizacion_dg` — aquí solo se informa.
+    if (r.requiere_autorizacion_dg) {
+      toast('⚠️ Pedido guardado, pero supera el techo de gastos — queda pendiente de Vº Bº de Dirección General.', 'warning', 7000);
+    }
     await _enviarEmailsPendientesEstado(r.emails_pendientes);
     // Invalidar ambas cachés: el pedido puede haber cambiado estado, importe o familia
     _invalidarStats();
@@ -6169,6 +6195,44 @@ function checkTechoPreview() {
   preview.style.display = '';
 }
 
+// (2026-08-01 — rediseño Techo de Gastos, Fase 6 parte 2) Acción rápida de
+// aprobar/denegar desde la propia tarjeta de Techo, sin tener que abrir el
+// pedido. Elección pragmática para esta primera versión: usa prompt() del
+// navegador para capturar la nota — no es el mismo patrón que el confirm()
+// que se quitó en la parte 1 (aquello era saltarse una validación sin
+// dejar rastro; esto es justo lo contrario, capturar el motivo exigido por
+// el propio backend). Si más adelante se prefiere un modal en condiciones
+// en vez de prompt(), es un cambio contenido a esta única función.
+async function resolverExpedienteTecho(eid, accion) {
+  let nota = '';
+  if (accion === 'denegar') {
+    const val = prompt('Motivo de la denegación (obligatorio):');
+    if (val === null) return; // canceló el prompt
+    nota = val.trim();
+    if (!nota) { toast('El motivo de la denegación es obligatorio', 'error'); return; }
+  } else {
+    const val = prompt('Observaciones de la aprobación (opcional):', '');
+    if (val === null) return; // canceló el prompt
+    nota = val.trim();
+  }
+  try {
+    const r = await api(`/api/expedientes/${eid}/${accion}`, 'POST', { nota_historial: nota });
+    if (r.error) { toast(r.error, 'error'); return; }
+    toast(accion === 'aprobar'
+      ? '✅ Expediente aprobado — pedido enviado al proveedor'
+      : '❌ Expediente denegado', 'success');
+    await _enviarEmailsPendientesEstado(r.emails_pendientes);
+    _invalidarStats();
+    _invalidarTecho();
+    await Promise.all([_fetchStats(true), loadTechoAlertas()]);
+    if (G.currentView === 'techo')   loadTecho();
+    if (G.currentView === 'pedidos') loadPedidos();
+    updateAlertBadge();
+  } catch(e) {
+    toast('Error resolviendo el expediente: ' + e.message, 'error');
+  }
+}
+
 async function loadTecho() {
   if (G.rol === 'hotel') return;   // sin acceso para rol hotel
   const grid  = document.getElementById('techo-resumen-grid');
@@ -6186,13 +6250,13 @@ async function loadTecho() {
   }
   empty.classList.add('section-hidden');
 
-  const semColores = { verde:'#d4edda', amarillo:'#fff3cd', rojo:'#f8d7da' };
-  const semTexto   = { verde:'#155724', amarillo:'#856404', rojo:'#721c24' };
-  const semIcono   = { verde:'🟢', amarillo:'🟡', rojo:'🔴' };
+  const semColores = { verde:'#d4edda', amarillo:'#fff3cd', rojo:'#f8d7da', azul:'#cfe2ff' };
+  const semTexto   = { verde:'#155724', amarillo:'#856404', rojo:'#721c24', azul:'#084298' };
+  const semIcono   = { verde:'🟢', amarillo:'🟡', rojo:'🔴', azul:'🔵' };
 
   grid.innerHTML = d.hoteles.map(h => {
     const pct = Math.min(100, (h.acumulado / h.techo_mes) * 100);
-    const barColor = h.semaforo === 'rojo' ? '#dc3545' : h.semaforo === 'amarillo' ? '#ffc107' : '#28a745';
+    const barColor = h.semaforo === 'rojo' ? '#dc3545' : h.semaforo === 'amarillo' ? '#ffc107' : h.semaforo === 'azul' ? '#0d6efd' : '#28a745';
     const maxFam = h.max_pedidos_familia || 1;
     const maxFamEur = h.max_importe_familia || 0;
     const famConteo = h.familias_conteo || {};
@@ -6226,6 +6290,57 @@ async function loadTecho() {
           Pedido ${p.pedido_num||('#'+p.norden)} — ${p.proveedor_nombre||'Sin proveedor'}
         </div>
       </div>`).join('') : '<div style="font-size:11px;color:#999;padding:4px 0">Sin pedidos sujetos al techo este mes</div>';
+
+    // (2026-08-01 — rediseño Techo de Gastos, Fase 6 parte 2) Compromiso
+    // potencial (punto 9) — solo se muestra si hay algo pendiente, para no
+    // ensuciar la tarjeta cuando no aporta nada nuevo respecto a "Acumulado".
+    const compromisoHtml = (h.pendientes_dg && h.pendientes_dg.length)
+      ? `<div style="font-size:11px;color:#0d6efd;margin-bottom:8px;background:#eaf2ff;border-radius:6px;padding:5px 8px">
+           🧮 Compromiso potencial si se aprueba todo lo pendiente: <strong>${(h.compromiso_potencial||0).toLocaleString('es-ES',{minimumFractionDigits:2})} €</strong>
+         </div>`
+      : '';
+
+    // Pendientes de Vº Bº — Sección 8. Cada fila con acciones aprobar/denegar
+    // directas desde la propia tarjeta, sin tener que abrir el pedido.
+    const pendientesHtml = (h.pendientes_dg && h.pendientes_dg.length)
+      ? `<div style="border-top:1px solid #eee;padding-top:8px;margin-top:8px">
+           <div style="font-size:11.5px;font-weight:700;color:#0d6efd;margin-bottom:6px">🔵 Pendientes de Vº Bº Dirección General (${h.pendientes_dg.length})</div>
+           ${h.pendientes_dg.map(e => `
+             <div style="background:#eaf2ff;border:1px solid #cfe2ff;border-radius:6px;padding:8px;margin-bottom:6px">
+               <div style="display:flex;justify-content:space-between;align-items:center;font-size:11px;margin-bottom:3px">
+                 <span style="font-weight:700">Pedido ${e.pedido_num||('#'+e.pedido_id)}${e.familia_nombre?' — '+e.familia_nombre:''}</span>
+                 <span style="font-weight:700">${(e.importe_pedido||0).toLocaleString('es-ES',{minimumFractionDigits:2})} €</span>
+               </div>
+               <div style="font-size:10.5px;color:#555;margin-bottom:6px">${e.motivo_solicitud||''}</div>
+               <div style="display:flex;gap:6px">
+                 <button onclick="event.stopPropagation();resolverExpedienteTecho(${e.id},'aprobar')"
+                         style="flex:1;font-size:10.5px;padding:4px 8px;border:1px solid #198754;border-radius:4px;background:#fff;color:#198754;font-weight:700;cursor:pointer">✅ Aprobar</button>
+                 <button onclick="event.stopPropagation();resolverExpedienteTecho(${e.id},'denegar')"
+                         style="flex:1;font-size:10.5px;padding:4px 8px;border:1px solid #dc3545;border-radius:4px;background:#fff;color:#dc3545;font-weight:700;cursor:pointer">❌ Denegar</button>
+                 <button onclick="event.stopPropagation();imprimirExpediente(${e.id})"
+                         title="Imprimir informe" style="font-size:10.5px;padding:4px 8px;border:1px solid #6c757d;border-radius:4px;background:#fff;color:#6c757d;cursor:pointer">🖨️</button>
+               </div>
+             </div>`).join('')}
+         </div>`
+      : '';
+
+    // Excesos autorizados — resumen compacto (el detalle completo, con
+    // informe, se consulta desde el histórico general de expedientes).
+    const excesosHtml = (h.excesos_autorizados && h.excesos_autorizados.length)
+      ? `<div style="border-top:1px solid #eee;padding-top:8px;margin-top:8px">
+           <div style="font-size:11.5px;font-weight:700;color:#198754;margin-bottom:4px">✅ Excesos autorizados este mes (${h.excesos_autorizados.length}) — ${(h.excesos_autorizados_importe||0).toLocaleString('es-ES',{minimumFractionDigits:2})} €</div>
+           ${h.excesos_autorizados.map(e => `
+             <div style="display:flex;justify-content:space-between;font-size:10.5px;color:#555;padding:2px 0">
+               <span>Pedido ${e.pedido_num||('#'+e.pedido_id)}${e.familia_nombre?' — '+e.familia_nombre:''}</span>
+               <span style="display:flex;align-items:center;gap:6px">
+                 <strong>${(e.importe_pedido||0).toLocaleString('es-ES',{minimumFractionDigits:2})} €</strong>
+                 <button onclick="event.stopPropagation();imprimirExpediente(${e.id})" title="Imprimir informe"
+                         style="font-size:10px;padding:1px 5px;border:1px solid #6c757d;border-radius:3px;background:#fff;color:#6c757d;cursor:pointer">🖨️</button>
+               </span>
+             </div>`).join('')}
+         </div>`
+      : '';
+
     return `
     <div style="background:#fff;border:1.5px solid ${semColores[h.semaforo]};border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -6243,7 +6358,10 @@ async function loadTecho() {
         <span>Pedidos usados: <strong>${h.num_pedidos} / ${h.max_pedidos}</strong></span>
         <span>Familias: ${familiasHtml}</span>
       </div>
+      ${compromisoHtml}
       <div style="border-top:1px solid #eee;padding-top:8px">${pedidosHtml}</div>
+      ${pendientesHtml}
+      ${excesosHtml}
     </div>`;
   }).join('');
 
@@ -8776,6 +8894,138 @@ async function imprimirAlertas(codigosSeleccionados) {
       '<div class="res-item" style="background:#e9ecef;color:#495057">Total: ' + alertas.length + '</div>' +
     '</div>' +
     tablaHtml + '</body></html>';
+
+  _abrirVentanaImpresion(html);
+}
+
+// (2026-08-01 — rediseño Techo de Gastos, Fase 5) Informe imprimible de un
+// expediente de exceso — Sección 10 del documento de diseño. Reutiliza
+// _abrirVentanaImpresion(), el mismo mecanismo que ya usan imprimirTecho()
+// e imprimirAlertas() — no se ha creado ningún sistema de impresión nuevo.
+async function imprimirExpediente(eid) {
+  var d;
+  try { d = await api('/api/expedientes/' + eid + '/informe'); }
+  catch(e) { alert('Error cargando el informe: ' + e.message); return; }
+  if (!d || !d.expediente) { alert('No se pudo cargar el expediente.'); return; }
+
+  var e = d.expediente, p = d.pedido || {};
+  var ahora = new Date().toLocaleString('es-ES');
+
+  var resultadoTexto = { pendiente: '⏳ Pendiente de resolución', aprobado: '✅ Autorizado', denegado: '❌ Denegado' };
+  var resultadoColor = { pendiente: '#856404', aprobado: '#155724', denegado: '#721c24' };
+  var resultadoBg    = { pendiente: '#fff3cd', aprobado: '#d4edda', denegado: '#f8d7da' };
+
+  function fmtFecha(ts) { return ts ? new Date(ts).toLocaleString('es-ES') : '—'; }
+
+  // ── Situación del techo — SIEMPRE la fotografía congelada en el propio
+  // expediente (consumido_en_solicitud / disponible_en_solicitud), nunca
+  // recalculada aquí (punto 10) — el informe refleja el momento de la
+  // solicitud, no el estado actual del techo.
+  var situacionHtml =
+    '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:18px">' +
+      '<tr style="background:#f8f9fa">' +
+        '<td style="padding:8px 10px;border:1px solid #dee2e6"><strong>Consumido en el momento de la solicitud</strong></td>' +
+        '<td style="padding:8px 10px;border:1px solid #dee2e6;text-align:right">' + _fmtEur(e.consumido_en_solicitud) + '</td>' +
+      '</tr>' +
+      '<tr>' +
+        '<td style="padding:8px 10px;border:1px solid #dee2e6"><strong>Disponible en el momento de la solicitud</strong></td>' +
+        '<td style="padding:8px 10px;border:1px solid #dee2e6;text-align:right">' + _fmtEur(e.disponible_en_solicitud) + '</td>' +
+      '</tr>' +
+      '<tr style="background:#f8f9fa">' +
+        '<td style="padding:8px 10px;border:1px solid #dee2e6"><strong>Importe de este pedido</strong></td>' +
+        '<td style="padding:8px 10px;border:1px solid #dee2e6;text-align:right;font-weight:700">' + _fmtEur(e.importe_pedido) + '</td>' +
+      '</tr>' +
+      '<tr>' +
+        '<td style="padding:8px 10px;border:1px solid #dee2e6"><strong>Exceso sobre el techo</strong></td>' +
+        '<td style="padding:8px 10px;border:1px solid #dee2e6;text-align:right;color:#b91c1c;font-weight:700">' + _fmtEur(e.exceso) + '</td>' +
+      '</tr>' +
+    '</table>';
+
+  function filaHistorico(h, mostrarPedido) {
+    return '<tr>' +
+      '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + fmtFecha(h.creado_en) + '</td>' +
+      (mostrarPedido ? '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + (h.pedido_num || '—') + '</td>' : '') +
+      '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:right">' + _fmtEur(h.importe_pedido) + '</td>' +
+      '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee;font-weight:700;color:' + (resultadoColor[h.resultado]||'#555') + '">' + (resultadoTexto[h.resultado] || h.resultado) + '</td>' +
+      '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + (h.usuario_resuelve_nombre || (h.resultado === 'pendiente' ? '—' : '—')) + '</td>' +
+      '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + (h.observaciones_direccion_general || '') + '</td>' +
+    '</tr>';
+  }
+
+  var historicoPedidoHtml = (d.historico_pedido && d.historico_pedido.length > 1)
+    ? '<h3 style="font-size:13px;margin:18px 0 8px">🔁 Cronología de este pedido (' + d.historico_pedido.length + ' intento(s))</h3>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:14px">' +
+        '<thead><tr style="background:#f8f9fa"><th style="padding:5px 8px;text-align:left;border-bottom:2px solid #dee2e6">Fecha</th>' +
+        '<th style="padding:5px 8px;text-align:right;border-bottom:2px solid #dee2e6">Importe</th>' +
+        '<th style="padding:5px 8px;text-align:left;border-bottom:2px solid #dee2e6">Resultado</th>' +
+        '<th style="padding:5px 8px;text-align:left;border-bottom:2px solid #dee2e6">Resuelto por</th>' +
+        '<th style="padding:5px 8px;text-align:left;border-bottom:2px solid #dee2e6">Observaciones</th></tr></thead>' +
+        '<tbody>' + d.historico_pedido.map(function(h){ return filaHistorico(h, false); }).join('') + '</tbody>' +
+      '</table>'
+    : '';
+
+  var historicoHotelFamiliaHtml = (d.historico_hotel_familia && d.historico_hotel_familia.length > 0)
+    ? '<h3 style="font-size:13px;margin:18px 0 8px">📂 Excesos anteriores — ' + (e.hotel_codigo||'') + ' / ' + (e.familia_nombre||'sin familia') + '</h3>' +
+      '<table style="width:100%;border-collapse:collapse;font-size:11px;margin-bottom:14px">' +
+        '<thead><tr style="background:#f8f9fa"><th style="padding:5px 8px;text-align:left;border-bottom:2px solid #dee2e6">Fecha</th>' +
+        '<th style="padding:5px 8px;text-align:left;border-bottom:2px solid #dee2e6">Pedido</th>' +
+        '<th style="padding:5px 8px;text-align:right;border-bottom:2px solid #dee2e6">Importe</th>' +
+        '<th style="padding:5px 8px;text-align:left;border-bottom:2px solid #dee2e6">Resultado</th>' +
+        '<th style="padding:5px 8px;text-align:left;border-bottom:2px solid #dee2e6">Resuelto por</th>' +
+        '<th style="padding:5px 8px;text-align:left;border-bottom:2px solid #dee2e6">Observaciones</th></tr></thead>' +
+        '<tbody>' + d.historico_hotel_familia.map(function(h){ return filaHistorico(h, true); }).join('') + '</tbody>' +
+      '</table>'
+    : '<p style="font-size:11px;color:#999;font-style:italic;margin-bottom:14px">Sin excesos anteriores registrados para este hotel/familia.</p>';
+
+  var html = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8">' +
+    '<title>Informe de Autorización — Exceso de Techo — Pedido ' + (p.pedido_num || e.pedido_id) + '</title>' +
+    '<style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#1a1a2e;margin:0;padding:24px}' +
+    'h1{font-size:19px;margin:0 0 4px}h3{color:#1a3a6b}.subtitle{font-size:12px;color:#666;margin-bottom:18px}' +
+    '@media print{body{padding:12px}@page{margin:10mm;size:A4 portrait}}' +
+    '</style></head><body>' +
+    '<h1>📋 Informe de Autorización — Exceso de Techo de Gastos</h1>' +
+    '<div class="subtitle">Generado: ' + ahora + ' &nbsp;|&nbsp; Usuario: ' + (G.nombre || G.user || '—') + '</div>' +
+
+    '<div style="display:inline-block;padding:6px 16px;border-radius:20px;font-weight:700;font-size:13px;margin-bottom:16px;' +
+      'background:' + (resultadoBg[e.resultado]||'#e9ecef') + ';color:' + (resultadoColor[e.resultado]||'#495057') + '">' +
+      (resultadoTexto[e.resultado] || e.resultado) + '</div>' +
+
+    '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">' +
+      '<tr><td style="padding:6px 10px;width:30%"><strong>Hotel</strong></td><td style="padding:6px 10px">' + (e.hotel_codigo||'') + ' — ' + (e.hotel_nombre||'') + '</td></tr>' +
+      '<tr style="background:#f8f9fa"><td style="padding:6px 10px"><strong>Familia / Partida</strong></td><td style="padding:6px 10px">' + (e.familia_nombre||'—') + '</td></tr>' +
+      '<tr><td style="padding:6px 10px"><strong>Pedido Nº</strong></td><td style="padding:6px 10px">' + (p.pedido_num || '#' + (p.norden||'')) + '</td></tr>' +
+      '<tr style="background:#f8f9fa"><td style="padding:6px 10px"><strong>Proveedor</strong></td><td style="padding:6px 10px">' + (p.proveedor_nombre||'—') + '</td></tr>' +
+      '<tr><td style="padding:6px 10px"><strong>Mes</strong></td><td style="padding:6px 10px">' + (e.mes||'—') + '</td></tr>' +
+      '<tr style="background:#f8f9fa"><td style="padding:6px 10px"><strong>Solicitado por</strong></td><td style="padding:6px 10px">' + (e.usuario_solicitante_nombre||'—') + ' — ' + fmtFecha(e.creado_en) + '</td></tr>' +
+    '</table>' +
+
+    '<h3 style="font-size:13px;margin:0 0 8px">💰 Situación del techo en el momento de la solicitud</h3>' +
+    situacionHtml +
+
+    '<h3 style="font-size:13px;margin:0 0 8px">📝 Motivo de la solicitud</h3>' +
+    '<p style="font-size:12px;background:#f8f9fa;padding:10px 14px;border-radius:6px;margin-bottom:16px">' + (e.motivo_solicitud || '—') + '</p>' +
+
+    (e.resultado !== 'pendiente'
+      ? '<h3 style="font-size:13px;margin:0 0 8px">✒️ Resolución</h3>' +
+        '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">' +
+          '<tr><td style="padding:6px 10px;width:30%"><strong>Resuelto por</strong></td><td style="padding:6px 10px">' + (e.usuario_resuelve_nombre||'—') + '</td></tr>' +
+          '<tr style="background:#f8f9fa"><td style="padding:6px 10px"><strong>Fecha de resolución</strong></td><td style="padding:6px 10px">' + fmtFecha(e.fecha_resolucion) + '</td></tr>' +
+          '<tr><td style="padding:6px 10px"><strong>Observaciones</strong></td><td style="padding:6px 10px">' + (e.observaciones_direccion_general||'—') + '</td></tr>' +
+        '</table>'
+      : '<div style="border:1.5px dashed #ccc;border-radius:8px;padding:16px;margin-bottom:16px">' +
+          '<div style="font-size:11px;color:#888;margin-bottom:30px">Espacio para observaciones y resolución manuscritas, si el informe se firma en papel:</div>' +
+          '<div style="border-bottom:1px solid #ccc;margin-bottom:10px">&nbsp;</div>' +
+          '<div style="border-bottom:1px solid #ccc;margin-bottom:10px">&nbsp;</div>' +
+          '<div style="border-bottom:1px solid #ccc;margin-bottom:24px">&nbsp;</div>' +
+          '<div style="display:flex;justify-content:space-between;font-size:11px;color:#888">' +
+            '<span>Firma Dirección General</span><span>Fecha: ____ / ____ / ______</span>' +
+          '</div>' +
+        '</div>') +
+
+    historicoPedidoHtml +
+    historicoHotelFamiliaHtml +
+
+    '</body></html>';
 
   _abrirVentanaImpresion(html);
 }
