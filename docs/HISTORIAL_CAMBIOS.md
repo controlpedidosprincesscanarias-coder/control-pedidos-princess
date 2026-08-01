@@ -8,6 +8,148 @@
 
 ---
 
+## 2026-08-01
+
+### [Organizador] v4.14.8 — "Limpiar chat" pasa a ser persistente por equipo
+- Petición: que el histórico desaparezca de verdad cada vez que se
+  pulsa "Limpiar chat", no solo la vista de esa sesión — hasta ahora,
+  al salir del chat y volver a entrar, todo reaparecía (diseño
+  deliberado desde v4.14.2, pero se pidió cambiarlo).
+- `app/db/sqlite.py` — 3 funciones nuevas sobre el mismo `config.json`
+  que ya usa el resto de la app (sin tocar SQLite):
+  `get_chat_limpiado(canal_id)` / `set_chat_limpiado(canal_id,
+  marca_iso)` (guardan/leen, por canal, la fecha/hora ISO 8601 UTC del
+  último "Limpiar chat"), y `filtrar_mensajes_limpiados(canal_id,
+  mensajes)` (descarta los mensajes con `creado_en` anterior o igual a
+  esa marca — comparación de strings directa, sin parsear fechas).
+- `app/ui/ventana_chat.py`: `_limpiar_chat()` guarda la marca antes de
+  vaciar la vista; `_cargar_historial()` filtra por ella antes de
+  pintar. Texto del diálogo de confirmación actualizado para explicar
+  el nuevo alcance.
+- `app/ui/chat_popup.py`: mismo filtro aplicado en `_cargar()`, para
+  que la burbuja flotante sea coherente con la ventana principal.
+- **Alcance — local por equipo, no de servidor:** no hay acceso desde
+  este proyecto al backend de chat (Flask/SocketIO independiente), así
+  que es un filtro en el cliente — el marcador vive en `config.json`
+  de `%APPDATA%\OrganizadorPrincess`. No borra nada del servidor: el
+  resto de participantes del canal sigue viendo el historial completo,
+  y si el mismo usuario entra desde otro PC también lo verá ahí hasta
+  que limpie también en ese equipo. Un borrado real de servidor
+  requeriría tocar el backend de chat, fuera del alcance de este repo.
+- Los 3 archivos compilan sin errores. `APP_VERSION` → `v4.14.8`;
+  `release_notes_actual.txt` y `release_notes.md` actualizados.
+
+### [Organizador] v4.14.6 — Contraste de "Limpiar chat" y texto de ayuda (chat)
+- Petición: mejorar el contraste del botón "Limpiar chat" y del texto
+  bajo "Elige uno o varios compañeros" en el chat; verificar de paso
+  si "Limpiar chat" realmente limpia algo, dado que al salir y volver
+  a entrar todo sigue ahí.
+- Causa del contraste: la app usa el tema oscuro `superhero`, donde
+  `bootstyle="secondary"` (`#4e5d6c`) contra el fondo `bg` (`#2b3e50`)
+  da un ratio de contraste de ~1.6:1 — muy por debajo del mínimo
+  legible (4.5:1 texto normal, WCAG AA). Verificado consultando la
+  paleta real del tema (`ttkbootstrap.themes.standard.
+  STANDARD_THEMES["superhero"]`), no a ojo.
+- Corregido en `app/ui/ventana_chat.py`:
+  - Botón "🧹 Limpiar chat": `secondary-outline` → `info-outline`
+    (`#5bc0de` ≈ 4.8:1 de contraste).
+  - Texto de ayuda bajo "Elige uno o varios compañeros:" (diálogo
+    `_abrir_nueva_conversacion`): `secondary` → `light` (`#ABB6C2` ≈
+    5.0:1).
+  - De propina (mismo problema, no pedido explícitamente): la
+    etiqueta `lbl_estado` ("Conectando…", estado inicial antes de
+    resolver a 🟢/🟡/🔴) también usaba `secondary` → cambiada a
+    `light` igual que las anteriores.
+  - `app/ui/chat_popup.py` no tiene ni el botón ni el selector de
+    compañeros (solo existen en la ventana principal) — nada que
+    tocar ahí para estos 2 puntos.
+- (Ver corrección posterior el mismo día: se decidió cambiar este
+  comportamiento — el histórico SÍ desaparece ahora al pulsar
+  "Limpiar chat".) `APP_VERSION` v4.14.6.
+
+### [Organizador] v4.14.4 — Fix: contraseña momentánea no dejaba continuar con solicitud ya enviada
+- Reportado: al reabrir «⚙ Admin» tras haber enviado ya una solicitud
+  de acceso (pendiente de aprobación), volvía a salir siempre el
+  formulario de "Enviar solicitud" en vez de dejar escribir la
+  contraseña momentánea.
+- Causa: `_comprobar_existencia_bg()` forzaba `_modo_alta()` cada vez
+  que `existe_en_plataforma(uwin)` devolvía `False`, sin distinguir
+  "nunca se ha pedido acceso" de "ya se pidió, pendiente de
+  aprobación" — ambos casos dan `existe=False` porque el usuario aún
+  no existe de verdad en Control de Pedidos.
+- Corregido en `main_agenda.py`: se comprueba
+  `get_bridge_credentials(uwin)` — si `bridge_user == uwin` y
+  `bridge_password` está vacío (estado que deja `_crear_acceso()` al
+  enviar la solicitud, vía `update_bridge_credentials(uwin, uwin,
+  "")`), se considera solicitud pendiente y se mantiene el modo login
+  con subtítulo explicativo, en vez de forzar el formulario de alta.
+  Así se llega al bloque "1-bis" ya existente en
+  `admin_auth.verificar_acceso()` (2026-07-28), que acepta la primera
+  contraseña introducida ahí como contraseña momentánea de acceso
+  local — antes nunca se llegaba a esa pantalla. No hizo falta tocar
+  `admin_auth.py`, esa lógica ya funcionaba bien.
+- Nota aparte, no relacionada con este fix: el correo de aprobación
+  de la solicitud no llega al usuario — no es un bug de este proyecto
+  (el Organizador solo hace la petición HTTP al proxy de Control de
+  Pedidos; el envío del correo lo genera el backend de Control de
+  Pedidos al aprobar la solicitud, fuera del alcance de este repo).
+  Pendiente de revisar desde el lado de Control de Pedidos si se
+  aporta acceso a ese código.
+- `main_agenda.py` compila sin errores. `APP_VERSION` v4.14.4.
+
+### [Ecosistema] A partir de ahora: HISTORIAL_CAMBIOS.md es un único documento compartido
+- Petición del usuario: como Organizador y Control de Pedidos van
+  relacionados, el historial de ambas aplicaciones debe ser siempre
+  el mismo archivo — no dos copias que se van desincronizando (esta
+  misma sesión, la copia de Organizador se había quedado en el 29 de
+  julio mientras la de Control de Pedidos seguía sumando entradas).
+  Fusionadas aquí las 2 entradas de Organizador que solo estaban en
+  su copia (v4.14.6 y v4.14.4) — de aquí en adelante, cada entrega
+  actualiza este único documento, y hay que subirlo igual a los dos
+  repos (o valorar que uno de los dos lo referencie en vez de
+  duplicarlo).
+
+---
+
+## 2026-07-31 (27)
+
+### [Control Pedidos] v12.29.2 — Revisión del zip v12.29.0 + 2 correos sin logo
+- A petición del usuario, revisión completa del zip subido (v12.29.0)
+  contra el código real, no solo contra el propio CHANGELOG.
+- ✅ Confirmado correcto: Techo de gastos por familia (v12.28.0 y
+  v12.29.0) — `_check_techo()` Reglas 2 y 4, job de familia repetida
+  con `HAVING COUNT(*) >= %s` configurable, los 2 endpoints de resumen
+  (`/api/techo/resumen` y `-historico`) devolviendo
+  `familias_conteo`/`familias_importe`/`max_pedidos_familia`/
+  `max_importe_familia`, y su renderizado en frontend (tarjetas +
+  exportación/impresión) — todo revisado línea a línea.
+- ✅ Confirmado correcto: logo en las 7 plantillas de proveedor/
+  internas (v12.27.22) — `_email_header_html()` con tabla (no
+  flexbox, más compatible con Outlook y similares), usada
+  exactamente en las 7 plantillas que dice el CHANGELOG.
+- ❌ Encontrado: 2 correos se quedaron sin logo pese al "sí, a
+  todos" — el código de verificación de login
+  (`_email_html_simple()`, la plantilla de la captura original que
+  motivó la petición) y el de restablecimiento de contraseña, que ni
+  siquiera usaba `_email_html_simple()` (párrafos sueltos sin
+  plantilla). Corregido: `_email_html_simple()` ahora envuelve el
+  cuerpo con `_email_header_html()`; el email de reset de contraseña
+  pasa a usar `_email_html_simple()` igual que el resto de correos
+  cortos tipo "código/enlace". Probado con datos de ejemplo — salida
+  limpia.
+- ❌ Encontrado: `CHANGELOG.md` con 2 cabeceras de versión perdidas
+  (v12.28.0 y v12.27.22 — el contenido estaba, pero sin su línea
+  `# vX.Y.Z — fecha`, quedando concatenadas bajo la versión
+  siguiente). Mismo tipo de fallo que ya se dio un par de veces en
+  esta conversación al insertar una entrada nueva encima de una
+  existente. Corregido. `docs/HISTORIAL_CAMBIOS.md` sí las tenía
+  bien, no hizo falta tocarlo por eso.
+- `app.py` compila sin errores en todo momento durante la revisión.
+- Badge de versión del sidebar actualizado a "V 12.29.2"; entrada
+  añadida en `CHANGELOG.md`.
+
+---
+
 ## 2026-07-31 (26)
 
 ### [Control Pedidos] v12.29.0 — Techo de gastos: importe máximo (€) también configurable por hotel/mes y familia

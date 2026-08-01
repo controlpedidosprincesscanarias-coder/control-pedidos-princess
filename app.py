@@ -359,13 +359,6 @@ def _auto_migrate():
                 "CREATE INDEX IF NOT EXISTS idx_bridge_notif_usuario_leido "
                 "ON bridge_notificaciones(usuario, leido)"
             )
-            # v12.29.1 — url_accion: enlace opcional (p.ej. "aprobar esta
-            # solicitud de acceso") para que el popup del Organizador pueda
-            # ofrecer un botón "🌐 Acceso web" que abra la página exacta en
-            # el navegador, en vez de solo mostrar texto plano.
-            cur.execute(
-                "ALTER TABLE bridge_notificaciones ADD COLUMN IF NOT EXISTS url_accion TEXT"
-            )
             # ── v11.4.0 — Plazo de entrega por pedido ─────────────────────────
             cur.execute(
                 "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS plazo_entrega_dias INTEGER"
@@ -1919,7 +1912,7 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
                       titulo_bridge: str = None, pedido_id_bridge: int = None,
                       nivel_bridge: str = "urgente", tipo_bridge: str = "supervision",
                       asunto_email: str = None, cuerpo_email_html: str = None,
-                      cuerpo_email_text: str = None, url_accion_bridge: str = None) -> None:
+                      cuerpo_email_text: str = None) -> None:
     """
     Punto único de envío para avisos de sistema/administración configurables.
     Resuelve destinatarios desde notificaciones_config y despacha por
@@ -1927,11 +1920,6 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
     independiente entre sí (v12.17.0: antes el popup viajaba siempre pegado
     a la lista de Telegram; ahora cada uno tiene su propio checkbox en el
     panel de admin).
-
-    url_accion_bridge (opcional, v12.29.1): si se indica, viaja SOLO al
-    canal popup (el Organizador la usa para pintar un botón "🌐 Acceso
-    web") — Telegram y email ya llevan su propio enlace embebido en el
-    texto/HTML, así que no hace falta duplicarlo ahí.
     """
     destinatarios_tg = _destinatarios_evento(evento_codigo, "telegram")
     for dest in destinatarios_tg:
@@ -1953,7 +1941,6 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
             mensaje=texto_telegram.replace("*", ""),
             nivel=nivel_bridge,
             pedido_id=pedido_id_bridge,
-            url_accion=url_accion_bridge,
         )
 
     if asunto_email:
@@ -1961,22 +1948,16 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
         _encolar_email_sistema(evento_codigo, destinatarios_email, asunto_email, cuerpo_email_html, cuerpo_email_text)
 
 
-def _notify_solicitud_telegram(texto: str, url_admin: str = None) -> None:
+def _notify_solicitud_telegram(texto: str) -> None:
     """
     Notifica una nueva solicitud de acceso (Fase 1 / Fase 2) a los usuarios
     configurados para el evento 'solicitud_acceso'.
-
-    url_admin (opcional, v12.29.1): enlace directo a la solicitud
-    (`{app_url}/admin/solicitudes#{sol_id}`) para que el popup del
-    Organizador pueda ofrecer un botón "🌐 Acceso web" que la abra sin
-    tener que ir a buscarla a mano en el panel.
     """
     _notificar_evento(
         "solicitud_acceso", texto,
         titulo_bridge="📋 Nueva solicitud de acceso",
         nivel_bridge="aviso",
         tipo_bridge="solicitud_acceso",
-        url_accion_bridge=url_admin,
     )
 
 
@@ -2097,8 +2078,7 @@ def _send_telegram(chat_id: str, text: str) -> dict:
 
 
 def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: str,
-                                  nivel: str = "aviso", pedido_id: int = None,
-                                  url_accion: str = None) -> None:
+                                  nivel: str = "aviso", pedido_id: int = None) -> None:
     """
     Inserta una fila en bridge_notificaciones para que el bridge de main_agenda
     la recoja en la próxima consulta a /api/bridge/notificaciones.
@@ -2107,23 +2087,20 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
     garantizando paridad total entre los avisos de Telegram y los de main_agenda.
 
     Parámetros:
-        usuario    – username del destinatario (igual que en la tabla usuarios)
-        tipo       – 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida' | 'supervision'
-        titulo     – línea resumen (se mostrará como título del popup)
-        mensaje    – cuerpo completo del aviso
-        nivel      – 'aviso' | 'urgente'
-        pedido_id  – id del pedido (None para alertas de techo sin pedido concreto)
-        url_accion – (opcional, v12.29.1) URL absoluta de la página relacionada
-                     (p.ej. la solicitud de acceso a aprobar); si viene, el
-                     Organizador pinta un botón "🌐 Acceso web" en el popup.
+        usuario   – username del destinatario (igual que en la tabla usuarios)
+        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida' | 'supervision'
+        titulo    – línea resumen (se mostrará como título del popup)
+        mensaje   – cuerpo completo del aviso
+        nivel     – 'aviso' | 'urgente'
+        pedido_id – id del pedido (None para alertas de techo sin pedido concreto)
     """
     try:
         db = get_db()
         db.cursor().execute(
             """INSERT INTO bridge_notificaciones
-               (usuario, tipo, pedido_id, titulo, mensaje, nivel, url_accion)
-               VALUES (%s, %s, %s, %s, %s, %s, %s)""",
-            (usuario.lower(), tipo, pedido_id, titulo, mensaje, nivel, url_accion)
+               (usuario, tipo, pedido_id, titulo, mensaje, nivel)
+               VALUES (%s, %s, %s, %s, %s, %s)""",
+            (usuario.lower(), tipo, pedido_id, titulo, mensaje, nivel)
         )
         db.commit()
     except Exception as exc:
@@ -4108,7 +4085,8 @@ def _email_header_html(titulo: str, subtitulo: str, color_fondo: str = "#0f2044"
 
 
 def _email_html_simple(nombre: str, parrafos: list, boton: dict = None,
-                        pie_extra: str = None) -> str:
+                        pie_extra: str = None, titulo: str = "Control de Pedidos",
+                        subtitulo: str = "Princess Canarias") -> str:
     """
     (2026-07-31) Helper reutilizable para emails cortos tipo "código /
     enlace" (verificación de login, reset de contraseña, avisos simples),
@@ -4124,6 +4102,14 @@ def _email_html_simple(nombre: str, parrafos: list, boton: dict = None,
     boton:     opcional, {"texto": ..., "url": ...} — genera el mismo
                botón rojo que ya usábamos en el reset de contraseña.
     pie_extra: opcional, línea adicional en gris antes de la firma fija.
+    titulo/subtitulo: texto de la cabecera — ver _email_header_html().
+
+    (2026-07-31) Antes esta función devolvía solo párrafos sueltos, sin
+    cabecera ni logo — quedaba fuera del rollout de logo de
+    v12.27.19-22 pese a ser la plantilla del código de verificación de
+    login y (de forma indirecta) la única fuente de estilo del email de
+    reset de contraseña. Ahora envuelve el cuerpo con la misma cabecera
+    de marca (_email_header_html) que usan las otras 7 plantillas.
     """
     partes = []
     if nombre:
@@ -4138,8 +4124,18 @@ def _email_html_simple(nombre: str, parrafos: list, boton: dict = None,
         )
     if pie_extra:
         partes.append(f'<p style="color:#666;font-size:12px;">{pie_extra}</p>')
-    partes.append('<p style="color:#666;font-size:12px;">Control de Pedidos · Princess Canarias</p>')
-    return "\n    ".join(partes)
+    cuerpo = "\n    ".join(partes)
+    return f"""
+    <div style="font-family:sans-serif;max-width:560px;margin:0 auto;
+                background:#f9f9f9;border-radius:10px;overflow:hidden;
+                border:1px solid #e0e0e0;">
+      {_email_header_html(titulo, subtitulo)}
+      <div style="padding:22px 24px;font-size:14px;color:#333;line-height:1.6;">
+        {cuerpo}
+        <p style="color:#666;font-size:12px;margin-top:16px">Control de Pedidos · Princess Canarias</p>
+      </div>
+    </div>
+    """
 
 
 # ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
@@ -5171,16 +5167,16 @@ def solicitar_reset_password():
     link     = f"{app_url}/?reset_token={token}"
 
     subject  = "Restablecimiento de contraseña – Control de Pedidos"
-    body_html = f"""
-    <p>Hola <strong>{user['nombre']}</strong>,</p>
-    <p>Hemos recibido una solicitud para restablecer tu contraseña.</p>
-    <p><a href="{link}" style="background:#8B0000;color:#fff;padding:10px 20px;
-       border-radius:4px;text-decoration:none;display:inline-block;">
-       Restablecer contraseña</a></p>
-    <p>Este enlace es válido durante <strong>2 horas</strong>.<br>
-    Si no lo solicitaste, ignora este mensaje.</p>
-    <p style="color:#666;font-size:12px;">Control de Pedidos · Princess Canarias</p>
-    """
+    # (2026-07-31) Antes: párrafos sueltos sin cabecera ni logo — el único
+    # email que quedó fuera del rollout de logo junto con el código de
+    # verificación de login. Ahora usa el mismo _email_html_simple() que ya
+    # lleva la cabecera de marca (_email_header_html) del resto de la app.
+    body_html = _email_html_simple(
+        nombre=user["nombre"],
+        parrafos=["Hemos recibido una solicitud para restablecer tu contraseña."],
+        boton={"texto": "Restablecer contraseña", "url": link},
+        pie_extra="Este enlace es válido durante <strong>2 horas</strong>. Si no lo solicitaste, ignora este mensaje.",
+    )
     # Siempre loguear el enlace en el servidor
     log.info("PASSWORD RESET solicitado por '%s' (id=%s) — enlace: %s",
              user["username"], user["id"], link)
@@ -5409,8 +5405,7 @@ def solicitar_usuario_fase1():
         f"\U0001F4CB Solicitud `#{sol_id}`\n\n"
         f"\u26A0\uFE0F *Abre la aplicaci\u00f3n* para que el email de verificaci\u00f3n "
         f"(Fase 2) se env\u00ede autom\u00e1ticamente al usuario."
-        + (f"\n\U0001F517 {url_admin}" if url_admin else ""),
-        url_admin=url_admin,
+        + (f"\n\U0001F517 {url_admin}" if url_admin else "")
     )
 
     # Se encolan ambos emails — el de Fase 2 al usuario y el aviso a los
@@ -5593,8 +5588,7 @@ def solicitar_usuario_directo():
         f"\U0001F4E7 {email_sol}\n"
         f"\U0001F3E8 {hoteles}\n"
         f"\U0001F4CB Solicitud `#{sol_id}` — lista para aprobar."
-        + (f"\n\U0001F517 {url_admin}" if url_admin else ""),
-        url_admin=url_admin,
+        + (f"\n\U0001F517 {url_admin}" if url_admin else "")
     )
 
     # Igual que fase 1: se encola (no EmailJS en vivo, porque aquí no hay
@@ -8919,7 +8913,6 @@ def bridge_notificaciones_usuario():
                 "titulo": "...",
                 "mensaje": "...",
                 "nivel": "urgente",           -- 'aviso'|'urgente'
-                "url_accion": null,           -- v12.29.1: enlace opcional (p.ej. aprobar una solicitud de acceso)
                 "creado_en": "2026-05-25T..."
             }, ...
         ],
@@ -8933,7 +8926,7 @@ def bridge_notificaciones_usuario():
 
     try:
         rows = rows_to_list(query(
-            """SELECT id, tipo, pedido_id, titulo, mensaje, nivel, url_accion, creado_en
+            """SELECT id, tipo, pedido_id, titulo, mensaje, nivel, creado_en
                FROM bridge_notificaciones
                WHERE usuario = %s AND leido = FALSE
                ORDER BY creado_en ASC""",

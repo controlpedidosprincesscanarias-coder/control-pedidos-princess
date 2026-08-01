@@ -1,3 +1,40 @@
+# v12.29.2 — 31 julio 2026
+
+🔧 Revisión de las últimas actualizaciones + 2 correos que se quedaron sin logo
+
+**A petición del usuario, revisión completa del zip subido (v12.29.0)
+contra el código real**, no solo contra el propio CHANGELOG. Resultado:
+
+✅ **Correcto — Techo de gastos por familia (v12.28.0 y v12.29.0):**
+`_check_techo()` Reglas 2 y 4, job de familia repetida, los 2 endpoints
+de resumen y su renderizado en frontend (tarjetas + exportación/impresión)
+— todo revisado línea a línea, sin fallos.
+
+✅ **Correcto — Logo en 7 plantillas de proveedor/internas (v12.27.22):**
+`_email_header_html()` bien diseñada (tabla, no flexbox — mucho más
+compatible con clientes de correo tipo Outlook) y usada en las 7
+plantillas que dice el CHANGELOG.
+
+❌ **Encontrado — 2 correos se quedaron sin logo pese al "sí, a todos":**
+el código de verificación de login (`_email_html_simple()`, la plantilla
+de la captura original) y el de restablecimiento de contraseña seguían
+sin cabecera de marca — ninguno de los dos usaba `_email_header_html()`
+ni el helper con logo. Corregido: `_email_html_simple()` ahora envuelve
+el cuerpo con `_email_header_html()`, y el email de reset de contraseña
+(antes párrafos sueltos sin plantilla) pasa a usar `_email_html_simple()`
+igual que el resto de correos cortos tipo "código/enlace".
+
+❌ **Encontrado — `CHANGELOG.md` con 2 cabeceras de versión perdidas:**
+las entradas de v12.28.0 y v12.27.22 estaban presentes en el cuerpo del
+texto pero sin su línea `# vX.Y.Z — fecha` — quedaban concatenadas bajo
+la cabecera de la versión siguiente. Corregido (mismo tipo de fallo que
+ya se dio un par de veces al insertar entradas nuevas encima de una
+existente — hay que llevar cuidado de reincluir la cabecera de la
+entrada que ya estaba). `docs/HISTORIAL_CAMBIOS.md` sí las tenía
+correctamente, no hizo falta tocarlo por eso.
+
+Badge de versión del sidebar actualizado a "V 12.29.2".
+
 # v12.29.0 — 31 julio 2026
 
 📉 Techo de gastos — importe máximo (€) también configurable por hotel/mes **y familia**
@@ -82,6 +119,8 @@ grupo 💳 *Techo de gastos* que los 4 campos existentes.
 
 Badge de versión del sidebar actualizado a "V 12.28.0".
 
+# v12.28.0 — 31 julio 2026
+
 
 
 🖼️ Logo aplicado también a los emails de proveedor / internos de pedidos
@@ -117,6 +156,8 @@ interno de cambio de estado, ambos dentro de `enviar_emails_estado`).
   redondeadas que antes daba la banda de color.
 
 Badge de versión del sidebar actualizado a "V 12.27.22".
+
+# v12.27.22 — 31 julio 2026
 
 # v12.27.21 — 31 julio 2026
 
