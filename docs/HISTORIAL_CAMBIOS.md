@@ -10,6 +10,19 @@
 
 ## 2026-08-01
 
+### [Control Pedidos] v12.29.6 — Ajuste visual: plazo entrega y fecha específica juntos
+- Petición (con captura): "Plazo entrega (días)" y "Fecha de entrega
+  específica" (v12.29.4) quedaban en filas distintas de la rejilla
+  del formulario — poco identificativo, al ser dos formas
+  alternativas del mismo dato.
+- Unidos en un mismo `.form-group`, lado a lado con flexbox
+  (`display:flex;gap:16px`) — antes eran 2 `.form-group` separados
+  que caían en filas distintas de la rejilla automática. Sin cambios
+  de comportamiento ni de backend, solo maquetación
+  (`templates/index.html`).
+- Badge de versión del sidebar actualizado a "V 12.29.6"; entrada
+  añadida en `CHANGELOG.md`.
+
 ### [Control Pedidos] v12.29.4 — Fecha de entrega específica del proveedor + bug crítico corregido
 - Petición: junto a "Plazo entrega (días)", añadir un campo de fecha
   de entrega concreta — si el proveedor da un día exacto en vez de

@@ -1212,7 +1212,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.4
+          V 12.29.6
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2023,24 +2023,28 @@ tbody tr:last-child{border-bottom:none}
           <div id="adj-tramit-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group">
-          <label class="form-label" title="Plazo de entrega indicado por el proveedor. Se usa para calcular alertas automáticas de entrega.">
-            Plazo entrega (días)
-            <span style="font-size:10px;color:#888;font-weight:400"> (proveedor)</span>
-          </label>
-          <input type="number" class="form-control" id="p-plazo-entrega" min="1" step="1"
-                 placeholder="ej. 60" oninput="actualizarFechaEntregaPrevista()"
-                 style="max-width:140px">
-        </div>
-        <div class="form-group">
-          <label class="form-label" title="Fecha de entrega exacta, si el proveedor la indica directamente en vez de un plazo en días. Si se rellena, tiene prioridad sobre 'Plazo entrega (días)' para calcular las alertas.">
-            Fecha de entrega específica
-            <span style="font-size:10px;color:#888;font-weight:400"> (proveedor)</span>
-          </label>
-          <input type="date" class="form-control" id="p-fecha-entrega-especifica"
-                 oninput="actualizarFechaEntregaPrevista()" style="max-width:180px">
-          <div style="font-size:10.5px;color:#888;margin-top:3px">
-            Si el proveedor da un día de entrega concreto, ponlo aquí en vez de calcularlo por días —
-            tiene prioridad sobre "Plazo entrega (días)" de arriba.
+          <div style="display:flex;gap:16px;flex-wrap:wrap">
+            <div>
+              <label class="form-label" title="Plazo de entrega indicado por el proveedor. Se usa para calcular alertas automáticas de entrega.">
+                Plazo entrega (días)
+                <span style="font-size:10px;color:#888;font-weight:400"> (proveedor)</span>
+              </label>
+              <input type="number" class="form-control" id="p-plazo-entrega" min="1" step="1"
+                     placeholder="ej. 60" oninput="actualizarFechaEntregaPrevista()"
+                     style="max-width:140px">
+            </div>
+            <div>
+              <label class="form-label" title="Fecha de entrega exacta, si el proveedor la indica directamente en vez de un plazo en días. Si se rellena, tiene prioridad sobre 'Plazo entrega (días)' para calcular las alertas.">
+                Fecha de entrega específica
+                <span style="font-size:10px;color:#888;font-weight:400"> (proveedor)</span>
+              </label>
+              <input type="date" class="form-control" id="p-fecha-entrega-especifica"
+                     oninput="actualizarFechaEntregaPrevista()" style="max-width:180px">
+            </div>
+          </div>
+          <div style="font-size:10.5px;color:#888;margin-top:5px">
+            Si el proveedor da un día de entrega concreto, ponlo en "Fecha de entrega específica" en vez de
+            calcularlo por días — tiene prioridad sobre "Plazo entrega (días)".
           </div>
           <div id="p-fecha-entrega-prevista-info" style="margin-top:4px;font-size:11px;color:#1a73e8;display:none">
             📅 Entrega prevista: <strong id="p-fecha-entrega-prevista-val"></strong>

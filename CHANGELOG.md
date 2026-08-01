@@ -1,3 +1,16 @@
+# v12.29.6 — 1 agosto 2026
+
+🎨 Ajuste visual — "Plazo entrega (días)" y "Fecha de entrega específica" juntos
+
+Los dos campos añadidos en v12.29.4 quedaban en filas distintas de la
+rejilla del formulario (uno emparejado con "Fecha tramitación", el otro
+solo en su propia fila) — poco identificativo al ser dos formas
+alternativas del mismo dato. Unidos ahora en un mismo bloque, lado a lado,
+para que se vea de un vistazo que son opciones relacionadas. Sin cambios
+de comportamiento ni de backend, solo maquetación.
+
+Badge de versión del sidebar actualizado a "V 12.29.6".
+
 # v12.29.4 — 1 agosto 2026
 
 📅 Fecha de entrega específica del proveedor (alternativa al plazo en días)
