@@ -8,6 +8,62 @@
 
 ---
 
+## 2026-08-02
+
+### [Control Pedidos] v12.29.34 — Documentación: README general de la aplicación
+- Añadido `README.md` en la raíz del proyecto: no existía ninguna
+  documentación general del repositorio hasta ahora.
+- Contenido: stack técnico, estructura de archivos, funcionalidades por
+  vista (Pedidos, Alertas, Proveedores, Techo de gastos, Familias,
+  Usuarios, Integridad, Config alertas/avisos, Restaurar backup), roles
+  de usuario (admin/compras/hotel/user), explicación detallada de cómo
+  funcionan las migraciones automáticas de base de datos
+  (`_auto_migrate()` en `app.py`, que corre en cada arranque, frente a
+  `SQL_STATEMENTS`/`init_db.py`, que solo corre a mano en el primer
+  despliegue) — el punto exacto que causó los bugs reales de v12.29.32
+  (hotel "PR") y v12.29.33 (tabla `expediente_exceso`), puesta en
+  marcha local/producción, variables de entorno, y convenciones del
+  proyecto.
+- Cambio puramente documental, no afecta a `app.py`. Badge de versión
+  del sidebar actualizado a "V 12.29.34"; entrada añadida en
+  `CHANGELOG.md`.
+
+### [Control Pedidos] v12.29.33 — Corrección real: "Techo de Gastos" se quedaba colgado en "Cargando…"
+- Usuario reportó, con captura de pantalla, que la vista "Techo de
+  gastos" se quedaba en "Cargando…" indefinidamente, sin llegar a
+  mostrar datos ni ningún error.
+- Causa real, encontrada revisando el código: mismo patrón exacto que
+  el bug del hotel "PR" de la v12.29.32. La tabla `expediente_exceso`
+  (rediseño de Techo de Gastos, Fase 1) solo estaba definida en
+  `SQL_STATEMENTS` (`models.py`), lista que **solo ejecuta
+  `init_db.py`** a mano, en el primer despliegue sobre una base de
+  datos nueva y vacía. Como la base de datos de producción ya existía
+  y nadie vuelve a correr `init_db.py` sobre ella, la tabla nunca
+  llegó a crearse — pese a que todo el código que la usa
+  (`/api/techo/resumen`, expedientes de exceso, etc.) estaba
+  desplegado correctamente.
+- Consecuencia en cascada: `/api/techo/resumen` fallaba con 500
+  ("relation expediente_exceso does not exist"); en el frontend,
+  `_fetchTecho()` capturaba ese error y devolvía `null` en vez de
+  relanzarlo, pero `loadTecho()` no comprobaba ese caso y accedía a
+  `d.mes` directamente sobre `null` — excepción sin capturar justo
+  después de pintar "Cargando…", dejando la vista colgada ahí para
+  siempre sin ningún aviso visible.
+- Corregido:
+  - `app.py`: se repite la creación de `expediente_exceso` (+ sus 3
+    índices) dentro de `_auto_migrate()` — la función que sí corre en
+    cada arranque del servidor —, con `CREATE TABLE/INDEX IF NOT
+    EXISTS`. Se ejecutará solo en el próximo arranque, sin ningún
+    riesgo de duplicado si `init_db.py` ya se llegó a ejecutar alguna
+    vez.
+  - `templates/index.html`: `loadTecho()` ahora comprueba si
+    `_fetchTecho()` devolvió `null` y muestra un mensaje de error
+    visible en la propia vista en vez de quedarse colgada en
+    "Cargando…" sin explicación.
+- `app.py` compila sin errores. Badge de versión del sidebar
+  actualizado a "V 12.29.33"; entrada añadida en `CHANGELOG.md`. No
+  hay tests automatizados en el proyecto que requieran actualización.
+
 ## 2026-08-01
 
 ### [Control Pedidos] v12.29.32 — Corrección real: el hotel "PR" nunca llegaba a insertarse

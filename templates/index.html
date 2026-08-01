@@ -1218,7 +1218,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.32
+          V 12.29.34
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6240,6 +6240,11 @@ async function loadTecho() {
   grid.innerHTML = '<div style="padding:20px;color:#999;text-align:center">Cargando…</div>';
   // force=true porque el usuario ha navegado explícitamente a la vista Techo
   const d = await _fetchTecho(true);
+  if (!d) {
+    grid.innerHTML = '<div style="padding:20px;color:#dc3545;text-align:center">⚠️ No se ha podido cargar el techo de gastos. Inténtalo de nuevo o pulsa "Actualizar".</div>';
+    empty.classList.add('section-hidden');
+    return;
+  }
   document.getElementById('techo-mes-label').textContent = `Mes: ${d.mes}`;
 
   const hotelesCon = d.hoteles.filter(h => h.num_pedidos > 0 || true); // mostrar todos

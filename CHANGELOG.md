@@ -1,3 +1,61 @@
+# v12.29.34 — 2 agosto 2026
+
+📄 Documentación — README general de la aplicación
+
+Se añade `README.md` en la raíz del proyecto con documentación general:
+stack técnico, estructura del repositorio, funcionalidades por vista,
+roles de usuario, cómo funcionan las migraciones automáticas de base de
+datos (`_auto_migrate()` vs `init_db.py`/`models.py` — el punto que ha
+causado los dos bugs reales de v12.29.32 y v12.29.33), puesta en marcha
+local y en producción, variables de entorno, y convenciones del
+proyecto (versión + changelog + historial en cada cambio).
+
+No afecta a `app.py` ni a la lógica de la aplicación — cambio puramente
+documental. Badge de versión del sidebar actualizado a "V 12.29.34".
+
+# v12.29.33 — 2 agosto 2026
+
+🔧 Corrección real — "Techo de Gastos" se quedaba colgado en "Cargando…" para siempre
+
+**Reportado:** la vista "Techo de gastos" se queda cargando y no llega a
+mostrar ningún dato, ni un error.
+
+**Causa encontrada tras revisar el código:** exactamente el mismo patrón
+de bug que el hotel de pruebas "PR" de la v12.29.32. La tabla
+`expediente_exceso` (rediseño de Techo de Gastos, Fase 1) solo estaba
+definida en `SQL_STATEMENTS` (`models.py`) — y esa lista **solo la
+ejecuta `init_db.py`**, un script manual pensado para "el primer
+despliegue" sobre una base de datos nueva y vacía. Como esta base de
+datos ya existe y nadie vuelve a correr `init_db.py` sobre producción,
+la tabla nunca llegó a crearse, pese a que el código que la usa
+(`/api/techo/resumen`) sí estaba desplegado correctamente.
+
+Al no existir la tabla, `/api/techo/resumen` fallaba con un error 500
+("relation expediente_exceso does not exist"). En el frontend,
+`_fetchTecho()` capturaba ese error y devolvía `null` en vez de
+relanzarlo — pero `loadTecho()` no comprobaba ese caso y hacía `d.mes`
+directamente sobre `null`, lo que lanzaba una excepción sin capturar
+justo después de pintar "Cargando…". Resultado: la vista se quedaba
+colgada en "Cargando…" para siempre, sin ningún mensaje de error visible
+para el usuario.
+
+**Corregido:**
+- `app.py`: se repite la creación de `expediente_exceso` (y sus 3
+  índices) dentro de `_auto_migrate()`, la función que sí corre en cada
+  arranque del servidor — con `CREATE TABLE/INDEX IF NOT EXISTS`, sin
+  ningún riesgo de duplicado si `init_db.py` ya se llegó a ejecutar en
+  algún momento. Se ejecutará solo, en el próximo arranque, sin tocar
+  nada más.
+- `templates/index.html`: `loadTecho()` ahora comprueba si `_fetchTecho()`
+  devolvió `null` y muestra un aviso de error visible ("⚠️ No se ha
+  podido cargar el techo de gastos...") en vez de quedarse colgada en
+  "Cargando…" sin explicación — para que, si algo similar vuelve a pasar
+  en el futuro, se note enseguida en vez de parecer que la app está
+  rota.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.33".
+
 # v12.29.32 — 1 agosto 2026
 
 🔧 Corrección real — el hotel de pruebas "PR" nunca llegaba a insertarse en despliegues existentes
