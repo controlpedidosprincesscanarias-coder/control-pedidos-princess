@@ -1218,7 +1218,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.35
+          V 12.29.36
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2515,7 +2515,20 @@ async function doLogin(reenvio=false) {
     }
 
     await _entrarEnApp(r);
-  } catch(e) { err.textContent='Error de conexión'; err.style.display='block'; }
+  } catch(e) {
+    // v12.29.36 — FIX: se mostraba "Error de conexión" para CUALQUIER
+    // fallo del login, incluida una contraseña incorrecta (401, con
+    // mensaje correcto "Usuario o contraseña incorrectos" ya devuelto
+    // por el backend, pero descartado aquí sin más). Esto hacía parecer
+    // que el servidor no respondía cuando en realidad solo rechazaba
+    // las credenciales. api() lanza `Error([status] detalle)` para
+    // respuestas de servidor — se recupera ese detalle y solo se cae al
+    // genérico "Error de conexión" cuando de verdad no hay respuesta del
+    // servidor (fetch falla del todo, sin código de estado).
+    const _detalle = (e && e.message || '').replace(/^\[\d+\]\s*/, '');
+    err.textContent = _detalle || 'Error de conexión';
+    err.style.display='block';
+  }
   finally {
     _loginEnCurso = false;
     if (btnAcceder) btnAcceder.disabled = false;

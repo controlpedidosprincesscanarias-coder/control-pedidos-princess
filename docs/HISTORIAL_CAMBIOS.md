@@ -10,6 +10,28 @@
 
 ## 2026-08-02
 
+### [Control Pedidos] v12.29.36 — Corrección real: login mostraba "Error de conexión" también con contraseña incorrecta
+- Primero se confirmó, con logs de Render del arranque siguiente al
+  despliegue de la v12.29.35, que la migración de `expediente_exceso`
+  se ejecutó correctamente (`CREATE TABLE ejecutado` + `índices OK`) —
+  el bug de "Techo de Gastos" queda resuelto.
+- Reportado a continuación: el login seguía dando "Error de conexión".
+  Revisando los logs de Render en el momento exacto del intento, el
+  servidor respondía con normalidad: `POST /api/login` devolvía 401
+  (no un fallo de red), la respuesta esperada cuando la contraseña no
+  coincide, con el mensaje correcto `"Usuario o contraseña
+  incorrectos"` ya incluido por el backend.
+- Causa real: el `catch` de `doLogin()` en el frontend ignoraba por
+  completo ese mensaje y mostraba siempre "Error de conexión" fuera
+  cual fuera el motivo del fallo — así que una contraseña incorrecta
+  se veía indistinguible de un problema real de conectividad.
+- Corregido: el `catch` ahora recupera y muestra el detalle real
+  devuelto por `api()` (p.ej. "Usuario o contraseña incorrectos"), y
+  solo cae al genérico "Error de conexión" cuando de verdad no hay
+  respuesta del servidor.
+- `app.py` sin cambios en esta versión. Badge de versión del sidebar
+  actualizado a "V 12.29.36"; entrada añadida en `CHANGELOG.md`.
+
 ### [Control Pedidos] v12.29.35 — Diagnóstico: la migración de expediente_exceso sigue sin aplicarse
 - Tras desplegar la v12.29.33/34, `/api/techo/resumen` seguía dando
   `psycopg2.errors.UndefinedTable: relation "expediente_exceso" does

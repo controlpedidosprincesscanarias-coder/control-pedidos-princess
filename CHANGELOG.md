@@ -1,3 +1,34 @@
+# v12.29.36 — 2 agosto 2026
+
+🔧 Corrección real — el login mostraba "Error de conexión" también con contraseña incorrecta
+
+**Confirmado primero:** la migración de `expediente_exceso` de la
+v12.29.35 se ejecutó correctamente en el arranque siguiente (logs:
+`[MIGRACION] Tabla expediente_exceso — CREATE TABLE ejecutado` +
+`índices OK`) — el bug de "Techo de Gastos" queda resuelto.
+
+**Reportado a continuación:** el login seguía dando "Error de conexión"
+tras ese despliegue. Revisando los logs de Render en el momento exacto
+del intento de login, el servidor respondía con total normalidad
+(`POST /api/login` → 401, no un fallo de red ni un timeout) — el 401 es
+la respuesta correcta del backend cuando la contraseña no coincide, y
+ya trae el mensaje adecuado (`{"error": "Usuario o contraseña
+incorrectos"}`).
+
+**Causa real:** el `catch` de `doLogin()` en el frontend ignoraba por
+completo ese mensaje y mostraba siempre el texto genérico "Error de
+conexión", sin importar el motivo real del fallo — así que una simple
+contraseña incorrecta parecía un problema de conectividad del servidor.
+
+**Corregido:** el `catch` ahora recupera el detalle real que devuelve
+`api()` (`Usuario o contraseña incorrectos`, o cualquier otro mensaje
+de error del servidor) y solo cae al genérico "Error de conexión"
+cuando de verdad no hay respuesta del servidor (fallo de red puro, sin
+código de estado HTTP).
+
+`app.py` sin cambios en esta versión. Badge de versión del sidebar
+actualizado a "V 12.29.36".
+
 # v12.29.35 — 2 agosto 2026
 
 🔍 Diagnóstico — la migración de expediente_exceso sigue sin aplicarse; añadido logging detallado
