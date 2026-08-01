@@ -10,6 +10,99 @@
 
 ## 2026-08-01
 
+### [Control Pedidos] v12.29.4 — Fecha de entrega específica del proveedor + bug crítico corregido
+- Petición: junto a "Plazo entrega (días)", añadir un campo de fecha
+  de entrega concreta — si el proveedor da un día exacto en vez de
+  "X días", las reclamaciones se calculan a partir de esa fecha. Si
+  no se rellena nada, igual que hasta ahora.
+- 🔴 **Bug crítico encontrado y corregido de paso, no buscado**:
+  `_calcular_fecha_entrega_prevista()` usaba `_d`/`_dt`, nombres que
+  NUNCA se importaron en esa función. Como `fecha_tramitacion` se
+  guarda como TEXT, siempre caía en la rama que los necesitaba,
+  lanzaba `NameError` silenciado por un `except Exception: return
+  None`, y devolvía `None` siempre — mismo patrón de fallo ya
+  corregido en `_dias_desde_fecha` el 30 de julio, pero que aquí se
+  quedó sin arreglar. Consecuencia: **toda la lógica de alertas por
+  "Plazo entrega (días)" llevaba inactiva desde que existe la
+  funcionalidad**, sin ningún error visible en logs — nunca disparó
+  un aviso por esa vía. Corregido usando los nombres bien importados
+  a nivel de módulo (`datetime`, `_date` — mismo patrón ya
+  establecido en `_dias_desde_fecha`).
+- Nueva columna `fecha_entrega_especifica` (DATE) en `pedidos`
+  (migración `ALTER TABLE ... ADD COLUMN IF NOT EXISTS`).
+- Nueva función `_resolver_fecha_entrega_prevista(pedido)`: prioriza
+  la fecha específica si existe; si no, calcula por
+  `fecha_tramitacion + plazo_entrega_dias` (comportamiento de
+  siempre); si no hay ninguno de los dos, `None`.
+- `_alertas_plazo_entrega()` y `_debe_usar_logica_plazo()`
+  actualizadas para usar el nuevo resolutor — reclamaciones
+  automáticas y clasificación de alertas ya respetan la prioridad
+  fecha específica > plazo en días.
+- Añadida la columna a `_JOB_PEDIDO_SQL` y `PEDIDO_SELECT_STATS`, y
+  al `INSERT`/`UPDATE` de `create_pedido`/`update_pedido`.
+  `PEDIDO_SELECT` (listado/detalle) ya la incluye automáticamente,
+  usa `p.*`.
+- Frontend: nuevo campo "Fecha de entrega específica (proveedor)"
+  junto a "Plazo entrega (días)", con nota explicando la prioridad.
+  `actualizarFechaEntregaPrevista()` prioriza la fecha específica si
+  está rellena. Oculto también para el rol hotel, igual que el plazo
+  en días. Tooltip del badge "📅 Entrega prevista" en el listado
+  actualizado para reflejar las 2 fuentes posibles.
+- `app.py` compila sin errores en todo momento durante la
+  implementación. Badge de versión del sidebar actualizado a
+  "V 12.29.4"; entrada añadida en `CHANGELOG.md`.
+
+### [Organizador] v4.16.2 — Corrección: "Limpiar chat" afectaba a varias conversaciones a la vez
+- Reportado: el botón "Limpiar chat" debería borrar solo la
+  conversación abierta, no todas.
+- Causa raíz en `app/db/sqlite.py`: al abrir una conversación privada
+  NUEVA (sin mensajes todavía), `_abrir_nueva_conversacion()` pasa
+  `canal_id=None` a propósito (lo resuelve el backend con el primer
+  mensaje). Sin guarda, `set_chat_limpiado(None, ...)` guardaba la
+  marca bajo la clave JSON `"null"` — y TODAS las conversaciones
+  nuevas sin resolver comparten ese mismo `canal_id=None` hasta que
+  reciben su primer mensaje. Limpiar una conversación nueva marcaba
+  como limpiadas también todas las demás conversaciones nuevas sin
+  resolver que hubiera en ese momento, no solo la abierta.
+- Corregido con una guarda (`if not canal_id`) en
+  `get_chat_limpiado()`/`set_chat_limpiado()` — un canal sin resolver
+  simplemente no guarda ni aplica ninguna marca (tampoco hace falta:
+  si no tiene `canal_id` es porque no tiene mensajes todavía). No
+  hizo falta tocar `ventana_chat.py` ni `chat_popup.py`, ya llamaban
+  bien a estas funciones — el fallo estaba solo en el almacenamiento.
+- Los archivos compilan sin errores. `APP_VERSION` → `v4.16.2`;
+  `release_notes_actual.txt` y `release_notes.md` actualizados.
+
+### [Organizador] v4.16.0 — Corrección: solicitud de acceso volvía a bloquear el panel Admin
+- Reportado (con captura del diálogo de solicitud): tras crear la
+  contraseña momentánea, cerrar y reabrir el Organizador dejaba sin
+  poder entrar al panel de Administración — volvía a salir el
+  formulario de "Enviar solicitud" en vez del de acceso.
+- Bug real en el fix de v4.14.4: `_solicitud_pendiente` exigía
+  además `not _bp_pend` (contraseña bridge vacía). Cubría el primer
+  reinicio (recién enviada la solicitud, sin contraseña local
+  todavía), pero en cuanto el usuario creaba su contraseña momentánea
+  (bloque "1-bis" de `admin_auth.verificar_acceso()`, que la guarda
+  con `update_bridge_credentials`), `bridge_password` dejaba de estar
+  vacío — y en el siguiente reinicio la condición volvía a fallar,
+  forzando otra vez `_modo_alta()`. Resultado: quien ya se había
+  creado su contraseña momentánea se quedaba bloqueado para siempre,
+  sin poder usarla.
+- Corregido: se quita el requisito de contraseña vacía —
+  `_solicitud_pendiente` pasa a ser solo "el usuario de Windows ya
+  tiene una solicitud registrada" (`bridge_user == uwin`), tenga o no
+  tenga ya contraseña local. El subtítulo del diálogo se adapta
+  (invita a "crear" la contraseña si aún no hay, o a "introducirla"
+  si ya existe), pero en ambos casos se queda en modo login sin
+  forzar nunca el formulario de alta mientras la solicitud siga sin
+  aprobar.
+- Confirmado de paso que el guardado automático en "Mi Usuario" →
+  credenciales bridge ya funcionaba bien (se relee de la BD local
+  cada vez que se abre esa ventana) — el usuario no llegaba a verlo
+  por este bloqueo previo, no era un problema aparte.
+- `main_agenda.py` compila sin errores. `APP_VERSION` → `v4.16.0`;
+  `release_notes_actual.txt` y `release_notes.md` actualizados.
+
 ### [Organizador] v4.14.8 — "Limpiar chat" pasa a ser persistente por equipo
 - Petición: que el histórico desaparezca de verdad cada vez que se
   pulsa "Limpiar chat", no solo la vista de esa sesión — hasta ahora,

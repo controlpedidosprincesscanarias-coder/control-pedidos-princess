@@ -1212,7 +1212,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.2
+          V 12.29.4
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2030,6 +2030,18 @@ tbody tr:last-child{border-bottom:none}
           <input type="number" class="form-control" id="p-plazo-entrega" min="1" step="1"
                  placeholder="ej. 60" oninput="actualizarFechaEntregaPrevista()"
                  style="max-width:140px">
+        </div>
+        <div class="form-group">
+          <label class="form-label" title="Fecha de entrega exacta, si el proveedor la indica directamente en vez de un plazo en días. Si se rellena, tiene prioridad sobre 'Plazo entrega (días)' para calcular las alertas.">
+            Fecha de entrega específica
+            <span style="font-size:10px;color:#888;font-weight:400"> (proveedor)</span>
+          </label>
+          <input type="date" class="form-control" id="p-fecha-entrega-especifica"
+                 oninput="actualizarFechaEntregaPrevista()" style="max-width:180px">
+          <div style="font-size:10.5px;color:#888;margin-top:3px">
+            Si el proveedor da un día de entrega concreto, ponlo aquí en vez de calcularlo por días —
+            tiene prioridad sobre "Plazo entrega (días)" de arriba.
+          </div>
           <div id="p-fecha-entrega-prevista-info" style="margin-top:4px;font-size:11px;color:#1a73e8;display:none">
             📅 Entrega prevista: <strong id="p-fecha-entrega-prevista-val"></strong>
           </div>
@@ -4050,6 +4062,7 @@ async function openPedidoModal(id=null) {
     setVal('p-f-vb', p.fecha_envio_visto_bueno);
     setVal('p-f-tramit', p.fecha_tramitacion);
     setVal('p-plazo-entrega', p.plazo_entrega_dias || '');
+    setVal('p-fecha-entrega-especifica', p.fecha_entrega_especifica || '');
     actualizarFechaEntregaPrevista();
     setVal('p-pedido-num', p.pedido_num);
     setVal('p-presup', p.presupuesto_num);
@@ -4108,7 +4121,7 @@ function _applyHotelRolePedidoModal(isEdit) {
   // IDs de secciones/campos a ocultar/deshabilitar para hotel
   const hideIds = [
     'p-hotel','p-depto',                          // hotel y departamento
-    'p-f-solicitud','p-f-vb','p-f-tramit','p-plazo-entrega',        // fechas
+    'p-f-solicitud','p-f-vb','p-f-tramit','p-plazo-entrega','p-fecha-entrega-especifica',  // fechas
     'p-pedido-num','p-presup','chk-tarifa-acordada',  // números SAP/presupuesto
     'p-proveedor-input',                          // proveedor
     'p-observaciones',                            // observaciones
@@ -4735,7 +4748,7 @@ function _setFormCanceladoSilent(bloqueado) {
 
 
 function clearPedidoForm() {
-  ['p-hotel','p-depto','p-pedido-num','p-presup','p-observaciones','p-nota','p-plazo-entrega'].forEach(id=>setVal(id,''));
+  ['p-hotel','p-depto','p-pedido-num','p-presup','p-observaciones','p-nota','p-plazo-entrega','p-fecha-entrega-especifica'].forEach(id=>setVal(id,''));
   ['p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
   document.getElementById('p-fecha-entrega-prevista-info').style.display = 'none';
   // Resetear checkbox "tarifa acordada" — siempre desmarcado por defecto
@@ -4762,11 +4775,17 @@ function clearPedidoForm() {
 }
 
 function actualizarFechaEntregaPrevista() {
-  const tramit = val('p-f-tramit');
-  const plazo  = parseInt(val('p-plazo-entrega'));
-  const info   = document.getElementById('p-fecha-entrega-prevista-info');
-  const label  = document.getElementById('p-fecha-entrega-prevista-val');
-  if (tramit && plazo > 0) {
+  const tramit    = val('p-f-tramit');
+  const plazo     = parseInt(val('p-plazo-entrega'));
+  const especifica = val('p-fecha-entrega-especifica');
+  const info      = document.getElementById('p-fecha-entrega-prevista-info');
+  const label     = document.getElementById('p-fecha-entrega-prevista-val');
+  if (especifica) {
+    // Prioridad: fecha específica del proveedor, sin calcular nada
+    const base = new Date(especifica + 'T00:00:00');
+    label.textContent = base.toLocaleDateString('es-ES', {day:'2-digit',month:'2-digit',year:'numeric'});
+    info.style.display = '';
+  } else if (tramit && plazo > 0) {
     const base = new Date(tramit + 'T00:00:00');
     base.setDate(base.getDate() + plazo);
     label.textContent = base.toLocaleDateString('es-ES', {day:'2-digit',month:'2-digit',year:'numeric'});
@@ -4949,6 +4968,7 @@ Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva 
     familia_id:           familiaId,
     importe:              importeVal,
     plazo_entrega_dias:   parseInt(val('p-plazo-entrega')) || null,
+    fecha_entrega_especifica: val('p-fecha-entrega-especifica') || null,
   };
 
   const btn = document.getElementById('btn-save-pedido');
@@ -5144,7 +5164,7 @@ function _renderAlertasTabla(lista) {
       ? `<span title="Fecha de solicitud">${fmtDate(fechaRef)||'—'}</span>`
       : (fmtDate(fechaRef)||'—');
     const entregaPrevLabel = p.fecha_entrega_prevista
-      ? `<br><span style="font-size:10px;color:#1a73e8" title="Entrega prevista (plazo proveedor)">📅 ${fmtDate(p.fecha_entrega_prevista)}</span>`
+      ? `<br><span style="font-size:10px;color:#1a73e8" title="Entrega prevista (fecha específica o plazo del proveedor)">📅 ${fmtDate(p.fecha_entrega_prevista)}</span>`
       : '';
 
     // ── Última notificación enviada para esta alerta (email y/o Telegram) ────

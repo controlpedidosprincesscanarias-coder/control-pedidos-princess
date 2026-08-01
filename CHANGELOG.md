@@ -1,3 +1,43 @@
+# v12.29.4 — 1 agosto 2026
+
+📅 Fecha de entrega específica del proveedor (alternativa al plazo en días)
+
+**Petición:** junto a "Plazo entrega (días)", añadir un campo de fecha de
+entrega concreta — si el proveedor da un día exacto en vez de "X días", las
+reclamaciones se calculan a partir de esa fecha. Si no se rellena nada,
+igual que hasta ahora.
+
+**🔴 Bug crítico encontrado y corregido de paso (no buscado):**
+`_calcular_fecha_entrega_prevista()` usaba dos nombres (`_d`, `_dt`) que
+NUNCA se importaron en esa función. Como `fecha_tramitacion` se guarda como
+TEXT, la función siempre caía en la rama que los necesitaba, lanzaba un
+`NameError` silenciado por un `except Exception: return None`, y devolvía
+`None` siempre — mismo patrón de fallo ya corregido en `_dias_desde_fecha`
+el 30 de julio, pero que aquí se quedó sin arreglar. **Resultado: toda la
+lógica de alertas por "Plazo entrega (días)" llevaba inactiva desde que
+existe la funcionalidad**, sin ningún error visible en logs — nunca disparó
+un aviso por esa vía. Corregido usando los nombres bien importados a nivel
+de módulo (`datetime`, `_date`).
+
+**Cambios:**
+- Nueva columna `fecha_entrega_especifica` (DATE) en `pedidos`.
+- Nueva función `_resolver_fecha_entrega_prevista(pedido)`: prioriza la
+  fecha específica si existe; si no, calcula por
+  `fecha_tramitacion + plazo_entrega_dias` (comportamiento de siempre); si
+  no hay ninguno de los dos, `None` — igual que cuando no se rellenaba nada.
+- `_alertas_plazo_entrega()` y `_debe_usar_logica_plazo()` usan el nuevo
+  resolutor — las reclamaciones automáticas y la clasificación de alertas ya
+  respetan la prioridad fecha específica > plazo en días.
+- Añadida la columna a las consultas SQL del job de alertas y de `/api/stats`,
+  y al `INSERT`/`UPDATE` de pedidos.
+- Frontend: nuevo campo "Fecha de entrega específica (proveedor)" junto a
+  "Plazo entrega (días)", con nota explicando la prioridad. El cálculo de
+  "📅 Entrega prevista" que ya se mostraba en el formulario ahora prioriza
+  la fecha específica si está rellena. Oculto también para el rol hotel,
+  igual que el plazo en días.
+
+Badge de versión del sidebar actualizado a "V 12.29.4".
+
 # v12.29.2 — 31 julio 2026
 
 🔧 Revisión de las últimas actualizaciones + 2 correos que se quedaron sin logo

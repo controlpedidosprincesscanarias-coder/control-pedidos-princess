@@ -363,6 +363,15 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS plazo_entrega_dias INTEGER"
             )
+            # ── v12.29.4 — Fecha de entrega específica (alternativa al plazo
+            # en días) — si el proveedor da un día de entrega concreto en vez
+            # de "X días", se guarda directamente aquí y las alertas/
+            # reclamaciones se calculan a partir de ella en vez de sumar
+            # plazo_entrega_dias a fecha_tramitacion. Ver
+            # _resolver_fecha_entrega_prevista().
+            cur.execute(
+                "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS fecha_entrega_especifica DATE"
+            )
             for _clave, _valor, _tipo, _label, _grupo, _orden in [
                 ('activar_uso_plazo_entrega',      '1', 'bool',   'Activar alertas basadas en plazo de entrega del proveedor', 'global',        2),
                 ('plazo_aviso_dias_antes',          '5', 'numero', 'Plazo entrega — Aviso previo (días antes de la entrega)',   'plazo_entrega', 1),
@@ -2669,7 +2678,7 @@ def _ya_reclamado_hoy_manual(pedido_id: int, tipo: str = "alerta_proveedor") -> 
 _JOB_PEDIDO_SQL = """
     SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
-           p.plazo_entrega_dias, p.hotel_id, p.proveedor_id,
+           p.plazo_entrega_dias, p.fecha_entrega_especifica, p.hotel_id, p.proveedor_id,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
@@ -2715,19 +2724,64 @@ def _dias_ultima_notificacion(pedido_id: int, tipo: str = "telegram_auto"):
 
 # ── Helpers para lógica de plazo de entrega ──────────────────────────────────
 
+def _resolver_fecha_entrega_prevista(pedido: dict):
+    """
+    (2026-08-01) Devuelve la fecha de entrega prevista (date) para un
+    pedido, con esta prioridad:
+      1. fecha_entrega_especifica, si el proveedor dio un día de entrega
+         concreto — se usa tal cual, sin calcular nada.
+      2. fecha_tramitacion + plazo_entrega_dias, si hay un plazo en días
+         informado (comportamiento de siempre, sin cambios).
+      3. None si no hay ninguno de los dos datos — mismo comportamiento
+         que cuando no se rellena plazo_entrega_dias.
+
+    Usa `datetime`/`_date` (importados a nivel de módulo, línea ~8) — NO
+    `_d`/`_dt`, que es el mismo error ya corregido en _dias_desde_fecha
+    (2026-07-30): esos nombres solo existían como imports locales dentro
+    de otras funciones sin relación, así que un NameError silenciado por
+    el `except Exception` hacía que la función devolviera siempre None.
+    """
+    fee = pedido.get("fecha_entrega_especifica")
+    if fee:
+        try:
+            if isinstance(fee, datetime):
+                return fee.date()
+            if isinstance(fee, _date):
+                return fee
+            return datetime.strptime(str(fee)[:10], "%Y-%m-%d").date()
+        except Exception:
+            pass
+    plazo = pedido.get("plazo_entrega_dias")
+    if plazo:
+        return _calcular_fecha_entrega_prevista(pedido.get("fecha_tramitacion"), plazo)
+    return None
+
+
 def _calcular_fecha_entrega_prevista(fecha_tramitacion, plazo_dias):
     """
     Devuelve (date) fecha_tramitacion + plazo_dias, o None si falta algún dato.
+
+    (2026-08-01) FIX CRÍTICO — mismo bug que _dias_desde_fecha
+    (2026-07-30), nunca corregido aquí: usaba `_d`/`_dt`, dos nombres que
+    NUNCA se importaron a nivel de esta función. Como fecha_tramitacion
+    se guarda como TEXT (ver models.py), siempre caía en la rama
+    `else: _dt.strptime(...)` y lanzaba NameError — silenciado por el
+    `except Exception: return None` de abajo. Resultado: esta función
+    devolvía SIEMPRE None para cualquier pedido con plazo informado, así
+    que toda la lógica de alertas basada en "Plazo entrega (días)"
+    (_alertas_plazo_entrega, reclamación automática incluida) llevaba
+    inactiva desde que existe la funcionalidad — nunca disparó ni un
+    solo aviso por esta vía, sin que hubiera ningún error visible.
     """
     if not fecha_tramitacion or not plazo_dias:
         return None
     try:
-        if hasattr(fecha_tramitacion, 'date'):
+        if isinstance(fecha_tramitacion, datetime):
             base = fecha_tramitacion.date()
-        elif isinstance(fecha_tramitacion, _d):
+        elif isinstance(fecha_tramitacion, _date):
             base = fecha_tramitacion
         else:
-            base = _dt.strptime(str(fecha_tramitacion)[:10], "%Y-%m-%d").date()
+            base = datetime.strptime(str(fecha_tramitacion)[:10], "%Y-%m-%d").date()
         return base + timedelta(days=int(plazo_dias))
     except Exception:
         return None
@@ -2735,8 +2789,10 @@ def _calcular_fecha_entrega_prevista(fecha_tramitacion, plazo_dias):
 
 def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
     """
-    Calcula si hoy debe generarse una alerta basada en el plazo de entrega
-    informado por el proveedor.
+    Calcula si hoy debe generarse una alerta basada en la fecha de entrega
+    prevista del pedido (ver _resolver_fecha_entrega_prevista): o bien una
+    fecha de entrega específica indicada por el proveedor, o bien
+    fecha_tramitacion + plazo_entrega_dias si no hay fecha específica.
 
     Estados soportados:
       - ENVIADO AL PROVEEDOR  → usa plazo_aviso_dias_antes / plazo_urgente_ciclo
@@ -2768,13 +2824,7 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
     else:
         return None
 
-    plazo = pedido.get("plazo_entrega_dias")
-    if not plazo:
-        return None
-
-    fecha_entrega = _calcular_fecha_entrega_prevista(
-        pedido.get("fecha_tramitacion"), plazo
-    )
+    fecha_entrega = _resolver_fecha_entrega_prevista(pedido)
     if not fecha_entrega:
         return None
 
@@ -2822,10 +2872,11 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
 
 
 def _debe_usar_logica_plazo(pedido: dict) -> bool:
-    """True si el pedido tiene plazo informado Y la feature está activada en config."""
+    """True si el pedido tiene plazo o fecha de entrega específica informados
+    Y la feature está activada en config."""
     cfg = get_config()
     activado = bool(int(cfg.get("activar_uso_plazo_entrega", 1) or 0))
-    return activado and bool(pedido.get("plazo_entrega_dias"))
+    return activado and bool(pedido.get("plazo_entrega_dias") or pedido.get("fecha_entrega_especifica"))
 
 
 def _job_alertas_diarias():
@@ -7842,7 +7893,7 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
 PEDIDO_SELECT_STATS = """
     SELECT p.id, p.norden, p.pedido_num, p.estado,
            p.fecha_tramitacion, p.fecha_solicitud,
-           p.plazo_entrega_dias, p.observaciones, p.importe,
+           p.plazo_entrega_dias, p.fecha_entrega_especifica, p.observaciones, p.importe,
            h.codigo  as hotel_codigo,
            h.nombre  as hotel_nombre,
            d.nombre  as departamento_nombre,
@@ -8021,10 +8072,10 @@ def create_pedido():
             parte_rotura, parte_ampliacion,
             proveedor_id, observaciones,
             familia_id, importe, sujeto_techo,
-            plazo_entrega_dias,
+            plazo_entrega_dias, fecha_entrega_especifica,
             creado_por_id, modificado_por_id,
             creado_por_nombre, modificado_por_nombre
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         RETURNING id
     """, (
         norden,
@@ -8042,6 +8093,7 @@ def create_pedido():
         data.get("proveedor_id"), data.get("observaciones"),
         familia_id, importe, sujeto_techo,
         data.get("plazo_entrega_dias") or None,
+        data.get("fecha_entrega_especifica") or None,
         uid, uid,
         session.get("nombre"), session.get("nombre"),
     ))
@@ -8227,7 +8279,7 @@ def update_pedido(pid):
             parte_rotura=%s, parte_ampliacion=%s,
             proveedor_id=%s, observaciones=%s,
             familia_id=%s, importe=%s, sujeto_techo=%s,
-            plazo_entrega_dias=%s,
+            plazo_entrega_dias=%s, fecha_entrega_especifica=%s,
             modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
         WHERE id=%s
     """, (
@@ -8249,6 +8301,7 @@ def update_pedido(pid):
         data.get("observaciones", pedido_actual["observaciones"]),
         familia_id, importe, sujeto_techo,
         data.get("plazo_entrega_dias", pedido_actual.get("plazo_entrega_dias")) or None,
+        data.get("fecha_entrega_especifica", pedido_actual.get("fecha_entrega_especifica")) or None,
         uid, session.get("nombre"), pid,
     ))
 
