@@ -103,6 +103,8 @@ SQL_STATEMENTS = [
         familia_id              INTEGER REFERENCES familias(id),
         importe                 NUMERIC(10,2),
         sujeto_techo            INTEGER NOT NULL DEFAULT 0,
+        mes_consumo_techo       TEXT,
+        no_autorizado_previo    BOOLEAN NOT NULL DEFAULT FALSE,
         creado_por_id           INTEGER REFERENCES usuarios(id),
         modificado_por_id       INTEGER REFERENCES usuarios(id),
         creado_por_nombre       TEXT,
@@ -142,6 +144,37 @@ SQL_STATEMENTS = [
         creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
     """,
+    # ── Expediente de Exceso de Techo (rediseño Techo de Gastos, Fase 1) ───────
+    # Registro independiente y permanente de cada autorización extraordinaria
+    # de Dirección General — nunca se combina con el cálculo del Techo en sí
+    # (ver mes_consumo_techo en pedidos) ni se borra. Un pedido puede tener
+    # varias filas aquí si es reabrible (denegado → reintenta) — cada intento
+    # es una fila independiente, nunca se sobrescribe; eso da gratis el
+    # histórico cronológico por expediente (listar por pedido_id, creado_en).
+    """
+    CREATE TABLE IF NOT EXISTS expediente_exceso (
+        id                              SERIAL PRIMARY KEY,
+        pedido_id                       INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+        hotel_id                        INTEGER NOT NULL REFERENCES hoteles(id),
+        familia_id                      INTEGER REFERENCES familias(id),
+        mes                             TEXT NOT NULL,
+        importe_pedido                  NUMERIC(10,2),
+        consumo_previo                  NUMERIC(10,2),
+        exceso                          NUMERIC(10,2),
+        motivo_solicitud                TEXT,
+        usuario_solicitante_id          INTEGER REFERENCES usuarios(id),
+        resultado                       TEXT NOT NULL DEFAULT 'pendiente',
+        usuario_resuelve_id             INTEGER REFERENCES usuarios(id),
+        fecha_resolucion                TIMESTAMPTZ,
+        observaciones_direccion_general TEXT,
+        consumido_en_solicitud          NUMERIC(10,2),
+        disponible_en_solicitud         NUMERIC(10,2),
+        creado_en                       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_expediente_pedido ON expediente_exceso(pedido_id)",
+    "CREATE INDEX IF NOT EXISTS idx_expediente_hotel_familia_mes ON expediente_exceso(hotel_id, familia_id, mes)",
+    "CREATE INDEX IF NOT EXISTS idx_expediente_resultado ON expediente_exceso(resultado)",
     # ── Emails log ────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS emails_log (
@@ -222,7 +255,8 @@ SQL_STATEMENTS = [
         ('IT', 'Princess Inspire Tenerife'),
         ('JN', 'Club Jandia Princess'),
         ('FV', 'Fuerteventura Princess'),
-        ('LP', 'La Palma Princess')
+        ('LP', 'La Palma Princess'),
+        ('PR', '⚠️ HOTEL PRUEBAS — no usar en operativa real')
     ON CONFLICT DO NOTHING
     """,
     """
@@ -246,6 +280,8 @@ ESTADOS_VALIDOS = [
     "PENDIENTE FIRMA DIRECCION COMPRAS",
     "PENDIENTE DE FIRMA DIRECCION HOTEL",
     "PENDIENTE COTIZACIÓN",
+    "PENDIENTE Vº Bº DIRECCIÓN GENERAL",
+    "DENEGADO POR DIRECCION GENERAL",
     "ENVIADO AL PROVEEDOR",
     "ENTREGA PARCIAL",
     "ENTREGADO",

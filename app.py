@@ -372,6 +372,55 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS fecha_entrega_especifica DATE"
             )
+            # ── v12.29.8 — Rediseño Techo de Gastos, Fase 1 ────────────────────
+            # mes_consumo_techo: se rellena SOLO cuando el pedido pasa a
+            # ENVIADO AL PROVEEDOR (momento real de consumo del techo, ya no
+            # al crear/editar) y se vacía si se cancela después — evita
+            # recalcular sobre historial_estados en cada consulta. Formato
+            # 'YYYY-MM'.
+            # no_autorizado_previo: flag de integridad — TRUE si el pedido
+            # llegó a ENVIADO AL PROVEEDOR sin haber pasado por una
+            # autorización de Dirección General cuando debería.
+            cur.execute(
+                "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS mes_consumo_techo TEXT"
+            )
+            cur.execute(
+                "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS no_autorizado_previo BOOLEAN NOT NULL DEFAULT FALSE"
+            )
+            # ── v12.29.24 — Rediseño Techo de Gastos, Fase 7 (backfill) ────────
+            # Los pedidos que YA estaban en ENVIADO AL PROVEEDOR/ENTREGA
+            # PARCIAL/ENTREGADO antes de que existiera mes_consumo_techo se
+            # quedarían con esa columna vacía para siempre si no se rellena
+            # una vez — y entonces desaparecerían del cálculo del techo del
+            # mes en que de verdad se enviaron (tanto en el resumen del mes
+            # en curso, si coincidiera con el mes actual, como sobre todo en
+            # el histórico por meses). Se rellena UNA sola vez con el mismo
+            # criterio de fallback que usaba el endpoint histórico antes de
+            # simplificarse en la Fase 4 (COALESCE historial_estados →
+            # fecha_tramitacion → creado_en), tomando el ÚLTIMO registro de
+            # "pasó a ENVIADO AL PROVEEDOR" en historial_estados si existe
+            # más de uno. Idempotente por el propio WHERE
+            # (mes_consumo_techo IS NULL): en despliegues ya migrados esta
+            # sentencia no actualiza ninguna fila y no hace nada.
+            cur.execute("""
+                UPDATE pedidos p
+                SET mes_consumo_techo = to_char(
+                    COALESCE(
+                        (SELECT hs.creado_en FROM historial_estados hs
+                         WHERE hs.pedido_id = p.id AND hs.estado_nuevo = 'ENVIADO AL PROVEEDOR'
+                         ORDER BY hs.creado_en DESC LIMIT 1),
+                        NULLIF(p.fecha_tramitacion, '')::timestamptz,
+                        p.creado_en
+                    ), 'YYYY-MM'
+                )
+                WHERE p.sujeto_techo = 1
+                  AND p.mes_consumo_techo IS NULL
+                  AND p.estado IN ('ENVIADO AL PROVEEDOR', 'ENTREGA PARCIAL', 'ENTREGADO')
+            """)
+            _backfill_techo_n = cur.rowcount
+            if _backfill_techo_n:
+                log.info("[MIGRACION] Backfill mes_consumo_techo (rediseño Techo Fase 7): %s pedido(s) actualizado(s)",
+                         _backfill_techo_n)
             for _clave, _valor, _tipo, _label, _grupo, _orden in [
                 ('activar_uso_plazo_entrega',      '1', 'bool',   'Activar alertas basadas en plazo de entrega del proveedor', 'global',        2),
                 ('plazo_aviso_dias_antes',          '5', 'numero', 'Plazo entrega — Aviso previo (días antes de la entrega)',   'plazo_entrega', 1),
@@ -3239,10 +3288,13 @@ def _job_familia_repetida_inner() -> None:
 
     # v12.28.0 — antes "repetida" era fijo a >1 pedido de la misma familia en
     # el mes; ahora se compara contra el límite configurable
-    # techo_max_pedidos_familia (Config alertas → Techo de gastos), para que
-    # esta alerta refleje el mismo límite que aplica _check_techo al crear/
-    # editar un pedido.
+    # techo_max_pedidos_familia (Config alertas → Techo de gastos).
+    # (2026-08-01 — rediseño Techo de Gastos, Fase 3) Mismo límite que usa
+    # _check_techo() en el momento de pasar a ENVIADO AL PROVEEDOR (ya no
+    # al crear/editar el pedido) — y mismo cambio de filtro que los otros
+    # 2 jobs de techo: por mes_consumo_techo, no por fecha de creación.
     max_pedidos_familia = get_config()["techo_max_pedidos_familia"]
+    _mes_techo_famrep = ahora.strftime("%Y-%m")
 
     enviados = 0
 
@@ -3260,14 +3312,12 @@ def _job_familia_repetida_inner() -> None:
                 LEFT JOIN familias f ON p.familia_id = f.id
                 WHERE p.hotel_id = %s
                   AND p.sujeto_techo = 1
-                  AND p.estado NOT IN ('CANCELADO')
-                  AND EXTRACT(YEAR  FROM p.creado_en) = %s
-                  AND EXTRACT(MONTH FROM p.creado_en) = %s
+                  AND p.mes_consumo_techo = %s
                   AND p.familia_id IS NOT NULL
                 GROUP BY p.familia_id, f.nombre
                 HAVING COUNT(*) >= %s
                 ORDER BY f.nombre
-            """, (hotel_id, year, month, max_pedidos_familia)))
+            """, (hotel_id, _mes_techo_famrep, max_pedidos_familia)))
         except Exception as exc:
             log.error("[FAM-REP] Error consultando pedidos hotel %s: %s", hotel_codigo, exc)
             continue
@@ -3565,6 +3615,11 @@ def _job_techo_urgente_admins_inner() -> None:
         hotel_nombre = hotel["nombre"] or ""
 
         # ── 1. Calcular semáforo del mes actual ───────────────────────────
+        # (2026-08-01 — rediseño Techo de Gastos, Fase 3) Filtro cambiado de
+        # EXTRACT(YEAR/MONTH FROM p.creado_en) a mes_consumo_techo — solo
+        # cuentan pedidos que YA han consumido techo de verdad (pasaron por
+        # ENVIADO AL PROVEEDOR), igual que en _check_techo().
+        _mes_techo_job = ahora.strftime("%Y-%m")
         try:
             pedidos = rows_to_list(query("""
                 SELECT p.importe, p.familia_id, f.nombre as familia_nombre
@@ -3572,10 +3627,8 @@ def _job_techo_urgente_admins_inner() -> None:
                 LEFT JOIN familias f ON p.familia_id = f.id
                 WHERE p.hotel_id = %s
                   AND p.sujeto_techo = 1
-                  AND p.estado NOT IN ('CANCELADO')
-                  AND EXTRACT(YEAR  FROM p.creado_en) = %s
-                  AND EXTRACT(MONTH FROM p.creado_en) = %s
-            """, (hotel_id, year, month)))
+                  AND p.mes_consumo_techo = %s
+            """, (hotel_id, _mes_techo_job)))
         except Exception as exc:
             log.error("[TECHO-URG] Error consultando pedidos hotel %s: %s", hotel_codigo, exc)
             continue
@@ -3692,6 +3745,54 @@ def _job_techo_urgente_admins_inner() -> None:
 
     log.info("✅ [TECHO-URG] Fin revisión — %d hoteles urgentes notificados", enviados)
 
+    # ── 5. Alerta específica: pedidos enviados sin autorización previa ──────
+    # (2026-08-01 — rediseño Techo de Gastos, Fase 3, punto 5) Si por
+    # cualquier vía un pedido llegó a ENVIADO AL PROVEEDOR con
+    # no_autorizado_previo=TRUE, ya queda constancia permanente en
+    # historial_estados (ver update_pedido) — esto es SOLO para que un
+    # admin lo vea cuanto antes, sin tener que ir a buscarlo. Deduplicado
+    # por pedido (una sola vez, whatsapp_log con pedido_id=el del pedido).
+    try:
+        _pedidos_no_autorizados = rows_to_list(query("""
+            SELECT p.id, p.pedido_num, p.importe, h.codigo as hotel_codigo, h.nombre as hotel_nombre
+            FROM pedidos p
+            JOIN hoteles h ON p.hotel_id = h.id
+            WHERE p.no_autorizado_previo = TRUE
+              AND NOT EXISTS (
+                  SELECT 1 FROM whatsapp_log w
+                  WHERE w.pedido_id = p.id AND w.tipo = 'telegram_no_autorizado_previo'
+              )
+        """))
+    except Exception as exc:
+        log.error("[TECHO-URG] Error consultando pedidos no_autorizado_previo: %s", exc)
+        _pedidos_no_autorizados = []
+
+    if _pedidos_no_autorizados:
+        admins_integridad = _destinatarios_evento("techo_urgente_admin", "telegram")
+        for p_na in _pedidos_no_autorizados:
+            texto_na = (
+                "⚠️ *Pedido enviado sin autorización previa de Dirección General*\n\n"
+                f"🏨 Hotel: *{p_na['hotel_codigo']}* — {p_na['hotel_nombre']}\n"
+                f"📄 Pedido Nº: {p_na.get('pedido_num') or p_na['id']}\n"
+                f"💰 Importe: {float(p_na.get('importe') or 0):,.2f} €\n\n"
+                "Revísese manualmente — no debería haber llegado a ENVIADO AL PROVEEDOR "
+                "sin pasar por el circuito de autorización.\n"
+                "— Control Pedidos Princess Canarias"
+            )
+            for adm in admins_integridad or []:
+                chat_id = adm.get("telegram_chat_id")
+                if chat_id:
+                    _send_telegram(chat_id, texto_na)
+            db_na = get_db()
+            db_na.cursor().execute(
+                "INSERT INTO whatsapp_log (pedido_id,tipo,destinatario,mensaje,enviado,error) "
+                "VALUES (%s,'telegram_no_autorizado_previo',%s,%s,1,NULL)",
+                (p_na["id"], f"admins|{p_na['hotel_codigo']}", texto_na)
+            )
+            db_na.commit()
+            log.warning("[TECHO-URG] ⚠️ Pedido %s sin autorización previa — alertado a admins",
+                        p_na.get("pedido_num") or p_na["id"])
+
 
 # ── Job de alertas de techo mensual ───────────────────────────────────────────
 
@@ -3777,6 +3878,10 @@ def _job_alertas_techo_mensual_inner() -> None:
         hotel_nombre = hotel["nombre"] or ""
 
         # ── Calcular acumulado del mes ────────────────────────────────────────
+        # (2026-08-01 — rediseño Techo de Gastos, Fase 3) Filtro cambiado de
+        # EXTRACT(YEAR/MONTH FROM p.creado_en) a mes_consumo_techo, igual
+        # que en _check_techo() y en el job urgente.
+        _mes_techo_mensual = hoy.strftime("%Y-%m")
         try:
             pedidos = rows_to_list(query("""
                 SELECT p.importe, p.familia_id, f.nombre as familia_nombre
@@ -3784,10 +3889,8 @@ def _job_alertas_techo_mensual_inner() -> None:
                 LEFT JOIN familias f ON p.familia_id = f.id
                 WHERE p.hotel_id = %s
                   AND p.sujeto_techo = 1
-                  AND p.estado NOT IN ('CANCELADO')
-                  AND EXTRACT(YEAR  FROM p.creado_en) = %s
-                  AND EXTRACT(MONTH FROM p.creado_en) = %s
-            """, (hotel_id, year, month)))
+                  AND p.mes_consumo_techo = %s
+            """, (hotel_id, _mes_techo_mensual)))
         except Exception as exc:
             log.error("[TECHO-MES] Error consultando pedidos hotel %s: %s", hotel_codigo, exc)
             continue
@@ -7359,11 +7462,27 @@ def importar_proveedores_reset():
 
 def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None):
     """
-    Comprueba las reglas del techo de gastos para un pedido nuevo o editado.
-    mes_str: 'YYYY-MM'  (mes natural del pedido, normalmente el actual)
-    excluir_pedido_id: al editar, excluimos el propio pedido del conteo.
+    (2026-08-01 — rediseño Techo de Gastos, Fase 2) Comprueba las reglas del
+    techo de gastos para un pedido que va a pasar a ENVIADO AL PROVEEDOR.
 
-    Devuelve lista de strings con los errores detectados (vacía = OK).
+    IMPORTANTE — cambio de comportamiento respecto a versiones anteriores:
+    esta función YA NO se llama al crear/editar un pedido (eso quedaba
+    bloqueado con un confirm() de JS saltable por cualquiera, sin rastro —
+    ver _forzar_techo, eliminado). Se llama ÚNICAMENTE desde update_pedido(),
+    en el momento exacto en que el pedido va a pasar a ENVIADO AL
+    PROVEEDOR — es el momento real de "consumo" del techo, no la creación.
+    Los motivos que devuelve ya NO bloquean el guardado: son el detonante
+    para abrir un expediente_exceso y desviar el pedido a
+    PENDIENTE Vº Bº DIRECCIÓN GENERAL en vez de enviarlo directamente.
+
+    mes_str: 'YYYY-MM' — el mes en el que el pedido va a CONSUMIR techo
+    (normalmente el mes actual), no el mes en que se creó.
+    excluir_pedido_id: por seguridad, excluye el propio pedido del conteo
+    (no debería tener mes_consumo_techo relleno todavía en circunstancias
+    normales, pero evita autocontarse en un reintento).
+
+    Devuelve lista de strings con los motivos detectados (vacía = dentro
+    de los límites, no requiere autorización de Dirección General).
     """
     cfg     = get_config()
     errores = []
@@ -7377,13 +7496,14 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
     if not familia_id:
         return errores   # sin familia no hay más que comprobar
 
-    year, month = map(int, mes_str.split("-"))
-
     excl_clause = "AND p.id != %s" if excluir_pedido_id else ""
     excl_args   = (excluir_pedido_id,) if excluir_pedido_id else ()
 
-    # Pedidos sujetos al techo en este hotel/mes
-    base_args = (hotel_id, year, month) + excl_args
+    # Pedidos que YA consumen techo este hotel/mes (mes_consumo_techo se
+    # rellena solo al pasar a ENVIADO AL PROVEEDOR — ya no se cuentan
+    # pedidos por su fecha de creación, sino por si de verdad han llegado a
+    # consumir presupuesto).
+    base_args = (hotel_id, mes_str) + excl_args
     sql = (
         "SELECT p.id, p.familia_id, f.nombre as familia_nombre, "
         "COALESCE(p.importe, 0) as importe "
@@ -7391,25 +7511,18 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
         "LEFT JOIN familias f ON p.familia_id = f.id "
         "WHERE p.hotel_id = %s "
         "  AND p.sujeto_techo = 1 "
-        "  AND p.estado NOT IN ('CANCELADO') "
-        "  AND EXTRACT(YEAR  FROM p.creado_en) = %s "
-        "  AND EXTRACT(MONTH FROM p.creado_en) = %s "
+        "  AND p.mes_consumo_techo = %s "
         + ("  " + excl_clause if excl_clause else "")
     )
     pedidos_mes = rows_to_list(query(sql, base_args))
 
-    # Regla 1: máximo N pedidos sujetos al techo por hotel/mes
-    max_pedidos = cfg["techo_max_pedidos"]
-    if len(pedidos_mes) >= max_pedidos:
-        errores.append(
-            f"🚫 Ya hay {len(pedidos_mes)} pedido(s) sujeto(s) al techo este mes para este hotel "
-            f"(máximo {max_pedidos})."
-        )
+    # (Rediseño 2026-08-01) Se elimina la antigua Regla 1 ("máximo N pedidos
+    # sujetos al techo por hotel/mes", agregado sin distinguir familia) —
+    # decisión de negocio del rediseño: solo queda vigente el límite por
+    # hotel + familia (Regla siguiente).
 
-    # Regla 2: máximo N pedidos por hotel/mes Y familia (antes v12.28.0: fijo
-    # a 1, es decir "la familia no puede repetirse"). Ahora es configurable
-    # vía techo_max_pedidos_familia, independiente del máximo total de
-    # pedidos por hotel/mes (techo_max_pedidos, Regla 1 más arriba).
+    # Regla: máximo N pedidos por hotel/mes Y familia (configurable vía
+    # techo_max_pedidos_familia).
     max_pedidos_familia = cfg["techo_max_pedidos_familia"]
     pedidos_familia = [p for p in pedidos_mes if p["familia_id"] == int(familia_id)]
     nuevo_importe   = float(importe) if importe else 0.0
@@ -7423,7 +7536,7 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
             f"para este hotel (máximo {max_pedidos_familia} por hotel/mes/familia)."
         )
 
-    # Regla 3: acumulado mensual no puede superar el techo mensual
+    # Regla: acumulado mensual no puede superar el techo mensual
     techo_mes     = cfg["techo_max_mes"]
     acumulado     = sum(float(p["importe"]) for p in pedidos_mes)
     if acumulado + nuevo_importe > techo_mes:
@@ -7433,9 +7546,9 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
             f"superando el techo mensual de {techo_mes:,.0f} €."
         )
 
-    # Regla 4 (v12.29.0): acumulado mensual de la FAMILIA no puede superar el
-    # techo mensual por hotel/mes/familia (techo_max_mes_familia). 0 = sin
-    # límite específico por familia (solo aplica la Regla 3, sobre el total
+    # Regla: acumulado mensual de la FAMILIA no puede superar el techo
+    # mensual por hotel/mes/familia (techo_max_mes_familia). 0 = sin límite
+    # específico por familia (solo aplica la regla anterior, sobre el total
     # del hotel).
     techo_mes_familia = cfg["techo_max_mes_familia"]
     if techo_mes_familia:
@@ -7450,6 +7563,34 @@ def _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=None)
 
     return errores
 
+
+def _techo_snapshot(hotel_id, mes_str):
+    """
+    (2026-08-01 — rediseño Techo de Gastos, Fase 2) Fotografía del consumo
+    de techo del hotel en el mes indicado, en el momento exacto de la
+    llamada. Se usa para congelar consumido_en_solicitud/
+    disponible_en_solicitud en expediente_exceso al crear la fila — nunca
+    se recalcula después (punto 10 del rediseño: el informe de Dirección
+    General debe reflejar la situación que había EN ESE MOMENTO, aunque
+    otros pedidos consuman techo más tarde).
+
+    Devuelve (consumido, disponible), ambos float, a nivel de hotel/mes
+    (sobre techo_max_mes) — no desglosado por familia; el detalle por
+    familia vive en las columnas propias de cada fila de expediente_exceso
+    (consumo_previo/exceso, calculadas por el caller con los datos que ya
+    tiene de _check_techo).
+    """
+    cfg = get_config()
+    row = query(
+        "SELECT COALESCE(SUM(importe),0) as total FROM pedidos "
+        "WHERE hotel_id=%s AND sujeto_techo=1 AND mes_consumo_techo=%s",
+        (hotel_id, mes_str), one=True
+    )
+    consumido  = float(row["total"] or 0)
+    techo_mes  = float(cfg.get("techo_max_mes", 0) or 0)
+    disponible = techo_mes - consumido
+    return consumido, disponible
+
 @app.route("/api/techo/resumen")
 @login_required
 def techo_resumen():
@@ -7459,6 +7600,21 @@ def techo_resumen():
     SELECT) en lugar del patrón N+1 anterior (1 query por hotel).
     get_config() se lee una sola vez y sus valores se reutilizan para todos
     los hoteles.
+
+    (2026-08-01 — rediseño Techo de Gastos, Fase 4)
+    - Filtro de pedidos cambiado de EXTRACT(YEAR/MONTH FROM p.creado_en) a
+      mes_consumo_techo — ya solo cuenta pedidos que de verdad han
+      consumido techo (pasaron por ENVIADO AL PROVEEDOR).
+    - Nuevos bloques por hotel: "pendientes_dg" (expedientes en
+      expediente_exceso con resultado='pendiente' este mes) y
+      "excesos_autorizados" (resultado='aprobado'), Sección 8 del
+      documento de diseño.
+    - Nuevo indicador "compromiso_potencial" = consumido + pendiente_dg
+      (punto 9) — no modifica el cálculo del techo, solo visibilidad.
+    - Semáforo: se mantienen los mismos umbrales rojo/amarillo/verde de
+      siempre (reutilizados de _job_alertas_techo_mensual, sin cambios),
+      añadiendo el nuevo caso "azul" cuando el hotel tiene al menos un
+      expediente pendiente de resolver este mes (punto 12).
     """
     if session.get("rol") == "hotel":
         return jsonify({"error": "Sin permisos"}), 403
@@ -7466,6 +7622,7 @@ def techo_resumen():
     hoy   = date.today()
     year  = hoy.year
     month = hoy.month
+    mes_str = f"{year}-{month:02d}"
 
     # ── 1. Configuración: una sola lectura ───────────────────────────────────
     cfg              = get_config()
@@ -7482,7 +7639,7 @@ def techo_resumen():
         "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
     ))
     if not hoteles:
-        return jsonify({"mes": f"{year}-{month:02d}", "hoteles": []})
+        return jsonify({"mes": mes_str, "hoteles": []})
 
     hotel_ids = [h["id"] for h in hoteles]
     ph        = ",".join(["%s"] * len(hotel_ids))
@@ -7499,17 +7656,34 @@ def techo_resumen():
         LEFT JOIN proveedores pr ON p.proveedor_id  = pr.id
         WHERE p.hotel_id IN ({ph})
           AND p.sujeto_techo = 1
-          AND p.estado NOT IN ('CANCELADO')
-          AND EXTRACT(YEAR  FROM p.creado_en) = %s
-          AND EXTRACT(MONTH FROM p.creado_en) = %s
+          AND p.mes_consumo_techo = %s
         ORDER BY p.hotel_id, p.creado_en
-    """, hotel_ids + [year, month]))
+    """, hotel_ids + [mes_str]))
 
-    # ── 4. Agrupar pedidos por hotel en memoria ──────────────────────────────
+    # ── 3b. Expedientes del mes (Sección 8): pendientes + aprobados ──────────
+    expedientes_mes = rows_to_list(query(f"""
+        SELECT e.id, e.pedido_id, e.hotel_id, e.familia_id, e.importe_pedido,
+               e.exceso, e.motivo_solicitud, e.resultado, e.creado_en,
+               e.fecha_resolucion, e.observaciones_direccion_general,
+               f.nombre AS familia_nombre, p.pedido_num
+        FROM expediente_exceso e
+        LEFT JOIN familias f ON e.familia_id = f.id
+        LEFT JOIN pedidos  p ON e.pedido_id   = p.id
+        WHERE e.hotel_id IN ({ph})
+          AND e.mes = %s
+          AND e.resultado IN ('pendiente', 'aprobado')
+        ORDER BY e.hotel_id, e.creado_en DESC
+    """, hotel_ids + [mes_str]))
+
+    # ── 4. Agrupar pedidos y expedientes por hotel en memoria ────────────────
     from collections import defaultdict
     pedidos_por_hotel: dict = defaultdict(list)
     for p in pedidos_mes:
         pedidos_por_hotel[p["hotel_id"]].append(p)
+
+    expedientes_por_hotel: dict = defaultdict(list)
+    for e in expedientes_mes:
+        expedientes_por_hotel[e["hotel_id"]].append(e)
 
     # ── 5. Construir resultado ────────────────────────────────────────────────
     resultado = []
@@ -7537,15 +7711,29 @@ def techo_resumen():
             if fn:
                 familias_importe[fn] = familias_importe.get(fn, 0) + float(p["importe"] or 0)
 
+        # (2026-08-01) Expedientes pendientes/aprobados de este hotel/mes
+        _exps_hotel   = expedientes_por_hotel[hotel["id"]]
+        _pendientes   = [e for e in _exps_hotel if e["resultado"] == "pendiente"]
+        _aprobados    = [e for e in _exps_hotel if e["resultado"] == "aprobado"]
+        pendiente_dg_importe     = sum(float(e["importe_pedido"] or 0) for e in _pendientes)
+        exceso_autorizado_importe = sum(float(e["importe_pedido"] or 0) for e in _aprobados)
+        compromiso_potencial      = acumulado + pendiente_dg_importe
+
         # Semaforo:
         #   ROJO     -> acumulado >= techo_max_mes  O  num_pedidos > techo_max_ped_n
         #   AMARILLO -> acumulado >= umbral_amarillo O  num_pedidos >= techo_max_ped_n
+        #   AZUL (2026-08-01, punto 12) -> hay al menos un expediente pendiente
+        #   de resolver este mes — se superpone a rojo/amarillo/verde porque
+        #   es la situación que más necesita atención (alguien está esperando
+        #   una decisión de Dirección General).
         if acumulado >= techo_max_mes or num_pedidos > techo_max_ped_n:
             semaforo = "rojo"
         elif acumulado >= umbral_amarillo or num_pedidos >= techo_max_ped_n:
             semaforo = "amarillo"
         else:
             semaforo = "verde"
+        if _pendientes:
+            semaforo = "azul"
 
         resultado.append({
             "hotel_id":        hotel["id"],
@@ -7563,19 +7751,34 @@ def techo_resumen():
             "max_importe_familia": techo_max_mes_fam,
             "semaforo":        semaforo,
             "pedidos":         pedidos,
+            "pendientes_dg":         _pendientes,
+            "pendientes_dg_importe": pendiente_dg_importe,
+            "excesos_autorizados":         _aprobados,
+            "excesos_autorizados_importe": exceso_autorizado_importe,
+            "compromiso_potencial":  compromiso_potencial,
         })
 
-    return jsonify({"mes": f"{year}-{month:02d}", "hoteles": resultado})
+    return jsonify({"mes": mes_str, "hoteles": resultado})
 
 @app.route("/api/techo/resumen-historico")
 @login_required
 def techo_resumen_historico():
-    """Devuelve el techo de gastos de un mes/año concreto, solo pedidos ENVIADO AL PROVEEDOR.
+    """Devuelve el techo de gastos de un mes/año concreto (histórico).
 
-    Versión optimizada: 2 queries fijas (hoteles + pedidos del mes en un solo
-    SELECT con COALESCE de fecha) en lugar del patrón N+1 anterior.
-    get_config() se lee una sola vez. El filtro de mes/año se aplica en SQL
-    con DATE_TRUNC, evitando traer todos los pedidos a Python para filtrar.
+    (2026-08-01 — rediseño Techo de Gastos, Fase 4) Simplificado: antes
+    calculaba la "fecha de envío" con un COALESCE(historial_estados,
+    fecha_tramitacion, creado_en) + DATE_TRUNC, y encima exigía
+    p.estado = 'ENVIADO AL PROVEEDOR' — lo que EXCLUÍA incorrectamente
+    cualquier pedido que ya hubiera avanzado a ENTREGA PARCIAL/ENTREGADO
+    desde entonces (un pedido de hace 3 meses ya entregado desaparecía del
+    histórico de ese mes). Ahora se usa directamente mes_consumo_techo, que
+    ya captura el mes real de consumo independientemente del estado actual
+    del pedido — más simple y más correcto. Los pedidos CANCELADO quedan
+    excluidos automáticamente porque cancelar limpia mes_consumo_techo
+    (ver update_pedido()), no hace falta filtrarlo aparte.
+
+    También incluye ahora los mismos bloques de expedientes
+    (pendientes_dg / excesos_autorizados) que el resumen del mes actual.
     """
     if session.get("rol") == "hotel":
         return jsonify({"error": "Sin permisos"}), 403
@@ -7587,6 +7790,8 @@ def techo_resumen_historico():
             return jsonify({"error": "Parámetros year/month inválidos"}), 400
     except (TypeError, ValueError):
         return jsonify({"error": "Parámetros year/month inválidos"}), 400
+
+    mes_str = f"{year}-{month:02d}"
 
     # ── 1. Configuración: una sola lectura ───────────────────────────────────
     cfg              = get_config()
@@ -7603,51 +7808,51 @@ def techo_resumen_historico():
         "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
     ))
     if not hoteles:
-        return jsonify({"mes": f"{year}-{month:02d}", "hoteles": [], "historico": True})
+        return jsonify({"mes": mes_str, "hoteles": [], "historico": True})
 
     hotel_ids = [h["id"] for h in hoteles]
     ph        = ",".join(["%s"] * len(hotel_ids))
 
-    # ── 3. Pedidos del mes histórico: una sola query para todos los hoteles ──
-    # La fecha de referencia es cuándo pasó a ENVIADO AL PROVEEDOR (historial),
-    # con fallback a fecha_tramitacion y por último a creado_en.
-    # DATE_TRUNC filtra en BD; no se trae ningún pedido de otros meses a Python.
+    # ── 3. Pedidos del mes histórico: mes_consumo_techo directamente ─────────
     pedidos_mes = rows_to_list(query(f"""
         SELECT p.id, p.hotel_id, p.importe, p.familia_id,
                f.nombre  AS familia_nombre,
                p.pedido_num, p.estado, p.norden,
                pr.nombre AS proveedor_nombre,
-               p.observaciones,
-               COALESCE(
-                   (SELECT hs.creado_en FROM historial_estados hs
-                    WHERE hs.pedido_id = p.id
-                      AND hs.estado_nuevo = 'ENVIADO AL PROVEEDOR'
-                    ORDER BY hs.creado_en DESC LIMIT 1),
-                   p.fecha_tramitacion::timestamptz,
-                   p.creado_en
-               ) AS fecha_envio
+               p.observaciones
         FROM pedidos p
         LEFT JOIN familias    f  ON p.familia_id   = f.id
         LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
         WHERE p.hotel_id IN ({ph})
           AND p.sujeto_techo = 1
-          AND p.estado = 'ENVIADO AL PROVEEDOR'
-          AND DATE_TRUNC('month', COALESCE(
-                  (SELECT hs2.creado_en FROM historial_estados hs2
-                   WHERE hs2.pedido_id = p.id
-                     AND hs2.estado_nuevo = 'ENVIADO AL PROVEEDOR'
-                   ORDER BY hs2.creado_en DESC LIMIT 1),
-                  p.fecha_tramitacion::timestamptz,
-                  p.creado_en
-              )) = DATE_TRUNC('month', MAKE_DATE(%s, %s, 1)::timestamptz)
-        ORDER BY p.hotel_id, fecha_envio
-    """, hotel_ids + [year, month]))
+          AND p.mes_consumo_techo = %s
+        ORDER BY p.hotel_id, p.creado_en
+    """, hotel_ids + [mes_str]))
+
+    # ── 3b. Expedientes de ese mes histórico ─────────────────────────────────
+    expedientes_mes = rows_to_list(query(f"""
+        SELECT e.id, e.pedido_id, e.hotel_id, e.familia_id, e.importe_pedido,
+               e.exceso, e.motivo_solicitud, e.resultado, e.creado_en,
+               e.fecha_resolucion, e.observaciones_direccion_general,
+               f.nombre AS familia_nombre, p.pedido_num
+        FROM expediente_exceso e
+        LEFT JOIN familias f ON e.familia_id = f.id
+        LEFT JOIN pedidos  p ON e.pedido_id   = p.id
+        WHERE e.hotel_id IN ({ph})
+          AND e.mes = %s
+          AND e.resultado IN ('pendiente', 'aprobado')
+        ORDER BY e.hotel_id, e.creado_en DESC
+    """, hotel_ids + [mes_str]))
 
     # ── 4. Agrupar por hotel en memoria ──────────────────────────────────────
     from collections import defaultdict
     pedidos_por_hotel: dict = defaultdict(list)
     for p in pedidos_mes:
         pedidos_por_hotel[p["hotel_id"]].append(p)
+
+    expedientes_por_hotel: dict = defaultdict(list)
+    for e in expedientes_mes:
+        expedientes_por_hotel[e["hotel_id"]].append(e)
 
     # ── 5. Construir resultado ────────────────────────────────────────────────
     resultado = []
@@ -7669,12 +7874,21 @@ def techo_resumen_historico():
             if fn:
                 familias_importe[fn] = familias_importe.get(fn, 0) + float(p["importe"] or 0)
 
+        _exps_hotel   = expedientes_por_hotel[hotel["id"]]
+        _pendientes   = [e for e in _exps_hotel if e["resultado"] == "pendiente"]
+        _aprobados    = [e for e in _exps_hotel if e["resultado"] == "aprobado"]
+        pendiente_dg_importe      = sum(float(e["importe_pedido"] or 0) for e in _pendientes)
+        exceso_autorizado_importe = sum(float(e["importe_pedido"] or 0) for e in _aprobados)
+        compromiso_potencial      = acumulado + pendiente_dg_importe
+
         if acumulado >= techo_max_mes or num_pedidos > techo_max_ped_n:
             semaforo = "rojo"
         elif acumulado >= umbral_amarillo or num_pedidos >= techo_max_ped_n:
             semaforo = "amarillo"
         else:
             semaforo = "verde"
+        if _pendientes:
+            semaforo = "azul"
 
         resultado.append({
             "hotel_id":        hotel["id"],
@@ -7691,10 +7905,186 @@ def techo_resumen_historico():
             "familias_importe": familias_importe,
             "max_importe_familia": techo_max_mes_fam,
             "semaforo":        semaforo,
+            "pendientes_dg":         _pendientes,
+            "pendientes_dg_importe": pendiente_dg_importe,
+            "excesos_autorizados":         _aprobados,
+            "excesos_autorizados_importe": exceso_autorizado_importe,
+            "compromiso_potencial":  compromiso_potencial,
             "pedidos":         pedidos,
         })
 
     return jsonify({"mes": f"{year}-{month:02d}", "hoteles": resultado, "historico": True})
+
+
+@app.route("/api/expedientes")
+@login_required
+def listar_expedientes():
+    """
+    (2026-08-01 — rediseño Techo de Gastos, Fase 4) Histórico completo de
+    expedientes de exceso de techo (Sección 9 del documento de diseño) —
+    nunca se borra, solo se consulta. Filtros opcionales por querystring:
+    hotel_id, familia_id, resultado (pendiente/aprobado/denegado), mes
+    (YYYY-MM). Sin filtros, devuelve todos (ordenados del más reciente al
+    más antiguo) — el frontend (Fase 6) decidirá si pagina.
+    """
+    if session.get("rol") == "hotel":
+        return jsonify({"error": "Sin permisos"}), 403
+
+    where   = ["1=1"]
+    args: list = []
+
+    hotel_id = request.args.get("hotel_id")
+    if hotel_id:
+        where.append("e.hotel_id = %s")
+        args.append(hotel_id)
+
+    familia_id = request.args.get("familia_id")
+    if familia_id:
+        where.append("e.familia_id = %s")
+        args.append(familia_id)
+
+    resultado_f = request.args.get("resultado")
+    if resultado_f in ("pendiente", "aprobado", "denegado"):
+        where.append("e.resultado = %s")
+        args.append(resultado_f)
+
+    mes_f = request.args.get("mes")
+    if mes_f:
+        where.append("e.mes = %s")
+        args.append(mes_f)
+
+    expedientes = rows_to_list(query(f"""
+        SELECT e.*, 
+               h.codigo AS hotel_codigo, h.nombre AS hotel_nombre,
+               f.nombre AS familia_nombre,
+               p.pedido_num, p.norden, p.estado AS pedido_estado,
+               us.nombre AS usuario_solicitante_nombre,
+               ur.nombre AS usuario_resuelve_nombre
+        FROM expediente_exceso e
+        LEFT JOIN hoteles   h  ON e.hotel_id              = h.id
+        LEFT JOIN familias  f  ON e.familia_id            = f.id
+        LEFT JOIN pedidos   p  ON e.pedido_id              = p.id
+        LEFT JOIN usuarios  us ON e.usuario_solicitante_id = us.id
+        LEFT JOIN usuarios  ur ON e.usuario_resuelve_id    = ur.id
+        WHERE {' AND '.join(where)}
+        ORDER BY e.creado_en DESC
+    """, tuple(args)))
+
+    return jsonify({"expedientes": expedientes})
+
+
+@app.route("/api/expedientes/pedido/<int:pedido_id>")
+@login_required
+def historico_expedientes_pedido(pedido_id):
+    """
+    (2026-08-01 — rediseño Techo de Gastos, Fase 4, punto 11) Histórico
+    cronológico de TODOS los intentos de un pedido concreto — cada
+    reintento tras una denegación es una fila independiente en
+    expediente_exceso (nunca se sobrescribe, ver Fase 1/2), así que basta
+    con listarlas todas por pedido_id, ordenadas por creado_en, para
+    reconstruir la cronología completa (solicitud → denegación → nueva
+    solicitud → aprobación, etc.) sin ninguna tabla ni cálculo adicional.
+    """
+    if session.get("rol") == "hotel":
+        return jsonify({"error": "Sin permisos"}), 403
+
+    expedientes = rows_to_list(query("""
+        SELECT e.*,
+               f.nombre AS familia_nombre,
+               us.nombre AS usuario_solicitante_nombre,
+               ur.nombre AS usuario_resuelve_nombre
+        FROM expediente_exceso e
+        LEFT JOIN familias f  ON e.familia_id            = f.id
+        LEFT JOIN usuarios us ON e.usuario_solicitante_id = us.id
+        LEFT JOIN usuarios ur ON e.usuario_resuelve_id    = ur.id
+        WHERE e.pedido_id = %s
+        ORDER BY e.creado_en ASC
+    """, (pedido_id,)))
+
+    return jsonify({"pedido_id": pedido_id, "expedientes": expedientes})
+
+
+@app.route("/api/expedientes/<int:eid>/informe")
+@login_required
+def informe_expediente(eid):
+    """
+    (2026-08-01 — rediseño Techo de Gastos, Fase 5) Datos completos para el
+    informe imprimible de un expediente (Sección 10 del documento de
+    diseño). Todo lo que necesita el frontend en una sola llamada:
+
+    - El propio expediente, CON su fotografía presupuestaria congelada
+      (consumido_en_solicitud / disponible_en_solicitud / importe_pedido /
+      consumo_previo / exceso) — estos valores NUNCA se recalculan aquí
+      (punto 10): el informe siempre refleja la situación que había en el
+      momento exacto de la solicitud, aunque otros pedidos hayan consumido
+      techo después. Si se quisiera la situación EN VIVO, para eso está
+      /api/techo/resumen, no este endpoint.
+    - Datos del pedido asociado (hotel, departamento, proveedor, importe).
+    - Histórico cronológico de TODOS los intentos de este mismo pedido
+      (reintentos tras denegación) — mismo dato que
+      /api/expedientes/pedido/<id>, incluido aquí también para no
+      necesitar una segunda llamada al montar el informe.
+    - Histórico de excesos anteriores del mismo hotel + familia (otros
+      pedidos, ya resueltos) — contexto para quien tenga que decidir:
+      "¿esto ya ha pasado antes en este hotel/familia?".
+    """
+    if session.get("rol") == "hotel":
+        return jsonify({"error": "Sin permisos"}), 403
+
+    expediente = row_to_dict(query("""
+        SELECT e.*, h.codigo AS hotel_codigo, h.nombre AS hotel_nombre,
+               f.nombre AS familia_nombre,
+               us.nombre AS usuario_solicitante_nombre,
+               ur.nombre AS usuario_resuelve_nombre
+        FROM expediente_exceso e
+        LEFT JOIN hoteles  h  ON e.hotel_id              = h.id
+        LEFT JOIN familias f  ON e.familia_id            = f.id
+        LEFT JOIN usuarios us ON e.usuario_solicitante_id = us.id
+        LEFT JOIN usuarios ur ON e.usuario_resuelve_id    = ur.id
+        WHERE e.id = %s
+    """, (eid,), one=True))
+    if not expediente:
+        return jsonify({"error": "Expediente no encontrado"}), 404
+
+    pedido = row_to_dict(query(f"{PEDIDO_SELECT} WHERE p.id=%s", (expediente["pedido_id"],), one=True))
+
+    historico_pedido = rows_to_list(query("""
+        SELECT e.*, us.nombre AS usuario_solicitante_nombre, ur.nombre AS usuario_resuelve_nombre
+        FROM expediente_exceso e
+        LEFT JOIN usuarios us ON e.usuario_solicitante_id = us.id
+        LEFT JOIN usuarios ur ON e.usuario_resuelve_id    = ur.id
+        WHERE e.pedido_id = %s
+        ORDER BY e.creado_en ASC
+    """, (expediente["pedido_id"],)))
+
+    # Excesos anteriores del mismo hotel+familia, ya resueltos (contexto) —
+    # familia_id puede ser NULL, así que la comparación se arma aparte.
+    if expediente.get("familia_id"):
+        fam_clause = "e.familia_id = %s"
+        fam_args   = (expediente["familia_id"],)
+    else:
+        fam_clause = "e.familia_id IS NULL"
+        fam_args   = ()
+    historico_hotel_familia = rows_to_list(query(f"""
+        SELECT e.*, p.pedido_num,
+               us.nombre AS usuario_solicitante_nombre, ur.nombre AS usuario_resuelve_nombre
+        FROM expediente_exceso e
+        LEFT JOIN pedidos  p  ON e.pedido_id              = p.id
+        LEFT JOIN usuarios us ON e.usuario_solicitante_id = us.id
+        LEFT JOIN usuarios ur ON e.usuario_resuelve_id    = ur.id
+        WHERE e.hotel_id = %s AND {fam_clause}
+          AND e.id != %s
+          AND e.resultado != 'pendiente'
+        ORDER BY e.creado_en DESC
+        LIMIT 20
+    """, (expediente["hotel_id"],) + fam_args + (eid,)))
+
+    return jsonify({
+        "expediente":              expediente,
+        "pedido":                  pedido,
+        "historico_pedido":        historico_pedido,
+        "historico_hotel_familia": historico_hotel_familia,
+    })
 
 
 # ── API Pedidos ────────────────────────────────────────────────────────────────
@@ -8054,13 +8444,10 @@ def create_pedido():
     familia_id   = data.get("familia_id") or None
     importe      = data.get("importe") or None
 
-    # Validación techo de gastos
-    if sujeto_techo and not data.get("_forzar_techo"):
-        from datetime import date
-        mes_str = date.today().strftime("%Y-%m")
-        errores = _check_techo(data.get("hotel_id"), familia_id, importe, mes_str)
-        if errores:
-            return jsonify({"ok": False, "techo_errores": errores}), 422
+    # (2026-08-01 — rediseño Techo de Gastos) Ya NO se comprueba el techo al
+    # crear un pedido — el momento real de "consumo" es al pasar a ENVIADO
+    # AL PROVEEDOR (ver update_pedido()), no al crear/editar. _forzar_techo
+    # queda eliminado, sustituido por el circuito de autorización real.
 
     cur = execute("""
         INSERT INTO pedidos (
@@ -8117,7 +8504,11 @@ def create_pedido():
         hotel_cod = hotel_codigo["codigo"] if hotel_codigo else ""
         _telegram_alerta_techo(pedido_id, hotel_cod, float(importe or 0), nombre_familia or "—")
 
-    return jsonify({"ok": True, "id": pedido_id, "norden": norden, "emails_pendientes": _pendientes_email}), 201
+    return jsonify({
+        "ok": True, "id": pedido_id, "norden": norden, "emails_pendientes": _pendientes_email,
+        "estado_final": estado,
+        "requiere_autorizacion_dg": estado == "PENDIENTE Vº Bº DIRECCIÓN GENERAL",
+    }), 201
 
 @app.route("/api/pedidos/<int:pid>", methods=["PUT"])
 @login_required
@@ -8174,14 +8565,10 @@ def update_pedido(pid):
     familia_id   = data.get("familia_id", pedido_actual.get("familia_id"))
     importe      = data.get("importe", pedido_actual.get("importe"))
 
-    # Validación techo si está sujeto
-    if sujeto_techo and not data.get("_forzar_techo"):
-        from datetime import date
-        mes_str = date.today().strftime("%Y-%m")
-        hotel_id = data.get("hotel_id", pedido_actual["hotel_id"])
-        errores = _check_techo(hotel_id, familia_id, importe, mes_str, excluir_pedido_id=pid)
-        if errores:
-            return jsonify({"ok": False, "techo_errores": errores}), 422
+    # (2026-08-01 — rediseño Techo de Gastos) Ya NO se comprueba el techo en
+    # cualquier edición — el momento real de "consumo" es al pasar a
+    # ENVIADO AL PROVEEDOR, comprobado más abajo dentro de esa misma
+    # validación. _forzar_techo queda eliminado.
 
     # ── Validación obligatoria para ENVIADO AL PROVEEDOR ─────────────────────
     if estado_nuevo == "ENVIADO AL PROVEEDOR" and estado_antes != "ENVIADO AL PROVEEDOR":
@@ -8252,6 +8639,50 @@ def update_pedido(pid):
 
         if errores_envio:
             return jsonify({"ok": False, "error": " | ".join(errores_envio), "errores": errores_envio}), 422
+
+        # ── Circuito de autorización — Techo de Gastos (rediseño Fase 2) ──
+        # El pedido ya está "listo para enviar" (proveedor, docs, nº pedido
+        # OK, comprobado arriba). Si está sujeto a techo y lo supera, se
+        # desvía a PENDIENTE Vº Bº DIRECCIÓN GENERAL en vez de proceder —
+        # salvo que ya exista un expediente aprobado para este pedido este
+        # mismo mes (reintento tras aprobación). Es el único punto por el
+        # que pasa cualquier vía que intente este cambio de estado, así que
+        # también cumple de forma natural el "chequeo de integridad" del
+        # punto 5 del rediseño — no hace falta un endpoint aparte.
+        if sujeto_techo:
+            _mes_techo = _date.today().strftime("%Y-%m")
+            _hotel_id_techo = data.get("hotel_id", pedido_actual["hotel_id"])
+            _expediente_aprobado = query(
+                "SELECT id FROM expediente_exceso WHERE pedido_id=%s AND mes=%s AND resultado='aprobado' "
+                "ORDER BY creado_en DESC LIMIT 1",
+                (pid, _mes_techo), one=True
+            )
+            if not _expediente_aprobado:
+                _motivos_techo = _check_techo(_hotel_id_techo, familia_id, importe, _mes_techo, excluir_pedido_id=pid)
+                if _motivos_techo:
+                    _cfg_techo = get_config()
+                    _consumido_snap, _disponible_snap = _techo_snapshot(_hotel_id_techo, _mes_techo)
+                    _importe_f = float(importe) if importe else 0.0
+                    _techo_mes_cfg = float(_cfg_techo.get("techo_max_mes", 0) or 0)
+                    execute("""
+                        INSERT INTO expediente_exceso (
+                            pedido_id, hotel_id, familia_id, mes, importe_pedido, consumo_previo, exceso,
+                            motivo_solicitud, usuario_solicitante_id, resultado,
+                            consumido_en_solicitud, disponible_en_solicitud
+                        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'pendiente',%s,%s)
+                    """, (
+                        pid, _hotel_id_techo, familia_id, _mes_techo,
+                        _importe_f, _consumido_snap,
+                        max(0.0, (_consumido_snap + _importe_f) - _techo_mes_cfg),
+                        " · ".join(_motivos_techo), uid,
+                        _consumido_snap, _disponible_snap,
+                    ))
+                    estado_nuevo = "PENDIENTE Vº Bº DIRECCIÓN GENERAL"
+                    _nota_sistema_techo = "Requiere autorización de Dirección General: " + " · ".join(_motivos_techo)
+                    _nota_usuario_techo = (data.get("nota_historial") or "").strip()
+                    data["nota_historial"] = (
+                        (_nota_usuario_techo + " — " if _nota_usuario_techo else "") + _nota_sistema_techo
+                    )
     # ── Fin validación ENVIADO AL PROVEEDOR ──────────────────────────────────
 
     ESTADOS_SIN_TRAMITAR = {
@@ -8268,6 +8699,32 @@ def update_pedido(pid):
     ):
         estado_nuevo = "PENDIENTE COTIZACIÓN"
 
+    # ── mes_consumo_techo (rediseño Techo de Gastos, Fase 2) ─────────────────
+    # Se rellena SOLO en el instante en que el pedido pasa de verdad a
+    # ENVIADO AL PROVEEDOR (momento real de consumo del techo) — no antes,
+    # ni siquiera si sujeto_techo está marcado desde el principio. Si se
+    # cancela un pedido que ya lo tenía relleno, se libera (vuelve a NULL,
+    # deja de contar en el cálculo activo del mes), pero queda constancia
+    # completa en historial_estados — nada se borra (punto 7 del rediseño).
+    _mes_consumo_techo_val = pedido_actual.get("mes_consumo_techo")
+    if estado_nuevo == "ENVIADO AL PROVEEDOR" and estado_antes != "ENVIADO AL PROVEEDOR":
+        _mes_consumo_techo_val = _date.today().strftime("%Y-%m")
+    elif estado_nuevo == "CANCELADO" and pedido_actual.get("mes_consumo_techo"):
+        _quien_aprobo = query(
+            "SELECT usuario_nombre FROM historial_estados WHERE pedido_id=%s AND estado_nuevo='ENVIADO AL PROVEEDOR' "
+            "ORDER BY creado_en DESC LIMIT 1", (pid,), one=True
+        )
+        _nota_liberacion = (
+            f"Techo liberado al cancelar — Pedido Nº {pedido_actual.get('pedido_num') or pid}, "
+            f"importe {float(pedido_actual.get('importe') or 0):,.2f} €, "
+            f"visto bueno original de {(_quien_aprobo['usuario_nombre'] if _quien_aprobo else 'desconocido')}, "
+            f"consumía el mes {pedido_actual['mes_consumo_techo']}. "
+            f"Cancelado por {session.get('nombre')}."
+        )
+        _nota_usuario_cancel = (data.get("nota_historial") or "").strip()
+        data["nota_historial"] = (_nota_usuario_cancel + " — " if _nota_usuario_cancel else "") + _nota_liberacion
+        _mes_consumo_techo_val = None
+
     execute("""
         UPDATE pedidos SET
             hotel_id=%s, departamento_id=%s,
@@ -8278,7 +8735,7 @@ def update_pedido(pid):
             comunicado_ab=%s, comunicado_jefe_dep=%s,
             parte_rotura=%s, parte_ampliacion=%s,
             proveedor_id=%s, observaciones=%s,
-            familia_id=%s, importe=%s, sujeto_techo=%s,
+            familia_id=%s, importe=%s, sujeto_techo=%s, mes_consumo_techo=%s,
             plazo_entrega_dias=%s, fecha_entrega_especifica=%s,
             modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
         WHERE id=%s
@@ -8299,7 +8756,7 @@ def update_pedido(pid):
         1 if data.get("parte_ampliacion",    pedido_actual["parte_ampliacion"]) else 0,
         data.get("proveedor_id",  pedido_actual["proveedor_id"]),
         data.get("observaciones", pedido_actual["observaciones"]),
-        familia_id, importe, sujeto_techo,
+        familia_id, importe, sujeto_techo, _mes_consumo_techo_val,
         data.get("plazo_entrega_dias", pedido_actual.get("plazo_entrega_dias")) or None,
         data.get("fecha_entrega_especifica", pedido_actual.get("fecha_entrega_especifica")) or None,
         uid, session.get("nombre"), pid,
@@ -8318,7 +8775,137 @@ def update_pedido(pid):
         _pendientes_email = _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
                                  usuario_nombre=session.get("nombre", ""))
 
+    return jsonify({
+        "ok": True,
+        "emails_pendientes": _pendientes_email,
+        "estado_final": estado_nuevo,
+        "requiere_autorizacion_dg": estado_nuevo == "PENDIENTE Vº Bº DIRECCIÓN GENERAL",
+    })
+
+
+@app.route("/api/expedientes/<int:eid>/aprobar", methods=["POST"])
+@login_required
+def aprobar_expediente(eid):
+    """
+    (2026-08-01 — rediseño Techo de Gastos, Fase 2) Aprueba un expediente de
+    exceso pendiente — el pedido pasa a ENVIADO AL PROVEEDOR (aquí, no
+    antes, se rellena mes_consumo_techo) y sigue el flujo normal de
+    notificación (email al proveedor, avisos internos) vía
+    _notificar_cambio_estado(), igual que cualquier otro cambio de estado.
+
+    Alcance de esta fase: no se repiten aquí TODAS las validaciones de
+    "listo para enviar" (nº pedido, adjuntos...) que ya se comprobaron
+    cuando el pedido entró en el circuito — solo se revalida que el
+    proveedor siga teniendo un contacto con email, por ser crítico para el
+    envío. Si algo más cambió entretanto (p.ej. se borró el adjunto
+    obligatorio), el email de confirmación al proveedor podría salir
+    incompleto; limitación conocida de esta fase, a revisar si hace falta.
+    """
+    data = request.get_json(silent=True) or {}
+    exp = row_to_dict(query("SELECT * FROM expediente_exceso WHERE id=%s", (eid,), one=True))
+    if not exp:
+        return jsonify({"error": "Expediente no encontrado"}), 404
+    if exp["resultado"] != "pendiente":
+        return jsonify({"error": f"Este expediente ya está resuelto ({exp['resultado']})"}), 409
+
+    pedido = row_to_dict(query("SELECT * FROM pedidos WHERE id=%s", (exp["pedido_id"],), one=True))
+    if not pedido:
+        return jsonify({"error": "El pedido de este expediente ya no existe"}), 404
+    if pedido["estado"] != "PENDIENTE Vº Bº DIRECCIÓN GENERAL":
+        return jsonify({"error": f"El pedido ya no está pendiente de Dirección General (estado actual: {pedido['estado']})"}), 409
+
+    if not pedido.get("proveedor_id"):
+        return jsonify({"error": "El pedido ya no tiene proveedor asignado — revíselo antes de aprobar."}), 422
+    if not _get_proveedor_emails_principales(pedido["proveedor_id"], pedido["hotel_id"]):
+        return jsonify({"error": "El proveedor de este pedido ya no tiene ningún contacto con email — revíselo antes de aprobar."}), 422
+
+    uid  = current_user_id()
+    db   = get_db()
+    nota = (data.get("nota_historial") or data.get("observaciones") or "").strip()
+
+    execute("""
+        UPDATE expediente_exceso SET resultado='aprobado', usuario_resuelve_id=%s,
+               fecha_resolucion=NOW(), observaciones_direccion_general=%s
+        WHERE id=%s
+    """, (uid, nota or None, eid))
+
+    estado_antes = pedido["estado"]
+    mes_consumo  = _date.today().strftime("%Y-%m")
+    execute("""
+        UPDATE pedidos SET estado='ENVIADO AL PROVEEDOR', mes_consumo_techo=%s,
+               modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
+        WHERE id=%s
+    """, (mes_consumo, uid, session.get("nombre"), exp["pedido_id"]))
+
+    _nota_hist = "Autorizado por Dirección General" + (f": {nota}" if nota else "")
+    execute(
+        "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
+        (exp["pedido_id"], estado_antes, "ENVIADO AL PROVEEDOR", uid, session.get("nombre"), _nota_hist)
+    )
+    db.commit()
+
+    _pendientes_email = _notificar_cambio_estado(
+        db, exp["pedido_id"], "ENVIADO AL PROVEEDOR", estado_antes,
+        usuario_nombre=session.get("nombre", "")
+    )
     return jsonify({"ok": True, "emails_pendientes": _pendientes_email})
+
+
+@app.route("/api/expedientes/<int:eid>/denegar", methods=["POST"])
+@login_required
+def denegar_expediente(eid):
+    """
+    (2026-08-01 — rediseño Techo de Gastos, Fase 2) Deniega un expediente
+    pendiente — el pedido pasa a DENEGADO POR DIRECCION GENERAL (estado
+    reabrible: se puede reeditar y reintentar más adelante, lo que abrirá
+    un nuevo expediente independiente — cada intento es una fila propia,
+    nunca se sobrescribe). Motivo obligatorio (punto 8 del rediseño); la
+    fecha de resolución no es un campo manual, se toma de
+    fecha_resolucion/creado_en automáticamente.
+    """
+    data = request.get_json(silent=True) or {}
+    nota = (data.get("nota_historial") or data.get("observaciones") or "").strip()
+    if not nota:
+        return jsonify({"error": "El motivo de la denegación es obligatorio"}), 400
+
+    exp = row_to_dict(query("SELECT * FROM expediente_exceso WHERE id=%s", (eid,), one=True))
+    if not exp:
+        return jsonify({"error": "Expediente no encontrado"}), 404
+    if exp["resultado"] != "pendiente":
+        return jsonify({"error": f"Este expediente ya está resuelto ({exp['resultado']})"}), 409
+
+    pedido = row_to_dict(query("SELECT * FROM pedidos WHERE id=%s", (exp["pedido_id"],), one=True))
+    if not pedido:
+        return jsonify({"error": "El pedido de este expediente ya no existe"}), 404
+
+    uid = current_user_id()
+    db  = get_db()
+
+    execute("""
+        UPDATE expediente_exceso SET resultado='denegado', usuario_resuelve_id=%s,
+               fecha_resolucion=NOW(), observaciones_direccion_general=%s
+        WHERE id=%s
+    """, (uid, nota, eid))
+
+    estado_antes = pedido["estado"]
+    execute("""
+        UPDATE pedidos SET estado='DENEGADO POR DIRECCION GENERAL',
+               modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
+        WHERE id=%s
+    """, (uid, session.get("nombre"), exp["pedido_id"]))
+    execute(
+        "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
+        (exp["pedido_id"], estado_antes, "DENEGADO POR DIRECCION GENERAL", uid, session.get("nombre"),
+         f"Denegado por Dirección General: {nota}")
+    )
+    db.commit()
+
+    _pendientes_email = _notificar_cambio_estado(
+        db, exp["pedido_id"], "DENEGADO POR DIRECCION GENERAL", estado_antes,
+        usuario_nombre=session.get("nombre", "")
+    )
+    return jsonify({"ok": True, "emails_pendientes": _pendientes_email})
+
 
 @app.route("/api/pedidos/<int:pid>", methods=["DELETE"])
 @admin_required
