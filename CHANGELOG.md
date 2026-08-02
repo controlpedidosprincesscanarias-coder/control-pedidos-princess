@@ -1,3 +1,76 @@
+# v12.29.39 — 2 agosto 2026
+
+🗓️ Auditoría de fin de semana en jobs automáticos — techo mensual se había quedado fuera
+
+**Petición:** revisar todos los puntos donde se envía Telegram/popup para
+que cumplan el mismo criterio de fin de semana aplicado en v12.29.38 (no
+avisar en sábado/domingo, retomar el lunes).
+
+**Encontrado:** `_job_alertas_techo_mensual_inner()` — el tercer job
+automático del rediseño de Techo de Gastos (junto a techo urgente y
+familia repetida, ambos ya con este guardián) — corría los 7 días de la
+semana. Inconsistente con sus dos jobs hermanos.
+
+**Corregido:**
+- Guardián de fin de semana al inicio de `_job_alertas_techo_mensual_inner()`,
+  igual que en `_job_alertas_diarias_inner()` y en
+  `_techo_urgente_es_horario_valido()`.
+- `day_of_week="mon-fri"` añadido al `scheduler.add_job` de
+  `alertas_techo_mensual`.
+
+**Revisados y dejados tal cual, a propósito (event-driven, no jobs
+automáticos):**
+- `_telegram_cambio_estado` — cambio manual de estado de un pedido
+- `_telegram_alerta_techo` — al crear un pedido nuevo sujeto a techo
+- `_notify_solicitud_telegram` / `_enviar_supervision_admins` —
+  solicitudes de acceso y copias de supervisión
+- Los 2 botones manuales "Enviar Telegram" del panel de alertas
+
+Estos son reacción inmediata a una acción real de una persona — deben
+salir el mismo día, sea fin de semana o no.
+
+**Revisados y dejados sin tocar, a petición expresa:** `_job_alerta_consumo_inner`
+(cuota Supabase/egress) y `_job_health_check_inner` (integridad BD) — son
+alertas de infraestructura, no de negocio de pedidos; siguen avisando
+los 7 días de la semana.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado
+a "V 12.29.39".
+
+# v12.29.38 — 2 agosto 2026
+
+🗓️ Correo de reclamación, Telegram y popup de main_agenda ya no salen en fin de semana
+
+**Petición:** el envío automático de la reclamación al proveedor, el aviso
+de firma pendiente, el Telegram a compradores y el popup de main_agenda
+(Organizador Princess) se disparaban también en sábado y domingo — se
+pidió retrasarlos al lunes sin tocar el conteo de días naturales ni el
+ciclo de reenvío.
+
+**Corregido:**
+- `_job_alertas_diarias_inner()` — nuevo guardián al inicio: si
+  `ahora.weekday() >= 5` (sábado/domingo), el job no envía nada y
+  termina. Este es el único punto donde salen los cuatro avisos
+  (reclamación al proveedor, aviso de firma pendiente, Telegram y popup
+  vía `_enviar_telegram_compradores` → `_encolar_bridge_notificacion`),
+  así que un solo guardián cubre los tres canales.
+- Scheduler (`scheduler.add_job` de `alertas_cada_minuto`) — añadido
+  `day_of_week="mon-fri"`, igual que ya tenían los jobs de techo urgente
+  y familia repetida, para no ejecutar el job en balde en fin de semana.
+- **Nada más cambia:** `_dias_desde_fecha()` sigue en días naturales sin
+  tocar (sábado y domingo suman igual al contador), y el ciclo de
+  reenvío (`_dias_ultima_notificacion` / `_ya_notificado_hoy`) sigue
+  basándose en la fecha real del último aviso en `whatsapp_log` — al no
+  guardarse ningún aviso en fin de semana, el recuento continúa con
+  normalidad desde el último aviso real (viernes) hasta el lunes, sin
+  necesidad de ningún caso especial.
+- No requiere cambios en main_agenda: al no encolarse nada en
+  `bridge_notificaciones` durante el fin de semana, el bridge
+  simplemente no tiene nada que recoger ese día.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado
+a "V 12.29.38".
+
 # v12.29.37 — 2 agosto 2026
 
 🔒 Seguridad — las contraseñas se guardaban en texto plano en la base de datos

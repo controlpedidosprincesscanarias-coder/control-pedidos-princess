@@ -3024,6 +3024,24 @@ def _job_alertas_diarias():
         _flush_egress_bytes()
 
 def _job_alertas_diarias_inner():
+    # (2026-08-02) Fin de semana: no se envía nada — ni reclamación al
+    # proveedor, ni Telegram, ni popup de main_agenda (los tres salen de
+    # este mismo job, vía _enviar_telegram_compradores /
+    # _encolar_reclamacion_proveedor_auto / _encolar_aviso_firma_pendiente_auto).
+    # El contador de "días" (fecha_tramitacion → hoy) sigue siendo en días
+    # naturales, sin tocar — solo se retrasa el ENVÍO al lunes. Como el ciclo
+    # de reenvío (_dias_ultima_notificacion / _ya_notificado_hoy) se basa en
+    # la fecha real del último aviso guardado en whatsapp_log, al no haber
+    # ningún envío en sábado/domingo el recuento del ciclo sigue contando con
+    # normalidad desde el último aviso real (viernes) hasta el lunes, sin
+    # necesidad de ningún ajuste especial aquí.
+    import pytz
+    tz_canarias = pytz.timezone("Atlantic/Canary")
+    ahora = datetime.now(tz_canarias)
+    if ahora.weekday() >= 5:  # sábado=5, domingo=6
+        log.debug("[SCHEDULER] Fin de semana — saltando job de alertas diarias (correo/telegram/popup)")
+        return
+
     log.info("▶ [SCHEDULER] Inicio job alertas diarias — %s", _date.today())
     log.info("BUILD-MARKER v12.22.2 reclamacion-fix activo")
     try:
@@ -3932,6 +3950,22 @@ def _job_alertas_techo_mensual() -> None:
 
 def _job_alertas_techo_mensual_inner() -> None:
     """Lógica interna del job — llamada siempre dentro de app.app_context()."""
+    # (2026-08-02) Mismo criterio que _job_alertas_diarias_inner(): este job
+    # es automático (no reacciona a ninguna acción real de un usuario, solo
+    # escanea hoteles cada día a las 08:00), igual que techo urgente y
+    # familia repetida — que ya tenían este guardián y este job se había
+    # quedado fuera por inconsistencia. En fin de semana no se envía nada
+    # (ni Telegram ni popup); el lunes se retoma con normalidad. El
+    # acumulado del mes y el semáforo se siguen calculando en vivo con datos
+    # reales, así que el lunes refleja el estado correcto sin necesidad de
+    # ningún ajuste adicional.
+    import pytz
+    tz_canarias = pytz.timezone("Atlantic/Canary")
+    ahora = datetime.now(tz_canarias)
+    if ahora.weekday() >= 5:  # sábado=5, domingo=6
+        log.debug("[TECHO-MES] Fin de semana — saltando job de techo mensual")
+        return
+
     from datetime import date as _date_local
     hoy   = _date_local.today()
     year  = hoy.year
@@ -11360,6 +11394,8 @@ def _iniciar_scheduler():
     scheduler.add_job(
         _job_alertas_diarias,
         trigger="cron",
+        day_of_week="mon-fri",  # (2026-08-02) fin de semana: se retrasa a lunes,
+                                 # ver guardián en _job_alertas_diarias_inner()
         hour="7-15",          # 07:00 → 15:59 (inclusive)
         minute="*",
         second="0",           # en punto de cada minuto
@@ -11380,10 +11416,13 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=60,
     )
-    # Job de techo mensual: una vez al día a las 08:00 hora Canarias
+    # Job de techo mensual: una vez al día a las 08:00 hora Canarias, lun-vie
+    # (2026-08-02: alineado con techo urgente y familia repetida — no tiene
+    # sentido notificar semáforo mensual en fin de semana, se retoma el lunes)
     scheduler.add_job(
         _job_alertas_techo_mensual,
         trigger="cron",
+        day_of_week="mon-fri",
         hour="8",
         minute="0",
         second="0",
@@ -11475,9 +11514,9 @@ def _iniciar_scheduler():
         misfire_grace_time=120,
     )
     scheduler.start()
-    log.info("✅ Scheduler iniciado — alertas cada 60s en horario 07:00-16:00 (Atlantic/Canary)")
+    log.info("✅ Scheduler iniciado — alertas cada 60s, lun-vie 07:00-16:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — techo URGENTE admins cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
-    log.info("✅ Scheduler — alertas techo mensual diarias a las 08:00 (Atlantic/Canary)")
+    log.info("✅ Scheduler — alertas techo mensual diarias, lun-vie 08:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — familia/partida repetida cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
     log.info("✅ Scheduler — snapshot de tamaño de BD diario a las 08:10 (Atlantic/Canary)")
