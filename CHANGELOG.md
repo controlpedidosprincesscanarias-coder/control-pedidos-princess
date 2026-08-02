@@ -1,45 +1,40 @@
 # v12.29.37 — 2 agosto 2026
 
-✨ Nueva funcionalidad — pausar la reclamación automática al proveedor en fin de semana
+🔒 Seguridad — las contraseñas se guardaban en texto plano en la base de datos
 
-**Solicitado:** que los sábados y domingos no se envíen reclamaciones
-automáticas por email a los proveedores, y que el contador de "días
-transcurridos" que decide cuándo toca reclamar se congele el fin de
-semana y se retome el lunes exactamente donde se quedó el viernes (en
-vez de arrastrar +2 días de golpe).
+**Hallazgo:** revisando `app.py` como referencia para el login de otro
+proyecto (DALI) se detectó que el login (`/api/login`, y el equivalente
+usado por el bridge de Organizador Princess) comparaba la contraseña
+recibida directamente contra la columna `password` de `usuarios` con un
+simple `=` en el SQL, sin ningún tipo de hash. Lo mismo ocurría al
+guardar una contraseña nueva: reset por token, alta automática de
+usuario tras solicitud aprobada, y alta/edición de usuario desde el
+panel de administración. Cualquiera con acceso de lectura a la base de
+datos (fuga, backup, herramienta de administración mal configurada, log
+de queries) veía las contraseñas de todos los usuarios tal cual las
+escribieron.
 
-**Contexto:** la reclamación automática al proveedor
-(`activar_reclamacion_proveedor_auto`, Config Alertas) se dispara desde
-el job de alertas (`_job_alertas_diarias`, cada 60s en horario
-07:00-16:00, todos los días de la semana sin excepción hasta ahora) por
-dos caminos: pedidos con "Plazo de entrega" informado
-(`_alertas_plazo_entrega`, ciclo en días naturales desde la fecha de
-entrega prevista) y pedidos sin plazo (ciclo en días naturales desde la
-última reclamación, vía `_dias_ultima_notificacion`). Ninguno de los
-dos excluía el fin de semana.
+**Corregido:**
+- Las contraseñas ahora se guardan siempre con `generate_password_hash`
+  (werkzeug, ya incluido con Flask — sin dependencia nueva) en los 4
+  puntos donde se escriben: reset por token, alta automática de
+  solicitud, alta de usuario y edición de usuario desde Admin.
+- El login (los dos endpoints: `/api/login` y el del bridge) compara
+  ahora con `check_password_hash` a través de una función común,
+  `_verifica_y_migra_password()`.
+- **Migración transparente, sin forzar reset a nadie:** esa función
+  detecta si la contraseña guardada todavía está en texto plano (cuentas
+  creadas antes de esta versión) y, si la comparación legacy coincide,
+  la rehashea y sobreescribe en la BD en ese mismo login. Cada usuario
+  queda migrado la próxima vez que entra, sin darse cuenta y sin ninguna
+  ventana en la que se quede sin poder acceder.
+- El email de bienvenida con contraseña temporal (alta automática de
+  solicitudes) sigue enviando la contraseña en claro al usuario nuevo,
+  como hasta ahora — solo cambia lo que se guarda en la BD, que pasa a
+  ser el hash.
 
-**Añadido:**
-- Nuevo interruptor en **Admin → Config Alertas → 📅 Plazo de entrega
-  proveedor**: *"Pausar la reclamación automática al proveedor los
-  fines de semana (retoma el lunes)"* — activado por defecto
-  (`pausar_reclamacion_fin_de_semana`).
-- Con el interruptor activado: ninguna reclamación automática al
-  proveedor se envía en sábado o domingo (los avisos internos por
-  Telegram a compradores/admins NO cambian, siguen igual que siempre).
-- El ciclo de reenvío (p.ej. "cada 2 días") pasa a contarse en días
-  **hábiles** (`_dias_habiles_ultima_notificacion` /
-  `_dias_habiles_transcurridos`, nuevos helpers) en vez de naturales —
-  el contador se congela sábado y domingo y se retoma el lunes justo
-  donde se quedó el viernes.
-- Desactivando el interruptor se recupera el comportamiento anterior
-  tal cual (días naturales, sin excluir fin de semana) — sin necesidad
-  de otro despliegue.
-
-`app.py` compila sin errores. Sin cambios de frontend más allá del
-badge de versión — el panel de Config Alertas ya renderiza y guarda
-cualquier clave nueva de forma genérica por grupo/tipo, sin código
-específico que mantener. Badge de versión del sidebar actualizado a
-"V 12.29.37".
+`app.py` compila sin errores. Badge de versión del sidebar actualizado
+a "V 12.29.37".
 
 # v12.29.36 — 2 agosto 2026
 

@@ -16,6 +16,7 @@ from psycopg2.pool import ThreadedConnectionPool
 import requests
 
 from flask import Flask, request, jsonify, send_from_directory, session, g, Response
+from werkzeug.security import generate_password_hash, check_password_hash
 from models import SQL_STATEMENTS, ESTADOS_VALIDOS, ESTADOS_EMAIL_PROVEEDOR, ESTADOS_EMAIL_INTERNO
 
 # ── Configuración ──────────────────────────────────────────────────────────────
@@ -517,21 +518,6 @@ def _auto_migrate():
             """, ('activar_reclamacion_proveedor_auto', '0', 'bool',
                   'Enviar reclamación automática por email al proveedor cuando vence el plazo',
                   'plazo_entrega', 5))
-            # ── v12.29.37 — Pausar reclamación automática al proveedor en
-            # fin de semana (a petición del usuario): sábados y domingos no
-            # se envían, y el contador de días para el ciclo de reenvío se
-            # cuenta en días hábiles (se congela el fin de semana y se
-            # retoma el lunes). Activado por defecto; desactivándolo se
-            # recupera el comportamiento anterior (días naturales, sin
-            # excluir fin de semana). Ver _es_fin_de_semana /
-            # _dias_habiles_ultima_notificacion en el job de alertas.
-            cur.execute("""
-                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
-                VALUES (%s, %s, %s, %s, %s, %s)
-                ON CONFLICT (clave) DO NOTHING
-            """, ('pausar_reclamacion_fin_de_semana', '1', 'bool',
-                  'Pausar la reclamación automática al proveedor los fines de semana (retoma el lunes)',
-                  'plazo_entrega', 6))
             # Columnas para que la cola de emails de sistema pueda llevar CC
             # (compradores del hotel) y quedar vinculada a un pedido concreto
             # — necesario para las reclamaciones automáticas a proveedor.
@@ -2668,7 +2654,6 @@ def get_config() -> dict:
         "plazo_parcial_aviso_dias_antes": 3,
         "plazo_parcial_urgente_ciclo": 2,
         "activar_reclamacion_proveedor_auto": 0,
-        "pausar_reclamacion_fin_de_semana": 1,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_max_pedidos_familia": 1, "techo_max_mes_familia": 0, "techo_pct_amarillo": 60,
         "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
@@ -2772,68 +2757,7 @@ def _dias_desde_fecha(fecha_str):
         log.warning("[_dias_desde_fecha] No se pudo interpretar %r: %s", fecha_str, exc)
         return None
 
-def _es_fin_de_semana(fecha=None) -> bool:
-    """True si `fecha` (por defecto hoy, hora Canarias) cae en sábado o domingo."""
-    if fecha is None:
-        fecha = _hoy_canarias()
-    return fecha.weekday() >= 5  # 5=sábado, 6=domingo
-
-
-def _dias_habiles_transcurridos(fecha_inicio):
-    """
-    (2026-08-02) Igual que _dias_desde_fecha pero contando solo días
-    hábiles (lunes-viernes) — sábados y domingos no suman al contador.
-    Efecto: el contador se "congela" el fin de semana y se retoma el
-    lunes exactamente donde se quedó el viernes, en vez de saltar +2 de
-    golpe. Usado únicamente por la reclamación automática al proveedor
-    (ver activar_reclamacion_proveedor_auto / pausar_reclamacion_fin_de_semana),
-    no afecta a los avisos internos por Telegram.
-    """
-    if not fecha_inicio:
-        return None
-    try:
-        if isinstance(fecha_inicio, datetime):
-            f = fecha_inicio.date()
-        elif isinstance(fecha_inicio, _date):
-            f = fecha_inicio
-        else:
-            f = datetime.strptime(str(fecha_inicio)[:10], "%Y-%m-%d").date()
-    except Exception as exc:
-        log.warning("[_dias_habiles_transcurridos] No se pudo interpretar %r: %s", fecha_inicio, exc)
-        return None
-    hoy = _date.today()
-    if f >= hoy:
-        return 0
-    dias = 0
-    cursor = f
-    while cursor < hoy:
-        cursor += timedelta(days=1)
-        if cursor.weekday() < 5:
-            dias += 1
-    return dias
-
-
-def _dias_habiles_ultima_notificacion(pedido_id: int, tipo: str):
-    """Igual que _dias_ultima_notificacion pero en días hábiles (ver
-    _dias_habiles_transcurridos) — mismo uso exclusivo: ciclo de la
-    reclamación automática al proveedor."""
-    try:
-        row = query(
-            """SELECT DATE(MAX(creado_en)) as ultima FROM whatsapp_log
-               WHERE pedido_id=%s AND tipo=%s AND enviado=1""",
-            (pedido_id, tipo), one=True
-        )
-        if not row or not row["ultima"]:
-            return None
-        ultima = row["ultima"]
-        if hasattr(ultima, "date"):
-            ultima = ultima.date()
-        return _dias_habiles_transcurridos(ultima)
-    except Exception:
-        return None
-
-
-
+def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
     """
     Devuelve True si ya se envió una notificación del tipo indicado para este pedido HOY.
     - tipo='telegram_auto'   → job diario de alertas por fecha
@@ -3049,7 +2973,6 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
             "nivel":  "aviso",
             "motivo": f"Entrega prevista el {fecha_str} (faltan {dias_aviso} días)",
             "fecha_entrega_prevista": fecha_entrega,
-            "ciclo": ciclo,
         }
 
     # Silencio entre -(N-1) y -1 inclusive
@@ -3062,7 +2985,6 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
             "nivel":  "urgente",
             "motivo": f"Hoy es la fecha de entrega prevista ({fecha_str})",
             "fecha_entrega_prevista": fecha_entrega,
-            "ciclo": ciclo,
         }
 
     # Urgente cada M días a partir del día siguiente (delta == M, 2M, 3M …)
@@ -3071,7 +2993,6 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
             "nivel":  "urgente",
             "motivo": f"Entrega prevista {fecha_str} superada hace {delta} día(s)",
             "fecha_entrega_prevista": fecha_entrega,
-            "ciclo": ciclo,
         }
 
     return None
@@ -3144,32 +3065,10 @@ def _job_alertas_diarias_inner():
             # "ya notificado hoy" de Telegram (misma razón que en el camino
             # estándar, un poco más abajo) — con su propia deduplicación
             # diaria, independiente de si el aviso interno ya salió hoy.
-            #
-            # (2026-08-02) A petición del usuario: los sábados y domingos no
-            # se envían reclamaciones automáticas al proveedor. El "nivel"
-            # (aviso/urgente) sigue calculándose en días naturales — sigue
-            # controlando los avisos internos por Telegram, que no cambian —
-            # pero la reclamación en sí exige además que hoy sea día laborable
-            # Y usa su propio contador en días hábiles
-            # (_dias_habiles_ultima_notificacion) para decidir si toca
-            # reclamar de nuevo: el contador queda "congelado" el fin de
-            # semana y se retoma el lunes justo donde se quedó el viernes,
-            # en vez de arrastrar +2 días de golpe. Todo bajo
-            # pausar_reclamacion_fin_de_semana (activado por defecto);
-            # desactivándolo se recupera el comportamiento anterior (en días
-            # naturales, sin excluir fin de semana).
             cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
-            cfg_pausar_finde = bool(int(get_config().get("pausar_reclamacion_fin_de_semana", 1) or 0))
-            _hoy_es_finde = cfg_pausar_finde and _es_fin_de_semana()
-            if (cfg_reclamacion_auto and nivel == "urgente" and not _hoy_es_finde
+            if (cfg_reclamacion_auto and nivel == "urgente"
                     and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
-                debe_reclamar_plazo = True
-                if cfg_pausar_finde and not _nunca_notificado(p["id"], tipo="reclamacion_proveedor_auto"):
-                    ciclo_r = int(info_plazo.get("ciclo") or 2)
-                    dias_habiles_ultima = _dias_habiles_ultima_notificacion(p["id"], "reclamacion_proveedor_auto")
-                    debe_reclamar_plazo = dias_habiles_ultima is None or dias_habiles_ultima >= ciclo_r
-                if debe_reclamar_plazo:
-                  try:
+                try:
                     ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
                     if ok_reclamacion:
                         db = get_db()
@@ -3179,7 +3078,7 @@ def _job_alertas_diarias_inner():
                             True, None,
                         )
                         db.commit()
-                  except Exception as exc:
+                except Exception as exc:
                     log.error("[SCHEDULER] Error encolando reclamación automática pedido %s: %s", p["id"], exc)
 
             if _ya_notificado_hoy(p["id"], "telegram_auto"):
@@ -3244,26 +3143,14 @@ def _job_alertas_diarias_inner():
         # estado en Config Alertas — así se controla desde el mismo panel,
         # sin un ajuste aparte que mantener sincronizado a mano.
         cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
-        # (2026-08-02) A petición del usuario: los sábados y domingos no se
-        # envían reclamaciones automáticas al proveedor, y el ciclo (arriba)
-        # pasa a contarse en días hábiles en vez de naturales — se congela el
-        # fin de semana y se retoma el lunes justo donde se quedó el viernes.
-        # No afecta al aviso interno por Telegram de más abajo, que sigue en
-        # días naturales. Controlable en Config Alertas
-        # (pausar_reclamacion_fin_de_semana, activado por defecto).
-        cfg_pausar_finde = bool(int(get_config().get("pausar_reclamacion_fin_de_semana", 1) or 0))
-        _hoy_es_finde = cfg_pausar_finde and _es_fin_de_semana()
         debe_reclamar = False
-        if cfg_reclamacion_auto and nivel == "urgente" and not _hoy_es_finde:
+        if cfg_reclamacion_auto and nivel == "urgente":
             if _nunca_notificado(p["id"], tipo="reclamacion_proveedor_auto"):
                 debe_reclamar = True
             else:
                 ciclo_reclamacion = cfg.get("ciclo")
-                dias_desde_ultima_reclamacion = (
-                    _dias_habiles_ultima_notificacion(p["id"], tipo="reclamacion_proveedor_auto")
-                    if cfg_pausar_finde else
-                    _dias_ultima_notificacion(p["id"], tipo="reclamacion_proveedor_auto")
-                )
+                dias_desde_ultima_reclamacion = _dias_ultima_notificacion(
+                    p["id"], tipo="reclamacion_proveedor_auto")
                 if ciclo_reclamacion and dias_desde_ultima_reclamacion is not None:
                     debe_reclamar = dias_desde_ultima_reclamacion >= ciclo_reclamacion
             # Red de seguridad final: nunca dos veces el mismo día, aunque
@@ -3271,8 +3158,8 @@ def _job_alertas_diarias_inner():
             if debe_reclamar and _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto"):
                 debe_reclamar = False
             log.info(
-                "RECLAMACION-DEBUG pedido=%s estado=%s dias=%s activo=%s ciclo=%s finde=%s debe_reclamar=%s",
-                p["id"], p.get("estado"), dias, cfg_reclamacion_auto, cfg.get("ciclo"), _hoy_es_finde, debe_reclamar,
+                "RECLAMACION-DEBUG pedido=%s estado=%s dias=%s activo=%s ciclo=%s debe_reclamar=%s",
+                p["id"], p.get("estado"), dias, cfg_reclamacion_auto, cfg.get("ciclo"), debe_reclamar,
             )
         if debe_reclamar:
             try:
@@ -5207,6 +5094,52 @@ def static_files(filename):
 
 DIAS_VERIFICACION_EMAIL = 3  # a partir de cuántos días sin login se exige código por email
 
+
+def _es_hash_password(valor):
+    """
+    Distingue un hash de werkzeug (pbkdf2:... / scrypt:...) de una
+    contraseña todavía en texto plano heredada de antes de la v12.29.37.
+    """
+    return isinstance(valor, str) and valor.startswith(("pbkdf2:", "scrypt:"))
+
+
+def _verifica_y_migra_password(user, password_recibida):
+    """
+    Verifica la contraseña recibida contra la almacenada, con migración
+    transparente al hash (v12.29.37 — corrección de seguridad: las
+    contraseñas se guardaban en texto plano).
+
+    - Si la contraseña guardada YA es un hash → se compara con
+      check_password_hash, como cualquier login normal.
+    - Si la contraseña guardada SIGUE en texto plano (cuenta antigua
+      todavía no migrada) → se compara tal cual como se hacía antes; si
+      coincide, se rehashea y se sobreescribe en la BD en ese mismo
+      instante, así el usuario queda migrado sin darse cuenta y sin
+      necesidad de resetear nada.
+
+    Devuelve True/False. No lanza excepciones por credenciales
+    incorrectas — solo por fallos reales de BD.
+    """
+    guardada = user.get("password") or ""
+
+    if _es_hash_password(guardada):
+        return check_password_hash(guardada, password_recibida)
+
+    # Contraseña heredada en texto plano: comparación legacy
+    if guardada == password_recibida:
+        nuevo_hash = generate_password_hash(password_recibida)
+        try:
+            execute("UPDATE usuarios SET password=%s WHERE id=%s", (nuevo_hash, user["id"]))
+            get_db().commit()
+        except Exception:
+            # Si la migración en caliente falla por lo que sea, no bloqueamos
+            # el login por eso — se reintentará en el próximo login.
+            log.exception("No se pudo migrar a hash la contraseña del usuario id=%s", user["id"])
+        return True
+
+    return False
+
+
 @app.route("/api/login", methods=["POST"])
 def login():
     body     = request.get_json(silent=True) or {}
@@ -5214,10 +5147,10 @@ def login():
     password = body.get("password", "").strip()
 
     user = query(
-        "SELECT * FROM usuarios WHERE username=%s AND password=%s AND activo=1",
-        (username, password), one=True
+        "SELECT * FROM usuarios WHERE username=%s AND activo=1",
+        (username,), one=True
     )
-    if not user:
+    if not user or not _verifica_y_migra_password(user, password):
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
     # ── Verificación por email tras varios días de inactividad ──────────────
@@ -5394,10 +5327,10 @@ def bridge_login():
     password = body.get("password", "").strip()
 
     user = query(
-        "SELECT * FROM usuarios WHERE username=%s AND password=%s AND activo=1",
-        (username, password), one=True
+        "SELECT * FROM usuarios WHERE username=%s AND activo=1",
+        (username,), one=True
     )
-    if not user:
+    if not user or not _verifica_y_migra_password(user, password):
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
     return _completar_login(user)
@@ -5573,7 +5506,7 @@ def cambiar_password_con_token():
         return jsonify({"error": "El enlace no es válido o ha caducado"}), 400
 
     db = get_db()
-    execute("UPDATE usuarios SET password=%s WHERE id=%s", (nueva, row["usuario_id"]))
+    execute("UPDATE usuarios SET password=%s WHERE id=%s", (generate_password_hash(nueva), row["usuario_id"]))
     execute("UPDATE password_reset_tokens SET usado=1 WHERE token=%s", (token,))
     db.commit()
     return jsonify({"ok": True, "msg": "Contraseña actualizada correctamente"})
@@ -6415,9 +6348,12 @@ def admin_aprobar_solicitud(sol_id):
     db = get_db()
 
     # Crear usuario (v11.6.7: se incluye movil de la solicitud y rol 'compras' por defecto)
+    # v12.29.37: se guarda el hash de password_temp, no el texto plano; el
+    # valor sin hashear (password_temp) se sigue usando tal cual para el
+    # email de bienvenida y la respuesta JSON de este endpoint, más abajo.
     cur = execute(
         "INSERT INTO usuarios (username, nombre, email, password, movil, rol, activo) VALUES (%s,%s,%s,%s,%s,'compras',1) RETURNING id",
-        (username, nombre_c, sol["email"], password_temp, sol.get("movil") or None)
+        (username, nombre_c, sol["email"], generate_password_hash(password_temp), sol.get("movil") or None)
     )
     new_uid = cur.fetchone()["id"]
 
@@ -6759,7 +6695,7 @@ def create_usuario():
         rol = "user"
     cur = execute(
         "INSERT INTO usuarios (username, nombre, email, email2, movil, password, rol, activo, telegram_chat_id) VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s) RETURNING id",
-        (username, nombre, email, email2 or None, data.get("movil",""), password, rol,
+        (username, nombre, email, email2 or None, data.get("movil",""), generate_password_hash(password), rol,
          (data.get("telegram_chat_id") or "").strip() or None)
     )
     new_id = cur.fetchone()["id"]
@@ -6818,7 +6754,7 @@ def update_usuario(uid):
                     }), 409
         fields.append("activo=%s"); args.append(1 if data["activo"] else 0)
     if "password" in data and data["password"].strip():
-        fields.append("password=%s"); args.append(data["password"].strip())
+        fields.append("password=%s"); args.append(generate_password_hash(data["password"].strip()))
     if "telegram_chat_id" in data:
         fields.append("telegram_chat_id=%s"); args.append((data["telegram_chat_id"] or "").strip() or None)
     if not fields:
