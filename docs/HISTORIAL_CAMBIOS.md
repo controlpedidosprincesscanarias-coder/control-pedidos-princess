@@ -10,6 +10,33 @@
 
 ## 2026-08-02
 
+### [Control Pedidos] v12.29.37 — Nueva funcionalidad: pausar la reclamación automática al proveedor en fin de semana
+- Solicitado: que los sábados y domingos no se envíen reclamaciones
+  automáticas por email a los proveedores, y que el contador de "días
+  transcurridos" que decide cuándo toca reclamar se congele el fin de
+  semana y se retome el lunes justo donde se quedó el viernes.
+- La reclamación automática al proveedor
+  (`activar_reclamacion_proveedor_auto`) se dispara desde el job de
+  alertas (cada 60s, 07:00-16:00, todos los días hasta ahora) por dos
+  caminos: pedidos con "Plazo de entrega" informado (ciclo en días
+  naturales desde la fecha de entrega prevista) y pedidos sin plazo
+  (ciclo en días naturales desde la última reclamación). Ninguno
+  excluía el fin de semana.
+- Añadido nuevo interruptor en Admin → Config Alertas → "📅 Plazo de
+  entrega proveedor": *"Pausar la reclamación automática al proveedor
+  los fines de semana (retoma el lunes)"* — activado por defecto
+  (`pausar_reclamacion_fin_de_semana`). Con él activado: cero
+  reclamaciones automáticas al proveedor en sábado/domingo (los avisos
+  internos por Telegram no cambian), y el ciclo de reenvío pasa a
+  contarse en días hábiles (nuevos helpers
+  `_dias_habiles_transcurridos` / `_dias_habiles_ultima_notificacion`)
+  en vez de naturales — se congela el fin de semana y se retoma el
+  lunes. Desactivable desde el mismo panel sin otro despliegue.
+- `app.py` compila sin errores. Sin cambios de frontend más allá del
+  badge de versión — Config Alertas renderiza y guarda claves nuevas
+  de forma genérica por grupo/tipo. Badge del sidebar actualizado a
+  "V 12.29.37"; entrada añadida en `CHANGELOG.md`.
+
 ### [Control Pedidos] v12.29.36 — Corrección real: login mostraba "Error de conexión" también con contraseña incorrecta
 - Primero se confirmó, con logs de Render del arranque siguiente al
   despliegue de la v12.29.35, que la migración de `expediente_exceso`

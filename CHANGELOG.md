@@ -1,3 +1,46 @@
+# v12.29.37 — 2 agosto 2026
+
+✨ Nueva funcionalidad — pausar la reclamación automática al proveedor en fin de semana
+
+**Solicitado:** que los sábados y domingos no se envíen reclamaciones
+automáticas por email a los proveedores, y que el contador de "días
+transcurridos" que decide cuándo toca reclamar se congele el fin de
+semana y se retome el lunes exactamente donde se quedó el viernes (en
+vez de arrastrar +2 días de golpe).
+
+**Contexto:** la reclamación automática al proveedor
+(`activar_reclamacion_proveedor_auto`, Config Alertas) se dispara desde
+el job de alertas (`_job_alertas_diarias`, cada 60s en horario
+07:00-16:00, todos los días de la semana sin excepción hasta ahora) por
+dos caminos: pedidos con "Plazo de entrega" informado
+(`_alertas_plazo_entrega`, ciclo en días naturales desde la fecha de
+entrega prevista) y pedidos sin plazo (ciclo en días naturales desde la
+última reclamación, vía `_dias_ultima_notificacion`). Ninguno de los
+dos excluía el fin de semana.
+
+**Añadido:**
+- Nuevo interruptor en **Admin → Config Alertas → 📅 Plazo de entrega
+  proveedor**: *"Pausar la reclamación automática al proveedor los
+  fines de semana (retoma el lunes)"* — activado por defecto
+  (`pausar_reclamacion_fin_de_semana`).
+- Con el interruptor activado: ninguna reclamación automática al
+  proveedor se envía en sábado o domingo (los avisos internos por
+  Telegram a compradores/admins NO cambian, siguen igual que siempre).
+- El ciclo de reenvío (p.ej. "cada 2 días") pasa a contarse en días
+  **hábiles** (`_dias_habiles_ultima_notificacion` /
+  `_dias_habiles_transcurridos`, nuevos helpers) en vez de naturales —
+  el contador se congela sábado y domingo y se retoma el lunes justo
+  donde se quedó el viernes.
+- Desactivando el interruptor se recupera el comportamiento anterior
+  tal cual (días naturales, sin excluir fin de semana) — sin necesidad
+  de otro despliegue.
+
+`app.py` compila sin errores. Sin cambios de frontend más allá del
+badge de versión — el panel de Config Alertas ya renderiza y guarda
+cualquier clave nueva de forma genérica por grupo/tipo, sin código
+específico que mantener. Badge de versión del sidebar actualizado a
+"V 12.29.37".
+
 # v12.29.36 — 2 agosto 2026
 
 🔧 Corrección real — el login mostraba "Error de conexión" también con contraseña incorrecta

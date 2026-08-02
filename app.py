@@ -517,6 +517,21 @@ def _auto_migrate():
             """, ('activar_reclamacion_proveedor_auto', '0', 'bool',
                   'Enviar reclamación automática por email al proveedor cuando vence el plazo',
                   'plazo_entrega', 5))
+            # ── v12.29.37 — Pausar reclamación automática al proveedor en
+            # fin de semana (a petición del usuario): sábados y domingos no
+            # se envían, y el contador de días para el ciclo de reenvío se
+            # cuenta en días hábiles (se congela el fin de semana y se
+            # retoma el lunes). Activado por defecto; desactivándolo se
+            # recupera el comportamiento anterior (días naturales, sin
+            # excluir fin de semana). Ver _es_fin_de_semana /
+            # _dias_habiles_ultima_notificacion en el job de alertas.
+            cur.execute("""
+                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (clave) DO NOTHING
+            """, ('pausar_reclamacion_fin_de_semana', '1', 'bool',
+                  'Pausar la reclamación automática al proveedor los fines de semana (retoma el lunes)',
+                  'plazo_entrega', 6))
             # Columnas para que la cola de emails de sistema pueda llevar CC
             # (compradores del hotel) y quedar vinculada a un pedido concreto
             # — necesario para las reclamaciones automáticas a proveedor.
@@ -2653,6 +2668,7 @@ def get_config() -> dict:
         "plazo_parcial_aviso_dias_antes": 3,
         "plazo_parcial_urgente_ciclo": 2,
         "activar_reclamacion_proveedor_auto": 0,
+        "pausar_reclamacion_fin_de_semana": 1,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_max_pedidos_familia": 1, "techo_max_mes_familia": 0, "techo_pct_amarillo": 60,
         "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
@@ -2756,7 +2772,68 @@ def _dias_desde_fecha(fecha_str):
         log.warning("[_dias_desde_fecha] No se pudo interpretar %r: %s", fecha_str, exc)
         return None
 
-def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
+def _es_fin_de_semana(fecha=None) -> bool:
+    """True si `fecha` (por defecto hoy, hora Canarias) cae en sábado o domingo."""
+    if fecha is None:
+        fecha = _hoy_canarias()
+    return fecha.weekday() >= 5  # 5=sábado, 6=domingo
+
+
+def _dias_habiles_transcurridos(fecha_inicio):
+    """
+    (2026-08-02) Igual que _dias_desde_fecha pero contando solo días
+    hábiles (lunes-viernes) — sábados y domingos no suman al contador.
+    Efecto: el contador se "congela" el fin de semana y se retoma el
+    lunes exactamente donde se quedó el viernes, en vez de saltar +2 de
+    golpe. Usado únicamente por la reclamación automática al proveedor
+    (ver activar_reclamacion_proveedor_auto / pausar_reclamacion_fin_de_semana),
+    no afecta a los avisos internos por Telegram.
+    """
+    if not fecha_inicio:
+        return None
+    try:
+        if isinstance(fecha_inicio, datetime):
+            f = fecha_inicio.date()
+        elif isinstance(fecha_inicio, _date):
+            f = fecha_inicio
+        else:
+            f = datetime.strptime(str(fecha_inicio)[:10], "%Y-%m-%d").date()
+    except Exception as exc:
+        log.warning("[_dias_habiles_transcurridos] No se pudo interpretar %r: %s", fecha_inicio, exc)
+        return None
+    hoy = _date.today()
+    if f >= hoy:
+        return 0
+    dias = 0
+    cursor = f
+    while cursor < hoy:
+        cursor += timedelta(days=1)
+        if cursor.weekday() < 5:
+            dias += 1
+    return dias
+
+
+def _dias_habiles_ultima_notificacion(pedido_id: int, tipo: str):
+    """Igual que _dias_ultima_notificacion pero en días hábiles (ver
+    _dias_habiles_transcurridos) — mismo uso exclusivo: ciclo de la
+    reclamación automática al proveedor."""
+    try:
+        row = query(
+            """SELECT DATE(MAX(creado_en)) as ultima FROM whatsapp_log
+               WHERE pedido_id=%s AND tipo=%s AND enviado=1""",
+            (pedido_id, tipo), one=True
+        )
+        if not row or not row["ultima"]:
+            return None
+        ultima = row["ultima"]
+        if hasattr(ultima, "date"):
+            ultima = ultima.date()
+        return _dias_habiles_transcurridos(ultima)
+    except Exception:
+        return None
+
+
+
     """
     Devuelve True si ya se envió una notificación del tipo indicado para este pedido HOY.
     - tipo='telegram_auto'   → job diario de alertas por fecha
@@ -2972,6 +3049,7 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
             "nivel":  "aviso",
             "motivo": f"Entrega prevista el {fecha_str} (faltan {dias_aviso} días)",
             "fecha_entrega_prevista": fecha_entrega,
+            "ciclo": ciclo,
         }
 
     # Silencio entre -(N-1) y -1 inclusive
@@ -2984,6 +3062,7 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
             "nivel":  "urgente",
             "motivo": f"Hoy es la fecha de entrega prevista ({fecha_str})",
             "fecha_entrega_prevista": fecha_entrega,
+            "ciclo": ciclo,
         }
 
     # Urgente cada M días a partir del día siguiente (delta == M, 2M, 3M …)
@@ -2992,6 +3071,7 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
             "nivel":  "urgente",
             "motivo": f"Entrega prevista {fecha_str} superada hace {delta} día(s)",
             "fecha_entrega_prevista": fecha_entrega,
+            "ciclo": ciclo,
         }
 
     return None
@@ -3064,10 +3144,32 @@ def _job_alertas_diarias_inner():
             # "ya notificado hoy" de Telegram (misma razón que en el camino
             # estándar, un poco más abajo) — con su propia deduplicación
             # diaria, independiente de si el aviso interno ya salió hoy.
+            #
+            # (2026-08-02) A petición del usuario: los sábados y domingos no
+            # se envían reclamaciones automáticas al proveedor. El "nivel"
+            # (aviso/urgente) sigue calculándose en días naturales — sigue
+            # controlando los avisos internos por Telegram, que no cambian —
+            # pero la reclamación en sí exige además que hoy sea día laborable
+            # Y usa su propio contador en días hábiles
+            # (_dias_habiles_ultima_notificacion) para decidir si toca
+            # reclamar de nuevo: el contador queda "congelado" el fin de
+            # semana y se retoma el lunes justo donde se quedó el viernes,
+            # en vez de arrastrar +2 días de golpe. Todo bajo
+            # pausar_reclamacion_fin_de_semana (activado por defecto);
+            # desactivándolo se recupera el comportamiento anterior (en días
+            # naturales, sin excluir fin de semana).
             cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
-            if (cfg_reclamacion_auto and nivel == "urgente"
+            cfg_pausar_finde = bool(int(get_config().get("pausar_reclamacion_fin_de_semana", 1) or 0))
+            _hoy_es_finde = cfg_pausar_finde and _es_fin_de_semana()
+            if (cfg_reclamacion_auto and nivel == "urgente" and not _hoy_es_finde
                     and not _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto")):
-                try:
+                debe_reclamar_plazo = True
+                if cfg_pausar_finde and not _nunca_notificado(p["id"], tipo="reclamacion_proveedor_auto"):
+                    ciclo_r = int(info_plazo.get("ciclo") or 2)
+                    dias_habiles_ultima = _dias_habiles_ultima_notificacion(p["id"], "reclamacion_proveedor_auto")
+                    debe_reclamar_plazo = dias_habiles_ultima is None or dias_habiles_ultima >= ciclo_r
+                if debe_reclamar_plazo:
+                  try:
                     ok_reclamacion = _encolar_reclamacion_proveedor_auto(p, dias, nivel)
                     if ok_reclamacion:
                         db = get_db()
@@ -3077,7 +3179,7 @@ def _job_alertas_diarias_inner():
                             True, None,
                         )
                         db.commit()
-                except Exception as exc:
+                  except Exception as exc:
                     log.error("[SCHEDULER] Error encolando reclamación automática pedido %s: %s", p["id"], exc)
 
             if _ya_notificado_hoy(p["id"], "telegram_auto"):
@@ -3142,14 +3244,26 @@ def _job_alertas_diarias_inner():
         # estado en Config Alertas — así se controla desde el mismo panel,
         # sin un ajuste aparte que mantener sincronizado a mano.
         cfg_reclamacion_auto = bool(int(get_config().get("activar_reclamacion_proveedor_auto", 0) or 0))
+        # (2026-08-02) A petición del usuario: los sábados y domingos no se
+        # envían reclamaciones automáticas al proveedor, y el ciclo (arriba)
+        # pasa a contarse en días hábiles en vez de naturales — se congela el
+        # fin de semana y se retoma el lunes justo donde se quedó el viernes.
+        # No afecta al aviso interno por Telegram de más abajo, que sigue en
+        # días naturales. Controlable en Config Alertas
+        # (pausar_reclamacion_fin_de_semana, activado por defecto).
+        cfg_pausar_finde = bool(int(get_config().get("pausar_reclamacion_fin_de_semana", 1) or 0))
+        _hoy_es_finde = cfg_pausar_finde and _es_fin_de_semana()
         debe_reclamar = False
-        if cfg_reclamacion_auto and nivel == "urgente":
+        if cfg_reclamacion_auto and nivel == "urgente" and not _hoy_es_finde:
             if _nunca_notificado(p["id"], tipo="reclamacion_proveedor_auto"):
                 debe_reclamar = True
             else:
                 ciclo_reclamacion = cfg.get("ciclo")
-                dias_desde_ultima_reclamacion = _dias_ultima_notificacion(
-                    p["id"], tipo="reclamacion_proveedor_auto")
+                dias_desde_ultima_reclamacion = (
+                    _dias_habiles_ultima_notificacion(p["id"], tipo="reclamacion_proveedor_auto")
+                    if cfg_pausar_finde else
+                    _dias_ultima_notificacion(p["id"], tipo="reclamacion_proveedor_auto")
+                )
                 if ciclo_reclamacion and dias_desde_ultima_reclamacion is not None:
                     debe_reclamar = dias_desde_ultima_reclamacion >= ciclo_reclamacion
             # Red de seguridad final: nunca dos veces el mismo día, aunque
@@ -3157,8 +3271,8 @@ def _job_alertas_diarias_inner():
             if debe_reclamar and _ya_notificado_hoy(p["id"], "reclamacion_proveedor_auto"):
                 debe_reclamar = False
             log.info(
-                "RECLAMACION-DEBUG pedido=%s estado=%s dias=%s activo=%s ciclo=%s debe_reclamar=%s",
-                p["id"], p.get("estado"), dias, cfg_reclamacion_auto, cfg.get("ciclo"), debe_reclamar,
+                "RECLAMACION-DEBUG pedido=%s estado=%s dias=%s activo=%s ciclo=%s finde=%s debe_reclamar=%s",
+                p["id"], p.get("estado"), dias, cfg_reclamacion_auto, cfg.get("ciclo"), _hoy_es_finde, debe_reclamar,
             )
         if debe_reclamar:
             try:
