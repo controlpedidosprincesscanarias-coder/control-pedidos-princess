@@ -33,6 +33,26 @@
 - `app.py` compila sin errores. Badge de versión del sidebar
   actualizado a "V 12.29.37"; entrada añadida en `CHANGELOG.md` y
   versión actualizada en `README.md`.
+- **Verificado en producción (2026-08-02, ~16:38h):** primer login tras
+  el despliegue (cuenta admin) devuelve `200` sin incidencias — la
+  migración transparente a hash funcionó al primer intento, sin ningún
+  401 ni reset forzado.
+- **PENDIENTE — auditoría de contraseñas aún no migradas:** dar unos
+  días (una semana natural, para cubrir a quien no entra todos los
+  días) y luego correr en Supabase:
+  ```sql
+  SELECT id, username, nombre, email, rol, activo, ultimo_login
+  FROM usuarios
+  WHERE password NOT LIKE 'pbkdf2:%'
+    AND password NOT LIKE 'scrypt:%'
+  ORDER BY ultimo_login ASC NULLS FIRST;
+  ```
+  Cada usuario se migra solo a hash al hacer login (ver corrección de
+  arriba), así que esta consulta antes de tiempo listaría a casi todo
+  el mundo sin decir nada útil. Pasados unos días, lo que quede en el
+  resultado son las cuentas que de verdad llevan tiempo sin entrar —
+  esas son las candidatas a un reset manual desde Admin → Usuarios
+  para cerrar la migración del todo.
 
 ### [Control Pedidos] v12.29.36 — Corrección real: login mostraba "Error de conexión" también con contraseña incorrecta
 - Primero se confirmó, con logs de Render del arranque siguiente al
