@@ -1,3 +1,40 @@
+# v12.29.42 — 3 agosto 2026
+
+🔧 Corrección: hotel de pruebas ("PR") también visible para el usuario dedicado
+
+**Corrección sobre v12.29.41:** la restricción anterior dejaba el hotel
+`PR` visible solo para el rol admin. El planteamiento correcto es que
+también debe verlo/usarlo el usuario dedicado a estas pruebas
+(username `usuario prueba`), **sea cual sea su rol real** (en la
+captura aparece como rol Compras) — admin sigue viéndolo igual que
+hasta ahora.
+
+**Cambios:**
+- Nueva constante `USERNAME_HOTEL_PRUEBAS = "usuario prueba"` y helper
+  `_puede_ver_hotel_pruebas()` (`app.py`), que sustituye a las
+  comprobaciones puntuales de `rol == "admin"` introducidas en v12.29.41
+  en todos los puntos donde se filtraba el hotel `PR`: `/api/maestros`,
+  `/api/pedidos` (listado, detalle, crear, editar), `/api/stats`,
+  `/api/dashboard/resumen`, `/api/techo/resumen` (actual e histórico),
+  `/api/exportar` (Excel) y `POST /api/importar`.
+- Los jobs automáticos (familias repetidas, techo urgente, techo
+  mensual) vuelven a recorrer TODOS los hoteles activos, incluido `PR`:
+  sus destinatarios se resuelven por hotel vía `_resolver_notificacion()`
+  (configuración de avisos por hotel/evento), así que solo llegan a
+  quien esté configurado como destinatario de ese hotel en concreto —
+  no hay filtrado adicional que hacer ahí, y excluirlo habría impedido
+  probar el pipeline de alertas con este hotel.
+- Si el username del usuario de pruebas cambiara, basta con actualizar
+  `USERNAME_HOTEL_PRUEBAS` en `app.py` (línea única).
+
+**Archivos modificados:**
+- `app.py`
+- `templates/index.html` (badge de versión)
+- `README.md` (versión)
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado
+a "V 12.29.42".
+
 # v12.29.41 — 3 agosto 2026
 
 🔒 Hotel de pruebas ("PR") restringido solo al rol admin

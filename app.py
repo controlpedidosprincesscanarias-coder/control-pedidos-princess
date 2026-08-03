@@ -50,13 +50,16 @@ SUPABASE_STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "adjuntos-ce
 STORAGE_CONFIGURADO = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 ESTADOS_CERRADOS = ("ENTREGADO", "CANCELADO")
 
-# ── Hotel de pruebas (v12.29.41) ────────────────────────────────────────────
-# El hotel "PR" (⚠️ HOTEL PRUEBAS) existe solo para pruebas internas del
-# rol admin — compras y hotel no deben verlo ni interactuar con sus pedidos
-# en ningún listado, dropdown, dashboard o alerta automática. Ver
+# ── Hotel de pruebas (v12.29.41 / v12.29.42) ────────────────────────────────
+# El hotel "PR" (⚠️ HOTEL PRUEBAS) existe solo para pruebas internas. Solo
+# puede verlo/usarlo: (a) el rol admin, y (b) el usuario dedicado a estas
+# pruebas (username 'usuario prueba'), sea cual sea su rol real — el resto de
+# usuarios no deben verlo ni interactuar con sus pedidos en ningún listado,
+# dropdown, dashboard o alerta automática. Ver _puede_ver_hotel_pruebas(),
 # _es_hotel_pruebas_id() y los filtros aplicados en /api/maestros,
 # /api/pedidos, /api/stats, /api/techo/resumen y los jobs de alertas.
 HOTEL_CODIGO_PRUEBAS = "PR"
+USERNAME_HOTEL_PRUEBAS = "usuario prueba"
 
 # Email — gestionado enteramente por EmailJS en el frontend
 # EMAILS_INTERNOS eliminado: los destinatarios internos se leen siempre de la BD (rol admin/compras)
@@ -1346,11 +1349,22 @@ def row_to_dict(row):
 def rows_to_list(rows):
     return [dict(r) for r in rows]
 
+def _puede_ver_hotel_pruebas() -> bool:
+    """
+    (2026-08-03) True si la sesión actual puede ver/usar el hotel de
+    pruebas ('PR'): el rol admin, o el usuario dedicado a estas pruebas
+    (username 'usuario prueba'), sea cual sea su rol real. El resto de usuarios
+    no deben verlo ni interactuar con sus pedidos en ningún sitio.
+    """
+    return (session.get("rol") == "admin"
+            or session.get("username") == USERNAME_HOTEL_PRUEBAS)
+
 def _es_hotel_pruebas_id(hotel_id) -> bool:
     """
     (2026-08-03) True si hotel_id corresponde al hotel de pruebas ('PR').
-    Usado para bloquear a compras/hotel la creación o edición de pedidos
-    sobre este hotel — solo admin puede interactuar con él.
+    Usado junto con _puede_ver_hotel_pruebas() para bloquear a compras/
+    hotel (salvo el usuario 'Prueba') la creación o edición de pedidos
+    sobre este hotel.
     """
     if not hotel_id:
         return False
@@ -3420,8 +3434,7 @@ def _job_familia_repetida_inner() -> None:
 
     try:
         hoteles = rows_to_list(query(
-            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
-            (HOTEL_CODIGO_PRUEBAS,)
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
         ))
     except Exception as exc:
         log.error("[FAM-REP] Error consultando hoteles: %s", exc)
@@ -3741,8 +3754,7 @@ def _job_techo_urgente_admins_inner() -> None:
 
     try:
         hoteles = rows_to_list(query(
-            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
-            (HOTEL_CODIGO_PRUEBAS,)
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
         ))
     except Exception as exc:
         log.error("[TECHO-URG] Error consultando hoteles: %s", exc)
@@ -4021,8 +4033,7 @@ def _job_alertas_techo_mensual_inner() -> None:
 
     try:
         hoteles = rows_to_list(query(
-            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
-            (HOTEL_CODIGO_PRUEBAS,)
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
         ))
     except Exception as exc:
         log.error("[TECHO-MES] Error consultando hoteles: %s", exc)
@@ -6681,22 +6692,29 @@ def me():
 @login_required
 def get_maestros():
     _rol = session.get("rol")
+    _ver_pruebas = _puede_ver_hotel_pruebas()
     if _rol == "hotel":
         hoteles_ids = session.get("hoteles_ids", [])
-        if hoteles_ids:
+        if not hoteles_ids:
+            hoteles = []
+        elif _ver_pruebas:
+            placeholders = ",".join(["%s"] * len(hoteles_ids))
+            hoteles = rows_to_list(query(
+                f"SELECT * FROM hoteles WHERE activo=1 AND id IN ({placeholders}) ORDER BY codigo",
+                tuple(hoteles_ids)
+            ))
+        else:
             placeholders = ",".join(["%s"] * len(hoteles_ids))
             hoteles = rows_to_list(query(
                 f"SELECT * FROM hoteles WHERE activo=1 AND id IN ({placeholders}) "
                 f"AND codigo <> %s ORDER BY codigo",
                 tuple(hoteles_ids) + (HOTEL_CODIGO_PRUEBAS,)
             ))
-        else:
-            hoteles = []
-    elif _rol == "admin":
+    elif _ver_pruebas:
         hoteles = rows_to_list(query("SELECT * FROM hoteles WHERE activo=1 ORDER BY codigo"))
     else:
-        # compras (u otro rol no-admin): mismo listado que admin salvo el
-        # hotel de pruebas, que es exclusivo de admin.
+        # compras (u otro rol no-admin, salvo el usuario 'Prueba'): mismo
+        # listado salvo el hotel de pruebas.
         hoteles = rows_to_list(query(
             "SELECT * FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
             (HOTEL_CODIGO_PRUEBAS,)
@@ -7859,7 +7877,7 @@ def techo_resumen():
     umbral_amarillo  = techo_max_mes * pct_amarillo / 100
 
     # ── 2. Hoteles activos: una query ────────────────────────────────────────
-    if session.get("rol") == "admin":
+    if _puede_ver_hotel_pruebas():
         hoteles = rows_to_list(query(
             "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
         ))
@@ -8034,7 +8052,7 @@ def techo_resumen_historico():
     umbral_amarillo  = techo_max_mes * pct_amarillo / 100
 
     # ── 2. Hoteles activos: una query ────────────────────────────────────────
-    if session.get("rol") == "admin":
+    if _puede_ver_hotel_pruebas():
         hoteles = rows_to_list(query(
             "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
         ))
@@ -8584,9 +8602,9 @@ def get_pedidos():
         wheres.append(f"p.hotel_id IN ({placeholders})")
         args += hoteles_ids
 
-    # Hotel de pruebas ('PR'): invisible para cualquier rol que no sea admin,
-    # en cualquier listado/filtro de pedidos.
-    if session.get("rol") != "admin":
+    # Hotel de pruebas ('PR'): invisible salvo para admin o el usuario
+    # dedicado a estas pruebas.
+    if not _puede_ver_hotel_pruebas():
         wheres.append("(h.codigo IS NULL OR h.codigo <> %s)")
         args.append(HOTEL_CODIGO_PRUEBAS)
 
@@ -8661,7 +8679,7 @@ def get_pedido(pid):
     p = row_to_dict(query(f"{PEDIDO_SELECT} WHERE p.id=%s", (pid,), one=True))
     if not p:
         return jsonify({"error": "No encontrado"}), 404
-    if session.get("rol") != "admin" and p.get("hotel_codigo") == HOTEL_CODIGO_PRUEBAS:
+    if not _puede_ver_hotel_pruebas() and p.get("hotel_codigo") == HOTEL_CODIGO_PRUEBAS:
         return jsonify({"error": "Sin acceso a este pedido"}), 403
     if session.get("rol") == "hotel":
         hoteles_ids = session.get("hoteles_ids", [])
@@ -8679,7 +8697,7 @@ def get_pedido(pid):
 @login_required
 def create_pedido():
     data   = request.get_json(silent=True) or {}
-    if session.get("rol") != "admin" and _es_hotel_pruebas_id(data.get("hotel_id")):
+    if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(data.get("hotel_id")):
         return jsonify({"error": "Hotel no disponible"}), 403
     db     = get_db()
     uid    = current_user_id()
@@ -8767,9 +8785,10 @@ def update_pedido(pid):
     if not pedido_actual:
         return jsonify({"error": "No encontrado"}), 404
 
-    # Hotel de pruebas ('PR'): fuera del alcance de compras/hotel, tanto si
-    # el pedido ya pertenece a ese hotel como si se intenta reasignar a él.
-    if session.get("rol") != "admin" and (
+    # Hotel de pruebas ('PR'): fuera del alcance salvo admin o el usuario
+    # dedicado a estas pruebas, tanto si el pedido ya pertenece a ese hotel
+    # como si se intenta reasignar a él.
+    if not _puede_ver_hotel_pruebas() and (
         _es_hotel_pruebas_id(pedido_actual["hotel_id"])
         or _es_hotel_pruebas_id(data.get("hotel_id"))
     ):
@@ -9272,7 +9291,7 @@ def get_stats():
                         "num_alertas": len(alertas_h)})
     # ── Resto de roles (admin / compras) ─────────────────────────────────────
     # Hotel de pruebas ('PR'): invisible para compras, visible solo a admin.
-    _excluir_pruebas = session.get("rol") != "admin"
+    _excluir_pruebas = not _puede_ver_hotel_pruebas()
     _filtro_pruebas_pedidos = (
         " WHERE p.hotel_id NOT IN (SELECT id FROM hoteles WHERE codigo=%s)"
         if _excluir_pruebas else ""
@@ -9361,10 +9380,10 @@ def get_dashboard_resumen():
     if rol == "hotel" and not hoteles_ids:
         return jsonify(vacio)
 
-    # Hotel de pruebas ('PR'): fuera del dashboard para cualquier rol
-    # distinto de admin.
+    # Hotel de pruebas ('PR'): fuera del dashboard salvo admin o el usuario
+    # dedicado a estas pruebas.
     _pr_id = None
-    if rol != "admin":
+    if not _puede_ver_hotel_pruebas():
         _pr_row = query("SELECT id FROM hoteles WHERE codigo=%s", (HOTEL_CODIGO_PRUEBAS,), one=True)
         _pr_id = _pr_row["id"] if _pr_row else None
 
@@ -10197,11 +10216,12 @@ def importar_excel():
         uid = current_user_id()
 
         # Cachés para no consultar la BD en cada fila
-        if session.get("rol") == "admin":
+        if _puede_ver_hotel_pruebas():
             hoteles_cache = {r["codigo"]: r["id"] for r in rows_to_list(query("SELECT id, codigo FROM hoteles WHERE activo=1"))}
         else:
-            # Hotel de pruebas ('PR') excluido: compras/hotel no pueden crear
-            # pedidos en él ni siquiera vía importación masiva.
+            # Hotel de pruebas ('PR') excluido: solo admin o el usuario
+            # dedicado a estas pruebas pueden crear pedidos en él, ni
+            # siquiera vía importación masiva.
             hoteles_cache = {r["codigo"]: r["id"] for r in rows_to_list(query(
                 "SELECT id, codigo FROM hoteles WHERE activo=1 AND codigo <> %s", (HOTEL_CODIGO_PRUEBAS,)
             ))}
@@ -10325,7 +10345,7 @@ def exportar_excel():
                     f"{PEDIDO_SELECT} WHERE p.hotel_id IN ({placeholders}) ORDER BY p.creado_en DESC",
                     tuple(hoteles_ids)
                 ))
-        elif rol == "admin":
+        elif _puede_ver_hotel_pruebas():
             pedidos = rows_to_list(query(f"{PEDIDO_SELECT} ORDER BY p.creado_en DESC"))
         else:
             # compras: mismo listado que admin salvo el hotel de pruebas

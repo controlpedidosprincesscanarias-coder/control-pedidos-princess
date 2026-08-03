@@ -24,6 +24,27 @@
 
 ## 2026-08-03
 
+### [Control Pedidos] v12.29.42 — Corrección: hotel de pruebas ("PR") también visible para el usuario dedicado
+- Corrección sobre v12.29.41: el hotel `PR` no debía quedar restringido
+  solo a admin, sino visible también para el usuario dedicado a estas
+  pruebas (username `usuario prueba`), sea cual sea su rol real
+  (Compras en este caso) — admin sigue viéndolo igual.
+- Nueva constante `USERNAME_HOTEL_PRUEBAS = "usuario prueba"` y helper
+  `_puede_ver_hotel_pruebas()` en `app.py`, que sustituye las
+  comprobaciones de `rol == "admin"` de v12.29.41 en `/api/maestros`,
+  `/api/pedidos` (listado/detalle/crear/editar), `/api/stats`,
+  `/api/dashboard/resumen`, `/api/techo/resumen[-historico]`,
+  `/api/exportar` y `POST /api/importar`.
+- Los jobs automáticos (familias repetidas, techo urgente, techo
+  mensual) vuelven a incluir `PR` en su recorrido de hoteles: sus
+  destinatarios ya se resuelven por hotel vía `_resolver_notificacion()`,
+  así que solo llega a quien esté configurado para ese hotel — excluirlo
+  del todo habría impedido probar el pipeline de alertas.
+- `app.py` compila sin errores. Badge de versión del sidebar actualizado
+  a "V 12.29.42"; entrada añadida en `CHANGELOG.md`.
+
+## 2026-08-03
+
 ### [Control Pedidos] v12.29.41 — Hotel de pruebas ("PR") restringido solo al rol admin
 - Petición: el hotel de pruebas (código `PR`, creado en v12.29.32) solo
   debe estar disponible para el rol admin; compras y hotel no deben
