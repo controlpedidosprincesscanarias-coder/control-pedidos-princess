@@ -1653,6 +1653,24 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     if not pedido:
         return pendientes
 
+    # Motivo real del cambio de estado (CANCELADO / DENEGADO POR DIRECCION
+    # GENERAL): se guarda en historial_estados.nota en el momento de la
+    # transición (ver update_pedido / denegar_expediente), NO en
+    # pedido.observaciones — ese es un campo aparte de notas generales del
+    # pedido y normalmente está vacío en una cancelación, por eso el correo
+    # se quedaba sin motivo aunque el usuario sí lo hubiera indicado.
+    _motivo_estado = None
+    if estado_nuevo in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL"):
+        _fila_hist = row_to_dict(query(
+            """SELECT nota FROM historial_estados
+               WHERE pedido_id=%s AND estado_nuevo=%s
+               ORDER BY creado_en DESC LIMIT 1""",
+            (pedido_id, estado_nuevo), one=True
+        ))
+        _motivo_estado = ((_fila_hist or {}).get("nota") or "").strip() or None
+        if not _motivo_estado:
+            _motivo_estado = (pedido.get("observaciones") or "").strip() or None
+
     _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"), pedido.get("hotel_id"))
     _usuarios_hotel   = _get_todos_usuarios_hotel(pedido.get("hotel_codigo",""))
     _emails_compradores = [e for u in _usuarios_hotel["compradores"] for e in _emails_usuario(u)]
@@ -1763,10 +1781,11 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _usuario_txt    = (usuario_nombre or '').strip()
 
         _ICONO_ESTADO = {
-            "ENVIADO AL PROVEEDOR": "📤",
-            "ENTREGA PARCIAL":      "📦",
-            "ENTREGADO":            "✅",
-            "CANCELADO":            "❌",
+            "ENVIADO AL PROVEEDOR":            "📤",
+            "ENTREGA PARCIAL":                 "📦",
+            "ENTREGADO":                       "✅",
+            "CANCELADO":                       "❌",
+            "DENEGADO POR DIRECCION GENERAL":  "🚫",
         }
         _icono = _ICONO_ESTADO.get(estado_nuevo, "🔔")
 
@@ -1775,6 +1794,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             "ENTREGA PARCIAL":      "Se ha registrado una <strong>entrega parcial</strong> en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
             "ENTREGADO":            "El pedido ha sido marcado como <strong>ENTREGADO</strong> (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
             "CANCELADO":            "El pedido ha sido <strong>CANCELADO</strong>.",
+            "DENEGADO POR DIRECCION GENERAL": "El pedido ha sido <strong>DENEGADO POR DIRECCIÓN GENERAL</strong>.",
         }
         _intro_html = _INTRO_ESTADO.get(estado_nuevo, "")
         _intro_html_block = f"<p>{_intro_html}</p>" if _intro_html else ""
@@ -1807,8 +1827,10 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         </table>
         {_html_bloque_entregas(_resumen_ent, estado_nuevo)}
         """
-        if estado_nuevo == "CANCELADO" and pedido.get("observaciones"):
-            body_html_i += f'<p style="margin-top:14px"><b>Observaciones / motivo:</b><br>{pedido.get("observaciones")}</p>'
+        if estado_nuevo in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL") and _motivo_estado:
+            _label_motivo = "Motivo de la denegación" if estado_nuevo == "DENEGADO POR DIRECCION GENERAL" else "Motivo de la cancelación"
+            _motivo_html = _motivo_estado.replace("\n", "<br>")
+            body_html_i += f'<p style="margin-top:14px"><b>{_label_motivo}:</b><br>{_motivo_html}</p>'
         body_html_i += '<p style="margin-top:18px;font-size:11.5px;color:#888">Aviso automático del sistema de Control de Pedidos — Princess Hotels &amp; Resorts.</p>'
         body_html_i += '</div></div>'
 
@@ -1817,6 +1839,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             "ENTREGA PARCIAL":      "Se ha registrado una entrega parcial en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
             "ENTREGADO":            "El pedido ha sido marcado como ENTREGADO (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
             "CANCELADO":            "El pedido ha sido CANCELADO.",
+            "DENEGADO POR DIRECCION GENERAL": "El pedido ha sido DENEGADO POR DIRECCIÓN GENERAL.",
         }
         _intro_text = _INTRO_ESTADO_TXT.get(estado_nuevo, "")
 
@@ -1845,8 +1868,9 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _bloque_text_ent = _text_bloque_entregas(_resumen_ent, estado_nuevo)
         if _bloque_text_ent:
             body_text_i += "\n\n📦 " + _bloque_text_ent
-        if estado_nuevo == "CANCELADO" and pedido.get("observaciones"):
-            body_text_i += f"\n\nObservaciones / motivo:\n{pedido.get('observaciones')}"
+        if estado_nuevo in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL") and _motivo_estado:
+            _label_motivo_txt = "Motivo de la denegación" if estado_nuevo == "DENEGADO POR DIRECCION GENERAL" else "Motivo de la cancelación"
+            body_text_i += f"\n\n{_label_motivo_txt}:\n{_motivo_estado}"
         body_text_i += f"\n\n{_SEP}\nAviso automático del sistema de Control de Pedidos — Princess Hotels & Resorts."
 
         for dest in _todos_internos:
@@ -4342,8 +4366,9 @@ def _email_header_html(titulo: str, subtitulo: str, color_fondo: str = "#0f2044"
           <p style="margin:4px 0 0;color:{color_subtitulo};font-size:13px;">{subtitulo}</p>
         </td>
         <td style="padding:12px 24px 12px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
-          <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels &amp; Resorts"
-               style="height:56px;width:auto;display:block;margin-left:auto;">
+          <img src="{app_url}/static/logo-sidebar-email.png" alt="Princess Hotels &amp; Resorts"
+               width="60" height="56"
+               style="height:56px;width:60px;display:block;margin-left:auto;">
         </td>
       </tr>
     </table>
@@ -5646,8 +5671,9 @@ def solicitar_usuario_fase1():
             </p>
           </td>
           <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
-            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
-                 style="height:64px;width:auto;display:block;margin-left:auto;">
+            <img src="{app_url}/static/logo-sidebar-email-64.png" alt="Princess Hotels & Resorts"
+                 width="69" height="64"
+                 style="height:64px;width:69px;display:block;margin-left:auto;">
           </td>
         </tr>
       </table>
@@ -5836,8 +5862,9 @@ def solicitar_usuario_directo():
             </p>
           </td>
           <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
-            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
-                 style="height:64px;width:auto;display:block;margin-left:auto;">
+            <img src="{app_url}/static/logo-sidebar-email-64.png" alt="Princess Hotels & Resorts"
+                 width="69" height="64"
+                 style="height:64px;width:69px;display:block;margin-left:auto;">
           </td>
         </tr>
       </table>
@@ -6037,8 +6064,9 @@ def _construir_email_fase2(sol: dict) -> dict:
             </p>
           </td>
           <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
-            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
-                 style="height:64px;width:auto;display:block;margin-left:auto;">
+            <img src="{app_url}/static/logo-sidebar-email-64.png" alt="Princess Hotels & Resorts"
+                 width="69" height="64"
+                 style="height:64px;width:69px;display:block;margin-left:auto;">
           </td>
         </tr>
       </table>
@@ -6254,8 +6282,9 @@ def solicitar_usuario_fase2():
             </p>
           </td>
           <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
-            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
-                 style="height:64px;width:auto;display:block;margin-left:auto;">
+            <img src="{app_url}/static/logo-sidebar-email-64.png" alt="Princess Hotels & Resorts"
+                 width="69" height="64"
+                 style="height:64px;width:69px;display:block;margin-left:auto;">
           </td>
         </tr>
       </table>
@@ -6448,8 +6477,9 @@ def admin_aprobar_solicitud(sol_id):
             </p>
           </td>
           <td style="padding:14px 28px 14px 16px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
-            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
-                 style="height:64px;width:auto;display:block;margin-left:auto;">
+            <img src="{app_url}/static/logo-sidebar-email-64.png" alt="Princess Hotels & Resorts"
+                 width="69" height="64"
+                 style="height:64px;width:69px;display:block;margin-left:auto;">
           </td>
         </tr>
       </table>
@@ -6524,8 +6554,9 @@ def admin_aprobar_solicitud(sol_id):
             <h2 style="margin:0;color:#6ee7b7;font-size:16px;">✅ Cuenta creada automáticamente</h2>
           </td>
           <td style="padding:10px 24px 10px 14px;vertical-align:middle;text-align:right;width:1%;white-space:nowrap;" valign="middle" align="right">
-            <img src="{app_url}/static/logo-sidebar.png" alt="Princess Hotels & Resorts"
-                 style="height:40px;width:auto;display:block;margin-left:auto;">
+            <img src="{app_url}/static/logo-sidebar-email.png" alt="Princess Hotels & Resorts"
+                 width="43" height="40"
+                 style="height:40px;width:43px;display:block;margin-left:auto;">
           </td>
         </tr>
       </table>

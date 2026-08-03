@@ -6,7 +6,52 @@
 > (backend Flask/SocketIO independiente), **Infra** (Render /
 > Cloudflare / GitHub Actions, no es código de la app).
 
+> **Normas de entrega (obligatorias para cualquier cambio, ya lo
+> implemente Claude, otra IA o cualquier programador humano):**
+> 1. No se entrega el proyecto completo (ni el ZIP entero): solo los
+>    archivos individuales modificados o creados, indicando su ruta
+>    dentro del proyecto.
+> 2. Toda entrega debe registrar una entrada nueva aquí (más reciente
+>    arriba) y en `CHANGELOG.md`, describiendo petición, causa/hallazgo
+>    y corrección aplicada.
+> 3. Actualizar `README.md` si el cambio afecta a algo que el README
+>    documenta (versión actual, funcionalidades, requisitos, etc.).
+> 4. Subir el número de versión en el badge de `templates/index.html`
+>    (formato `V MAJOR.MINOR.PATCH`), coherente con el de `CHANGELOG.md`
+>    y esta entrada.
+
 ---
+
+## 2026-08-03
+
+### [Control Pedidos] v12.29.40 — Logo nítido en emails + motivo real en avisos de CANCELADO/DENEGADO
+- Petición: el logo de la cabecera de los correos se veía distorsionado/
+  borroso, y los correos de cancelación (o denegación por Dirección
+  General) no indicaban el motivo ni la trazabilidad de quién hizo el
+  cambio, solo el campo "Observaciones" del pedido (casi siempre vacío).
+- Logo borroso: causa era el escalado CSS de `logo-sidebar.png`
+  (787×731 px original) a 56/64/40 px — mala calidad de downscale en
+  clientes de correo (especialmente Outlook). Generados
+  `static/logo-sidebar-email.png` (121×112) y
+  `static/logo-sidebar-email-64.png` (138×128), versiones retina 2x
+  pre-escaladas con remuestreo Lanczos. `_email_header_html()` y los 6
+  bloques de cabecera sueltos (correos de solicitud de acceso)
+  actualizados para usarlas, con `width`/`height` explícitos en el
+  `<img>`.
+- Motivo/trazabilidad: el motivo real vive en `historial_estados.nota`
+  en el momento de la transición de estado, no en `pedido.observaciones`
+  — por eso no salía en el correo aunque el usuario lo hubiera escrito.
+  `enviar_emails_estado()` ahora consulta `historial_estados` por
+  `pedido_id` + `estado_nuevo` y añade "Motivo de la cancelación" /
+  "Motivo de la denegación" al correo (HTML y texto plano), con
+  fallback a `observaciones`. La fila "Realizado por" ya existente
+  cubre quién hizo el cambio.
+- `DENEGADO POR DIRECCION GENERAL` añadido a `ESTADOS_EMAIL_INTERNO`
+  (`models.py`) — antes no se enviaba ningún correo interno para ese
+  estado.
+- `app.py` y `models.py` compilan sin errores. Badge de versión del
+  sidebar actualizado a "V 12.29.40"; entrada añadida en
+  `CHANGELOG.md`.
 
 ## 2026-08-02
 

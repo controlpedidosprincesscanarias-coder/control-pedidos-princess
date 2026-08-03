@@ -1,3 +1,49 @@
+# v12.29.40 — 3 agosto 2026
+
+📧 Logo nítido en cabeceras de email + motivo real en avisos de CANCELADO / DENEGADO
+
+**Petición:** el logo de la cabecera se veía distorsionado/borroso en los
+correos de aviso interno. Además, en los correos de cancelación (y
+denegación por Dirección General) no se estaba indicando el motivo ni
+quién realizó el cambio, solo el campo "Observaciones" del pedido (casi
+siempre vacío).
+
+**Corregido — logo borroso:**
+- Causa: los correos usaban `logo-sidebar.png` (787×731 px original) escalado
+  vía CSS a 56/64/40 px — muchos clientes de correo (sobre todo Outlook, motor
+  Word) hacen un downscale de mala calidad de imágenes grandes.
+- Generados `static/logo-sidebar-email.png` (121×112, retina 2x para 56/40 px)
+  y `static/logo-sidebar-email-64.png` (138×128, retina 2x para 64 px) con
+  remuestreo Lanczos.
+- `_email_header_html()` y los 6 bloques de cabecera sueltos (correos de
+  solicitud de acceso) actualizados para usar estos assets con `width`/`height`
+  explícitos en el `<img>`.
+
+**Corregido — motivo y trazabilidad en CANCELADO / DENEGADO:**
+- El motivo real de la cancelación/denegación se guarda en
+  `historial_estados.nota` en el momento de la transición, no en
+  `pedido.observaciones` (campo aparte, normalmente vacío) — por eso el
+  correo se quedaba sin motivo.
+- `enviar_emails_estado()` ahora consulta `historial_estados` por
+  `pedido_id` + `estado_nuevo` y muestra "Motivo de la cancelación" /
+  "Motivo de la denegación" en el correo (HTML y texto plano), con
+  fallback a `observaciones` si no hubiera nota.
+- `DENEGADO POR DIRECCION GENERAL` añadido a `ESTADOS_EMAIL_INTERNO`
+  (`models.py`) — antes no se enviaba ningún correo interno para ese
+  estado.
+- La fila "Realizado por" (ya existente) sigue cubriendo quién hizo el
+  cambio.
+
+**Archivos modificados:**
+- `app.py`
+- `models.py`
+- `templates/index.html` (badge de versión)
+- `static/logo-sidebar-email.png` (nuevo)
+- `static/logo-sidebar-email-64.png` (nuevo)
+
+`app.py` y `models.py` compilan sin errores. Badge de versión del sidebar
+actualizado a "V 12.29.40".
+
 # v12.29.39 — 2 agosto 2026
 
 🗓️ Auditoría de fin de semana en jobs automáticos — techo mensual se había quedado fuera
