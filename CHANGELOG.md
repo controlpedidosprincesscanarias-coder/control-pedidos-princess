@@ -1,3 +1,44 @@
+# v12.29.41 — 3 agosto 2026
+
+🔒 Hotel de pruebas ("PR") restringido solo al rol admin
+
+**Petición:** el hotel de pruebas (código `PR`, creado en v12.29.32 para
+pruebas internas) solo debe estar disponible para el rol admin — el
+resto de usuarios (compras, hotel) no deben poder verlo ni interactuar
+con sus pedidos en ningún sitio de la aplicación.
+
+**Cambios:**
+- `/api/maestros` (dropdown de hoteles usado en toda la app para crear/
+  filtrar pedidos): excluye `PR` para compras; el rol hotel ya estaba
+  limitado a sus hoteles asignados, se añade la exclusión también ahí
+  por seguridad.
+- `/api/pedidos` (listado) y `/api/pedidos/<id>` (detalle): excluyen/
+  bloquean el hotel `PR` para cualquier rol que no sea admin.
+- `POST /api/pedidos` y `PUT /api/pedidos/<id>`: rechazan crear o
+  reasignar un pedido al hotel `PR` si el usuario no es admin.
+- `/api/stats`, `/api/dashboard/resumen`, `/api/techo/resumen` y
+  `/api/techo/resumen-historico`: excluyen el hotel `PR` de conteos,
+  gráficos, alertas y rankings para compras.
+- `/api/exportar` (Excel) y `POST /api/importar` (importación masiva):
+  excluyen el hotel `PR` para compras/hotel.
+- Jobs automáticos de alertas (familias repetidas, techo urgente, techo
+  mensual): excluyen el hotel `PR` del recorrido de hoteles activos,
+  para que no genere notificaciones reales a compradores/hoteles.
+- Paneles exclusivamente admin (gestión de compradores por hotel,
+  configuración de avisos, importación/reset, integridad operativa) se
+  mantienen sin cambios — siguen mostrando `PR`, como corresponde a su
+  uso interno de admin.
+- Nueva constante `HOTEL_CODIGO_PRUEBAS = "PR"` y helper
+  `_es_hotel_pruebas_id()` en `app.py` para centralizar la comprobación.
+
+**Archivos modificados:**
+- `app.py`
+- `templates/index.html` (badge de versión)
+- `README.md` (versión)
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado
+a "V 12.29.41".
+
 # v12.29.40 — 3 agosto 2026
 
 📧 Logo nítido en cabeceras de email + motivo real en avisos de CANCELADO / DENEGADO

@@ -24,6 +24,34 @@
 
 ## 2026-08-03
 
+### [Control Pedidos] v12.29.41 — Hotel de pruebas ("PR") restringido solo al rol admin
+- Petición: el hotel de pruebas (código `PR`, creado en v12.29.32) solo
+  debe estar disponible para el rol admin; compras y hotel no deben
+  verlo ni interactuar con sus pedidos en ningún sitio de la app.
+- `/api/maestros` (dropdown de hoteles usado en toda la app): excluye
+  `PR` para compras; refuerzo también en la rama del rol hotel.
+- `/api/pedidos` (listado) y `/api/pedidos/<id>` (detalle): excluyen/
+  bloquean `PR` para cualquier rol que no sea admin.
+- `POST /api/pedidos` y `PUT /api/pedidos/<id>`: rechazan crear o
+  reasignar un pedido al hotel `PR` si el usuario no es admin.
+- `/api/stats`, `/api/dashboard/resumen`, `/api/techo/resumen` y
+  `/api/techo/resumen-historico`: excluyen `PR` de conteos, gráficos,
+  alertas y rankings para compras.
+- `/api/exportar` (Excel) y `POST /api/importar` (importación masiva):
+  excluyen `PR` para compras/hotel.
+- Jobs automáticos (familias repetidas, techo urgente, techo mensual):
+  excluyen `PR` del recorrido de hoteles activos, para no generar
+  notificaciones reales sobre este hotel de pruebas.
+- Paneles exclusivamente admin (compradores por hotel, configuración de
+  avisos, importación/reset, integridad operativa) sin cambios — siguen
+  mostrando `PR`, como corresponde a su uso interno de admin.
+- Nueva constante `HOTEL_CODIGO_PRUEBAS = "PR"` y helper
+  `_es_hotel_pruebas_id()` en `app.py`.
+- `app.py` compila sin errores. Badge de versión del sidebar actualizado
+  a "V 12.29.41"; entrada añadida en `CHANGELOG.md`.
+
+## 2026-08-03
+
 ### [Control Pedidos] v12.29.40 — Logo nítido en emails + motivo real en avisos de CANCELADO/DENEGADO
 - Petición: el logo de la cabecera de los correos se veía distorsionado/
   borroso, y los correos de cancelación (o denegación por Dirección

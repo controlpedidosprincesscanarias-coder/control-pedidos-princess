@@ -50,6 +50,14 @@ SUPABASE_STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "adjuntos-ce
 STORAGE_CONFIGURADO = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 ESTADOS_CERRADOS = ("ENTREGADO", "CANCELADO")
 
+# ── Hotel de pruebas (v12.29.41) ────────────────────────────────────────────
+# El hotel "PR" (⚠️ HOTEL PRUEBAS) existe solo para pruebas internas del
+# rol admin — compras y hotel no deben verlo ni interactuar con sus pedidos
+# en ningún listado, dropdown, dashboard o alerta automática. Ver
+# _es_hotel_pruebas_id() y los filtros aplicados en /api/maestros,
+# /api/pedidos, /api/stats, /api/techo/resumen y los jobs de alertas.
+HOTEL_CODIGO_PRUEBAS = "PR"
+
 # Email — gestionado enteramente por EmailJS en el frontend
 # EMAILS_INTERNOS eliminado: los destinatarios internos se leen siempre de la BD (rol admin/compras)
 
@@ -1337,6 +1345,18 @@ def row_to_dict(row):
 
 def rows_to_list(rows):
     return [dict(r) for r in rows]
+
+def _es_hotel_pruebas_id(hotel_id) -> bool:
+    """
+    (2026-08-03) True si hotel_id corresponde al hotel de pruebas ('PR').
+    Usado para bloquear a compras/hotel la creación o edición de pedidos
+    sobre este hotel — solo admin puede interactuar con él.
+    """
+    if not hotel_id:
+        return False
+    row = query("SELECT 1 FROM hoteles WHERE id=%s AND codigo=%s",
+                (hotel_id, HOTEL_CODIGO_PRUEBAS), one=True)
+    return bool(row)
 
 # ── Helpers de Supabase Storage (v12.8.0) ────────────────────────────────────
 # Llamadas directas a la API REST de Storage (no usamos supabase-py, para no
@@ -3400,7 +3420,8 @@ def _job_familia_repetida_inner() -> None:
 
     try:
         hoteles = rows_to_list(query(
-            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
+            (HOTEL_CODIGO_PRUEBAS,)
         ))
     except Exception as exc:
         log.error("[FAM-REP] Error consultando hoteles: %s", exc)
@@ -3720,7 +3741,8 @@ def _job_techo_urgente_admins_inner() -> None:
 
     try:
         hoteles = rows_to_list(query(
-            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
+            (HOTEL_CODIGO_PRUEBAS,)
         ))
     except Exception as exc:
         log.error("[TECHO-URG] Error consultando hoteles: %s", exc)
@@ -3999,7 +4021,8 @@ def _job_alertas_techo_mensual_inner() -> None:
 
     try:
         hoteles = rows_to_list(query(
-            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
+            (HOTEL_CODIGO_PRUEBAS,)
         ))
     except Exception as exc:
         log.error("[TECHO-MES] Error consultando hoteles: %s", exc)
@@ -6657,18 +6680,27 @@ def me():
 @app.route("/api/maestros")
 @login_required
 def get_maestros():
-    if session.get("rol") == "hotel":
+    _rol = session.get("rol")
+    if _rol == "hotel":
         hoteles_ids = session.get("hoteles_ids", [])
         if hoteles_ids:
             placeholders = ",".join(["%s"] * len(hoteles_ids))
             hoteles = rows_to_list(query(
-                f"SELECT * FROM hoteles WHERE activo=1 AND id IN ({placeholders}) ORDER BY codigo",
-                tuple(hoteles_ids)
+                f"SELECT * FROM hoteles WHERE activo=1 AND id IN ({placeholders}) "
+                f"AND codigo <> %s ORDER BY codigo",
+                tuple(hoteles_ids) + (HOTEL_CODIGO_PRUEBAS,)
             ))
         else:
             hoteles = []
-    else:
+    elif _rol == "admin":
         hoteles = rows_to_list(query("SELECT * FROM hoteles WHERE activo=1 ORDER BY codigo"))
+    else:
+        # compras (u otro rol no-admin): mismo listado que admin salvo el
+        # hotel de pruebas, que es exclusivo de admin.
+        hoteles = rows_to_list(query(
+            "SELECT * FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
+            (HOTEL_CODIGO_PRUEBAS,)
+        ))
     departamentos = rows_to_list(query("SELECT * FROM departamentos WHERE activo=1 ORDER BY nombre"))
     familias      = rows_to_list(query("SELECT * FROM familias WHERE activo=1 ORDER BY nombre"))
     return jsonify({
@@ -7827,9 +7859,15 @@ def techo_resumen():
     umbral_amarillo  = techo_max_mes * pct_amarillo / 100
 
     # ── 2. Hoteles activos: una query ────────────────────────────────────────
-    hoteles = rows_to_list(query(
-        "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
-    ))
+    if session.get("rol") == "admin":
+        hoteles = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+        ))
+    else:
+        hoteles = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
+            (HOTEL_CODIGO_PRUEBAS,)
+        ))
     if not hoteles:
         return jsonify({"mes": mes_str, "hoteles": []})
 
@@ -7996,9 +8034,15 @@ def techo_resumen_historico():
     umbral_amarillo  = techo_max_mes * pct_amarillo / 100
 
     # ── 2. Hoteles activos: una query ────────────────────────────────────────
-    hoteles = rows_to_list(query(
-        "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
-    ))
+    if session.get("rol") == "admin":
+        hoteles = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+        ))
+    else:
+        hoteles = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
+            (HOTEL_CODIGO_PRUEBAS,)
+        ))
     if not hoteles:
         return jsonify({"mes": mes_str, "hoteles": [], "historico": True})
 
@@ -8540,6 +8584,12 @@ def get_pedidos():
         wheres.append(f"p.hotel_id IN ({placeholders})")
         args += hoteles_ids
 
+    # Hotel de pruebas ('PR'): invisible para cualquier rol que no sea admin,
+    # en cualquier listado/filtro de pedidos.
+    if session.get("rol") != "admin":
+        wheres.append("(h.codigo IS NULL OR h.codigo <> %s)")
+        args.append(HOTEL_CODIGO_PRUEBAS)
+
     q           = request.args.get("q", "").strip()
     hotel       = request.args.get("hotel_id", "")
     estado      = request.args.get("estado", "")
@@ -8611,6 +8661,8 @@ def get_pedido(pid):
     p = row_to_dict(query(f"{PEDIDO_SELECT} WHERE p.id=%s", (pid,), one=True))
     if not p:
         return jsonify({"error": "No encontrado"}), 404
+    if session.get("rol") != "admin" and p.get("hotel_codigo") == HOTEL_CODIGO_PRUEBAS:
+        return jsonify({"error": "Sin acceso a este pedido"}), 403
     if session.get("rol") == "hotel":
         hoteles_ids = session.get("hoteles_ids", [])
         if p.get("hotel_id") not in hoteles_ids:
@@ -8627,6 +8679,8 @@ def get_pedido(pid):
 @login_required
 def create_pedido():
     data   = request.get_json(silent=True) or {}
+    if session.get("rol") != "admin" and _es_hotel_pruebas_id(data.get("hotel_id")):
+        return jsonify({"error": "Hotel no disponible"}), 403
     db     = get_db()
     uid    = current_user_id()
     norden = _next_norden(db)
@@ -8712,6 +8766,14 @@ def update_pedido(pid):
     pedido_actual = row_to_dict(query("SELECT * FROM pedidos WHERE id=%s", (pid,), one=True))
     if not pedido_actual:
         return jsonify({"error": "No encontrado"}), 404
+
+    # Hotel de pruebas ('PR'): fuera del alcance de compras/hotel, tanto si
+    # el pedido ya pertenece a ese hotel como si se intenta reasignar a él.
+    if session.get("rol") != "admin" and (
+        _es_hotel_pruebas_id(pedido_actual["hotel_id"])
+        or _es_hotel_pruebas_id(data.get("hotel_id"))
+    ):
+        return jsonify({"error": "Sin acceso a este pedido"}), 403
 
     # ── Restricción rol hotel: solo puede modificar entrada_albaran_num, sin CANCELADO ──
     if session.get("rol") == "hotel":
@@ -9208,18 +9270,32 @@ def get_stats():
         return jsonify({"total": total, "by_estado": by_estado,
                         "by_hotel": by_hotel, "alertas": alertas_h,
                         "num_alertas": len(alertas_h)})
-    # ── Resto de roles ────────────────────────────────────────────────────────
+    # ── Resto de roles (admin / compras) ─────────────────────────────────────
+    # Hotel de pruebas ('PR'): invisible para compras, visible solo a admin.
+    _excluir_pruebas = session.get("rol") != "admin"
+    _filtro_pruebas_pedidos = (
+        " WHERE p.hotel_id NOT IN (SELECT id FROM hoteles WHERE codigo=%s)"
+        if _excluir_pruebas else ""
+    )
+    _filtro_pruebas_args = (HOTEL_CODIGO_PRUEBAS,) if _excluir_pruebas else ()
+
     # total se deriva de by_estado: evita un COUNT(*) redundante sobre la tabla.
     by_estado = rows_to_list(query(
-        "SELECT estado, COUNT(*) as total FROM pedidos GROUP BY estado ORDER BY total DESC"
+        f"SELECT estado, COUNT(*) as total FROM pedidos p{_filtro_pruebas_pedidos} "
+        f"GROUP BY estado ORDER BY total DESC",
+        _filtro_pruebas_args
     ))
     total = sum(r["total"] for r in by_estado)
+    _filtro_pruebas_hotel = " AND h.codigo <> %s" if _excluir_pruebas else ""
     by_hotel  = rows_to_list(query(
-        """SELECT h.codigo, h.nombre, COUNT(p.id) as total
+        f"""SELECT h.codigo, h.nombre, COUNT(p.id) as total
            FROM hoteles h LEFT JOIN pedidos p ON p.hotel_id=h.id
-           GROUP BY h.id, h.codigo, h.nombre ORDER BY total DESC"""
+           WHERE 1=1{_filtro_pruebas_hotel}
+           GROUP BY h.id, h.codigo, h.nombre ORDER BY total DESC""",
+        _filtro_pruebas_args
     ))
     # ── Alertas: clasificadas por _clasificar_alertas (fuente única) ──────────
+    _filtro_pruebas_alertas = " AND h.codigo <> %s" if _excluir_pruebas else ""
     alertas_raw = rows_to_list(query(f"""
         {PEDIDO_SELECT_STATS}
         WHERE p.estado IN (
@@ -9232,9 +9308,9 @@ def get_stats():
           AND (
             p.fecha_tramitacion IS NOT NULL
             OR (p.estado = 'PENDIENTE COTIZACIÓN' AND p.fecha_solicitud IS NOT NULL)
-          )
+          ){_filtro_pruebas_alertas}
         ORDER BY p.fecha_tramitacion ASC
-    """))
+    """, _filtro_pruebas_args))
     cfg_activar_plazo = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
     alertas = _clasificar_alertas(alertas_raw, cfg_activar_plazo)
 
@@ -9285,12 +9361,23 @@ def get_dashboard_resumen():
     if rol == "hotel" and not hoteles_ids:
         return jsonify(vacio)
 
-    filtro_p = ""
+    # Hotel de pruebas ('PR'): fuera del dashboard para cualquier rol
+    # distinto de admin.
+    _pr_id = None
+    if rol != "admin":
+        _pr_row = query("SELECT id FROM hoteles WHERE codigo=%s", (HOTEL_CODIGO_PRUEBAS,), one=True)
+        _pr_id = _pr_row["id"] if _pr_row else None
+
+    _filtro_partes = []
     params_p = ()
     if hoteles_ids:
         placeholders = ",".join(["%s"] * len(hoteles_ids))
-        filtro_p = f"AND p.hotel_id IN ({placeholders})"
-        params_p = tuple(hoteles_ids)
+        _filtro_partes.append(f"p.hotel_id IN ({placeholders})")
+        params_p += tuple(hoteles_ids)
+    if _pr_id:
+        _filtro_partes.append("p.hotel_id <> %s")
+        params_p += (_pr_id,)
+    filtro_p = ("AND " + " AND ".join(_filtro_partes)) if _filtro_partes else ""
 
     hoy = _date.today()
     primer_dia_mes = hoy.replace(day=1)
@@ -9440,12 +9527,16 @@ def get_dashboard_resumen():
         u["creado_en"] = u["creado_en"].isoformat() if u.get("creado_en") else None
 
     # ── Por hotel: total + entregados + % cumplimiento + alertas ──────────
-    filtro_h = ""
+    _filtro_h_partes = []
     params_h = ()
     if hoteles_ids:
         placeholders = ",".join(["%s"] * len(hoteles_ids))
-        filtro_h = f"WHERE h.id IN ({placeholders})"
-        params_h = tuple(hoteles_ids)
+        _filtro_h_partes.append(f"h.id IN ({placeholders})")
+        params_h += tuple(hoteles_ids)
+    if _pr_id:
+        _filtro_h_partes.append("h.id <> %s")
+        params_h += (_pr_id,)
+    filtro_h = ("WHERE " + " AND ".join(_filtro_h_partes)) if _filtro_h_partes else ""
     by_hotel_raw = rows_to_list(query(f"""
         SELECT h.codigo, h.nombre, COUNT(p.id) AS total,
                COUNT(p.id) FILTER (WHERE p.estado = 'ENTREGADO') AS entregados
@@ -10106,7 +10197,14 @@ def importar_excel():
         uid = current_user_id()
 
         # Cachés para no consultar la BD en cada fila
-        hoteles_cache      = {r["codigo"]: r["id"] for r in rows_to_list(query("SELECT id, codigo FROM hoteles WHERE activo=1"))}
+        if session.get("rol") == "admin":
+            hoteles_cache = {r["codigo"]: r["id"] for r in rows_to_list(query("SELECT id, codigo FROM hoteles WHERE activo=1"))}
+        else:
+            # Hotel de pruebas ('PR') excluido: compras/hotel no pueden crear
+            # pedidos en él ni siquiera vía importación masiva.
+            hoteles_cache = {r["codigo"]: r["id"] for r in rows_to_list(query(
+                "SELECT id, codigo FROM hoteles WHERE activo=1 AND codigo <> %s", (HOTEL_CODIGO_PRUEBAS,)
+            ))}
         deptos_cache       = {r["nombre"].upper(): r["id"] for r in rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1"))}
         proveedores_cache  = {r["nombre"].upper(): r["id"] for r in rows_to_list(query("SELECT id, nombre FROM proveedores WHERE activo=1"))}
 
@@ -10227,8 +10325,14 @@ def exportar_excel():
                     f"{PEDIDO_SELECT} WHERE p.hotel_id IN ({placeholders}) ORDER BY p.creado_en DESC",
                     tuple(hoteles_ids)
                 ))
-        else:
+        elif rol == "admin":
             pedidos = rows_to_list(query(f"{PEDIDO_SELECT} ORDER BY p.creado_en DESC"))
+        else:
+            # compras: mismo listado que admin salvo el hotel de pruebas
+            pedidos = rows_to_list(query(
+                f"{PEDIDO_SELECT} WHERE h.codigo IS NULL OR h.codigo <> %s ORDER BY p.creado_en DESC",
+                (HOTEL_CODIGO_PRUEBAS,)
+            ))
 
         wb = openpyxl.Workbook()
         ws = wb.active
