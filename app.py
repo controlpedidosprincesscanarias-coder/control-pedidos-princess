@@ -2864,6 +2864,8 @@ _JOB_PEDIDO_SQL = """
     SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
            p.plazo_entrega_dias, p.fecha_entrega_especifica, p.hotel_id, p.proveedor_id,
+           p.sujeto_techo, p.familia_id, p.importe,
+           fam.nombre as familia_nombre,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
@@ -2874,6 +2876,7 @@ _JOB_PEDIDO_SQL = """
     LEFT JOIN hoteles h ON p.hotel_id = h.id
     LEFT JOIN departamentos d ON p.departamento_id = d.id
     LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
+    LEFT JOIN familias fam ON p.familia_id = fam.id
 """
 
 def _nunca_notificado(pedido_id: int, tipo: str = "telegram_auto") -> bool:
@@ -4513,11 +4516,39 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
         dest_label = "Dirección del Hotel"
         accion = "firma por parte de la Dirección del Hotel"
     subject = f"[Recordatorio] Pedido Nº {pedido.get('pedido_num','—')} pendiente de {accion}"
+
+    # (2026-08-03) A petición del usuario: si el pedido está marcado "sujeto
+    # al techo de gasto mensual", la persona que gestione la firma debe
+    # saberlo — puede requerir una atención distinta (revisar margen
+    # disponible, adjuntar justificación, etc.). Se avisa aquí con un aviso
+    # destacado, y si Compras ya adjuntó algún listado de apoyo a la
+    # solicitud de firma (tipo 'firma_techo_doc'), se menciona también para
+    # que quien firme sepa que debe consultarlo en la ficha del pedido.
+    aviso_techo_html = ""
+    if pedido.get("sujeto_techo"):
+        try:
+            _n_adj = query(
+                "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='firma_techo_doc'",
+                (pedido.get("id"),), one=True
+            )
+            _n_adjuntos = (_n_adj or {}).get("n", 0) or 0
+        except Exception:
+            _n_adjuntos = 0
+        _importe_txt = f"{float(pedido['importe']):,.2f} €".replace(",", "@").replace(".", ",").replace("@", ".") if pedido.get("importe") is not None else "—"
+        aviso_techo_html = f"""
+        <p style="background:#fff3cd;border:1px solid #ffc107;color:#7a5b00;padding:12px 14px;border-radius:4px;font-size:13px;margin:0 0 16px">
+          📉 <strong>Este pedido está sujeto al Techo de Gastos mensual del hotel</strong> — familia
+          <strong>{pedido.get('familia_nombre') or 'sin especificar'}</strong>, importe <strong>{_importe_txt}</strong>.
+          Tenlo en cuenta al gestionar esta firma.
+          {f'<br>📎 Compras adjuntó {_n_adjuntos} documento(s) de apoyo a esta solicitud — consúltelo en la ficha del pedido antes de firmar.' if _n_adjuntos else ''}
+        </p>"""
+
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
       {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
                             color_fondo="#1a3a6b", color_subtitulo="#a8c0e8")}
       <div style="padding:24px">
+        {aviso_techo_html}
         <p>Se le notifica que el siguiente pedido lleva <strong>{dias} días</strong>
            pendiente de {accion}:</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:14px">
@@ -4889,6 +4920,8 @@ PEDIDO_SELECT_ALERTA = """
     SELECT p.id, p.norden, p.pedido_num, p.presupuesto_num, p.estado,
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
            p.proveedor_id, p.hotel_id,
+           p.sujeto_techo, p.familia_id, p.importe,
+           fam.nombre as familia_nombre,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
@@ -4899,6 +4932,7 @@ PEDIDO_SELECT_ALERTA = """
     LEFT JOIN hoteles h ON p.hotel_id = h.id
     LEFT JOIN departamentos d ON p.departamento_id = d.id
     LEFT JOIN proveedores pr ON p.proveedor_id = pr.id
+    LEFT JOIN familias fam ON p.familia_id = fam.id
 """
 
 @app.route("/api/alertas/<int:pedido_id>/email-preview", methods=["GET"])
@@ -10434,6 +10468,9 @@ TIPOS_ADJUNTO_VALIDOS = {
     "solicitud_doc",    # Excel/PDF/Word + correo vinculado a Fecha Solicitud
     "vb_eml",           # Correo .eml/.msg vinculado a Fecha Envio Vº Bº
     "tramit_eml",       # Correo .eml/.msg vinculado a Fecha Tramitacion
+    "firma_techo_doc",  # (2026-08-03) Excel/PDF/Word + correo — listado de
+                        # apoyo adjunto a la solicitud de firma cuando el
+                        # pedido está sujeto a techo de gastos
 }
 MIME_PERMITIDOS = {
     "application/pdf",
@@ -10581,7 +10618,7 @@ def upload_adjunto(pid):
             if n_docs_existentes >= 1:
                 return jsonify({"ok": False, "error": "Ya existe un documento adjunto en «Nº Pedido (DALI/SAP)». Elimínelo antes de subir uno nuevo."}), 400
 
-    elif tipo in ("presupuesto_doc", "solicitud_doc"):
+    elif tipo in ("presupuesto_doc", "solicitud_doc", "firma_techo_doc"):
         etiqueta = "PDF, Word o correo (.eml/.msg)" if tipo == "presupuesto_doc" else "Excel, Word, PDF o correo (.eml/.msg)"
         if mime not in MIME_SOLICITUD_DOC:
             return jsonify({"ok": False, "error": f"Formato no permitido. Use {etiqueta}"}), 400

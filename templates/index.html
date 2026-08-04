@@ -1218,7 +1218,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.42
+          V 12.29.43
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2205,6 +2205,17 @@ tbody tr:last-child{border-bottom:none}
                 </div>
               </div>
               <div id="techo-preview" style="margin-top:10px;display:none"></div>
+              <div style="margin-top:12px;background:#fff3cd;border:1px solid #ffc107;border-radius:8px;padding:10px 12px">
+                <div style="font-size:12px;color:#7a5b00;font-weight:600;margin-bottom:8px">
+                  📉 Al activar esta opción, la firma de este pedido queda sujeta al Techo de Gastos — quien firme debe tenerlo en cuenta.
+                </div>
+                <label class="adj-fecha-btn" id="lbl-firma-techo-doc" title="Adjuntar listado de apoyo a la solicitud de firma">
+                  <input type="file" accept=".pdf,.doc,.docx,.xls,.xlsx,.eml,.msg" multiple style="display:none"
+                         onchange="subirAdjuntos(this,'firma_techo_doc')">
+                  📎 Adjuntar listado a la solicitud de firma (opcional)
+                </label>
+                <div id="adj-firma-techo-list" class="adj-fecha-list"></div>
+              </div>
             </div>
           </div>
         </div>
@@ -4262,12 +4273,14 @@ async function cargarAdjuntos(pedidoId) {
   const solicitudDoc = d.adjuntos.filter(a => a.tipo === 'solicitud_doc');
   const vbEml        = d.adjuntos.filter(a => a.tipo === 'vb_eml');
   const tramitEml    = d.adjuntos.filter(a => a.tipo === 'tramit_eml');
+  const firmaTechoDoc = d.adjuntos.filter(a => a.tipo === 'firma_techo_doc');
   renderAdjuntosFecha('pedido', pedidoAdj);
   renderAdjuntosFecha('presupuesto', presupAdj);
   renderAdjuntosImg(imagenes);
   renderAdjuntosFecha('solicitud', solicitudDoc);
   renderAdjuntosFecha('vb', vbEml);
   renderAdjuntosFecha('tramit', tramitEml);
+  renderAdjuntosFecha('firma-techo', firmaTechoDoc);
   // Para rol hotel: ocultar botones eliminar en la lista de pedido DALI/SAP
   if (G.rol === 'hotel') {
     const adjPedidoList = document.getElementById('adj-pedido-list');

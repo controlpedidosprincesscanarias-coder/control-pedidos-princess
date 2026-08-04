@@ -1,3 +1,39 @@
+# v12.29.43 — 3 agosto 2026
+
+✨ Nueva funcionalidad — alarma y listado adjunto cuando un pedido está sujeto a techo de gastos
+
+**Solicitado:** cuando se activa "sujeto al techo de gasto mensual" en un
+pedido, debe saltar alguna alarma que indique que la autorización (firma)
+está sujeta a techo de gastos, y debe poder adjuntarse algún listado de
+apoyo a la solicitud de firma.
+
+**Añadido:**
+- **Frontend** — al marcar "Este pedido computa para el techo de gasto
+  mensual" en la ficha del pedido, aparece un aviso destacado (📉) junto
+  a un botón para adjuntar uno o varios documentos de apoyo ("Adjuntar
+  listado a la solicitud de firma"), nuevo tipo de adjunto
+  `firma_techo_doc` (PDF, Word, Excel o correo .eml/.msg — mismas
+  validaciones de tamaño/formato que "Nº Presupuesto"). No visible para
+  el rol Hotel (oculto por la restricción de formulario ya existente).
+- **Backend** — `_email_template_pendiente_firma()` (el recordatorio
+  automático/manual de "pedido pendiente de firma") ahora incluye un
+  aviso destacado si el pedido está `sujeto_techo`, con familia e
+  importe, y menciona si hay documentos de apoyo adjuntos para que quien
+  gestione la firma los consulte antes de decidir.
+- `firma_techo_doc` registrado en `TIPOS_ADJUNTO_VALIDOS` y añadido a la
+  validación compartida con `presupuesto_doc`/`solicitud_doc`.
+- `_JOB_PEDIDO_SQL` y `PEDIDO_SELECT_ALERTA` (las dos consultas que
+  alimentan los avisos de firma pendiente, automático y manual) amplían
+  sus columnas con `sujeto_techo`, `familia_id`, `importe` y
+  `familia_nombre` (nuevo `LEFT JOIN familias`).
+
+**Archivos modificados:**
+- `app.py`
+- `templates/index.html`
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado
+a "V 12.29.43".
+
 # v12.29.42 — 3 agosto 2026
 
 🔧 Corrección: hotel de pruebas ("PR") también visible para el usuario dedicado

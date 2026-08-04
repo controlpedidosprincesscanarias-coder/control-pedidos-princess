@@ -24,6 +24,29 @@
 
 ## 2026-08-03
 
+### [Control Pedidos] v12.29.43 — Nueva funcionalidad: alarma y listado adjunto cuando un pedido está sujeto a techo de gastos
+- Solicitado: que al activar "sujeto al techo de gasto mensual" en un
+  pedido salte alguna alarma indicando que la autorización (firma) está
+  sujeta a techo de gastos, y que se pueda adjuntar algún listado de
+  apoyo a la solicitud de firma.
+- Frontend: al marcar la casilla de techo en la ficha del pedido,
+  aparece un aviso destacado junto a un botón para adjuntar uno o
+  varios documentos de apoyo ("Adjuntar listado a la solicitud de
+  firma"), nuevo tipo de adjunto `firma_techo_doc` (PDF/Word/Excel/
+  correo, mismas validaciones que "Nº Presupuesto"). No visible para el
+  rol Hotel.
+- Backend: `_email_template_pendiente_firma()` (recordatorio de pedido
+  pendiente de firma, automático y manual) incluye ahora un aviso
+  destacado si el pedido es `sujeto_techo`, con familia e importe, y
+  menciona si hay documentos de apoyo adjuntos. `firma_techo_doc`
+  registrado en `TIPOS_ADJUNTO_VALIDOS`. `_JOB_PEDIDO_SQL` y
+  `PEDIDO_SELECT_ALERTA` amplían sus columnas con `sujeto_techo`,
+  `familia_id`, `importe` y `familia_nombre` (nuevo `LEFT JOIN
+  familias`).
+- `app.py` compila sin errores. Badge de versión del sidebar
+  actualizado a "V 12.29.43"; entrada añadida en `CHANGELOG.md`.
+  Archivos modificados: `app.py`, `templates/index.html`.
+
 ### [Control Pedidos] v12.29.42 — Corrección: hotel de pruebas ("PR") también visible para el usuario dedicado
 - Corrección sobre v12.29.41: el hotel `PR` no debía quedar restringido
   solo a admin, sino visible también para el usuario dedicado a estas
