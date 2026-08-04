@@ -22,6 +22,37 @@
 
 ---
 
+## 2026-08-04
+
+### [Control Pedidos] v12.29.44 — Simplificación del registro de entrada DALI/SAP: ENTREGADO + CANCELADO
+- Petición: simplificar el paso de "Nº Entrada DALI / SAP" — de tres
+  checkboxes (ENTREGA PARCIAL, ENTREGA TOTAL, CANCELADO) a solo dos
+  (ENTREGADO, CANCELADO). Dentro de "entrega" se mantiene igual: si es
+  total se marca la entrada como final y el estado pasa a ENTREGADO; si
+  es parcial se pueden añadir tantas entradas como sean necesarias, y
+  la última se marca como final para cerrar (ENTREGADO) — mientras
+  tanto el estado real sigue siendo ENTREGA PARCIAL.
+- Solo frontend (`templates/index.html`): "ENTREGA PARCIAL" y "ENTREGA
+  TOTAL" se fusionan en un único checkbox `chk-entregado` ("ENTREGADO"),
+  que abre la misma lista editable de entradas de antes.
+- Eliminado el mini-modal de "ENTREGA TOTAL" (`modal-albaran-total`,
+  `abrirModalAlbaranTotal()`, `cerrarModalAlbaranTotal()`) — ya no hace
+  falta: para una entrega total basta con añadir una entrada y marcarla
+  como "Entrada final".
+- El checkbox "Entrada final" por fila (ya existente) sigue decidiendo
+  el estado real: marcado → `ENTREGADO`, sin marcar → `ENTREGA
+  PARCIAL`. Solo una entrada final a la vez, igual que antes.
+- `initAlbaranSection()`, `onAlbaranCheckChange()` y
+  `_onAlbaranFinalChange()` actualizados para el checkbox único, sin
+  cambios de comportamiento en la lista de entradas en sí.
+- Sin cambios en `app.py` ni en los estados internos (`ESTADOS_VALIDOS`
+  en `models.py`) — es puramente una simplificación de la interfaz de
+  captura, el backend sigue guardando/validando `ENTREGA PARCIAL` /
+  `ENTREGADO` / `CANCELADO` exactamente igual.
+- Badge de versión del sidebar actualizado a "V 12.29.44"; entrada
+  añadida en `CHANGELOG.md`; `README.md` sincronizado con la versión
+  (estaba desactualizado desde v12.29.43).
+
 ## 2026-08-03
 
 ### [Control Pedidos] v12.29.43 — Nueva funcionalidad: alarma y listado adjunto cuando un pedido está sujeto a techo de gastos

@@ -1218,7 +1218,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.43
+          V 12.29.44
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2091,12 +2091,8 @@ tbody tr:last-child{border-bottom:none}
           <label class="form-label">Nº Entrada DALI / SAP</label>
           <div style="display:flex;align-items:center;gap:16px;margin-bottom:8px;flex-wrap:wrap">
             <label class="checkbox-item" style="font-size:13px;font-weight:500;color:var(--navy2)">
-              <input type="checkbox" id="chk-parcial" onchange="onAlbaranCheckChange('parcial')">
-              <span style="margin-left:4px">ENTREGA PARCIAL</span>
-            </label>
-            <label class="checkbox-item" style="font-size:13px;font-weight:500;color:var(--navy2)">
-              <input type="checkbox" id="chk-total" onchange="onAlbaranCheckChange('total')">
-              <span style="margin-left:4px">ENTREGA TOTAL</span>
+              <input type="checkbox" id="chk-entregado" onchange="onAlbaranCheckChange('entregado')">
+              <span style="margin-left:4px">ENTREGADO</span>
             </label>
             <label class="checkbox-item" style="font-size:13px;font-weight:500;color:#991b1b">
               <input type="checkbox" id="chk-cancelado" onchange="onAlbaranCheckChange('cancelado')">
@@ -2110,7 +2106,7 @@ tbody tr:last-child{border-bottom:none}
           </div>
           <!-- Lista dinámica de entradas DALI / SAP -->
           <div id="albaran-list" style="display:flex;flex-direction:column;gap:6px"></div>
-          <!-- Botón añadir (sólo visible mientras PARCIAL activo) -->
+          <!-- Botón añadir (oculto en cuanto se marca una entrada como final) -->
           <button type="button" id="btn-add-albaran" onclick="addAlbaranInput()"
             style="display:none;margin-top:8px;padding:5px 14px;font-size:12px;font-weight:600;
                    border:1.5px dashed var(--navy2);border-radius:8px;background:transparent;
@@ -2119,34 +2115,6 @@ tbody tr:last-child{border-bottom:none}
             onmouseout="this.style.background='transparent'">
             ＋ Añadir entrada DALI / SAP
           </button>
-        </div>
-
-        <!-- Mini-modal: introducir Nº Entrada DALI / SAP al marcar ENTREGA TOTAL -->
-        <div id="modal-albaran-total" style="display:none;position:fixed;inset:0;z-index:3000;
-             background:rgba(0,0,0,.45);align-items:center;justify-content:center">
-          <div style="background:#fff;border-radius:14px;padding:28px 32px;min-width:340px;max-width:420px;
-                      box-shadow:0 8px 32px rgba(0,0,0,.18);position:relative">
-            <div style="font-size:15px;font-weight:700;color:var(--navy);margin-bottom:16px">
-              Nº Entrada DALI / SAP
-            </div>
-            <p style="font-size:13px;color:#555;margin-bottom:14px">
-              Introduce el número de entrada DALI / SAP para registrar la entrega total.
-            </p>
-            <input class="form-control monospace" id="albaran-total-input"
-                   placeholder="Nº Entrada DALI / SAP"
-                   style="margin-bottom:10px;font-size:14px">
-            <label style="font-size:12px;font-weight:600;color:#555;display:block;margin-bottom:4px">Fecha de entrada</label>
-            <input type="date" class="form-control" id="albaran-total-fecha"
-                   style="margin-bottom:18px;font-size:14px">
-            <div style="display:flex;gap:10px;justify-content:flex-end">
-              <button type="button" onclick="cerrarModalAlbaranTotal(false)"
-                style="padding:8px 18px;border:1.5px solid #ccc;border-radius:8px;
-                       background:#fff;font-size:13px;cursor:pointer">Omitir</button>
-              <button type="button" onclick="cerrarModalAlbaranTotal(true)"
-                style="padding:8px 18px;border:none;border-radius:8px;background:var(--gold,#b8860b);
-                       color:#fff;font-size:13px;font-weight:600;cursor:pointer">Guardar</button>
-            </div>
-          </div>
         </div>
 
         <!-- Estado -->
@@ -4395,7 +4363,10 @@ async function borrarAdjunto(adjId) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Lógica de Nº Entrada DALI / SAP — checkboxes ENTREGA PARCIAL / TOTAL
+   Lógica de Nº Entrada DALI / SAP — checkbox ENTREGADO (con entradas
+   parciales) / CANCELADO. Al marcar ENTREGADO se abre la lista editable de
+   entradas; mientras ninguna esté marcada como "Entrada final" el estado
+   real es ENTREGA PARCIAL — al marcar una como final pasa a ENTREGADO.
    Formato de datos: "NUM::FECHA" por entrada, separadas por " | "
    Retrocompatible con entradas antiguas sin fecha (solo "NUM")
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -4515,7 +4486,7 @@ function _makeAlbaranRow(num, fecha, editable, idx) {
   return row;
 }
 
-// Cuando se marca una fila como "entrada final" en modo parcial
+// Cuando se marca una fila como "entrada final" (cierra la entrega → ENTREGADO)
 function _onAlbaranFinalChange(chk, row) {
   const list = document.getElementById('albaran-list');
   // Solo puede haber una final a la vez
@@ -4523,33 +4494,24 @@ function _onAlbaranFinalChange(chk, row) {
     if (c !== chk) c.checked = false;
   });
 
+  const estadoSel = document.getElementById('p-estado');
+  const btnAdd     = document.getElementById('btn-add-albaran');
+
   if (chk.checked) {
-    // Cambiar el estado a ENTREGADO y marcar checkbox TOTAL
-    const estadoSel  = document.getElementById('p-estado');
-    const chkParcial = document.getElementById('chk-parcial');
-    const chkTotal   = document.getElementById('chk-total');
-    if (estadoSel)  estadoSel.value = 'ENTREGADO';
-    if (chkParcial) chkParcial.checked = false;
-    if (chkTotal)   chkTotal.checked   = true;
+    // Cierra la entrega: estado → ENTREGADO
+    if (estadoSel) estadoSel.value = 'ENTREGADO';
     // Resaltar la fila visualmente
     row.style.background = '#e8f5e9';
     row.style.borderRadius = '7px';
     row.style.padding = '3px 4px';
     // Deshabilitar el botón de añadir más entradas
-    const btnAdd = document.getElementById('btn-add-albaran');
     if (btnAdd) btnAdd.style.display = 'none';
   } else {
-    // Revertir al estado parcial
-    const estadoSel  = document.getElementById('p-estado');
-    const chkParcial = document.getElementById('chk-parcial');
-    const chkTotal   = document.getElementById('chk-total');
-    if (estadoSel)  estadoSel.value = 'ENTREGA PARCIAL';
-    if (chkParcial) chkParcial.checked = true;
-    if (chkTotal)   chkTotal.checked   = false;
+    // Revertir a entrega parcial (sigue habiendo entradas pero ninguna final)
+    if (estadoSel) estadoSel.value = 'ENTREGA PARCIAL';
     row.style.background = '';
     row.style.borderRadius = '';
     row.style.padding = '';
-    const btnAdd = document.getElementById('btn-add-albaran');
     if (btnAdd) btnAdd.style.display = '';
   }
 }
@@ -4573,18 +4535,19 @@ function addAlbaranInput() {
   if (input) input.focus();
 }
 
-// Maneja el cambio en cualquiera de los tres checkboxes (parcial / total / cancelado)
+// Maneja el cambio en cualquiera de los dos checkboxes (entregado / cancelado)
 function onAlbaranCheckChange(cual) {
-  const chkParcial   = document.getElementById('chk-parcial');
-  const chkTotal     = document.getElementById('chk-total');
+  const chkEntregado = document.getElementById('chk-entregado');
   const chkCancelado = document.getElementById('chk-cancelado');
   const btnAdd       = document.getElementById('btn-add-albaran');
   const estadoSel    = document.getElementById('p-estado');
 
-  if (cual === 'parcial') {
-    if (chkParcial.checked) {
-      chkTotal.checked = false;
+  if (cual === 'entregado') {
+    if (chkEntregado.checked) {
       chkCancelado.checked = false;
+      // Arranca en ENTREGA PARCIAL hasta que se marque una entrada como
+      // final (ver _onAlbaranFinalChange) — si esa era ya total, el estado
+      // se recalcula al reconstruir la lista más abajo.
       if (estadoSel) estadoSel.value = 'ENTREGA PARCIAL';
       const vals = getAlbaranValues();
       renderAlbaranList(vals.length ? vals : [], true);
@@ -4595,27 +4558,9 @@ function onAlbaranCheckChange(cual) {
       renderAlbaranList(vals, false);
       btnAdd.style.display = 'none';
     }
-  } else if (cual === 'total') {
-    if (chkTotal.checked) {
-      chkParcial.checked = false;
-      chkCancelado.checked = false;
-      const vals = getAlbaranValues();
-      if (estadoSel) estadoSel.value = 'ENTREGADO';
-      renderAlbaranList(vals, false);
-      btnAdd.style.display = 'none';
-      setFormCancelado(false);
-      if (!vals.length) {
-        abrirModalAlbaranTotal();
-      }
-    } else {
-      const vals = getAlbaranValues();
-      renderAlbaranList(vals, false);
-      btnAdd.style.display = 'none';
-    }
   } else if (cual === 'cancelado') {
     if (chkCancelado.checked) {
-      chkParcial.checked = false;
-      chkTotal.checked = false;
+      chkEntregado.checked = false;
       if (estadoSel) estadoSel.value = 'CANCELADO';
       const vals = getAlbaranValues();
       renderAlbaranList(vals, false);
@@ -4636,41 +4581,13 @@ function setFormCancelado(bloqueado) {
   if (!bloqueado) onEstadoChange();
 }
 
-// Mini-modal albarán total
-function abrirModalAlbaranTotal() {
-  const modal = document.getElementById('modal-albaran-total');
-  const input = document.getElementById('albaran-total-input');
-  const fecha = document.getElementById('albaran-total-fecha');
-  input.value = '';
-  fecha.value = new Date().toISOString().split('T')[0]; // Fecha de hoy por defecto
-  modal.style.display = 'flex';
-  setTimeout(() => input.focus(), 80);
-}
-
-function cerrarModalAlbaranTotal(guardar) {
-  const modal = document.getElementById('modal-albaran-total');
-  const input = document.getElementById('albaran-total-input');
-  const fecha = document.getElementById('albaran-total-fecha');
-  modal.style.display = 'none';
-  if (guardar && input.value.trim()) {
-    const serialized = _serializeAlbaranEntry(input.value.trim(), fecha.value.trim());
-    const list = document.getElementById('albaran-list');
-    list.innerHTML = '';
-    const entry = _parseAlbaranEntry(serialized);
-    const row = _makeAlbaranRow(entry.num, entry.fecha, false, 0);
-    list.appendChild(row);
-  }
-}
-
 // Inicializa la sección albarán al abrir el modal (carga datos existentes)
 function initAlbaranSection(albaranStr, estado) {
-  const chkParcial   = document.getElementById('chk-parcial');
-  const chkTotal     = document.getElementById('chk-total');
+  const chkEntregado = document.getElementById('chk-entregado');
   const chkCancelado = document.getElementById('chk-cancelado');
   const btnAdd       = document.getElementById('btn-add-albaran');
 
-  chkParcial.checked   = false;
-  chkTotal.checked     = false;
+  chkEntregado.checked = false;
   chkCancelado.checked = false;
   btnAdd.style.display = 'none';
 
@@ -4687,11 +4604,14 @@ function initAlbaranSection(albaranStr, estado) {
     : [];
 
   if (estado === 'ENTREGA PARCIAL') {
-    chkParcial.checked = true;
+    // Entrega en curso: aún no hay entrada marcada como final — editable,
+    // se pueden seguir añadiendo entradas parciales.
+    chkEntregado.checked = true;
     renderAlbaranList(valores.length ? valores : [], true);
     btnAdd.style.display = '';
   } else if (estado === 'ENTREGADO') {
-    chkTotal.checked = true;
+    // Entrega cerrada (total o última parcial marcada como final) — solo lectura.
+    chkEntregado.checked = true;
     renderAlbaranList(valores, false);
   } else if (estado === 'CANCELADO') {
     chkCancelado.checked = true;
@@ -4773,7 +4693,7 @@ function _setFormCanceladoSilent(bloqueado) {
     el.disabled = bloqueado;
     el.style.opacity = bloqueado ? '0.55' : '';
   });
-  ['chk-parcial','chk-total'].forEach(id => {
+  ['chk-entregado'].forEach(id => {
     const el = document.getElementById(id);
     if (el) { el.disabled = bloqueado; el.style.opacity = bloqueado ? '0.55' : ''; }
   });

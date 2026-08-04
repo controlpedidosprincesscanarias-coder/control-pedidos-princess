@@ -1,3 +1,44 @@
+# v12.29.44 — 4 agosto 2026
+
+📦 Simplificación del registro de entrada DALI/SAP: ENTREGADO + CANCELADO
+
+**Petición:** simplificar el paso de "Nº Entrada DALI / SAP" — en vez de
+tres checkboxes (ENTREGA PARCIAL, ENTREGA TOTAL, CANCELADO), mostrar
+solo dos (ENTREGADO, CANCELADO). Dentro de "entrega" se mantiene el
+mecanismo actual: si es una entrega total se marca la entrada como
+final y el estado pasa directamente a ENTREGADO; si es parcial se
+pueden ir añadiendo tantas entradas como sean necesarias, y la última
+se marca como final para cerrar la entrega (estado ENTREGADO) —
+mientras tanto el estado real sigue siendo ENTREGA PARCIAL.
+
+**Cambios (solo frontend, `templates/index.html`):**
+- Los checkboxes "ENTREGA PARCIAL" y "ENTREGA TOTAL" se fusionan en un
+  único checkbox **ENTREGADO** (`chk-entregado`), que abre la misma
+  lista editable de entradas de antes (número + fecha + botón "＋
+  Añadir entrada DALI / SAP").
+- Eliminado el mini-modal que pedía un único Nº Entrada DALI/SAP al
+  marcar "ENTREGA TOTAL" directamente (`modal-albaran-total` y sus
+  funciones `abrirModalAlbaranTotal()` / `cerrarModalAlbaranTotal()`) —
+  ya no hace falta: para una entrega total ahora basta con añadir una
+  entrada y marcarla como "Entrada final" en el mismo formulario.
+- El checkbox "Entrada final" de cada fila (ya existente) sigue siendo
+  el mecanismo que decide el estado real: marcado → `ENTREGADO`; sin
+  marcar → `ENTREGA PARCIAL`. Solo puede haber una entrada final a la
+  vez, igual que antes.
+- `initAlbaranSection()`, `onAlbaranCheckChange()` y
+  `_onAlbaranFinalChange()` actualizados para el checkbox único; sin
+  cambios de comportamiento en la lista de entradas en sí.
+- Los estados internos (`ENTREGA PARCIAL`, `ENTREGADO`, `CANCELADO`) no
+  cambian — sigue siendo exactamente lo que guarda/valida el backend
+  (`ESTADOS_VALIDOS` en `models.py`); esto es puramente una
+  simplificación de la interfaz de captura.
+
+**Archivos modificados:**
+- `templates/index.html`
+- `README.md` (versión)
+
+Badge de versión del sidebar actualizado a "V 12.29.44".
+
 # v12.29.43 — 3 agosto 2026
 
 ✨ Nueva funcionalidad — alarma y listado adjunto cuando un pedido está sujeto a techo de gastos
