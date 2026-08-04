@@ -1,3 +1,39 @@
+# v12.29.48 — 4 agosto 2026
+
+🐛 Fix: aviso "familia repetida" saltaba con el primer pedido (sin
+duplicado real)
+
+**Síntoma reportado:** el comprador de INSIRE seguía recibiendo el aviso
+🔴 "Familia/Partida REPETIDA" de forma constante después de v12.29.47,
+pese a que en el hotel no existía ningún pedido duplicado de esa
+familia — solo un único pedido.
+
+**Causa raíz:** `_job_familia_repetida_inner()` (el job diario que
+detecta y notifica familias repetidas) contaba **todos** los pedidos de
+la familia sin excluir ninguno, y comparaba con
+`HAVING COUNT(*) >= techo_max_pedidos_familia`. Como
+`techo_max_pedidos_familia` vale **1** por defecto, la condición
+ejecutada era en la práctica `COUNT(*) >= 1`: el primer y único pedido
+de cualquier familia ya cumplía la condición y se marcaba como
+"repetida", sin que existiera un segundo pedido.
+
+Esto era inconsistente con `_check_techo()` (la función que sí bloquea
+el paso a ENVIADO AL PROVEEDOR): esa función excluye el propio pedido
+del recuento antes de comparar, así que solo bloquea cuando **ya
+existía otro pedido antes** — comportamiento correcto. El job de aviso
+diario no tenía esa exclusión y disparaba un día antes de tiempo, con
+el primer pedido.
+
+**Cambio:** en la consulta SQL del job (`app.py`, función
+`_job_familia_repetida_inner`), `HAVING COUNT(*) >= %s` pasa a
+`HAVING COUNT(*) > %s`. Ahora el job solo alerta cuando el número de
+pedidos de la familia **supera** el máximo configurado (repetición
+real), no cuando simplemente lo alcanza con el primer pedido.
+
+No se ha tocado `_check_techo()` (Regla de bloqueo al enviar al
+proveedor): esa función ya era correcta, porque excluye el pedido en
+curso del recuento antes de comparar.
+
 # v12.29.47 — 4 agosto 2026 (PRUEBA)
 
 🧪 Prueba: popup de main_agenda se entrega una única vez (dedup en servidor)

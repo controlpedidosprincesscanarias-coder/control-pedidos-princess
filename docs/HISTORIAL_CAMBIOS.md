@@ -24,6 +24,33 @@
 
 ## 2026-08-04
 
+### [Control Pedidos] v12.29.48 — Fix: aviso "familia repetida" saltaba con el primer pedido, sin duplicado real
+- Reportado: el comprador seguía recibiendo el aviso 🔴 "Familia/Partida
+  REPETIDA" de forma constante, pese a que en el hotel no existía
+  ningún pedido duplicado de esa familia — solo un único pedido sujeto
+  a techo.
+- Causa raíz: `_job_familia_repetida_inner()` (`app.py`) contaba TODOS
+  los pedidos de la familia sin excluir ninguno, y comparaba con
+  `HAVING COUNT(*) >= techo_max_pedidos_familia`. Con el valor por
+  defecto de `techo_max_pedidos_familia` (= 1), la condición ejecutada
+  era en la práctica `COUNT(*) >= 1`: el primer y único pedido de
+  cualquier familia ya la marcaba como "repetida".
+- Inconsistencia detectada frente a `_check_techo()` (la función que
+  bloquea el paso a ENVIADO AL PROVEEDOR): esa función excluye el
+  propio pedido del recuento antes de comparar, así que solo bloquea
+  cuando ya existía otro pedido antes — comportamiento correcto. El
+  job de aviso diario no tenía esa exclusión.
+- Corrección: en la consulta SQL del job, `HAVING COUNT(*) >= %s` pasa
+  a `HAVING COUNT(*) > %s`. El job ahora solo alerta cuando el número
+  de pedidos de la familia supera el máximo configurado (repetición
+  real), no cuando simplemente lo alcanza con el primer pedido.
+- Sin cambios en `_check_techo()` (ya era correcta) ni en
+  `techo_max_pedidos_familia` (sigue en 1 por defecto — el límite de
+  negocio no cambia, solo se corrige cuándo se considera "repetido").
+- Badge de versión del sidebar actualizado a "V 12.29.48"; entrada
+  añadida en `CHANGELOG.md`; `README.md` sincronizado con la versión
+  (estaba desactualizado desde v12.29.44).
+
 ### [Control Pedidos] v12.29.44 — Simplificación del registro de entrada DALI/SAP: ENTREGADO + CANCELADO
 - Petición: simplificar el paso de "Nº Entrada DALI / SAP" — de tres
   checkboxes (ENTREGA PARCIAL, ENTREGA TOTAL, CANCELADO) a solo dos

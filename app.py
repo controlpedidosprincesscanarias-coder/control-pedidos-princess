@@ -3512,6 +3512,19 @@ def _job_familia_repetida_inner() -> None:
     # _check_techo() en el momento de pasar a ENVIADO AL PROVEEDOR (ya no
     # al crear/editar el pedido) — y mismo cambio de filtro que los otros
     # 2 jobs de techo: por mes_consumo_techo, no por fecha de creación.
+    #
+    # v12.29.48 — FIX falso positivo "familia repetida" con el 1er pedido:
+    # este job comparaba COUNT(*) >= max_pedidos_familia contando TODOS los
+    # pedidos de la familia (sin excluir ninguno). Con el valor por defecto
+    # techo_max_pedidos_familia=1, el primer y único pedido de una familia
+    # ya cumplía "COUNT(*) >= 1" y se etiquetaba como "repetida" sin que
+    # existiera ningún duplicado real. _check_techo() (línea ~7801, el que
+    # SÍ bloquea el envío al proveedor) no tiene este problema porque
+    # excluye el propio pedido del recuento antes de comparar — por tanto
+    # solo bloquea cuando YA había otro pedido antes de este. Este job debe
+    # comportarse igual: solo alertar cuando el total de pedidos supere
+    # (no solo alcance) el máximo configurado, es decir, cuando de verdad
+    # haya más de uno. Cambiado ">=" por ">".
     max_pedidos_familia = get_config()["techo_max_pedidos_familia"]
     _mes_techo_famrep = ahora.strftime("%Y-%m")
 
@@ -3534,7 +3547,7 @@ def _job_familia_repetida_inner() -> None:
                   AND p.mes_consumo_techo = %s
                   AND p.familia_id IS NOT NULL
                 GROUP BY p.familia_id, f.nombre
-                HAVING COUNT(*) >= %s
+                HAVING COUNT(*) > %s
                 ORDER BY f.nombre
             """, (hotel_id, _mes_techo_famrep, max_pedidos_familia)))
         except Exception as exc:
