@@ -1349,6 +1349,28 @@ def row_to_dict(row):
 def rows_to_list(rows):
     return [dict(r) for r in rows]
 
+def _normalizar_fecha_entrega_especifica(p):
+    """
+    (fix v12.29.45) fecha_entrega_especifica es la única fecha de
+    'pedidos' guardada como columna DATE real — todas las demás
+    (fecha_solicitud, fecha_envio_visto_bueno, fecha_tramitacion...) son
+    TEXT con formato 'YYYY-MM-DD' desde el principio. Por eso psycopg2
+    la devuelve como datetime.date, y el serializador JSON por defecto
+    de Flask convierte cualquier `date`/`datetime` a formato RFC 1123
+    ('Wed, 10 Aug 2026 00:00:00 GMT') en vez de ISO. El <input
+    type="date"> del frontend no acepta ese formato y se queda vacío al
+    reabrir el pedido — parece que la fecha "no se grabó" aunque sí se
+    guardó correctamente en BD. Se normaliza aquí a texto ISO antes de
+    devolverla en cualquier respuesta JSON. Aplicar SIEMPRE que un dict
+    de pedido con esta columna vaya a pasar por jsonify().
+    """
+    if p is None:
+        return p
+    v = p.get("fecha_entrega_especifica")
+    if hasattr(v, "strftime"):
+        p["fecha_entrega_especifica"] = v.strftime("%Y-%m-%d")
+    return p
+
 def _puede_ver_hotel_pruebas() -> bool:
     """
     (2026-08-03) True si la sesión actual puede ver/usar el hotel de
@@ -8531,6 +8553,7 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
     """
     alertas: list = []
     for p in pedidos_raw:
+        _normalizar_fecha_entrega_especifica(p)
         # ── Lógica plazo de entrega ──────────────────────────────────────
         info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
         if info_plazo:
@@ -8695,6 +8718,8 @@ def get_pedidos():
 
     sql     = f"{PEDIDO_SELECT} {where_sql} ORDER BY {order} LIMIT %s OFFSET %s"
     pedidos = rows_to_list(query(sql, args + [page_size, (page - 1) * page_size]))
+    for _p in pedidos:
+        _normalizar_fecha_entrega_especifica(_p)
     if session.get("rol") == "hotel":
         for p in pedidos:
             p["importe"] = None
@@ -8713,6 +8738,7 @@ def get_pedido(pid):
     p = row_to_dict(query(f"{PEDIDO_SELECT} WHERE p.id=%s", (pid,), one=True))
     if not p:
         return jsonify({"error": "No encontrado"}), 404
+    _normalizar_fecha_entrega_especifica(p)
     if not _puede_ver_hotel_pruebas() and p.get("hotel_codigo") == HOTEL_CODIGO_PRUEBAS:
         return jsonify({"error": "Sin acceso a este pedido"}), 403
     if session.get("rol") == "hotel":

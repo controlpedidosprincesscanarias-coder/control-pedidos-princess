@@ -1,3 +1,31 @@
+# v12.29.45 — 4 agosto 2026
+
+🐛 Fix: "Fecha de entrega específica" (proveedor) no se quedaba grabada visualmente
+
+**Síntoma:** al rellenar "Fecha de entrega específica" en el pedido y
+guardar, la fecha SÍ se guardaba en BD, pero al reabrir el pedido el
+campo aparecía vacío — daba la impresión de que no se había grabado.
+
+**Causa:** `fecha_entrega_especifica` es la única fecha de `pedidos`
+guardada como columna `DATE` real (el resto — `fecha_solicitud`,
+`fecha_envio_visto_bueno`, `fecha_tramitacion`... — son `TEXT` con
+formato `YYYY-MM-DD`). Al devolverla en JSON, el serializador por
+defecto de Flask convierte cualquier `date`/`datetime` a formato
+RFC 1123 (`"Wed, 10 Aug 2026 00:00:00 GMT"`) en vez de ISO. El
+`<input type="date">` del frontend no acepta ese formato y lo descarta
+silenciosamente, dejando el campo vacío al reabrir el modal — aunque
+el guardado en BD siempre fue correcto.
+
+**Cambios (`app.py`):**
+- Nueva función `_normalizar_fecha_entrega_especifica(p)`: convierte
+  el valor a texto ISO (`YYYY-MM-DD`) si llega como `date`/`datetime`.
+- Aplicada en los tres puntos donde un pedido con esta columna se
+  devuelve al frontend: `GET /api/pedidos` (listado), `GET
+  /api/pedidos/<id>` (detalle) y `_clasificar_alertas()` (usada por
+  los endpoints de stats/alertas del dashboard).
+- No se ha tocado el guardado (`POST`/`PUT`), que ya funcionaba bien;
+  el problema era solo de lectura/visualización.
+
 # v12.29.44 — 4 agosto 2026
 
 📦 Simplificación del registro de entrada DALI/SAP: ENTREGADO + CANCELADO
