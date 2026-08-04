@@ -1,3 +1,36 @@
+# v12.29.46 — 4 agosto 2026
+
+🐛 Fix: pedidos en PENDIENTE FIRMA DIRECCION COMPRAS / PENDIENTE DE
+FIRMA DIRECCION HOTEL nunca generaban alerta
+
+**Síntoma:** un pedido llevaba semanas en "PENDIENTE DE FIRMA
+DIRECCION HOTEL" (o "...COMPRAS") y aparecía correctamente en el
+listado de Pedidos con ese filtro, pero nunca salía en el panel de
+Alertas ni generaba avisos por Telegram, por muchos días que pasaran.
+
+**Causa:** estos dos estados son justo los que `ESTADOS_SIN_TRAMITAR`
+marca como "sin fecha_tramitacion todavía" — ese campo se rellena más
+adelante en el flujo, así que para pedidos en estos estados
+`fecha_tramitacion` está siempre vacío (se ve como "—" en la columna
+F. TRAMIT. del listado). La configuración de umbrales
+(`_build_umbrales()`) no tenía `fecha_ref` explícito para ninguno de
+los dos, así que `_clasificar_alertas()` (panel de Alertas) y el job
+de reclamaciones por Telegram caían en el valor por defecto
+`"fecha_tramitacion"` — que al estar siempre vacío para estos estados
+hacía que el cálculo de días diera `None` y la alerta se descartara
+siempre, sin importar cuánto tiempo llevara esperando firma.
+
+**Cambios (`app.py`):**
+- `_build_umbrales()`: añadido `"fecha_ref": "fecha_solicitud"` a
+  `PENDIENTE FIRMA DIRECCION COMPRAS` y `PENDIENTE DE FIRMA DIRECCION
+  HOTEL`, igual que ya tenía `PENDIENTE COTIZACIÓN`. Ahora los días de
+  espera se cuentan desde que se solicitó el pedido, que es la fecha
+  que sí existe siempre en estos estados.
+- Mismo cambio en el dict `UMBRALES_ALERTAS` (legacy, solo
+  documentación/valores por defecto) para que no quede inconsistente.
+- Afecta tanto al panel de Alertas del dashboard como al job
+  automático de avisos por Telegram, que comparten `_build_umbrales()`.
+
 # v12.29.45 — 4 agosto 2026
 
 🐛 Fix: "Fecha de entrega específica" (proveedor) no se quedaba grabada visualmente

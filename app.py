@@ -2760,7 +2760,19 @@ def get_config() -> dict:
 
 
 def _build_umbrales() -> dict:
-    """UMBRALES_ALERTAS construido dinámicamente desde BD."""
+    """UMBRALES_ALERTAS construido dinámicamente desde BD.
+
+    (fix v12.29.45) "PENDIENTE FIRMA DIRECCION COMPRAS" y "PENDIENTE DE
+    FIRMA DIRECCION HOTEL" son justo los dos estados que
+    ESTADOS_SIN_TRAMITAR marca como "sin fecha_tramitacion todavía" —
+    ese campo se rellena más adelante en el flujo. Sin `fecha_ref`
+    explícito aquí, _clasificar_alertas() y el job de reclamaciones
+    caían en el default "fecha_tramitacion", que para estos dos estados
+    está vacío siempre → dias=None → la alerta nunca se disparaba, por
+    muchos días que llevara el pedido esperando firma. Se usa
+    fecha_solicitud como referencia, igual que ya hacía
+    PENDIENTE COTIZACIÓN.
+    """
     c = get_config()
     return {
         "ENVIADO AL PROVEEDOR": {
@@ -2772,11 +2784,13 @@ def _build_umbrales() -> dict:
             "primera": c["firma_compras_primera"],
             "urgente": c["firma_compras_urgente"] or None,
             "ciclo":   c["firma_compras_ciclo"],
+            "fecha_ref": "fecha_solicitud",
         },
         "PENDIENTE DE FIRMA DIRECCION HOTEL": {
             "primera": c["firma_hotel_primera"],
             "urgente": c["firma_hotel_urgente"] or None,
             "ciclo":   c["firma_hotel_ciclo"],
+            "fecha_ref": "fecha_solicitud",
         },
         "ENTREGA PARCIAL": {
             "primera": c["entrega_parcial_primera"],
@@ -2797,10 +2811,10 @@ UMBRALES_ALERTAS = {
         "primera": 15, "urgente": 25, "ciclo": 10,
     },
     "PENDIENTE FIRMA DIRECCION COMPRAS": {
-        "primera": 8, "urgente": None, "ciclo": 8,
+        "primera": 8, "urgente": None, "ciclo": 8, "fecha_ref": "fecha_solicitud",
     },
     "PENDIENTE DE FIRMA DIRECCION HOTEL": {
-        "primera": 5, "urgente": None, "ciclo": 5,
+        "primera": 5, "urgente": None, "ciclo": 5, "fecha_ref": "fecha_solicitud",
     },
     "ENTREGA PARCIAL": {
         "primera": 10, "urgente": None, "ciclo": 10,
