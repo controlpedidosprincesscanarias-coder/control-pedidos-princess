@@ -371,6 +371,32 @@ def _auto_migrate():
                 "CREATE INDEX IF NOT EXISTS idx_bridge_notif_usuario_leido "
                 "ON bridge_notificaciones(usuario, leido)"
             )
+            # ── v12.29.47 (PRUEBA) — Popup de main_agenda: entrega única persistida ──
+            # Hasta ahora /api/bridge/alertas devolvía SIEMPRE los pedidos en
+            # alerta activa, y era pedidos_agenda_bridge.py (Organizador
+            # Princess) quien decidía si tocaba (re)mostrar el popup con un
+            # intervalo en horas guardado EN MEMORIA (_estado_popups). Al
+            # reiniciarse la app ese historial se perdía y el popup podía
+            # reaparecer de golpe -- causa probable de los avisos repetidos
+            # reportados por el comprador de INSIRE (2026-08-04).
+            # Esta tabla mueve el dedup al servidor: cada fila (usuario,
+            # pedido_id, nivel) significa "este popup ya se entregó a este
+            # usuario" -- de forma permanente, no reseteable por el cliente.
+            # Ver _filtrar_popups_no_vistos().
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS bridge_popup_visto (
+                    id         SERIAL PRIMARY KEY,
+                    usuario    TEXT NOT NULL,
+                    pedido_id  INTEGER NOT NULL,
+                    nivel      TEXT NOT NULL,
+                    visto_en   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    UNIQUE (usuario, pedido_id, nivel)
+                )
+            """)
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS idx_bridge_popup_visto_usuario "
+                "ON bridge_popup_visto(usuario)"
+            )
             # ── v11.4.0 — Plazo de entrega por pedido ─────────────────────────
             cur.execute(
                 "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS plazo_entrega_dias INTEGER"
@@ -9822,6 +9848,87 @@ def set_dashboard_prefs():
 # Misma lógica de umbrales y niveles que /api/stats pero filtrada.
 # ─────────────────────────────────────────────────────────────────────────────
 
+def _filtrar_popups_no_vistos(usuario: str, alertas: list) -> list:
+    """
+    v12.29.47 (PRUEBA) — Popup de main_agenda: entrega única persistida.
+
+    Antes, este endpoint devolvía siempre TODAS las alertas activas del
+    usuario, y era pedidos_agenda_bridge.py (en memoria, vía
+    _estado_popups) quien decidía si tocaba repetir el popup según un
+    intervalo en horas. Al reiniciarse Organizador Princess ese
+    historial se perdía → reaparición de popups ya vistos. Se sospecha
+    que esta es la causa del comprador de INSIRE viendo el mismo aviso
+    "continuamente" (2026-08-04).
+
+    Ahora el dedup se hace aquí, contra bridge_popup_visto (persistida
+    en BD, no en el cliente):
+      - Si (usuario, pedido_id, nivel) ya está en bridge_popup_visto,
+        NO se devuelve — ya se entregó una vez, para siempre.
+      - Si el pedido escala de nivel (aviso→urgente), la clave cambia
+        de nivel → se trata como aviso nuevo y sí se entrega.
+      - Las que SÍ se devuelven se marcan como vistas en la misma
+        llamada (igual que /api/bridge/notificaciones marca leido=TRUE
+        al servir) — si Organizador Princess está cerrada en este
+        momento y nunca llega a recibir esta respuesta, ese popup
+        concreto se entregará en la próxima conexión, pero no antes;
+        una vez entregado no se repite ni con reintentos ni al
+        reiniciar la app.
+      - Si un pedido deja de ser alertable (se resuelve o cambia de
+        estado), se borra su fila: si vuelve a alertar más adelante se
+        trata como un aviso nuevo.
+
+    Devuelve la sublista de `alertas` pendiente de entregar (posible
+    lista vacía). No modifica `alertas` en sí — ese valor completo se
+    sigue usando para el resumen/saludo diario (total de activas).
+    """
+    if not alertas:
+        try:
+            db = get_db()
+            db.cursor().execute(
+                "DELETE FROM bridge_popup_visto WHERE usuario=%s", (usuario,)
+            )
+            db.commit()
+        except Exception as exc:
+            log.warning("bridge_popup_visto: no se pudo limpiar (%s) — %s", usuario, exc)
+        return []
+
+    pedido_ids_activos = list({a["id"] for a in alertas})
+
+    try:
+        vistos_rows = rows_to_list(query(
+            "SELECT pedido_id, nivel FROM bridge_popup_visto WHERE usuario=%s",
+            (usuario,)
+        ))
+    except Exception as exc:
+        log.warning("bridge_popup_visto: no se pudo leer vistos (%s) — %s", usuario, exc)
+        vistos_rows = []
+
+    vistos = {(r["pedido_id"], r["nivel"]) for r in vistos_rows}
+    nuevas = [a for a in alertas if (a["id"], a["nivel_alerta"]) not in vistos]
+
+    try:
+        db  = get_db()
+        cur = db.cursor()
+        placeholders = ",".join(["%s"] * len(pedido_ids_activos))
+        cur.execute(
+            f"""DELETE FROM bridge_popup_visto
+                WHERE usuario=%s AND pedido_id NOT IN ({placeholders})""",
+            (usuario, *pedido_ids_activos)
+        )
+        for a in nuevas:
+            cur.execute(
+                """INSERT INTO bridge_popup_visto (usuario, pedido_id, nivel)
+                   VALUES (%s, %s, %s)
+                   ON CONFLICT (usuario, pedido_id, nivel) DO NOTHING""",
+                (usuario, a["id"], a["nivel_alerta"])
+            )
+        db.commit()
+    except Exception as exc:
+        log.warning("bridge_popup_visto: no se pudo actualizar (%s) — %s", usuario, exc)
+
+    return nuevas
+
+
 @app.route("/api/bridge/alertas")
 @login_required
 def bridge_alertas_usuario():
@@ -9897,12 +10004,24 @@ def bridge_alertas_usuario():
     cfg_activar_plazo_bridge = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
     alertas = _clasificar_alertas(alertas_raw, cfg_activar_plazo_bridge)
 
+    # v12.29.47 (PRUEBA): "alertas" pasa a contener SOLO lo pendiente de
+    # entregar como popup (ver _filtrar_popups_no_vistos). Los totales sin
+    # filtrar se mandan aparte en total_activas/urgentes_activas/
+    # normales_activas, para que el resumen del saludo diario de Organizador
+    # Princess (get_resumen_alertas()) siga reflejando TODAS las alertas
+    # activas y no solo las nuevas de este ciclo.
+    usuario = session.get("username", "").lower()
+    nuevas  = _filtrar_popups_no_vistos(usuario, alertas)
+
     return jsonify({
-        "alertas":     alertas,
-        "num_alertas": len(alertas),
-        "usuario":     session.get("username"),
-        "nombre":      session.get("nombre"),
-        "rol":         rol,
+        "alertas":           nuevas,
+        "num_alertas":       len(nuevas),
+        "total_activas":     len(alertas),
+        "urgentes_activas":  sum(1 for a in alertas if a.get("nivel_alerta") == "urgente"),
+        "normales_activas":  sum(1 for a in alertas if a.get("nivel_alerta") != "urgente"),
+        "usuario":           session.get("username"),
+        "nombre":            session.get("nombre"),
+        "rol":               rol,
     })
 
 

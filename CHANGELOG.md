@@ -1,3 +1,54 @@
+# v12.29.47 — 4 agosto 2026 (PRUEBA)
+
+🧪 Prueba: popup de main_agenda se entrega una única vez (dedup en servidor)
+
+**Síntoma reportado:** el comprador de INSIRE recibía el mismo popup de
+aviso "continuamente" a lo largo del día en Organizador Princess.
+
+**Causa probable:** `/api/bridge/alertas` devolvía siempre TODAS las
+alertas activas del usuario, y era `pedidos_agenda_bridge.py` (en el
+propio Organizador Princess) quien decidía si tocaba repetir el popup,
+con un intervalo en horas guardado **en memoria** (`_estado_popups`).
+Si la app se reiniciaba, ese historial se perdía y los avisos volvían
+a saltar de golpe; si el comprador tenía varios pedidos urgentes
+acumulados, cada uno repetía cada hora por separado, dando sensación
+de repetición constante.
+
+**Cambio (a petición de VAMA, como prueba):** el dedup se mueve al
+servidor.
+- Nueva tabla `bridge_popup_visto (usuario, pedido_id, nivel)` —
+  registra qué popups ya se le entregaron a cada usuario, de forma
+  permanente (no se resetea al reiniciar Organizador Princess).
+- Nueva función `_filtrar_popups_no_vistos()`: filtra las alertas
+  activas contra esta tabla y marca como vistas las que se devuelven,
+  en la misma llamada. Si el pedido escala de nivel (aviso→urgente) se
+  trata como aviso nuevo. Si el pedido deja de ser alertable
+  (resuelto/cambio de estado), se purga su fila — si vuelve a alertar
+  más adelante, se trata como nuevo.
+- `/api/bridge/alertas` ahora devuelve en `"alertas"` **solo** lo
+  pendiente de entregar (para disparar el popup), y por separado
+  `total_activas` / `urgentes_activas` / `normales_activas` con el
+  recuento completo sin filtrar, para que el resumen del saludo diario
+  de Organizador Princess siga mostrando el total real de alertas
+  activas y no solo las nuevas de ese ciclo.
+- **Comportamiento resultante:** si Organizador Princess está cerrada
+  en el momento en que un pedido entra en alerta, el popup se le
+  entregará en cuanto vuelva a conectar — pero solo esa vez; no se
+  repite nunca más para ese pedido+nivel, ni con reintentos horarios
+  ni al reiniciar la app.
+- Contrapartida de esta prueba: se elimina el reintento periódico por
+  nivel (`popup_horas_critico`/`popup_horas_normal`, configurable
+  desde Admin → Config Alertas). Si el comprador cierra el popup sin
+  actuar sobre el pedido, ya no volverá a recordárselo — a validar si
+  esto es aceptable o si conviene reintroducir algún recordatorio,
+  ahora también con dedup persistente.
+
+**Cambios (`pedidos_agenda_bridge.py` v4.8, Organizador Princess):**
+`_sincronizar_alertas()` simplificada — ya no decide repetición, solo
+muestra lo que el servidor le manda. `_estado_popups` y las funciones
+de repetición quedan sin usar (no se borran, por si hay que revertir
+la prueba).
+
 # v12.29.46 — 4 agosto 2026
 
 🐛 Fix: pedidos en PENDIENTE FIRMA DIRECCION COMPRAS / PENDIENTE DE
