@@ -7291,8 +7291,10 @@ def get_proveedores():
     return jsonify(result)
 
 @app.route("/api/proveedores", methods=["POST"])
-@admin_required
+@login_required
 def create_proveedor():
+    if session.get("rol") not in ("admin", "compras"):
+        return jsonify({"error": "Acceso restringido"}), 403
     data   = request.get_json(silent=True) or {}
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo") or "").strip()
@@ -7341,8 +7343,10 @@ def create_proveedor():
     return jsonify({"ok": True, "id": new_id, "nombre": nombre}), 201
 
 @app.route("/api/proveedores/<int:pid>", methods=["PUT"])
-@admin_required
+@login_required
 def update_proveedor(pid):
+    if session.get("rol") not in ("admin", "compras"):
+        return jsonify({"error": "Acceso restringido"}), 403
     data   = request.get_json(silent=True) or {}
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo") or "").strip()

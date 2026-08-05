@@ -24,6 +24,50 @@
 
 ## 2026-08-04
 
+### [Control Pedidos] v12.29.49 — Fix: comprador no podía crear ni editar proveedores (botón Guardar no hacía nada)
+- Petición del usuario: "los compradores no pueden editar la ficha de
+  proveedor y si deberían poder, cuando se pulsa guardar no hace
+  nada". Confirmado a continuación que también debían poder **crear**
+  proveedores nuevos, no solo editar los existentes.
+- **Nota de versión / por qué v12.29.49 y no v12.29.48:** este fix se
+  desarrolló primero contra un snapshot (`control_pedidos_v12_29_47.zip`)
+  y se numeró en su momento como v12.29.48. Al recibir después el zip
+  de la versión realmente desplegada (`control_pedidos_v12_29_48.zip`),
+  esta ya incluía **otro** fix distinto con ese mismo número (el de
+  "familia repetida", justo debajo) — es decir, el número v12.29.48 se
+  usó dos veces en paralelo, en dos sesiones distintas, para dos
+  cambios distintos. Para no pisar la entrada real ni el código ya
+  desplegado, este fix de proveedores se ha renumerado a **v12.29.49**
+  y se ha aplicado directamente sobre la base real subida por el
+  usuario (que ya contenía el fix de familia repetida intacto).
+  **Lección para próximas entregas:** antes de numerar una versión
+  nueva, confirmar con el usuario cuál es el último número
+  realmente desplegado (no asumir que el último zip que nos pasaron
+  es el que sigue en producción sin cambios adicionales).
+- Causa encontrada: `POST /api/proveedores` y
+  `PUT /api/proveedores/<id>` (`app.py`) estaban protegidas con
+  `@admin_required` (solo `rol == "admin"`), así que un comprador
+  recibía `403 Solo administradores` al guardar. El frontend
+  (`saveProveedor()`, `templates/index.html`) no captura la excepción
+  que lanza el helper `api()` ante un error no controlado como este
+  403, así que el fallo era silencioso para el usuario.
+- Corrección (`app.py`): `create_proveedor()` y `update_proveedor()`
+  pasan de `@admin_required` a `@login_required` + comprobación
+  explícita `session.get("rol") not in ("admin", "compras")` → 403,
+  mismo patrón ya usado en `get_pedidos_eliminados()`. Ahora admin y
+  comprador pueden crear/editar proveedores; el rol `hotel` sigue sin
+  poder (solo consulta, sin cambios).
+- Se han dejado **sin tocar**, restringidas a admin: `delete_proveedor()`
+  y la importación masiva por Excel (`importar_proveedores`).
+- Corrección (`templates/index.html`): `_refreshProvAdminControls()`
+  ahora muestra el botón "+ Nuevo proveedor" de la vista Proveedores
+  también para `rol === 'compras'` (antes solo admin). El botón
+  "Importar Excel" sigue solo para admin.
+- `app.py` compila sin errores (`python3 -m py_compile`). Badge de
+  versión del sidebar actualizado a "V 12.29.49"; entrada añadida en
+  `CHANGELOG.md`; `README.md` sincronizado (solo el número de
+  versión).
+
 ### [Control Pedidos] v12.29.48 — Fix: aviso "familia repetida" saltaba con el primer pedido, sin duplicado real
 - Reportado: el comprador seguía recibiendo el aviso 🔴 "Familia/Partida
   REPETIDA" de forma constante, pese a que en el hotel no existía

@@ -1,3 +1,54 @@
+# v12.29.49 — 4 agosto 2026
+
+🐛 Fix: comprador no podía crear ni editar proveedores (botón Guardar
+no hacía nada)
+
+**Nota de versión:** esta corrección se hizo primero contra un
+snapshot del proyecto (subido como `control_pedidos_v12_29_47.zip`) y
+se numeró en su momento como v12.29.48. Al recibir después la versión
+realmente desplegada (`control_pedidos_v12_29_48.zip`), esta ya traía
+otro fix distinto — el de "familia repetida" de abajo — usando ese
+mismo número v12.29.48. Para no pisar esa entrada, este fix de
+proveedores se renumera aquí a **v12.29.49** y se aplica sobre la base
+real desplegada (que ya incluye el fix de familia repetida).
+
+**Síntoma reportado:** un usuario con rol `compras` (comprador) abría
+la ficha de un proveedor, pulsaba "Guardar cambios" y no pasaba nada
+visible — ni error, ni confirmación, ni cierre del modal.
+
+**Causa:** `POST /api/proveedores` y `PUT /api/proveedores/<id>`
+estaban protegidas con `@admin_required` (solo `rol == "admin"`). Un
+comprador recibía un `403 Solo administradores`. Como la función
+`saveProveedor()` del frontend no captura la excepción que lanza el
+helper `api()` ante un error no controlado, el 403 quedaba silencioso
+para el usuario (solo visible en la consola del navegador) — de ahí
+la sensación de que el botón "no hacía nada".
+
+**Cambios (`app.py`):**
+- `create_proveedor()` y `update_proveedor()`: pasan de `@admin_required`
+  a `@login_required` + comprobación explícita
+  `session.get("rol") not in ("admin", "compras")` → 403. Mismo patrón
+  ya usado en `get_pedidos_eliminados()`. Ahora admin y comprador
+  pueden crear/editar proveedores; el rol `hotel` sigue sin poder
+  (consulta únicamente, como ya lo era).
+- Sin cambios en `delete_proveedor()` ni en la importación masiva por
+  Excel (`importar_proveedores`): se mantienen restringidas a admin
+  por ser acciones más sensibles/destructivas.
+
+**Cambios (`templates/index.html`):**
+- `_refreshProvAdminControls()`: el botón "+ Nuevo proveedor" de la
+  vista Proveedores ahora también se muestra para `rol === 'compras'`
+  (antes solo para admin, lo que era inconsistente con el acceso
+  rápido "Nuevo proveedor" del dashboard, que sí lo permitía a
+  comprador desde `renderAccesosRapidos()`). El botón de "Importar
+  Excel" sigue solo para admin.
+- Badge de versión del sidebar actualizado a "V 12.29.49".
+
+**Archivos entregados en esta corrección:** `app.py`,
+`templates/index.html`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`,
+`README.md` (solo el número de versión), aplicados sobre la base real
+subida por el usuario (`control_pedidos_v12_29_48.zip`).
+
 # v12.29.48 — 4 agosto 2026
 
 🐛 Fix: aviso "familia repetida" saltaba con el primer pedido (sin

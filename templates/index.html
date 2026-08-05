@@ -1218,7 +1218,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.48
+          V 12.29.49
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5205,8 +5205,12 @@ let _provCache = {};
 // ── Mostrar/ocultar controles de admin en proveedores ─────────────────────
 function _refreshProvAdminControls() {
   const isAdmin = G.rol === 'admin';
+  // "Nuevo proveedor" también para comprador (rol 'compras'), igual que en
+  // el backend (create_proveedor ahora acepta admin+compras). La importación
+  // masiva por Excel se mantiene solo para admin.
+  const puedeCrear = G.rol === 'admin' || G.rol === 'compras';
   const btnNuevo = document.getElementById('btn-nuevo-proveedor');
-  if (btnNuevo) btnNuevo.style.display = isAdmin ? 'inline-flex' : 'none';
+  if (btnNuevo) btnNuevo.style.display = puedeCrear ? 'inline-flex' : 'none';
   const btnImport = document.getElementById('btn-importar-prov-trigger');
   if (btnImport) btnImport.style.display = isAdmin ? 'inline-flex' : 'none';
 }
