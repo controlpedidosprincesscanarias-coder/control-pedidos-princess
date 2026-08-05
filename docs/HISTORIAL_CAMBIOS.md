@@ -24,6 +24,43 @@
 
 ## 2026-08-05
 
+### [Control Pedidos] v12.29.53 — Fecha de entrega prevista también visible en la lista de Pedidos (no solo en Alertas)
+- Petición: el usuario observó que bajo "F. Tramitación" algunos
+  pedidos muestran una fecha de entrega estimada y otros no, y
+  planteó la hipótesis de que dependía de si el criterio era "días de
+  plazo" o "fecha prevista" del proveedor.
+- Investigación: revisando `_resolver_fecha_entrega_prevista` (`app.py`)
+  y su uso en `_clasificar_alertas`, se confirmó que el campo
+  `fecha_entrega_prevista` se rellena igual sin importar el origen del
+  dato (prioridad: fecha específica del proveedor → plazo en días).
+  El motivo real de la diferencia entre las dos capturas era otro: esa
+  fecha solo se pintaba en la tabla de **Alertas**
+  (`_renderAlertasTabla`), nunca en la lista de **Pedidos**
+  (`renderPedidosTable`) — y además Alertas solo muestra pedidos que
+  ese día generan alerta (con el fix v12.29.52 recién aplicado, un
+  pedido con fecha de entrega aún lejana puede no aparecer ahí en
+  absoluto). El usuario confirmó y pidió ver la misma información en
+  ambas pantallas.
+- Corrección (`templates/index.html`):
+  - Nueva función `_fechaEntregaPrevistaCliente(p)`: calcula en
+    cliente la fecha de entrega prevista con la misma prioridad que
+    el backend — 1) `fecha_entrega_especifica` si el proveedor dio un
+    día concreto; 2) `fecha_tramitacion + plazo_entrega_dias` si hay
+    plazo informado; 3) nada si no hay ninguno de los dos. No hizo
+    falta tocar el backend: `/api/pedidos` ya devuelve
+    `plazo_entrega_dias` y `fecha_entrega_especifica` en cada pedido
+    (`p.*` de `PEDIDO_SELECT`).
+  - `renderPedidosTable()`: la celda de F. Tramitación añade ahora,
+    cuando aplica, la misma línea "📅 fecha" (mismo estilo/tooltip)
+    que ya existía en Alertas — visible para cualquier pedido con
+    fecha específica o plazo informados, sin depender de si hoy
+    genera alerta.
+- Verificado: los bloques `<script>` de `templates/index.html` pasan
+  `node --check` sin errores tras el cambio. Badge de versión del
+  sidebar actualizado a "V 12.29.53"; entrada añadida en
+  `CHANGELOG.md`; `README.md` sincronizado (solo el número de
+  versión). `app.py` no se ha tocado en esta entrega.
+
 ### [Control Pedidos] v12.29.52 — Fix crítico: pedidos con fecha de entrega específica todavía lejana se reclamaban al proveedor por el criterio equivocado
 - Reportado con capturas: el pedido 692 (GY, CASA DELFIN SA), con
   `Fecha de entrega específica = 27/08/2026` indicada por el propio

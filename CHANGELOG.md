@@ -1,3 +1,41 @@
+# v12.29.53 — 5 agosto 2026
+
+✨ Fecha de entrega prevista ("📅 fecha") visible también en la lista
+de Pedidos, no solo en Alertas
+
+**Petición:** el usuario observó que bajo "F. Tramitación" algunos
+pedidos muestran una fecha de entrega estimada y otros no, y pensó que
+dependía de si el criterio configurado era "días de plazo" o "fecha
+prevista" del proveedor. Al revisar el código se confirmó que **no**
+depende del origen del dato (ambos casos usan el mismo campo
+`fecha_entrega_prevista`, con prioridad fecha específica → plazo en
+días) — lo que pasaba es que esa fecha solo se mostraba en la pantalla
+de **Alertas**, nunca en la lista de **Pedidos** (que además solo
+enseña los pedidos que ese día generan alerta, así que un pedido con
+fecha de entrega aún lejana puede no aparecer ahí en absoluto, sin
+relación con el tipo de dato). El usuario pidió ver la misma
+información en ambas pantallas.
+
+**Cambios (`templates/index.html`):**
+- Nueva función `_fechaEntregaPrevistaCliente(p)`: calcula en cliente
+  la fecha de entrega prevista de un pedido con la misma prioridad
+  que el backend (`_resolver_fecha_entrega_prevista` en `app.py`):
+  1) `fecha_entrega_especifica` si el proveedor dio un día concreto;
+  2) `fecha_tramitacion + plazo_entrega_dias` si hay plazo informado;
+  3) nada si no hay ninguno de los dos. No requiere cambios en el
+  backend: `/api/pedidos` ya devuelve `plazo_entrega_dias` y
+  `fecha_entrega_especifica` en cada pedido (`p.*` de `PEDIDO_SELECT`).
+- `renderPedidosTable()`: la celda de F. Tramitación ahora añade,
+  cuando aplica, la misma línea "📅 fecha" (mismo estilo y tooltip)
+  que ya existía en la tabla de Alertas — se muestra para cualquier
+  pedido con fecha específica o plazo informados, sin depender de si
+  hoy genera o no alerta.
+
+**Archivos entregados en esta corrección:** `templates/index.html`,
+`CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`, `README.md` (solo el
+número de versión). `app.py` no se ha tocado — el dato ya se recibía
+en el frontend, solo faltaba calcularlo y pintarlo en esa tabla.
+
 # v12.29.52 — 5 agosto 2026
 
 🐛 Fix crítico: pedidos con "Fecha de entrega específica" (o "Plazo

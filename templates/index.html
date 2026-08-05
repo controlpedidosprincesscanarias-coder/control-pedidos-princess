@@ -1265,7 +1265,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.52
+          V 12.29.53
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -4075,6 +4075,25 @@ function boolCell(v) {
   return v ? '<span class="bool-si">SÍ</span>' : '<span class="bool-no">—</span>';
 }
 
+// v12.29.53 — Calcula en cliente la fecha de entrega prevista de un pedido
+// (misma prioridad que el backend en _resolver_fecha_entrega_prevista):
+// 1) fecha_entrega_especifica, si el proveedor dio un día concreto.
+// 2) fecha_tramitacion + plazo_entrega_dias, si hay plazo informado.
+// 3) null si no hay ninguno de los dos. Se usa tanto en la lista de
+// Pedidos como (ya existía) en Alertas, para que el dato salga igual en
+// ambas pantallas sin importar si el origen es la fecha específica o el
+// plazo en días.
+function _fechaEntregaPrevistaCliente(p) {
+  if (p.fecha_entrega_especifica) return p.fecha_entrega_especifica;
+  const plazo = parseInt(p.plazo_entrega_dias);
+  if (p.fecha_tramitacion && plazo > 0) {
+    const base = new Date(String(p.fecha_tramitacion).slice(0, 10) + 'T00:00:00');
+    base.setDate(base.getDate() + plazo);
+    return base.toISOString().split('T')[0];
+  }
+  return null;
+}
+
 function renderPedidosTable(pedidos) {
   const tbody = document.getElementById('pedidos-tbody');
   tbody.innerHTML = pedidos.map(p => {
@@ -4085,6 +4104,10 @@ function renderPedidosTable(pedidos) {
     // registrado en historial_estados y alertado a admins por Telegram
     // (Fase 3); esto solo lo hace visible también en el propio listado.
     const noAutoriz = p.no_autorizado_previo ? `<span title="Este pedido llegó a ENVIADO AL PROVEEDOR sin pasar por el circuito de autorización de Dirección General — revisar" style="display:inline-block;background:#f8d7da;border:1px solid #dc3545;color:#721c24;border-radius:4px;font-size:10px;padding:1px 5px;margin-left:4px;font-weight:700">⚠️ SIN AUTORIZAR</span>` : '';
+    const entregaPrevPedidos = _fechaEntregaPrevistaCliente(p);
+    const entregaPrevPedidosLabel = entregaPrevPedidos
+      ? `<br><span style="font-size:10px;color:#1a73e8" title="Entrega prevista (fecha específica o plazo del proveedor)">📅 ${fmtDate(entregaPrevPedidos)}</span>`
+      : '';
     return `
     <tr onclick="openPedidoModal(${p.id})">
       <td class="monospace">${p.norden||'—'}</td>
@@ -4093,7 +4116,7 @@ function renderPedidosTable(pedidos) {
       <td>${fmtDate(p.fecha_solicitud)}</td>
       <td class="monospace">${p.pedido_num||'—'}${techo}${noAutoriz}</td>
       <td>${estadoBadge(p.estado)}</td>
-      <td>${fmtDate(p.fecha_tramitacion)}</td>
+      <td>${fmtDate(p.fecha_tramitacion)}${entregaPrevPedidosLabel}</td>
       <td>${p.proveedor_nombre||'—'}</td>
       <td class="comentarios-cell" title="${(p.observaciones||'').replace(/"/g,'&quot;')}">${p.observaciones ? `<span class="comentarios-text">${p.observaciones}</span>` : '<span class="bool-no">—</span>'}</td>
       <td style="text-align:center">${p.has_adjuntos ? `<span class="adj-indicator" title="Tiene archivos adjuntos">📎</span>` : ''}</td>
