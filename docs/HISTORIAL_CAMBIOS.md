@@ -22,7 +22,148 @@
 
 ---
 
+## 2026-08-05
+
+### [Control Pedidos] v12.29.52 — Fix crítico: pedidos con fecha de entrega específica todavía lejana se reclamaban al proveedor por el criterio equivocado
+- Reportado con capturas: el pedido 692 (GY, CASA DELFIN SA), con
+  `Fecha de entrega específica = 27/08/2026` indicada por el propio
+  proveedor y grabada en el pedido, apareció en Alertas como 🔴
+  URGENTE ("37 días") con "🚚 Reclamado auto hoy" — pese a que
+  faltaban 22 días para la fecha que el proveedor había comprometido.
+  Pregunta del usuario: "¿qué criterio está siguiendo?".
+- Causa raíz (`app.py`): hay dos vías para calcular la alerta de un
+  pedido en ENVIADO AL PROVEEDOR/ENTREGA PARCIAL — (1) vía plazo
+  (`_alertas_plazo_entrega`, basada en la fecha de entrega
+  específica o `fecha_tramitacion + plazo_entrega_dias`, que solo
+  devuelve algo en días concretos: N días antes, el día exacto, o
+  cada M días después de vencer) y (2) vía estándar
+  (`_build_umbrales`, cuenta días desde `fecha_tramitacion` sin mirar
+  ninguna fecha de entrega). Tanto en el job diario
+  (`_job_alertas_diarias_inner`) como en el endpoint que alimenta la
+  pantalla de Alertas (`_clasificar_alertas`, usado por
+  `/api/stats`), el código decidía la vía con
+  `if info_plazo: ... else: <vía estándar>` — pero `None` de la vía 1
+  significa dos cosas distintas que el código no distinguía: "sin
+  plazo/fecha informados" (correcto caer a la vía estándar) o "con
+  fecha informada, pero hoy no toca aviso por esa vía" (debería ser
+  simplemente "sin alerta hoy", nunca caer a la vía estándar). En el
+  segundo caso caía igualmente a la vía estándar, que solo mira días
+  desde `fecha_tramitacion` (37 días) e ignora la fecha de entrega
+  concreta y todavía vigente — de ahí la reclamación automática
+  injustificada.
+- Ya existía una función `_debe_usar_logica_plazo(pedido)` escrita
+  exactamente para resolver esta ambigüedad (pedido con plazo/fecha
+  informados Y función activada → usar solo la vía plazo), pero
+  **nunca se llamaba desde ningún sitio** — quedó huérfana desde que
+  se creó.
+- Corrección: en `_job_alertas_diarias_inner` y en `_clasificar_alertas`
+  se usa ahora `_debe_usar_logica_plazo(p)` para decidir de entrada si
+  el pedido "vive" en la vía de plazo. Si es así: se evalúa
+  `_alertas_plazo_entrega()`; si hoy no toca aviso por esa vía, se
+  omite sin más (sin alerta, sin reclamación, sin caer a la vía
+  estándar). La vía estándar solo se aplica ahora a pedidos sin
+  ninguna fecha/plazo de entrega informado, o con la función
+  desactivada globalmente (`activar_uso_plazo_entrega = 0`).
+- **Nota importante:** el fix evita que se repita a partir de ahora,
+  pero la reclamación automática de hoy para el pedido 692 ya había
+  salido antes de aplicar la corrección — no se puede deshacer un
+  correo ya enviado. Si hace falta, avisar manualmente al proveedor
+  de que fue un error del sistema.
+- `app.py` compila sin errores (`python3 -m py_compile`). Badge de
+  versión del sidebar actualizado a "V 12.29.52"; entrada añadida en
+  `CHANGELOG.md`; `README.md` sincronizado (solo el número de
+  versión).
+
 ## 2026-08-04
+
+### [Control Pedidos] v12.29.51 — Fix: contador "N pedidos" no se actualizaba a 0 cuando la búsqueda no encontraba resultados
+- Reportado: "en la pantalla de pedidos así como en la de alertas, la
+  búsqueda por código pedido no funciona", con capturas mostrando una
+  búsqueda por `4130` sin resultados ("No hay pedidos que mostrar")
+  pero con el contador inferior aún en "721 pedidos".
+- Investigación: se repasó `loadPedidos()`/backend `get_pedidos()`
+  (búsqueda `ILIKE` sobre `pedido_num`, `proveedor.nombre`,
+  `observaciones`, `hotel.codigo`) y `aplicarFiltrosAlertas()`
+  (filtro cliente sobre las alertas activas). Ambos funcionan
+  correctamente por subcadena. Al confirmar con el usuario el dato
+  exacto, se aclaró que `4130` era un error de tecleo por `40130` — la
+  búsqueda en sí no tenía ningún bug de fondo.
+- Bug real detectado durante la investigación (`templates/index.html`,
+  `loadPedidos()`): con 0 resultados, `renderPagination()` —única
+  función que actualiza `#page-info-text` ("N pedidos") y
+  `#pagination`— no se llegaba a invocar, así que el contador y la
+  paginación se quedaban con los valores de la carga/búsqueda
+  anterior, en vez de reflejar que no hay resultados. Esto reforzaba
+  la sensación de que "la búsqueda no funciona" aunque el filtrado en
+  sí fuera correcto.
+- Corrección: en la rama de 0 resultados de `loadPedidos()`, se fija
+  `#page-info-text` a `"0 pedidos"` y se vacía `#pagination`
+  (`innerHTML = ''`), igual que ocurriría con cualquier búsqueda sin
+  coincidencias.
+- Solo se entrega este bug confirmado — no se ha tocado la lógica de
+  búsqueda (backend `ILIKE` ni filtro cliente de Alertas), que ya
+  funcionaba como se esperaba.
+- Verificado: los 8 bloques `<script>` de `templates/index.html`
+  pasan `node --check` sin errores tras el cambio. Badge de versión
+  del sidebar actualizado a "V 12.29.51"; entrada añadida en
+  `CHANGELOG.md`; `README.md` sincronizado (solo el número de
+  versión). `app.py` no se ha tocado — el cambio es exclusivamente de
+  frontend.
+
+### [Control Pedidos] v12.29.50 — Rol hotel sin acceso visible a proveedores + avisos de validación del modal de Pedidos con el patrón visual de "Acceso restringido"
+- **Petición 1 (confirmación de permisos):** el usuario confirmó que
+  el rol `hotel` no debe poder crear ni editar proveedores (solo
+  `admin` y `compras`, ver v12.29.49) y pidió "evitar los errores
+  siempre" — es decir, no mostrar en el frontend acciones que el
+  usuario no puede completar, aunque el backend ya las bloquee.
+  - Causa: el backend ya devolvía 403 para `hotel` en
+    `create_proveedor`/`update_proveedor` (desde v12.29.49), pero el
+    botón "✏ Editar" seguía visible en la lista de Proveedores para
+    ese rol, así que `hotel` se topaba con el mismo síntoma original
+    (pulsar Guardar y que "no pase nada").
+  - Corrección (`templates/index.html`):
+    - Template de fila de la lista de Proveedores: para
+      `G.rol === 'hotel'` el botón "✏ Editar" se sustituye por un
+      indicador "🔒 Solo lectura" (con tooltip). Para `admin` y
+      `compras` no cambia nada.
+    - `saveProveedor()`: guardia defensiva al inicio — si
+      `G.rol === 'hotel'`, corta la ejecución y muestra el aviso
+      visual nuevo (ver punto 2) en vez de dejar que la petición
+      llegue al backend y falle en silencio. Es un cinturón de
+      seguridad adicional al botón oculto, por si `saveProveedor()`
+      se invocara desde otro punto en el futuro.
+- **Petición 2 (más visual):** en la ventana de crear/editar pedido,
+  cuando falta algo obligatorio y da error, se pidió que el aviso se
+  vea "siguiendo el mismo patrón" que el aviso de "Acceso
+  restringido" del sidebar (tarjeta oscura centrada con icono/título),
+  en vez del pequeño toast rojo de esquina — "es más visual".
+  - Corrección (`templates/index.html`):
+    - Nuevo componente `#form-alert-toast` (HTML + CSS): mismo patrón
+      que `#sb-access-toast` (tarjeta `rgba(26,38,65,.97)` centrada,
+      `position:fixed;bottom:80px;left:50%`), con borde rojo (en vez
+      de dorado) y título/icono configurables por llamada; admite una
+      segunda línea de detalle (útil para listas de campos que
+      faltan, p.ej. "Nº Pedido" + "PDF" a la vez).
+    - Nueva función `showFormAlert(mensaje, { title, detail,
+      duracion })` que rellena y muestra el componente (auto-oculta a
+      los 6 s por defecto).
+    - `savePedido()`: los 10 `toast(msg,'error',...)` de validación y
+      error de la función pasan a `showFormAlert(...)` — modo hotel
+      (cancelar no permitido, error al guardar albarán), falta hotel,
+      nota obligatoria (CANCELADO / denegar DG), proveedor sin
+      asignar, proveedor sin email, Nº Pedido/PDF faltante (con la
+      lista en la línea de detalle), familia/importe del techo, error
+      de negocio del backend al crear/actualizar, y error de conexión
+      del `catch`. Los mensajes de éxito (`'success'`) y el aviso de
+      techo superado (`'warning'`) se mantienen como el toast pequeño
+      de siempre — el patrón nuevo es solo para errores/validación en
+      ese modal, según lo pedido.
+- Verificación: los 8 bloques `<script>` de `templates/index.html`
+  pasan `node --check` sin errores de sintaxis tras los cambios.
+  Badge de versión del sidebar actualizado a "V 12.29.50"; entrada
+  añadida en `CHANGELOG.md`; `README.md` sincronizado (solo el número
+  de versión). `app.py` no se ha tocado en esta entrega — ambos
+  cambios eran exclusivamente de frontend.
 
 ### [Control Pedidos] v12.29.49 — Fix: comprador no podía crear ni editar proveedores (botón Guardar no hacía nada)
 - Petición del usuario: "los compradores no pueden editar la ficha de

@@ -3195,8 +3195,31 @@ def _job_alertas_diarias_inner():
 
     for p in alertas_raw:
         # ── Lógica por plazo de entrega (si el pedido la tiene y está activada) ─
-        info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
-        if info_plazo:
+        # v12.29.52 — FIX: un pedido con fecha_entrega_especifica o
+        # plazo_entrega_dias informado debe evaluarse SIEMPRE por esta vía
+        # mientras la tenga informada — nunca por la lógica estándar de
+        # "días desde fecha_tramitacion", aunque hoy no le toque disparar
+        # nada (p. ej. faltan más de N días para la entrega, o está en la
+        # ventana de silencio). Antes se usaba `if info_plazo:` para decidir
+        # esto, pero _alertas_plazo_entrega() devuelve None tanto si el
+        # pedido no tiene plazo/fecha informados COMO si los tiene pero hoy
+        # no es día de disparo — el código no distinguía ambos casos y en
+        # el segundo caía por error a la lógica estándar (días desde
+        # fecha_tramitacion), disparando alertas/reclamaciones automáticas
+        # ignorando una fecha de entrega específica todavía lejana. Ahora
+        # se usa _debe_usar_logica_plazo(p) —ya existía, pero no se llamaba
+        # desde ningún sitio— para decidir de entrada si el pedido "vive"
+        # en la vía de plazo; si es así, se evalúa _alertas_plazo_entrega()
+        # y se continúa al siguiente pedido pase lo que pase (haya o no
+        # alerta hoy), sin tocar nunca la lógica estándar.
+        if _debe_usar_logica_plazo(p):
+            info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
+            if not info_plazo:
+                # Tiene fecha/plazo informado pero hoy no toca ningún aviso
+                # por esa vía (todavía faltan días, o está en la ventana de
+                # silencio) — no caer a la lógica estándar.
+                omitidos += 1
+                continue
             # Usar lógica de plazo en lugar de la estándar para ENVIADO AL PROVEEDOR
             nivel  = info_plazo["nivel"]
             motivo = info_plazo["motivo"]
@@ -8612,8 +8635,17 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
     for p in pedidos_raw:
         _normalizar_fecha_entrega_especifica(p)
         # ── Lógica plazo de entrega ──────────────────────────────────────
-        info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
-        if info_plazo:
+        # v12.29.52 — mismo fix que en _job_alertas_diarias_inner: un
+        # pedido con fecha_entrega_especifica/plazo_entrega_dias informado
+        # se evalúa SIEMPRE por esta vía (con _debe_usar_logica_plazo), y
+        # si hoy no le toca ningún aviso por esta vía, sencillamente no
+        # genera alerta — nunca cae a la lógica estándar de "días desde
+        # fecha_tramitacion", que ignoraría una fecha de entrega concreta
+        # todavía lejana y mostraría el pedido como urgente sin serlo.
+        if _debe_usar_logica_plazo(p):
+            info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
+            if not info_plazo:
+                continue
             dias = _dias_desde_alerta(p.get("fecha_tramitacion")) or 0
             p["dias_tramitacion"]      = dias
             p["nivel_alerta"]          = info_plazo["nivel"]

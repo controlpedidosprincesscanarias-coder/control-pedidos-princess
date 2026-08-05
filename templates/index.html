@@ -680,6 +680,44 @@ tbody tr:last-child{border-bottom:none}
   color: rgba(255,255,255,0.65);
   margin-top: 4px;
 }
+/* v12.29.50 — Aviso de validación de formularios (mismo patrón visual que
+   #sb-access-toast / "Acceso restringido"), reutilizado para los errores
+   de campos obligatorios en el modal de Pedidos (antes salían como un
+   pequeño toast rojo en la esquina, poco visible). */
+#form-alert-toast {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: rgba(26,38,65,0.97);
+  color: #fff;
+  border-left: 4px solid #dc3545;
+  border-radius: 10px;
+  padding: 14px 22px;
+  font-size: 13px;
+  font-weight: 500;
+  z-index: 10000;
+  box-shadow: 0 4px 24px rgba(0,0,0,0.35);
+  max-width: 420px;
+  text-align: center;
+  display: none;
+  pointer-events: none;
+}
+#form-alert-toast .sb-toast-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #ff8a8a;
+  margin-bottom: 4px;
+}
+#form-alert-toast .sb-toast-msg {
+  line-height: 1.5;
+}
+#form-alert-toast .sb-toast-roles {
+  font-size: 12px;
+  color: rgba(255,255,255,0.65);
+  margin-top: 6px;
+  text-align: left;
+}
 </style>
   <!-- EmailJS SDK — envío real desde Gmail sin servidor SMTP -->
   <script src="https://cdn.jsdelivr.net/npm/@emailjs/browser@4/dist/email.min.js"></script>
@@ -1152,6 +1190,15 @@ tbody tr:last-child{border-bottom:none}
   <div class="sb-toast-roles" id="sb-access-toast-roles"></div>
 </div>
 
+<!-- v12.29.50 — Aviso visual de validación (campos obligatorios / errores
+     de negocio) en modales de formulario, ej. modal-pedido. Mismo patrón
+     que #sb-access-toast pero con borde/icono de error en vez de bloqueo. -->
+<div id="form-alert-toast">
+  <div class="sb-toast-title" id="form-alert-toast-title">⚠️ Faltan datos</div>
+  <div class="sb-toast-msg" id="form-alert-toast-msg"></div>
+  <div class="sb-toast-roles" id="form-alert-toast-detail"></div>
+</div>
+
 <div id="app" style="display:none">
   <!-- Sidebar -->
   <div id="sidebar">
@@ -1218,7 +1265,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.49
+          V 12.29.52
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3292,6 +3339,34 @@ function _showSbAccessToast(view, allowedRoles) {
   _sbToastTimer = setTimeout(() => { t.style.display = 'none'; }, 3500);
 }
 
+// v12.29.50 — Aviso de validación en formularios (mismo patrón visual que
+// _showSbAccessToast/"Acceso restringido", más visible que el toast rojo
+// de esquina). Uso: showFormAlert('mensaje') o showFormAlert('mensaje',
+// { title:'⚠️ Otro título', detail:'línea secundaria o lista', duracion:7000 }).
+let _formAlertTimer = null;
+function showFormAlert(message, opts = {}) {
+  const title    = opts.title || '⚠️ Faltan datos';
+  const detail   = opts.detail || '';
+  const duracion = opts.duracion || 6000;
+  const esc = (s) => String(s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  document.getElementById('form-alert-toast-title').textContent = title;
+  document.getElementById('form-alert-toast-msg').innerHTML = esc(message).replace(/\n/g, '<br>');
+  const detailEl = document.getElementById('form-alert-toast-detail');
+  if (detail) {
+    detailEl.innerHTML = esc(detail).replace(/\n/g, '<br>');
+    detailEl.style.display = 'block';
+  } else {
+    detailEl.textContent = '';
+    detailEl.style.display = 'none';
+  }
+  const t = document.getElementById('form-alert-toast');
+  t.style.display = 'block';
+  if (_formAlertTimer) clearTimeout(_formAlertTimer);
+  _formAlertTimer = setTimeout(() => { t.style.display = 'none'; }, duracion);
+}
+
+
 function showViewGuarded(view, el) {
   const item = el || document.querySelector(`[data-view="${view}"]`);
   const rolesAttr = item ? item.getAttribute('data-roles') : null;
@@ -3966,6 +4041,13 @@ async function loadPedidos() {
 
   if (!d.pedidos.length) {
     document.getElementById('pedidos-empty').classList.remove('section-hidden');
+    // v12.29.51 — antes, con 0 resultados, el contador ("N pedidos") y la
+    // paginación se quedaban con los valores de la búsqueda/página
+    // anterior (p.ej. "721 pedidos" aunque diga "No hay pedidos que
+    // mostrar"), porque renderPagination() solo se llamaba en la rama de
+    // "sí hay resultados". Ahora también se actualiza a 0 aquí.
+    document.getElementById('page-info-text').textContent = '0 pedidos';
+    document.getElementById('pagination').innerHTML = '';
   } else {
     document.getElementById('pedidos-table-wrap').style.display='';
     renderPedidosTable(d.pedidos);
@@ -4816,7 +4898,7 @@ async function savePedido() {
     if (!id) return;
     const estadoNuevo = val('p-estado');
     if (estadoNuevo === 'CANCELADO') {
-      toast('No tienes permiso para cancelar pedidos', 'error'); return;
+      showFormAlert('No tienes permiso para cancelar pedidos', { title: '🚫 Acción no permitida' }); return;
     }
     const body = {
       entrada_albaran_num: getAlbaranCombined(),
@@ -4826,7 +4908,7 @@ async function savePedido() {
     btn.disabled = true;
     const r = await api(`/api/pedidos/${id}`, 'PUT', body);
     btn.disabled = false;
-    if (r && r.error) { toast(r.error, 'error'); return; }
+    if (r && r.error) { showFormAlert(r.error); return; }
     await _enviarEmailsPendientesEstado(r.emails_pendientes);
     toast('Código DALI / SAP actualizado', 'success');
     closeModal('modal-pedido');
@@ -4837,7 +4919,7 @@ async function savePedido() {
 
   const hotel = document.getElementById('p-hotel').value;
   const depto = document.getElementById('p-depto').value;
-  if (!hotel) { toast('Selecciona un hotel','error'); return; }
+  if (!hotel) { showFormAlert('Selecciona un hotel para poder guardar el pedido.'); return; }
 
   // Validar nota obligatoria si se cambia desde CANCELADO, o si el destino
   // es DENEGADO POR DIRECCION GENERAL (2026-08-01 — rediseño Techo de
@@ -4851,9 +4933,9 @@ async function savePedido() {
     if (!notaSave) {
       document.getElementById('p-nota').focus();
       document.getElementById('p-nota').style.borderColor = '#dc3545';
-      toast(vaADenegarDGSave
+      showFormAlert(vaADenegarDGSave
         ? 'Debes indicar el motivo de la denegación'
-        : 'Debes indicar el motivo del cambio desde estado CANCELADO', 'error');
+        : 'Debes indicar el motivo del cambio desde estado CANCELADO', { title: '⚠️ Motivo obligatorio' });
       return;
     }
   }
@@ -4871,21 +4953,18 @@ async function savePedido() {
     const _proveedorNombre = document.getElementById('p-proveedor-input').value.trim();
     const _proveedorEmail  = document.getElementById('p-proveedor').dataset.email || '';
     if (!_proveedorId) {
-      toast(
-        '⚠️ No se puede pasar a ENVIADO AL PROVEEDOR. El pedido no tiene proveedor asignado. Asigne un proveedor antes de cambiar el estado.',
-        'error', 8000
+      showFormAlert(
+        'No se puede pasar a ENVIADO AL PROVEEDOR. El pedido no tiene proveedor asignado. Asigne un proveedor antes de cambiar el estado.',
+        { title: '⚠️ No se puede continuar', duracion: 8000 }
       );
       document.getElementById('p-proveedor-input').focus();
       return;
     }
     // 0b. Comprobar que el proveedor tiene email en su ficha (contacto principal)
     if (!_proveedorEmail) {
-      toast(
-        `⚠️ No se puede pasar a ENVIADO AL PROVEEDOR.
-
-El proveedor «${_proveedorNombre}» no tiene correo electrónico configurado en su ficha.
-Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva a intentarlo.`,
-        'error', 10000
+      showFormAlert(
+        `El proveedor «${_proveedorNombre}» no tiene correo electrónico configurado en su ficha.\nAcceda a la ficha del proveedor, añada un email al contacto principal y vuelva a intentarlo.`,
+        { title: '⚠️ No se puede continuar', duracion: 10000 }
       );
       return;
     }
@@ -4897,7 +4976,11 @@ Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva 
     if (!_pedidoNumVal)  _faltas.push('• Nº Pedido (DALI / SAP) — campo obligatorio');
     if (!_tienePdf)      _faltas.push('• Documento PDF del pedido — adjunta al menos un archivo en "Adjuntar doc. / correo"');
     if (_faltas.length) {
-      toast('Para ENVIADO AL PROVEEDOR falta:\n' + _faltas.join('\n'), 'error', 7000);
+      showFormAlert('Para pasar a ENVIADO AL PROVEEDOR falta:', {
+        title: '⚠️ No se puede continuar',
+        detail: _faltas.join('\n'),
+        duracion: 7000
+      });
       const _numInput = document.getElementById('p-pedido-num');
       if (!_pedidoNumVal) {
         _numInput.style.borderColor = '#dc3545';
@@ -4915,8 +4998,8 @@ Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva 
 
   // Validación frontend básica de techo
   if (sujetoTecho) {
-    if (!familiaId) { toast('Selecciona una familia de artículos para el techo de gastos', 'error'); return; }
-    if (!importeVal || importeVal <= 0) { toast('Introduce el importe del pedido (> 0)', 'error'); return; }
+    if (!familiaId) { showFormAlert('Selecciona una familia de artículos para el techo de gastos.'); return; }
+    if (!importeVal || importeVal <= 0) { showFormAlert('Introduce el importe del pedido (mayor que 0 €).'); return; }
     if (importeVal > 3000) {
       const ok = confirm(`⚠️ El importe ${importeVal.toLocaleString('es-ES',{minimumFractionDigits:2})} € supera el límite individual de 3.000 €.\n¿Deseas continuar de todas formas?`);
       if (!ok) return;
@@ -4957,7 +5040,7 @@ Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva 
     } else {
       r = await api('/api/pedidos', 'POST', body);
     }
-    if (r.error) { toast(r.error,'error'); return; }
+    if (r.error) { showFormAlert(r.error); return; }
     // (2026-08-01 — rediseño Techo de Gastos, Fase 6) Antes aquí se
     // interpretaba `r.techo_errores` con un confirm() de JS que cualquiera
     // podía saltarse sin dejar rastro (_forzar_techo). Ya no existe: el
@@ -4990,7 +5073,7 @@ Acceda a la ficha del proveedor, añada un email al contacto principal y vuelva 
   } catch(e) {
     const msg = e?.message || String(e) || 'Error desconocido';
     console.error('[guardarPedido]', e);
-    toast('Error de conexión: ' + msg, 'error');
+    showFormAlert('Error de conexión: ' + msg, { title: '🔌 Error de conexión' });
   }
   finally { btn.disabled=false; btn.textContent='Guardar'; }
 }
@@ -5286,7 +5369,9 @@ async function loadProveedores() {
       <td style="font-size:.85rem;line-height:1.5">${contactos}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.observaciones||'')}">${p.observaciones||'—'}</td>
       <td>
-        <button class="btn btn-ghost btn-sm" onclick="openProveedorModal(${p.id})">✏ Editar</button>
+        ${G.rol === 'hotel'
+          ? '<span style="color:var(--text-secondary);font-size:.8rem" title="Los usuarios de hotel no pueden editar proveedores">🔒 Solo lectura</span>'
+          : `<button class="btn btn-ghost btn-sm" onclick="openProveedorModal(${p.id})">✏ Editar</button>`}
       </td>
     </tr>`;
   }).join('');
@@ -5464,6 +5549,13 @@ function openNuevoProveedorModal() {
 }
 
 async function saveProveedor() {
+  // Guardia defensiva: el rol hotel no puede crear/editar proveedores.
+  // El botón ya está oculto para hotel en la vista de Proveedores, pero
+  // esto evita el error 403 silencioso si se llegara a invocar igualmente.
+  if (G.rol === 'hotel') {
+    showFormAlert('Los usuarios de hotel no pueden crear ni editar proveedores.', { title: '🔒 Acción no disponible' });
+    return;
+  }
   const isNew = !G.editingProveedorId;
   const body = {
     observaciones: document.getElementById('pv-obs').value.trim(),
