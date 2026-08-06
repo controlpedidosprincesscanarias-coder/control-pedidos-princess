@@ -1,3 +1,102 @@
+# v12.29.58 — 6 agosto 2026 09:45
+
+🐛 Fix real: el panel de Alertas nunca reflejaba los correos automáticos como enviados
+
+**Confirmado con un correo real recibido por el usuario** (pedido 694, aviso
+de firma pendiente) que la pantalla seguía mostrando "Sin notificar" pese a
+que el email había salido correctamente.
+
+**Causa:** `ultima_notif_email` (la subconsulta que decide si la columna
+"Notificación" del panel de Alertas dice "Notificado" o "Sin notificar")
+**solo miraba `emails_log`** — la tabla donde se registran los envíos
+MANUALES (botón "Notificar"/"Re-notificar"). Pero **todos los correos
+automáticos** (reclamación al proveedor, aviso de firma pendiente, aviso de
+cotización sin proveedor...) se encolan y despachan a través de una tabla
+distinta, `emails_sistema_pendientes`, que esta subconsulta nunca
+consultaba. Resultado: cualquier pedido que solo hubiera recibido avisos
+automáticos (nunca un clic manual) se quedaba marcado "Sin notificar" para
+siempre en pantalla, aunque el correo hubiera salido de verdad — visible
+también en la fila 723 de la propia captura del usuario, con "Reclamado
+auto hace hoy" pero "Sin notificar" al mismo tiempo, contradictorio a
+simple vista.
+
+**Corregido:** `PEDIDO_SELECT_STATS` combina ahora ambas fuentes con
+`GREATEST()` — `emails_log.creado_en` (manual) y
+`emails_sistema_pendientes.enviado_en` (automático, solo filas con
+`enviado=TRUE`, que es el momento real de envío, no el de encolado). Este
+bug era sistemático — afectaba a todo pedido notificado únicamente por vía
+automática, no solo al caso reportado.
+
+`README.md` actualizado a la versión actual. `app.py` compila sin errores.
+Badge de versión del sidebar actualizado a "V 12.29.58".
+
+# v12.29.56 — 6 agosto 2026 09:15
+
+🐛 Telegram bloqueado por el usuario: dejar de reintentar, en vez de fallar cada día
+
+**Confirmado con log real de Render**: el pedido 13513 fallaba siempre con
+`HTTP 403: {"error_code":403,"description":"Forbidden: bot was blocked by
+the user"}` — la persona destinataria bloqueó el bot en su Telegram. No es
+un fallo del sistema, así que reintentar cada día (con el fix de v12.29.54)
+tampoco iba a arreglarlo — a petición del usuario, ahora se da por
+terminado en vez de seguir intentándolo indefinidamente.
+
+**Cambios:**
+- `_send_telegram()` detecta errores 400/403 de Telegram que indican que
+  **nunca** va a poder entregarse reintentando (bot bloqueado, cuenta
+  desactivada, chat inexistente) y los marca con un nuevo flag
+  `permanente: True` — a diferencia de un fallo transitorio (timeout, 5xx),
+  que sí debe seguir reintentándose al día siguiente.
+- Los 4 puntos donde se registra el resultado en `whatsapp_log`
+  (`telegram_estado`, `telegram_auto` ×2, `telegram_techo`) tratan ahora
+  `ok=True OR permanente=True` como "hecho" — un bot bloqueado deja de
+  generar un intento fallido cada día, sin necesidad de tocar nada más.
+- El correo automático NO se ve afectado por este cambio — es un canal
+  totalmente independiente (cola `emails_sistema_pendientes`, revisado
+  aparte a petición del usuario: sin ningún bug encontrado, el
+  comportamiento es el esperado del diseño "se envía desde el navegador
+  de quien tenga la app abierta").
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.56".
+
+# v12.29.54 — 6 agosto 2026 08:30
+
+🐛 Fix: un envío fallido bloqueaba las notificaciones automáticas para siempre
+
+**Reportado:** pedidos con 50-65 días sin firma/cotización seguían en "Sin
+notificar" pese a llevar muchísimo tiempo esperando, mientras otros del
+mismo hotel sí se notificaban con normalidad. Diagnosticado con logs de
+Render en varias rondas (`RECLAMACION-DEBUG` y `[SCHEDULER]`).
+
+**Causa real, confirmada en el código:** `_nunca_notificado()` y
+`_ya_notificado_hoy()` contaban CUALQUIER fila en `whatsapp_log`, tuviera
+o no éxito (`enviado=0` también contaba). Si el primer intento de enviar
+un Telegram fallaba — por ejemplo, sin destinatarios configurados para
+ese hotel en el evento "alerta_pedido_hotel" (Admin → Config. Avisos) —
+igual quedaba registrada una fila, y a partir de ahí el sistema daba por
+"ya intentado" un envío que nunca llegó a nadie, **bloqueando cualquier
+reintento para siempre**. La pantalla de Alertas, en cambio, sí distinguía
+bien éxito de fallo — por eso seguía mostrando correctamente "Sin
+notificar" mientras el sistema, por dentro, ya había dejado de intentarlo.
+
+**Corregido con cuidado de no crear un problema nuevo:**
+- `_nunca_notificado()` ahora exige `enviado=1` — un fallo ya no cuenta
+  como "hecho para siempre".
+- `_ya_notificado_hoy()` se deja **a propósito sin ese filtro** — sigue
+  contando cualquier intento (éxito o fallo) dentro del MISMO día, para
+  seguir frenando reintentos cada minuto si algo sigue fallando. El
+  resultado: un pedido que falla se reintenta **una vez al día**, no
+  1440 veces — hasta que se resuelva la causa de fondo (previsiblemente,
+  revisar los destinatarios de "alerta_pedido_hotel" para el hotel
+  afectado en Admin → Config. Avisos) y el envío tenga éxito de verdad.
+- Mismo fix aplicado a `_ya_reclamado_hoy_manual()`, revertido después al
+  mismo criterio por la misma razón — solo se mantiene el fix en
+  `_nunca_notificado()`.
+
+`app.py` compila sin errores. Badge de versión del sidebar actualizado a
+"V 12.29.54".
+
 # v12.29.53 — 5 agosto 2026
 
 ✨ Fecha de entrega prevista ("📅 fecha") visible también en la lista

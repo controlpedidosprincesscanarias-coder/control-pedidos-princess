@@ -22,6 +22,109 @@
 
 ---
 
+## 2026-08-06 09:45
+
+### [Control Pedidos] v12.29.58 — Fix real: el panel de Alertas nunca reflejaba los correos automáticos como enviados
+- Continuación directa de v12.29.56, confirmado con un correo real
+  recibido por el usuario (pedido 694, aviso de firma pendiente): el
+  correo salió correctamente, pero la pantalla seguía mostrando "Sin
+  notificar".
+- Causa: `ultima_notif_email` (subconsulta de `PEDIDO_SELECT_STATS`
+  que decide si la columna "Notificación" del panel de Alertas dice
+  "Notificado" o "Sin notificar") solo miraba `emails_log` — la tabla
+  de envíos MANUALES (botón "Notificar"/"Re-notificar"). Todos los
+  correos automáticos (reclamación al proveedor, aviso de firma
+  pendiente, aviso de cotización sin proveedor) se encolan y
+  despachan vía `emails_sistema_pendientes`, una tabla distinta que
+  esta subconsulta nunca consultaba. Bug sistemático, no solo del
+  caso reportado — visible también en la fila 723 de la propia
+  captura del usuario, con "🤖 Reclamado auto hace hoy" y "⛔ Sin
+  notificar" a la vez, contradictorio a simple vista.
+- Corregido: `PEDIDO_SELECT_STATS` combina ahora ambas fuentes con
+  `GREATEST()` entre `emails_log.creado_en` (manual) y
+  `emails_sistema_pendientes.enviado_en` (automático, solo filas con
+  `enviado=TRUE` — el momento real de envío, no el de encolado).
+- `README.md` actualizado a la versión actual (preferencia del
+  usuario: mantenerlo siempre al día junto con el `CHANGELOG.md`).
+  No existe `test_flujo.py` en este proyecto — nada que actualizar
+  ahí.
+- `app.py` compila sin errores. Badge de versión del sidebar
+  actualizado a "V 12.29.58"; entrada añadida en `CHANGELOG.md`.
+
+## 2026-08-06 09:15
+
+### [Control Pedidos] v12.29.56 — Telegram bloqueado por el usuario: dejar de reintentar
+- Continuación directa de v12.29.54, confirmado con log real de Render:
+  el pedido 13513 fallaba siempre con `HTTP 403: {"error_code":403,
+  "description":"Forbidden: bot was blocked by the user"}` — la persona
+  destinataria bloqueó el bot en su Telegram. Reintentar cada día
+  (comportamiento nuevo de v12.29.54) tampoco lo iba a arreglar — a
+  petición del usuario, se da por terminado en vez de seguir
+  intentándolo indefinidamente.
+- `_send_telegram()` detecta errores 400/403 de Telegram permanentes
+  (bot bloqueado, cuenta desactivada, chat inexistente — por texto de
+  la `description`, Telegram no da un código específico) y devuelve
+  un nuevo flag `permanente: True`, distinto de un fallo transitorio
+  (timeout, 5xx) que sí debe seguir reintentándose al día siguiente.
+- Los 4 puntos que registran el resultado en `whatsapp_log`
+  (`telegram_estado`, `telegram_auto` en sus 2 variantes,
+  `telegram_techo`) tratan ahora `ok=True OR permanente=True` como
+  "hecho" — un bot bloqueado deja de generar un intento fallido cada
+  día sin tocar nada más.
+- De paso, se investigó a fondo (a petición del usuario) el problema
+  paralelo del correo automático que "no está saliendo" para el mismo
+  pedido — **sin encontrar ningún bug**: el log confirma que el aviso
+  sí se encoló correctamente
+  (`[AVISO-FIRMA-AUTO] Pedido 13513 — aviso de firma pendiente
+  encolado`); esta app no tiene SMTP propio, el envío real depende de
+  que alguien tenga la aplicación abierta en el navegador (se
+  despacha vía EmailJS cada 5 min mientras haya sesión activa, tanto
+  para admin como para compras). Ya existe además
+  `_job_recordar_emails_sistema_pendientes()`, que manda un Telegram
+  de recordatorio si un email lleva más de 10 min en cola sin
+  nadie que lo despache (07:00-21:00). Comportamiento esperado del
+  diseño, no un fallo — pendiente de que el usuario confirme si tuvo
+  la app abierta desde que se generó el aviso esta mañana.
+- `app.py` compila sin errores. Badge de versión del sidebar
+  actualizado a "V 12.29.56"; entrada añadida en `CHANGELOG.md`.
+
+## 2026-08-06 08:30
+
+### [Control Pedidos] v12.29.54 — Fix: un envío fallido bloqueaba las notificaciones automáticas para siempre
+- Reportado: pedidos con 50-65 días sin firma/cotización seguían en
+  "Sin notificar" pese al tiempo transcurrido, mientras otros del
+  mismo hotel sí se notificaban con normalidad. Diagnosticado en
+  varias rondas de logs de Render (`RECLAMACION-DEBUG` y
+  `[SCHEDULER]`) junto con el usuario.
+- Causa real, confirmada en el código: `_nunca_notificado()` y
+  `_ya_notificado_hoy()` contaban cualquier fila en `whatsapp_log`,
+  tuviera o no éxito (`enviado=0` también contaba). Si el primer
+  intento de Telegram fallaba (p. ej. sin destinatarios configurados
+  para ese hotel en el evento "alerta_pedido_hotel", Admin → Config.
+  Avisos), igual quedaba registrada una fila, y el sistema daba por
+  "ya intentado" un envío que nunca llegó a nadie — bloqueando
+  cualquier reintento para siempre. La pantalla de Alertas sí
+  distinguía bien éxito de fallo, por eso seguía mostrando
+  correctamente "Sin notificar" mientras el sistema, por dentro, ya
+  había dejado de intentarlo.
+- Corregido con cuidado de no crear un problema nuevo:
+  `_nunca_notificado()` ahora exige `enviado=1` — un fallo deja de
+  contar como "hecho para siempre". `_ya_notificado_hoy()` se deja a
+  propósito SIN ese filtro, para seguir frenando reintentos cada
+  minuto (el job corre cada minuto) si algo sigue fallando dentro del
+  mismo día. Resultado: un pedido que falla se reintenta una vez al
+  día, no 1440 veces, hasta que se resuelva la causa de fondo.
+- Mismo patrón revisado en `_ya_reclamado_hoy_manual()` — se probó el
+  mismo fix y se revirtió a propósito por la misma razón (evitar
+  spam intradía); solo queda el fix en `_nunca_notificado()`.
+- Pendiente de confirmar por el usuario: revisar en Admin → Config.
+  Avisos los destinatarios configurados para "alerta_pedido_hotel" en
+  el hotel GY, ya que es la explicación más probable (aunque no
+  confirmada por falta de retención de logs tan atrás en Render) del
+  fallo original del primer intento.
+- `app.py` compila sin errores. Badge de versión del sidebar
+  actualizado a "V 12.29.54"; entrada añadida en `CHANGELOG.md`.
+
 ## 2026-08-05
 
 ### [Control Pedidos] v12.29.53 — Fecha de entrega prevista también visible en la lista de Pedidos (no solo en Alertas)
@@ -112,6 +215,84 @@
   versión).
 
 ## 2026-08-04
+
+### [Ecosistema] Reunificación de historiales — nota de fusión
+- Detectado (2026-08-05): ambas copias del historial se habían
+  desincronizado en direcciones distintas — a esta copia (Control de
+  Pedidos) le faltaban las 3 entradas de Organizador de esta misma
+  fecha (v4.16.3/.4/.5); a la copia de Organizador le faltaban 34
+  entradas de Control de Pedidos (v12.29.4 a v12.29.53). Se fusionan
+  aquí las 3 entradas de Organizador que faltaban — el orden exacto
+  entre ellas y las entradas de Control de Pedidos de este mismo día
+  no se ha podido reconstruir con precisión de minutos (ninguna de las
+  dos copias guardaba hora, solo fecha), así que quedan agrupadas
+  juntas en vez de intercaladas una a una.
+
+### [Organizador] v4.16.5 (`update_service.py`) — Misma gracia de 5 min aplicada al check de actualizaciones de GitHub
+- Detectado al revisar el fix anterior (v4.16.4): el check de
+  actualizaciones contra GitHub (`_check_update_github()`,
+  `app/services/update_service.py`) tenía el mismo síntoma que el
+  bridge de Control de Pedidos, pero SIN NINGÚN límite — cada fallo
+  (HTTPError, URLError, excepción inesperada) mostraba el diálogo
+  "⚠️ Error al comprobar actualizaciones" al momento y se reprogramaba
+  a los 30 min sin más, sin tope diario. Con GitHub inalcanzable un
+  rato (proxy, incidencia, corte puntual), el diálogo podía repetirse
+  cada 30 minutos indefinidamente.
+- Cambio: `_check_update_github()` gana el parámetro
+  `_es_reintento_gracia` (default `False`). El primer fallo llama a
+  `_conceder_gracia_update()`, que programa un único reintento
+  silencioso a los 5 minutos del mismo check en vez de avisar. Si el
+  reintento tiene éxito, se descarta en silencio (log únicamente); si
+  también falla, se muestra el diálogo con el error de ese segundo
+  intento, y el propio reintento retoma el ciclo normal de 30 min al
+  reprogramarse él solo.
+- `APP_VERSION` → "v4.16.5" en `main_agenda.py`; `MyAppVersion` →
+  "4.16.5" en `OrganizadorPrincess_Setup.iss`; entrada añadida en
+  `release_notes/release_notes.md` y `release_notes_actual.txt`.
+
+### [Organizador] v4.16.4 (`pedidos_agenda_bridge.py` v4.9) — Gracia de 5 min antes de avisar de un corte de conexión
+- Petición: el diálogo "⚠️ Error de conexión con Control de Pedidos"
+  saltaba con el primer fallo de red (login, `/api/bridge/alertas` o
+  `/api/bridge/notificaciones`), aunque fuera un corte puntual que se
+  resuelve solo (wifi, cold start de Render, una petición perdida).
+- Cambio: ningún fallo de conexión abre el diálogo al momento. La
+  primera vez que falla cualquiera de esas tres operaciones se llama
+  a la nueva `_reportar_fallo_conexion()`, que NO avisa — programa un
+  único reintento a los 5 minutos (`_GRACIA_RECONEXION_SEGUNDOS`) de
+  la misma operación que falló. Si el reintento tiene éxito, el
+  fallo se descarta en silencio (queda constancia en
+  `bridge_errors.log`). Si el reintento también falla, entonces sí se
+  abre el diálogo, con el error de ese segundo intento (puede no
+  coincidir con el del primero). Varios fallos casi a la vez (p. ej.
+  login y alertas juntos) no programan un reintento cada uno — todos
+  son síntoma del mismo corte, basta con uno (`_gracia_en_curso`).
+- `login()` se divide en `_intentar_login()` (silenciosa, devuelve
+  `(ok, titulo, cuerpo)`) + `login()` (delega en
+  `_reportar_fallo_conexion()` si falla), para reutilizar el mismo
+  intento en la llamada normal y en el reintento a los 5 min.
+  `_sincronizar_alertas()` y `_procesar_push()` siguen el mismo patrón
+  con closures locales.
+- Sin cambios en el límite de "1 diálogo por tipo de error y día" de
+  `_mostrar_error_bridge()` (v4.3) — la gracia de 5 min ocurre antes
+  de llegar a ese punto, no lo sustituye.
+- `APP_VERSION` actualizado a "v4.16.4" en `main_agenda.py` y
+  `MyAppVersion` a "4.16.4" en `OrganizadorPrincess_Setup.iss`; entrada
+  añadida en `release_notes/release_notes.md` y
+  `release_notes/release_notes_actual.txt`.
+
+### [Organizador + Control Pedidos] v4.16.3 / v12.29.46 — Prueba: popup entregado una única vez (dedup en servidor)
+- Motivo: comprador de INSIRE reportó el mismo popup repitiéndose
+  "continuamente" en el mismo día.
+- Causa probable: el dedup de repetición de popups vivía en memoria de
+  Organizador Princess (`_estado_popups`), se perdía al reiniciar la
+  app y volvía a mostrar avisos ya vistos.
+- Prueba: el dedup se mueve a Control de Pedidos (tabla
+  `bridge_popup_visto`, persistente). `/api/bridge/alertas` ahora solo
+  entrega cada aviso una vez por usuario/pedido/nivel, para siempre —
+  si la app está cerrada cuando el pedido entra en alerta, se entrega
+  en cuanto reconecte, pero solo esa vez, sin reintentos posteriores.
+  Detalle completo en `CHANGELOG.md` (Control Pedidos, v12.29.46) y en
+  el docstring de `_sincronizar_alertas()` (Organizador, v4.8).
 
 ### [Control Pedidos] v12.29.51 — Fix: contador "N pedidos" no se actualizaba a 0 cuando la búsqueda no encontraba resultados
 - Reportado: "en la pantalla de pedidos así como en la de alertas, la

@@ -2297,7 +2297,15 @@ def _get_usuarios_hotel_rol_telegram(hotel_codigo: str) -> list:
     return rows
 
 def _send_telegram(chat_id: str, text: str) -> dict:
-    """Envía un mensaje de Telegram al chat_id indicado. Devuelve {ok, error}."""
+    """Envía un mensaje de Telegram al chat_id indicado. Devuelve {ok, error, permanente}.
+
+    (2026-08-06) `permanente=True` cuando el error indica que NUNCA va a
+    tener éxito reintentando (p. ej. el usuario bloqueó el bot, borró la
+    conversación, o desactivó su cuenta) — a diferencia de un fallo
+    transitorio (timeout, 5xx, sin red), que sí merece reintentarse al día
+    siguiente. Quien llama a esta función decide qué hacer con el flag;
+    aquí solo se detecta y se etiqueta.
+    """
     import urllib.request, urllib.error
     try:
         payload = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}).encode()
@@ -2309,14 +2317,27 @@ def _send_telegram(chat_id: str, text: str) -> dict:
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
             result = json.loads(resp.read().decode())
-            return {"ok": result.get("ok", False), "error": None}
+            return {"ok": result.get("ok", False), "error": None, "permanente": False}
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
         log.error("Telegram HTTP %s para chat_id %s: %s", e.code, chat_id, body)
-        return {"ok": False, "error": f"HTTP {e.code}: {body[:200]}"}
+        # Errores 403/400 típicos de Telegram cuando NUNCA va a poder
+        # entregarse reintentando: bot bloqueado, chat borrado/inexistente,
+        # cuenta de usuario desactivada. Se detecta por texto porque
+        # Telegram no da un código de error específico para esto, solo una
+        # "description" en inglés.
+        body_lower = body.lower()
+        es_permanente = e.code in (400, 403) and any(frase in body_lower for frase in (
+            "bot was blocked by the user",
+            "user is deactivated",
+            "chat not found",
+            "chat_id is empty",
+            "peer_id_invalid",
+        ))
+        return {"ok": False, "error": f"HTTP {e.code}: {body[:200]}", "permanente": es_permanente}
     except Exception as e:
         log.error("Telegram error para chat_id %s: %s", chat_id, e)
-        return {"ok": False, "error": str(e)}
+        return {"ok": False, "error": str(e), "permanente": False}
 
 
 def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: str,
@@ -2677,7 +2698,7 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
                 db, pedido_id, "telegram_estado",
                 r.get("username", "?"),
                 nota_log,
-                r.get("ok", False),
+                r.get("ok", False) or r.get("permanente", False),
                 r.get("error"),
             )
         db.commit()
@@ -2879,10 +2900,19 @@ def _dias_desde_fecha(fecha_str):
 
 def _ya_notificado_hoy(pedido_id: int, tipo: str = "telegram_auto") -> bool:
     """
-    Devuelve True si ya se envió una notificación del tipo indicado para este pedido HOY.
+    Devuelve True si ya se INTENTÓ (con éxito o no) una notificación del
+    tipo indicado para este pedido HOY.
     - tipo='telegram_auto'   → job diario de alertas por fecha
     - tipo='telegram_estado' → cambio de estado inmediato desde update_pedido
-    Evita duplicar notificaciones si la misma acción se dispara varias veces.
+    Evita duplicar notificaciones si la misma acción se dispara varias veces
+    — el job corre cada minuto, así que esto es lo que evita reintentar
+    (con éxito o sin él) 1440 veces al día si algo va mal.
+
+    (2026-08-06) A propósito NO exige enviado=1 aquí — ver _nunca_notificado()
+    para el fix real de "un fallo no debe bloquear para siempre". Esta
+    función es solo el freno de "no more de una vez por día", tenga éxito
+    o no el intento; _nunca_notificado() es la que decide si, al empezar
+    un día nuevo, hay que volver a intentarlo.
     """
     try:
         row = query(
@@ -2908,6 +2938,11 @@ def _ya_reclamado_hoy_manual(pedido_id: int, tipo: str = "alerta_proveedor") -> 
     tipo='alerta_interno' (v12.23.8): email manual interno (p.ej. aviso de
       firma pendiente al comprador) — evita que el aviso automático
       equivalente la duplique el mismo día.
+
+    (2026-08-06) A propósito NO exige enviado=1 — es solo el freno de "ya
+    se intentó hoy", igual que _ya_notificado_hoy(). Ver _nunca_notificado()
+    para el fix real del problema de fondo (un fallo no debe bloquear para
+    siempre, solo por el resto del día en curso).
     """
     try:
         row = query(
@@ -2942,10 +2977,28 @@ _JOB_PEDIDO_SQL = """
 """
 
 def _nunca_notificado(pedido_id: int, tipo: str = "telegram_auto") -> bool:
-    """Devuelve True si el pedido nunca ha recibido una notificación del tipo indicado."""
+    """
+    Devuelve True si el pedido nunca ha recibido CON ÉXITO una notificación
+    del tipo indicado.
+
+    (2026-08-06) FIX real del problema reportado: antes contaba también los
+    intentos fallidos (enviado=0), así que un pedido cuyo primer envío
+    fallara (p. ej. sin destinatarios configurados para el hotel/evento, o
+    un error puntual de Telegram) se consideraba "ya notificado" para
+    siempre y jamás se volvía a intentar — aunque en la pantalla de
+    Alertas siguiera apareciendo, correctamente, como "Sin notificar".
+    Ahora exige enviado=1: un fallo dejará de bloquear el reintento.
+
+    El reintento no es inmediato ni cada minuto — _ya_notificado_hoy()
+    (sin este fix, a propósito) sigue frenando cualquier intento adicional
+    el resto del mismo día en que ya se probó, tenga éxito o no. Es al
+    empezar el día siguiente cuando esta función vuelve a decir "nunca se
+    notificó con éxito" y el job lo reintenta — una vez al día mientras
+    la causa de fondo no se arregle, no 1440 veces.
+    """
     try:
         row = query(
-            "SELECT COUNT(*) as n FROM whatsapp_log WHERE pedido_id=%s AND tipo=%s",
+            "SELECT COUNT(*) as n FROM whatsapp_log WHERE pedido_id=%s AND tipo=%s AND enviado=1",
             (pedido_id, tipo), one=True
         )
         return (row["n"] if row else 0) == 0
@@ -3263,7 +3316,7 @@ def _job_alertas_diarias_inner():
                         db, p["id"], "telegram_auto",
                         r.get("username", "?"),
                         f"Alerta plazo entrega {nivel} — {motivo}",
-                        r.get("ok", False),
+                        r.get("ok", False) or r.get("permanente", False),
                         r.get("error"),
                     )
                 db.commit()
@@ -3386,7 +3439,7 @@ def _job_alertas_diarias_inner():
                     db, p["id"], "telegram_auto",
                     r.get("username", "?"),
                     f"Alerta automática {nivel} — {dias}d sin respuesta",
-                    r.get("ok", False),
+                    r.get("ok", False) or r.get("permanente", False),
                     r.get("error"),
                 )
             db.commit()
@@ -4347,7 +4400,7 @@ def _telegram_alerta_techo(pedido_id: int, hotel_codigo: str, importe: float, fa
                 db, pedido_id, "telegram_techo",
                 r.get("username", "?"),
                 f"Alerta techo gastos — {importe:,.2f} € — {familia_nombre}",
-                r.get("ok", False),
+                r.get("ok", False) or r.get("permanente", False),
                 r.get("error"),
             )
         db.commit()
@@ -8692,9 +8745,26 @@ PEDIDO_SELECT_STATS = """
            EXISTS (
                SELECT 1 FROM pedido_adjuntos pa WHERE pa.pedido_id = p.id
            ) AS has_adjuntos,
-           (SELECT MAX(el.creado_en) FROM emails_log el
-              WHERE el.pedido_id = p.id
-                AND el.tipo IN ('alerta_proveedor','alerta_interno')) AS ultima_notif_email,
+           -- (2026-08-06) FIX: antes solo miraba emails_log (envíos MANUALES,
+           -- botón "Notificar"/"Re-notificar"). Todos los correos automáticos
+           -- (reclamación al proveedor, aviso de firma pendiente, aviso de
+           -- cotización sin proveedor...) se encolan y despachan vía
+           -- emails_sistema_pendientes — una tabla distinta que esta
+           -- subconsulta nunca miraba. Resultado: un pedido que solo había
+           -- recibido avisos automáticos (nunca un clic manual) se quedaba
+           -- marcado "Sin notificar" para siempre en el panel de Alertas,
+           -- aunque el correo hubiera salido de verdad — confirmado con un
+           -- correo real recibido por el usuario que la pantalla no reflejaba.
+           -- GREATEST() combina ambas fuentes; enviado_en (no creado_en) es
+           -- el momento real de envío en emails_sistema_pendientes, no el de
+           -- encolado.
+           GREATEST(
+               (SELECT MAX(el.creado_en) FROM emails_log el
+                  WHERE el.pedido_id = p.id
+                    AND el.tipo IN ('alerta_proveedor','alerta_interno')),
+               (SELECT MAX(esp.enviado_en) FROM emails_sistema_pendientes esp
+                  WHERE esp.pedido_id = p.id AND esp.enviado = TRUE)
+           ) AS ultima_notif_email,
            (SELECT MAX(wl.creado_en) FROM whatsapp_log wl
               WHERE wl.pedido_id = p.id
                 AND wl.tipo = 'telegram_auto' AND wl.enviado = 1) AS ultima_notif_telegram,
