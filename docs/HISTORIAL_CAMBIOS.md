@@ -22,6 +22,104 @@
 
 ---
 
+## 2026-08-10 09:20
+
+### [Control Pedidos] v12.29.68 — Causa raíz del fallo de migración, "Comparar listado PDF" solo Admin, filtro de proveedores invertido a opt-in
+- Usuario reportó que, incluso en v12.29.64 (posterior a cuando se
+  "arreglaron"), seguían los 3 errores de RLS en Supabase Y el 500
+  de `/api/proveedores` — confirmando que el fix anterior
+  (aislar cada migración en su propio try/except) no era suficiente
+  por sí solo.
+- **Causa raíz encontrada**: las 3 migraciones más recientes (RLS,
+  `sujeto_seguimiento`, hotel de pruebas `PR`) vivían casi al final
+  de `_auto_migrate()`, una función con 111 sentencias de migración
+  en total. Si cualquiera de las ~108 sentencias *anteriores* a
+  ellas fallaba por el motivo que fuera —sin relación con estos
+  cambios—, el `except` genérico de toda la función paraba la
+  ejecución justo ahí, y estas 3, al estar casi al final, nunca
+  llegaban a aplicarse. El try/except individual de cada una (fix
+  de v12.29.66) las protegía de fallar POR SÍ MISMAS, pero no de
+  nunca llegar a EJECUTARSE si algo anterior ya había abortado la
+  función entera.
+- Corregido moviendo las 3 al principio del todo de
+  `_auto_migrate()`, justo después de `with db.cursor() as cur:` —
+  antes de cualquier otra de las 108 sentencias restantes. Así se
+  garantiza que se apliquen siempre en cada arranque, pase lo que
+  pase más abajo en el resto de la función esa misma ejecución.
+  Cada una conserva además su propio try/except, por si alguna de
+  estas 3 en concreto falla.
+- Pendiente, no localizado todavía: cuál de las ~108 sentencias
+  restantes es la que ha estado fallando (o ha estado fallando en
+  algún momento) — revisar el log de arranque real del servidor,
+  buscando "Auto-migración omitida", identificaría la causa de
+  fondo de fondo si se quiere perseguir más allá de blindar el
+  orden de estas 3.
+- **"Comparar listado PDF" — restringido solo a Admin** (petición
+  del usuario; antes admin+compras): backend
+  (`if session.get("rol") != "admin"`) y visibilidad del botón en
+  el frontend actualizados a la vez, en los 2 puntos de
+  inicialización donde se controla.
+- **Filtro de proveedores invertido a opt-in** (petición del
+  usuario; antes opt-out): con muchos más proveedores de compra
+  diaria que proveedores a seguir, es más seguro que todos
+  empiecen apagados y el admin encienda solo los que le interesa
+  vigilar. `sujeto_seguimiento` pasa a `DEFAULT FALSE`; checkbox de
+  la ficha de proveedor desmarcado por defecto, tanto al crear uno
+  nuevo como al abrir uno existente que nunca se haya marcado
+  explícitamente; texto de ayuda del checkbox reescrito para
+  reflejar el nuevo criterio; docstring del endpoint de comparación
+  actualizado para avisar de que, hasta que se marquen proveedores,
+  el listado devolverá pocos o ningún pedido evaluado —
+  comportamiento esperado, no un fallo.
+- `app.py` compila sin errores; los 9 bloques `<script>` de
+  `templates/index.html` pasan `node --check`. `README.md`
+  actualizado a la versión actual. Badge de versión del sidebar
+  actualizado a "V 12.29.68"; entrada añadida en `CHANGELOG.md`.
+
+## 2026-08-10 08:40
+
+### [Control Pedidos] v12.29.66 — Fix: /api/proveedores caía con 500 — migración de sujeto_seguimiento nunca se ejecutó
+- Reportado con captura de la consola del navegador:
+  `[500] Error inesperado: column "sujeto_seguimiento" does not exist`
+  — la pantalla de Proveedores se quedaba vacía, sin más pista.
+- Causa: `_auto_migrate()` tiene 111 sentencias de migración en
+  total, y la inmensa mayoría (incluida la de `sujeto_seguimiento`,
+  casi al final de la función) no tenía su propio `try/except` — si
+  cualquier sentencia ANTERIOR fallaba por el motivo que fuera, sin
+  relación con este cambio concreto, el `except` genérico de toda la
+  función paraba la ejecución justo ahí, y esta `ALTER TABLE` nunca
+  llegaba a aplicarse.
+- Arreglo inmediato comunicado al usuario para desbloquear sin
+  esperar a un redeploy — SQL seguro de ejecutar a mano en el SQL
+  Editor de Supabase:
+  `ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS
+  sujeto_seguimiento BOOLEAN NOT NULL DEFAULT TRUE;`
+- Corregido de raíz en el código:
+  - La migración de `sujeto_seguimiento` y la del hotel de pruebas
+    `PR` (v12.29.32-33, también sin proteger) se aíslan ahora en su
+    propio `try/except` — mismo patrón ya usado para RLS y
+    `expediente_exceso` — para que sean robustas frente a cualquier
+    fallo anterior no relacionado en la misma ejecución de
+    `_auto_migrate()`.
+  - `loadProveedores()` (frontend) no capturaba la excepción de
+    `api()` — si la petición fallaba, la pantalla se quedaba vacía
+    sin ningún aviso, indistinguible de "no hay proveedores de
+    verdad". Así es exactamente como se llegó a reportar esto como
+    "no salen los proveedores" en vez de como un error real. Ahora
+    se captura y se muestra con un `toast()` de error, con el
+    detalle exacto del fallo — para que la próxima vez que algo así
+    pase, se vea de inmediato que es un error, no una lista vacía.
+- Pendiente, no localizado en esta corrección: qué sentencia ANTERIOR
+  de las 111 de `_auto_migrate()` estuvo fallando y provocando esto
+  — revisar el log de arranque real del servidor (buscar
+  "Auto-migración omitida") para identificarla, si se quiere llegar a
+  la causa raíz de fondo en vez de solo blindar las migraciones más
+  recientes una a una.
+- `app.py` compila sin errores; los 9 bloques `<script>` de
+  `templates/index.html` pasan `node --check`. `README.md`
+  actualizado a la versión actual. Badge de versión del sidebar
+  actualizado a "V 12.29.66"; entrada añadida en `CHANGELOG.md`.
+
 ## 2026-08-10 08:15
 
 ### [Control Pedidos] v12.29.64 — Fix: el +34 del teléfono salía duplicado en la firma de los correos

@@ -79,6 +79,64 @@ def _auto_migrate():
         )
         db.autocommit = True
         with db.cursor() as cur:
+            # ══════════════════════════════════════════════════════════════
+            # (2026-08-10) Bloque movido AQUÍ, al principio del todo — antes
+            # vivía casi al final de esta función (justo antes de db.close()),
+            # y _auto_migrate() tiene 111 sentencias en total, la inmensa
+            # mayoría sin try/except propio. Si CUALQUIERA de esas otras 100+
+            # sentencias fallaba por el motivo que fuera —sin relación con
+            # estos cambios—, el except genérico de toda la función paraba la
+            # ejecución ahí mismo y este bloque, al estar casi al final, nunca
+            # llegaba a ejecutarse. Bug real confirmado en producción: RLS
+            # sin activar en Supabase y /api/proveedores con 500 por
+            # "column sujeto_seguimiento does not exist", pese a llevar
+            # semanas desplegado. Poniéndolo el primero de todos, se garantiza
+            # que se aplique siempre, pase lo que pase más abajo en el resto
+            # de la función esa misma ejecución — cada sentencia sigue con su
+            # propio try/except además, por si falla alguna de estas 3 en
+            # concreto.
+            # ── RLS en tablas propias de la app sin política pública ────────
+            # Supabase expone TODAS las tablas del esquema public vía su API
+            # REST automática (PostgREST) salvo que tengan RLS activado — el
+            # Security Advisor lo marca como error ("RLS Disabled in Public").
+            # Esta app nunca usa esa API (ni el backend ni el frontend; todo
+            # habla por conexión directa a Postgres con DATABASE_URL, nunca
+            # con la anon key), así que activar RLS sin ninguna política es
+            # 100% seguro para el funcionamiento — simplemente cierra el
+            # acceso público accidental por ese otro camino.
+            for _tabla_rls in ("egress_tracking", "db_size_tracking", "db_vacuum_log", "agente_heartbeat",
+                                "expediente_exceso", "proveedor_contacto_hoteles", "bridge_popup_visto"):
+                try:
+                    cur.execute(f"ALTER TABLE IF EXISTS {_tabla_rls} ENABLE ROW LEVEL SECURITY")
+                except Exception as e:
+                    log.warning(f"No se pudo activar RLS en {_tabla_rls}: {e}")
+            # ── Verificación de listados PDF de SAP — filtro de proveedores ──
+            # (2026-08-10) A petición del usuario: el criterio se invierte a
+            # "opt-in" — DEFAULT FALSE, ningún proveedor está sujeto a
+            # seguimiento hasta que un admin lo marque explícitamente en su
+            # ficha. Antes era "opt-out" (DEFAULT TRUE, había que desmarcar
+            # uno a uno alimentación/bebida) — con tantísimos proveedores de
+            # compra diaria frente a los pocos que sí interesa seguir, es más
+            # seguro empezar todos apagados y que el admin encienda solo los
+            # que quiere vigilar, que al revés.
+            try:
+                cur.execute(
+                    "ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS sujeto_seguimiento BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo añadir sujeto_seguimiento a proveedores: {e}")
+            # ── Hotel de pruebas "PR" ─────────────────────────────────────
+            try:
+                cur.execute("""
+                    INSERT INTO hoteles (codigo, nombre) VALUES
+                        ('PR', '⚠️ HOTEL PRUEBAS — no usar en operativa real')
+                    ON CONFLICT DO NOTHING
+                """)
+                if cur.rowcount:
+                    log.info("[MIGRACION] Hotel de pruebas 'PR' insertado")
+            except Exception as e:
+                log.warning(f"No se pudo insertar el hotel de pruebas 'PR': {e}")
+            # ══════════════════════════════════════════════════════════════
             # Columnas legacy de proveedores (para DBs antiguas)
             for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT"),
                                         ("contacto","TEXT"),("email","TEXT"),("telefono","TEXT")]:
@@ -459,27 +517,6 @@ def _auto_migrate():
             if _backfill_techo_n:
                 log.info("[MIGRACION] Backfill mes_consumo_techo (rediseño Techo Fase 7): %s pedido(s) actualizado(s)",
                          _backfill_techo_n)
-            # ── v12.29.32 — Hotel de pruebas "PR" ──────────────────────────────
-            # (2026-08-01) FIX: se había añadido este INSERT a SQL_STATEMENTS
-            # (models.py) en v12.29.28, asumiendo que se ejecutaba en cada
-            # arranque igual que las migraciones de aquí abajo — pero
-            # SQL_STATEMENTS solo la ejecuta init_db.py, un script MANUAL
-            # pensado para "el primer despliegue" sobre una base de datos
-            # nueva y vacía (ver su propio docstring). Como esta base de
-            # datos ya existe y nadie vuelve a correr init_db.py sobre una
-            # base de datos en producción, el hotel nunca llegó a
-            # insertarse pese a que el código estaba desplegado
-            # correctamente. Se repite aquí, en _auto_migrate() (la función
-            # que sí corre siempre, en cada arranque), con el mismo
-            # ON CONFLICT DO NOTHING — no duplica nada si alguna vez sí se
-            # llegó a ejecutar init_db.py.
-            cur.execute("""
-                INSERT INTO hoteles (codigo, nombre) VALUES
-                    ('PR', '⚠️ HOTEL PRUEBAS — no usar en operativa real')
-                ON CONFLICT DO NOTHING
-            """)
-            if cur.rowcount:
-                log.info("[MIGRACION] Hotel de pruebas 'PR' insertado")
             # ── v12.29.33 — FIX: tabla expediente_exceso nunca se creó en
             # producción ────────────────────────────────────────────────────
             # Mismo bug que el hotel "PR" de arriba: expediente_exceso (y sus
@@ -1138,41 +1175,6 @@ def _auto_migrate():
             # usuario.
             cur.execute(
                 "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS dashboard_prefs TEXT"
-            )
-            # ── RLS en tablas propias de la app sin política pública (Jul-Ago 2026) ──
-            # Supabase expone TODAS las tablas del esquema public vía su API
-            # REST automática (PostgREST) salvo que tengan RLS activado — el
-            # Security Advisor lo marca como error ("RLS Disabled in Public").
-            # Esta app nunca usa esa API (ni el backend ni el frontend; todo
-            # habla por conexión directa a Postgres con DATABASE_URL, nunca
-            # con la anon key), así que activar RLS sin ninguna política es
-            # 100% seguro para el funcionamiento — simplemente cierra el
-            # acceso público accidental por ese otro camino.
-            # (2026-08-06) Se añaden aquí, según las va señalando el propio
-            # Security Advisor de Supabase, las tablas nuevas que se han ido
-            # creando en sesiones recientes sin este ALTER desde el principio
-            # (expediente_exceso — rediseño Techo de Gastos;
-            # proveedor_contacto_hoteles — contactos de proveedor por hotel;
-            # bridge_popup_visto — dedup de avisos al Organizador). El resto
-            # de tablas propias de la aplicación (pedidos, usuarios, etc.) no
-            # se tocan aquí — su RLS, si aplica, se gestiona donde ya se
-            # gestionaba.
-            for _tabla_rls in ("egress_tracking", "db_size_tracking", "db_vacuum_log", "agente_heartbeat",
-                                "expediente_exceso", "proveedor_contacto_hoteles", "bridge_popup_visto"):
-                try:
-                    cur.execute(f"ALTER TABLE IF EXISTS {_tabla_rls} ENABLE ROW LEVEL SECURITY")
-                except Exception as e:
-                    log.warning(f"No se pudo activar RLS en {_tabla_rls}: {e}")
-            # ── v12.29.60 — Verificación de listados PDF de SAP ────────────────
-            # Filtro de proveedores "sujetos a seguimiento": esta app hace
-            # seguimiento de todo tipo de pedido MENOS alimentación y bebida
-            # (compra diaria, no pasa por aquí). Al comparar un listado PDF
-            # exportado de SAP contra los pedidos ya registrados, los pedidos
-            # de un proveedor marcado como NO sujeto a seguimiento se ignoran
-            # del todo — nunca se avisa de que "faltan" en la app, porque es
-            # esperable que no estén.
-            cur.execute(
-                "ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS sujeto_seguimiento BOOLEAN NOT NULL DEFAULT TRUE"
             )
         db.close()
         log.info("Auto-migración OK")
@@ -7424,7 +7426,7 @@ def create_proveedor():
     db  = get_db()
     cur = execute(
         "INSERT INTO proveedores (codigo,nombre,observaciones,sujeto_seguimiento) VALUES (%s,%s,%s,%s) RETURNING id",
-        (codigo, nombre, data.get("observaciones",""), bool(data.get("sujeto_seguimiento", True)))
+        (codigo, nombre, data.get("observaciones",""), bool(data.get("sujeto_seguimiento", False)))
     )
     new_id = cur.fetchone()["id"]
     # Insertar contactos
@@ -7476,7 +7478,7 @@ def update_proveedor(pid):
     db   = get_db()
     execute(
         "UPDATE proveedores SET codigo=%s,nombre=%s,observaciones=%s,sujeto_seguimiento=%s WHERE id=%s",
-        (codigo, nombre, data.get("observaciones",""), bool(data.get("sujeto_seguimiento", True)), pid)
+        (codigo, nombre, data.get("observaciones",""), bool(data.get("sujeto_seguimiento", False)), pid)
     )
     # Reemplazar contactos (el DELETE cascada también borra sus filas en
     # proveedor_contacto_hoteles vía ON DELETE CASCADE)
@@ -7543,6 +7545,7 @@ def comparar_listado_pdf():
     """
     (2026-08-06) Verificación de listados PDF de SAP contra los pedidos ya
     registrados en la app — pensado para un repaso semanal por hotel.
+    Restringido solo a rol admin (2026-08-10, a petición del usuario).
 
     Un "Listado de Pedidos" exportado de SAP (uno por hotel) tiene un
     formato fijo, verificado contra un ejemplo real de 262 páginas / 622
@@ -7556,16 +7559,19 @@ def comparar_listado_pdf():
     aquí para su seguimiento.
 
     El filtro de proveedores "sujeto_seguimiento" (Admin → Proveedores)
-    excluye del resultado los pedidos de proveedores marcados como no
-    seguidos por esta app (p.ej. alimentación/bebida, compra diaria) —
-    ni cuentan como encontrados ni como no encontrados, simplemente no
-    se evalúan.
+    es opt-in (2026-08-10): por defecto NINGÚN proveedor está sujeto a
+    seguimiento hasta que un admin lo marque explícitamente en su ficha
+    — solo entonces sus pedidos entran en la comparación; el resto ni
+    cuentan como encontrados ni como no encontrados, simplemente no se
+    evalúan. Hasta que se marquen los proveedores que interesan, esta
+    comparación devolverá pocos o ningún pedido evaluado — es el
+    comportamiento esperado, no un fallo.
 
     POST /api/pedidos/comparar-listado-pdf
     form-data: hotel_id, file (el PDF)
     """
-    if session.get("rol") not in ("admin", "compras"):
-        return jsonify({"error": "Acceso restringido"}), 403
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
 
     hotel_id_raw = request.form.get("hotel_id")
     if not hotel_id_raw:

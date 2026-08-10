@@ -1,3 +1,82 @@
+# v12.29.68 — 10 agosto 2026 09:20
+
+🔧 3 ajustes: causa raíz del fallo de migración, "Comparar listado PDF" solo admin, filtro de proveedores invertido a opt-in
+
+**1) Causa raíz del fallo de migración (RLS + sujeto_seguimiento seguían sin aplicarse en v12.29.64):**
+Las 3 migraciones más recientes (RLS, `sujeto_seguimiento`, hotel de
+pruebas `PR`) vivían casi al final de `_auto_migrate()`, una función con
+111 sentencias en total. Si cualquiera de las ~108 sentencias
+*anteriores* a ellas fallaba por el motivo que fuera, el `except`
+genérico de toda la función paraba la ejecución ahí mismo y estas 3
+nunca llegaban a aplicarse — coincide exactamente con que el usuario
+seguía viendo los errores de RLS en Supabase y el 500 de `/api/proveedores`
+incluso en v12.29.64 (posterior a cuando se "arreglaron"). **Movidas las
+3 al principio del todo de `_auto_migrate()`**, antes de cualquier otra
+sentencia — así se garantiza que se apliquen siempre, pase lo que pase
+más abajo en el resto de la función esa misma ejecución.
+
+**2) "Comparar listado PDF" — ahora solo Admin** (antes admin+compras):
+backend (`if session.get("rol") != "admin"`) y botón del frontend
+actualizados a la vez.
+
+**3) Filtro de proveedores invertido a opt-in** (antes opt-out): con
+tantos proveedores de compra diaria frente a los pocos que interesa
+seguir, es más seguro que todos empiecen apagados y el admin encienda
+solo los que quiere vigilar. `sujeto_seguimiento` pasa a `DEFAULT FALSE`;
+checkbox de la ficha de proveedor desmarcado por defecto (tanto al crear
+como al no haberlo marcado nunca en uno existente); avisado en el propio
+endpoint de comparación: hasta que se marquen proveedores, el listado
+devolverá pocos o ningún pedido evaluado — comportamiento esperado, no
+un fallo.
+
+`app.py` compila sin errores; los 9 bloques `<script>` pasan
+`node --check`. `README.md` actualizado. Badge de versión del sidebar
+actualizado a "V 12.29.68".
+
+# v12.29.66 — 10 agosto 2026 08:40
+
+🐛 Fix: /api/proveedores caía con 500 — migración de sujeto_seguimiento nunca se ejecutó
+
+**Reportado con captura de la consola del navegador**:
+`[500] Error inesperado: column "sujeto_seguimiento" does not exist`.
+
+**Causa:** `_auto_migrate()` tiene 111 sentencias de migración en total, y
+la inmensa mayoría (incluida la de `sujeto_seguimiento`, casi al final)
+NO tenía su propio `try/except` — si cualquier sentencia ANTERIOR fallaba
+por el motivo que fuera (sin relación con este cambio concreto), el
+`except` genérico de toda la función paraba ahí la ejecución, y esta
+`ALTER TABLE` nunca se llegaba a aplicar.
+
+**Arreglo inmediato para desbloquear ahora mismo, sin esperar a un
+redeploy** (comunicado directamente al usuario, seguro de ejecutar a
+mano en el SQL Editor de Supabase):
+```sql
+ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS sujeto_seguimiento BOOLEAN NOT NULL DEFAULT TRUE;
+```
+
+**Corregido de raíz:**
+- La migración de `sujeto_seguimiento` y la del hotel de pruebas `PR`
+  (v12.29.32-33, también bare) se aíslan ahora en su propio
+  `try/except` — mismo patrón ya usado para RLS y `expediente_exceso` —
+  para que sean robustas frente a cualquier fallo anterior no
+  relacionado en la misma ejecución de `_auto_migrate()`.
+- `loadProveedores()` (frontend) capturaba la excepción de `api()` sin
+  querer: si la petición fallaba, la pantalla se quedaba vacía **sin
+  ningún aviso**, indistinguible de "no hay proveedores de verdad" — así
+  es como se llegó a reportar esto como "no salen los proveedores" en
+  vez de como un error. Ahora se captura y se muestra con un `toast()`
+  de error, con el detalle exacto del fallo.
+- Pendiente, no localizado en esta corrección: qué sentencia ANTERIOR de
+  las 111 de `_auto_migrate()` estuvo fallando y provocando esto —
+  revisar el log de arranque real del servidor (buscar
+  "Auto-migración omitida") para identificarla, si se quiere ir a la
+  causa raíz de fondo en vez de solo blindar las migraciones más
+  recientes.
+
+`app.py` compila sin errores; los 9 bloques `<script>` de
+`templates/index.html` pasan `node --check`. `README.md` actualizado a la
+versión actual. Badge de versión del sidebar actualizado a "V 12.29.66".
+
 # v12.29.64 — 10 agosto 2026 08:15
 
 🔧 Fix: el +34 del teléfono salía duplicado en la firma de los correos

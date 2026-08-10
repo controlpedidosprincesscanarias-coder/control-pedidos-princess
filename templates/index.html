@@ -1265,7 +1265,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.64
+          V 12.29.68
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2354,16 +2354,16 @@ tbody tr:last-child{border-bottom:none}
         </div>
       </div>
 
-      <!-- (2026-08-06) Filtro de seguimiento de listados PDF de SAP -->
+      <!-- (2026-08-06, invertido a opt-in 2026-08-10) Filtro de seguimiento de listados PDF de SAP -->
       <div class="form-group" style="margin-top:14px;background:#f8f9fa;border-radius:8px;padding:10px 14px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600">
-          <input type="checkbox" id="pv-sujeto-seguimiento" checked style="width:16px;height:16px">
+          <input type="checkbox" id="pv-sujeto-seguimiento" style="width:16px;height:16px">
           Sujeto a seguimiento en "Comparar listado PDF"
         </label>
         <div style="font-size:.78rem;color:var(--text-secondary);margin-top:4px">
-          Desmárcalo para proveedores de compra diaria que no se siguen en esta app (p. ej.
-          alimentación y bebida) — sus pedidos se ignorarán al comparar el listado de SAP,
-          en vez de avisar de que "faltan" en la aplicación.
+          Desmarcado por defecto para todos los proveedores. Márcalo solo para los que sí
+          quieras vigilar con "Comparar listado PDF" — el resto (p. ej. alimentación y bebida,
+          que no se sigue en esta app) se ignora automáticamente sin tener que hacer nada.
         </div>
       </div>
     </div>
@@ -2692,9 +2692,9 @@ async function _entrarEnApp(r) {
   // Ocultar botón nuevo pedido para usuario hotel (solo lectura + albarán)
   const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
   if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
-  // (2026-08-06) Comparar listado PDF: solo admin/compras (igual que el backend)
+  // (2026-08-10) Comparar listado PDF: solo admin (igual que el backend)
   const btnCompararPdf = document.getElementById('btn-comparar-listado-pdf');
-  if (btnCompararPdf) btnCompararPdf.style.display = G.rol === 'hotel' ? 'none' : '';
+  if (btnCompararPdf) btnCompararPdf.style.display = G.rol === 'admin' ? '' : 'none';
   await loadMaestros();
   // ── Detección de versión nueva al iniciar sesión ────────────────────────
   // FLUJO A (nueva sesión / login):
@@ -5433,10 +5433,26 @@ async function loadEliminados() {
 async function loadProveedores() {
   const q = (document.getElementById('prov-q')?.value || '').trim();
   const url = q ? `/api/proveedores?q=${encodeURIComponent(q)}` : '/api/proveedores';
-  const d = await api(url);
   const tbody = document.getElementById('proveedores-tbody');
   const empty = document.getElementById('prov-empty');
   const countEl = document.getElementById('prov-count');
+  let d;
+  try {
+    d = await api(url);
+  } catch (e) {
+    // (2026-08-10) FIX: antes, si la petición fallaba (p.ej. un 500 real
+    // del backend), la excepción se quedaba sin capturar aquí — la
+    // pantalla se quedaba vacía sin ningún aviso, indistinguible de "no
+    // hay proveedores de verdad". Caso real que motivó esto: la columna
+    // sujeto_seguimiento no existía todavía en la base de datos y el
+    // usuario no tenía forma de saber, solo mirando la pantalla, que
+    // había un error real detrás.
+    toast('Error cargando proveedores: ' + e.message, 'error');
+    tbody.innerHTML = '';
+    if (empty) empty.classList.remove('section-hidden');
+    if (countEl) countEl.textContent = 'Error al cargar';
+    return;
+  }
   if (!d.length) {
     tbody.innerHTML='';
     empty.classList.remove('section-hidden');
@@ -5636,7 +5652,7 @@ function openProveedorModal(pid) {
   }
   pvSetContactos(p.contactos || []);
   document.getElementById('pv-obs').value = p.observaciones||'';
-  document.getElementById('pv-sujeto-seguimiento').checked = p.sujeto_seguimiento !== false;
+  document.getElementById('pv-sujeto-seguimiento').checked = p.sujeto_seguimiento === true;
   openModal('modal-proveedor');
 }
 
@@ -5651,7 +5667,7 @@ function openNuevoProveedorModal() {
   setVal('pv-codigo-input', '');
   pvSetContactos([]);
   document.getElementById('pv-obs').value = '';
-  document.getElementById('pv-sujeto-seguimiento').checked = true;
+  document.getElementById('pv-sujeto-seguimiento').checked = false;
   openModal('modal-proveedor');
 }
 
@@ -6094,7 +6110,7 @@ function calcDias(s) {
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
     const btnCompararPdf2 = document.getElementById('btn-comparar-listado-pdf');
-    if (btnCompararPdf2) btnCompararPdf2.style.display = G.rol === 'hotel' ? 'none' : '';
+    if (btnCompararPdf2) btnCompararPdf2.style.display = G.rol === 'admin' ? '' : 'none';
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     _checkIntegridadBadge();  // badge silencioso en sidebar para admin
