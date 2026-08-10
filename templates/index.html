@@ -1265,7 +1265,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.68
+          V 12.29.72
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2354,8 +2354,8 @@ tbody tr:last-child{border-bottom:none}
         </div>
       </div>
 
-      <!-- (2026-08-06, invertido a opt-in 2026-08-10) Filtro de seguimiento de listados PDF de SAP -->
-      <div class="form-group" style="margin-top:14px;background:#f8f9fa;border-radius:8px;padding:10px 14px">
+      <!-- (2026-08-06, invertido a opt-in 2026-08-10, solo-admin 2026-08-10) Filtro de seguimiento de listados PDF de SAP -->
+      <div class="form-group" id="pv-sujeto-seguimiento-wrap" style="margin-top:14px;background:#f8f9fa;border-radius:8px;padding:10px 14px">
         <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600">
           <input type="checkbox" id="pv-sujeto-seguimiento" style="width:16px;height:16px">
           Sujeto a seguimiento en "Comparar listado PDF"
@@ -2364,6 +2364,9 @@ tbody tr:last-child{border-bottom:none}
           Desmarcado por defecto para todos los proveedores. Márcalo solo para los que sí
           quieras vigilar con "Comparar listado PDF" — el resto (p. ej. alimentación y bebida,
           que no se sigue en esta app) se ignora automáticamente sin tener que hacer nada.
+          <span id="pv-sujeto-seguimiento-solo-admin" style="display:none;font-style:italic">
+            Solo un administrador puede cambiar esto.
+          </span>
         </div>
       </div>
     </div>
@@ -5653,7 +5656,22 @@ function openProveedorModal(pid) {
   pvSetContactos(p.contactos || []);
   document.getElementById('pv-obs').value = p.observaciones||'';
   document.getElementById('pv-sujeto-seguimiento').checked = p.sujeto_seguimiento === true;
+  _pvAplicarPermisoSeguimiento(isAdmin);
   openModal('modal-proveedor');
+}
+
+// (2026-08-10) Solo admin puede marcar/desmarcar "Sujeto a seguimiento" —
+// compras puede seguir editando el resto de la ficha del proveedor con
+// normalidad. Deshabilitar el control (no solo ocultarlo) para que quede
+// claro que el valor sigue ahí, solo que no se puede tocar desde esta
+// sesión — el backend también rechaza el cambio aunque se fuerce el DOM.
+function _pvAplicarPermisoSeguimiento(esAdmin) {
+  const chk = document.getElementById('pv-sujeto-seguimiento');
+  const wrap = document.getElementById('pv-sujeto-seguimiento-wrap');
+  const aviso = document.getElementById('pv-sujeto-seguimiento-solo-admin');
+  chk.disabled = !esAdmin;
+  if (wrap) wrap.style.opacity = esAdmin ? '1' : '.6';
+  if (aviso) aviso.style.display = esAdmin ? 'none' : 'inline';
 }
 
 function openNuevoProveedorModal() {
@@ -5668,6 +5686,7 @@ function openNuevoProveedorModal() {
   pvSetContactos([]);
   document.getElementById('pv-obs').value = '';
   document.getElementById('pv-sujeto-seguimiento').checked = false;
+  _pvAplicarPermisoSeguimiento(G.rol === 'admin');
   openModal('modal-proveedor');
 }
 

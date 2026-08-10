@@ -119,12 +119,41 @@ def _auto_migrate():
             # compra diaria frente a los pocos que sí interesa seguir, es más
             # seguro empezar todos apagados y que el admin encienda solo los
             # que quiere vigilar, que al revés.
+            # FIX (mismo día): el SQL de emergencia que se dio para
+            # desbloquear /api/proveedores mientras esta migración no se
+            # aplicaba (v12.29.66) usaba DEFAULT TRUE — versión anterior a
+            # este cambio de criterio. Si se llegó a ejecutar a mano, la
+            # columna ya existía con DEFAULT TRUE y TODOS los proveedores en
+            # TRUE, y un simple "ADD COLUMN IF NOT EXISTS ... DEFAULT FALSE"
+            # no toca nada si la columna ya existe — por eso seguían todos
+            # marcados. Se comprueba el DEFAULT real de la columna en
+            # information_schema y, si no es FALSE (columna inexistente o
+            # con el DEFAULT antiguo), se crea/corrige el DEFAULT y se
+            # resetean a FALSE los proveedores que estuvieran en TRUE — algo
+            # seguro de hacer aquí porque, al ser una funcionalidad
+            # recién nacida, nadie ha podido marcar todavía ninguno a
+            # propósito (la pantalla llevaba rota desde que se introdujo).
+            # Es correctivo y de una sola vez: en cuanto el DEFAULT quede en
+            # FALSE, esta condición deja de cumplirse y no se vuelve a tocar
+            # nada en arranques futuros, así que si un admin marca luego
+            # proveedores concretos, esos cambios quedan a salvo para
+            # siempre.
             try:
-                cur.execute(
-                    "ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS sujeto_seguimiento BOOLEAN NOT NULL DEFAULT FALSE"
-                )
+                cur.execute("""
+                    SELECT column_default FROM information_schema.columns
+                    WHERE table_name='proveedores' AND column_name='sujeto_seguimiento'
+                """)
+                _fila_col = cur.fetchone()
+                _default_actual = (_fila_col or {}).get("column_default") or ""
+                if "false" not in _default_actual.lower():
+                    cur.execute(
+                        "ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS sujeto_seguimiento BOOLEAN NOT NULL DEFAULT FALSE"
+                    )
+                    cur.execute("ALTER TABLE proveedores ALTER COLUMN sujeto_seguimiento SET DEFAULT FALSE")
+                    cur.execute("UPDATE proveedores SET sujeto_seguimiento = FALSE WHERE sujeto_seguimiento = TRUE")
+                    log.info("[MIGRACION] sujeto_seguimiento corregido a opt-in (DEFAULT FALSE) y proveedores reseteados")
             except Exception as e:
-                log.warning(f"No se pudo añadir sujeto_seguimiento a proveedores: {e}")
+                log.warning(f"No se pudo corregir sujeto_seguimiento a opt-in: {e}")
             # ── Hotel de pruebas "PR" ─────────────────────────────────────
             try:
                 cur.execute("""
@@ -7424,9 +7453,16 @@ def create_proveedor():
     if rows_to_list(dup_codigo):
         return jsonify({"error": f"Ya existe un proveedor con el código SAP '{codigo}'"}), 409
     db  = get_db()
+    # (2026-08-10) sujeto_seguimiento solo lo puede fijar un admin —
+    # compras puede seguir dando de alta proveedores con normalidad, pero
+    # no marcar/desmarcar el seguimiento de "Comparar listado PDF" (rol
+    # restringido también en esa pantalla). Si no es admin, el proveedor
+    # nuevo se crea siempre con el valor por defecto (FALSE), aunque el
+    # payload trajera otra cosa.
+    sujeto_seg = bool(data.get("sujeto_seguimiento", False)) if session.get("rol") == "admin" else False
     cur = execute(
         "INSERT INTO proveedores (codigo,nombre,observaciones,sujeto_seguimiento) VALUES (%s,%s,%s,%s) RETURNING id",
-        (codigo, nombre, data.get("observaciones",""), bool(data.get("sujeto_seguimiento", False)))
+        (codigo, nombre, data.get("observaciones",""), sujeto_seg)
     )
     new_id = cur.fetchone()["id"]
     # Insertar contactos
@@ -7476,9 +7512,20 @@ def update_proveedor(pid):
     if rows_to_list(dup_codigo):
         return jsonify({"error": f"Ya existe otro proveedor con el código SAP '{codigo}'"}), 409
     db   = get_db()
+    # (2026-08-10) sujeto_seguimiento solo lo puede cambiar un admin —
+    # compras puede seguir editando la ficha del proveedor con normalidad
+    # (contactos, observaciones...), pero no marcar/desmarcar este campo.
+    # Si no es admin, se conserva el valor que ya tuviera guardado en vez
+    # de aceptar lo que traiga el payload (y sobre todo, en vez de
+    # resetearlo a FALSE sin querer solo por editar otra cosa).
+    if session.get("rol") == "admin":
+        sujeto_seg = bool(data.get("sujeto_seguimiento", False))
+    else:
+        _actual = query("SELECT sujeto_seguimiento FROM proveedores WHERE id=%s", (pid,), one=True)
+        sujeto_seg = bool(_actual["sujeto_seguimiento"]) if _actual else False
     execute(
         "UPDATE proveedores SET codigo=%s,nombre=%s,observaciones=%s,sujeto_seguimiento=%s WHERE id=%s",
-        (codigo, nombre, data.get("observaciones",""), bool(data.get("sujeto_seguimiento", False)), pid)
+        (codigo, nombre, data.get("observaciones",""), sujeto_seg, pid)
     )
     # Reemplazar contactos (el DELETE cascada también borra sus filas en
     # proveedor_contacto_hoteles vía ON DELETE CASCADE)

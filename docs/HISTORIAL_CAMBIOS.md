@@ -22,6 +22,66 @@
 
 ---
 
+## 2026-08-10 10:30
+
+### [Control Pedidos] v12.29.72 — "Sujeto a seguimiento" restringido solo a Admin
+- Petición: los roles hotel y compras no deben poder modificar el
+  campo "Sujeto a seguimiento en Comparar listado PDF" de la ficha
+  de proveedor.
+- Hotel ya no podía crear ni editar proveedores en absoluto
+  (`create_proveedor`/`update_proveedor` ya devolvían 403 para ese
+  rol) — sin cambios necesarios ahí.
+- Compras sí puede seguir editando la ficha del proveedor con
+  normalidad (nombre, código, contactos, observaciones), pero ya no
+  este campo en concreto:
+  - Backend: al crear un proveedor, si quien hace la petición no es
+    admin, se crea siempre con el valor por defecto (`FALSE`),
+    ignorando lo que trajera el payload. Al editar, si no es admin,
+    se conserva el valor que ya tuviera guardado el proveedor en vez
+    de aceptar lo que llegue en la petición — así, aunque compras
+    edite cualquier otra cosa de la ficha (añadir un contacto, por
+    ejemplo), este campo no se toca ni se resetea sin querer.
+  - Frontend: el checkbox se deshabilita (no solo se oculta) para
+    cualquiera que no sea admin, con un aviso "Solo un administrador
+    puede cambiar esto" junto al texto de ayuda — doble seguridad,
+    el backend rechaza el cambio igualmente aunque alguien fuerce el
+    DOM del navegador.
+- `app.py` compila sin errores; los 9 bloques `<script>` de
+  `templates/index.html` pasan `node --check`. `README.md`
+  actualizado a la versión actual. Badge de versión del sidebar
+  actualizado a "V 12.29.72"; entrada añadida en `CHANGELOG.md`.
+
+## 2026-08-10 10:05
+
+### [Control Pedidos] v12.29.70 — Fix: los proveedores seguían saliendo "Sujeto a seguimiento" pese al cambio a opt-in
+- Reportado con captura: al editar un proveedor, el checkbox salía
+  marcado — contradiciendo el propio texto de ayuda de al lado, que
+  ya decía "Desmarcado por defecto para todos los proveedores"
+  (v12.29.68, entregado minutos antes).
+- Causa: el SQL de emergencia entregado el mismo día para desbloquear
+  `/api/proveedores` (v12.29.66, antes de que el usuario pidiera el
+  cambio a opt-in) creaba la columna con `DEFAULT TRUE`. Al haberse
+  ejecutado, `sujeto_seguimiento` quedó creada con todos los
+  proveedores en `TRUE` — y la migración de v12.29.68
+  (`ADD COLUMN IF NOT EXISTS ... DEFAULT FALSE`) es un no-op si la
+  columna ya existe (por diseño de `IF NOT EXISTS`), así que nunca
+  llegó a corregir nada, ni el `DEFAULT` ni los valores ya puestos.
+- Corregido: nueva migración que consulta el `DEFAULT` real de la
+  columna en `information_schema.columns` y, si no es `FALSE`
+  (columna inexistente, o existente con el `DEFAULT` antiguo),
+  corrige el `DEFAULT` de la columna **y** resetea a `FALSE` los
+  proveedores que estuvieran en `TRUE` — seguro de hacer aquí porque,
+  al ser una funcionalidad recién nacida y con la pantalla rota hasta
+  ahora, nadie ha podido marcar todavía ningún proveedor a propósito.
+  Es correctiva y de una sola vez: en cuanto el `DEFAULT` quede en
+  `FALSE`, la condición deja de cumplirse y no se vuelve a tocar nada
+  en arranques futuros — cualquier proveedor que un admin marque
+  después de esto queda a salvo para siempre, no se resetea en cada
+  reinicio del servidor.
+- `app.py` compila sin errores. `README.md` actualizado a la versión
+  actual. Badge de versión del sidebar actualizado a "V 12.29.70";
+  entrada añadida en `CHANGELOG.md`.
+
 ## 2026-08-10 09:20
 
 ### [Control Pedidos] v12.29.68 — Causa raíz del fallo de migración, "Comparar listado PDF" solo Admin, filtro de proveedores invertido a opt-in
