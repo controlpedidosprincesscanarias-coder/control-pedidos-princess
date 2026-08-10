@@ -1265,7 +1265,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.58
+          V 12.29.64
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1413,6 +1413,7 @@ tbody tr:last-child{border-bottom:none}
           <input class="filter-input" id="f-fecha-hasta" type="date" title="Fecha solicitud hasta" style="width:140px" onchange="loadPedidos()">
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
           <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
+          <button class="btn btn-sm" id="btn-comparar-listado-pdf" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCompararListado()">📄 Comparar listado PDF</button>
         </div>
         <div class="search-chips">
           <span class="search-chips-label">Busca por:</span>
@@ -2352,6 +2353,19 @@ tbody tr:last-child{border-bottom:none}
           Estas observaciones son del proveedor y no tienen relación con las observaciones de los pedidos.
         </div>
       </div>
+
+      <!-- (2026-08-06) Filtro de seguimiento de listados PDF de SAP -->
+      <div class="form-group" style="margin-top:14px;background:#f8f9fa;border-radius:8px;padding:10px 14px">
+        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:600">
+          <input type="checkbox" id="pv-sujeto-seguimiento" checked style="width:16px;height:16px">
+          Sujeto a seguimiento en "Comparar listado PDF"
+        </label>
+        <div style="font-size:.78rem;color:var(--text-secondary);margin-top:4px">
+          Desmárcalo para proveedores de compra diaria que no se siguen en esta app (p. ej.
+          alimentación y bebida) — sus pedidos se ignorarán al comparar el listado de SAP,
+          en vez de avisar de que "faltan" en la aplicación.
+        </div>
+      </div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" style="color:#e74c3c;border-color:#e74c3c"
@@ -2359,6 +2373,71 @@ tbody tr:last-child{border-bottom:none}
       <div style="flex:1"></div>
       <button class="btn btn-ghost" onclick="closeModal('modal-proveedor')">Cancelar</button>
       <button class="btn btn-gold" id="btn-save-proveedor" onclick="saveProveedor()">Guardar cambios</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL COMPARAR LISTADO PDF (2026-08-06) ──────────────────────────────
+     Verificación semanal: sube el "Listado de Pedidos" que exporta SAP para
+     un hotel y compara los números de pedido contra lo ya registrado aquí.
+-->
+<div class="modal-overlay" id="modal-comparar-pdf">
+  <div class="modal" style="max-width:900px">
+    <div class="modal-header">
+      <div class="modal-title">📄 Comparar listado PDF (SAP)</div>
+      <button class="close-btn" onclick="closeModal('modal-comparar-pdf')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="cmp-pdf-form">
+        <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
+          Sube el "Listado de Pedidos" que exporta SAP para un hotel (un PDF por hotel) —
+          se comparan todos los números de pedido del listado contra los que ya están dados
+          de alta aquí, para detectar compras hechas en SAP que se hayan quedado sin
+          registrar en esta aplicación. Los proveedores marcados como
+          <strong>no sujetos a seguimiento</strong> (Proveedores → ficha del proveedor —
+          pensado para alimentación/bebida) se excluyen del todo del resultado.
+        </div>
+        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;align-items:end">
+          <div class="form-group">
+            <label class="form-label">Hotel <span style="color:#e74c3c">*</span></label>
+            <select class="form-control" id="cmp-pdf-hotel"><option value="">— Selecciona —</option></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Listado PDF <span style="color:#e74c3c">*</span></label>
+            <input class="form-control" type="file" id="cmp-pdf-file" accept="application/pdf">
+          </div>
+        </div>
+        <div style="margin-top:16px;text-align:right">
+          <button class="btn btn-gold" id="btn-cmp-pdf-comparar" onclick="compararListadoPdf()">Comparar</button>
+        </div>
+      </div>
+
+      <div id="cmp-pdf-loading" class="loading" style="display:none">Leyendo el PDF y comparando…</div>
+
+      <div id="cmp-pdf-resultado" style="display:none;margin-top:18px">
+        <div id="cmp-pdf-resumen" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <label style="display:flex;align-items:center;gap:6px;font-size:.85rem;cursor:pointer">
+            <input type="checkbox" id="cmp-pdf-solo-faltantes" checked onchange="_renderCompararPdfResultado()">
+            Mostrar solo los que faltan en la app
+          </label>
+          <div style="flex:1"></div>
+          <button class="btn btn-ghost btn-sm" onclick="_resetModalCompararPdf()">↺ Nuevo listado</button>
+        </div>
+        <div class="table-wrap" style="max-height:420px">
+          <table>
+            <thead>
+              <tr>
+                <th>Pedido SAP</th><th>Fecha</th><th>Proveedor (SAP)</th><th>Estado</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="cmp-pdf-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-comparar-pdf')">Cerrar</button>
     </div>
   </div>
 </div>
@@ -2613,6 +2692,9 @@ async function _entrarEnApp(r) {
   // Ocultar botón nuevo pedido para usuario hotel (solo lectura + albarán)
   const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
   if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
+  // (2026-08-06) Comparar listado PDF: solo admin/compras (igual que el backend)
+  const btnCompararPdf = document.getElementById('btn-comparar-listado-pdf');
+  if (btnCompararPdf) btnCompararPdf.style.display = G.rol === 'hotel' ? 'none' : '';
   await loadMaestros();
   // ── Detección de versión nueva al iniciar sesión ────────────────────────
   // FLUJO A (nueva sesión / login):
@@ -5554,6 +5636,7 @@ function openProveedorModal(pid) {
   }
   pvSetContactos(p.contactos || []);
   document.getElementById('pv-obs').value = p.observaciones||'';
+  document.getElementById('pv-sujeto-seguimiento').checked = p.sujeto_seguimiento !== false;
   openModal('modal-proveedor');
 }
 
@@ -5568,6 +5651,7 @@ function openNuevoProveedorModal() {
   setVal('pv-codigo-input', '');
   pvSetContactos([]);
   document.getElementById('pv-obs').value = '';
+  document.getElementById('pv-sujeto-seguimiento').checked = true;
   openModal('modal-proveedor');
 }
 
@@ -5582,6 +5666,7 @@ async function saveProveedor() {
   const isNew = !G.editingProveedorId;
   const body = {
     observaciones: document.getElementById('pv-obs').value.trim(),
+    sujeto_seguimiento: document.getElementById('pv-sujeto-seguimiento').checked,
     contactos:     pvGetContactos(),
   };
 
@@ -5614,6 +5699,116 @@ async function saveProveedor() {
 
   closeModal('modal-proveedor');
   loadProveedores();
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Comparar listado PDF (SAP) — 2026-08-06
+   Verificación semanal: sube el "Listado de Pedidos" que exporta SAP para
+   un hotel y compara los números de pedido contra pedido_num en la app.
+═══════════════════════════════════════════════════════════════════════ */
+let _cmpPdfResultado = null;
+
+function abrirModalCompararListado() {
+  const sel = document.getElementById('cmp-pdf-hotel');
+  sel.innerHTML = '<option value="">— Selecciona —</option>';
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  _resetModalCompararPdf();
+  openModal('modal-comparar-pdf');
+}
+
+function _resetModalCompararPdf() {
+  _cmpPdfResultado = null;
+  document.getElementById('cmp-pdf-form').style.display = '';
+  document.getElementById('cmp-pdf-loading').style.display = 'none';
+  document.getElementById('cmp-pdf-resultado').style.display = 'none';
+  document.getElementById('cmp-pdf-file').value = '';
+}
+
+async function compararListadoPdf() {
+  const hotelId = val('cmp-pdf-hotel');
+  const fileInput = document.getElementById('cmp-pdf-file');
+  const file = fileInput.files[0];
+  if (!hotelId) { toast('Selecciona un hotel', 'error'); return; }
+  if (!file) { toast('Selecciona el PDF del listado', 'error'); return; }
+
+  document.getElementById('cmp-pdf-form').style.display = 'none';
+  document.getElementById('cmp-pdf-loading').style.display = '';
+  document.getElementById('cmp-pdf-resultado').style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('hotel_id', hotelId);
+  fd.append('file', file);
+
+  try {
+    const r = await fetch('/api/pedidos/comparar-listado-pdf', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error comparando el listado', 'error');
+      document.getElementById('cmp-pdf-form').style.display = '';
+      document.getElementById('cmp-pdf-loading').style.display = 'none';
+      return;
+    }
+    _cmpPdfResultado = d;
+    document.getElementById('cmp-pdf-loading').style.display = 'none';
+    document.getElementById('cmp-pdf-resultado').style.display = '';
+    document.getElementById('cmp-pdf-solo-faltantes').checked = true;
+    _renderCompararPdfResultado();
+  } catch (e) {
+    toast('Error comparando el listado: ' + e.message, 'error');
+    document.getElementById('cmp-pdf-form').style.display = '';
+    document.getElementById('cmp-pdf-loading').style.display = 'none';
+  }
+}
+
+function _renderCompararPdfResultado() {
+  const d = _cmpPdfResultado;
+  if (!d) return;
+  const resumen = document.getElementById('cmp-pdf-resumen');
+  const pill = (txt, bg, color) => `<span style="background:${bg};color:${color};font-weight:700;
+      padding:5px 12px;border-radius:20px;font-size:.85rem">${txt}</span>`;
+  resumen.innerHTML =
+    pill(`📄 ${d.total_pdf} pedidos en el listado`, '#e9ecef', '#495057') +
+    pill(`✅ ${d.encontrados} encontrados`, '#d4edda', '#155724') +
+    pill(`⛔ ${d.no_encontrados} NO encontrados`, d.no_encontrados ? '#f8d7da' : '#d4edda', d.no_encontrados ? '#721c24' : '#155724') +
+    (d.excluidos_seguimiento ? pill(`➖ ${d.excluidos_seguimiento} excluidos (sin seguimiento)`, '#fff3cd', '#856404') : '');
+
+  const soloFaltantes = document.getElementById('cmp-pdf-solo-faltantes').checked;
+  const filas = soloFaltantes ? d.pedidos.filter(p => !p.encontrado) : d.pedidos;
+  const tbody = document.getElementById('cmp-pdf-tbody');
+  if (!filas.length) {
+    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:20px">
+      ${soloFaltantes ? '🎉 Ningún pedido del listado falta en la aplicación.' : 'Sin pedidos.'}</td></tr>`;
+    return;
+  }
+  tbody.innerHTML = filas.map(p => {
+    const provLabel = p.proveedor_identificado
+      ? p.proveedor_pdf
+      : `${p.proveedor_pdf} <span title="No se ha identificado en el catálogo de proveedores" style="color:#e67700">⚠️</span>`;
+    const estado = p.encontrado
+      ? `<span style="color:#155724;font-weight:600">✅ En la app${p.norden ? ' (Nº' + p.norden + ')' : ''}</span><br>
+         <span style="font-size:.78rem;color:var(--text-secondary)">${p.estado_app || ''}</span>`
+      : `<span style="color:#721c24;font-weight:700">⛔ No está en la app</span>`;
+    const accion = p.encontrado
+      ? `<button class="btn btn-ghost btn-sm" onclick="closeModal('modal-comparar-pdf');openPedidoModal(${p.pedido_id})">Ver</button>`
+      : `<button class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none"
+                 onclick="_crearPedidoDesdeComparacion('${p.pedido_num_sap}')">➕ Crear pedido</button>`;
+    return `<tr>
+      <td class="monospace">${p.pedido_num_sap}</td>
+      <td>${p.fecha}</td>
+      <td>${provLabel}</td>
+      <td>${estado}</td>
+      <td>${accion}</td>
+    </tr>`;
+  }).join('');
+}
+
+function _crearPedidoDesdeComparacion(pedidoNumSap) {
+  const hotelId = val('cmp-pdf-hotel');
+  closeModal('modal-comparar-pdf');
+  openNuevoPedidoModal();
+  setVal('p-hotel', hotelId);
+  setVal('p-pedido-num', pedidoNumSap);
+  toast('Pedido prellenado con el hotel y el Nº de SAP — completa el resto de datos', 'success');
 }
 
 async function borrarProveedor() {
@@ -5898,6 +6093,8 @@ function calcDias(s) {
     _applySidebarRoleStyles();
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
+    const btnCompararPdf2 = document.getElementById('btn-comparar-listado-pdf');
+    if (btnCompararPdf2) btnCompararPdf2.style.display = G.rol === 'hotel' ? 'none' : '';
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     _checkIntegridadBadge();  // badge silencioso en sidebar para admin

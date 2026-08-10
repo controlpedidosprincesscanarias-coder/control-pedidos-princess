@@ -1,3 +1,90 @@
+# v12.29.64 — 10 agosto 2026 08:15
+
+🔧 Fix: el +34 del teléfono salía duplicado en la firma de los correos
+
+**Reportado con captura**: la firma mostraba `(+34) +34681111792` — el
+prefijo repetido.
+
+**Causa:** `_firma_comprador_html()`/`_firma_comprador_text()` anteponen
+siempre `"(+34)"` al móvil guardado del usuario, pero el propio campo del
+formulario sugiere como placeholder "+34 600 000 000" — algunos usuarios
+lo guardan ya con el prefijo incluido, y entonces se duplicaba.
+
+**Corregido:** nuevo helper `_formatear_movil_firma()` que quita
+cualquier `+34`/`0034`/`34` inicial (con o sin espacio) del móvil
+guardado antes de anteponer el `(+34)` fijo de la firma — el resultado
+sale limpio se haya guardado el número como se haya guardado. Probado
+contra varios formatos realistas (`+34681111792`, `34681111792`,
+`0034681111792`, con espacios...), todos correctos.
+
+`app.py` compila sin errores. `README.md` actualizado a la versión
+actual. Badge de versión del sidebar actualizado a "V 12.29.64".
+
+# v12.29.62 — 6 agosto 2026 11:35
+
+🔒 Seguridad — RLS activado en 3 tablas nuevas (aviso del Security Advisor de Supabase)
+
+**Reportado** con el propio informe del linter de Supabase: `RLS Disabled
+in Public` sobre `proveedor_contacto_hoteles`, `expediente_exceso` y
+`bridge_popup_visto` — 3 tablas creadas en sesiones recientes que se
+quedaron sin el mismo `ENABLE ROW LEVEL SECURITY` que ya se aplicaba a
+otras 4 tablas desde julio.
+
+**Mismo criterio ya verificado entonces, sin cambios de comportamiento**:
+esta app nunca usa la API REST automática de Supabase (PostgREST) — todo
+habla por conexión directa a Postgres con `DATABASE_URL`, nunca con la
+anon key — así que activar RLS sin ninguna política es 100% seguro para
+el funcionamiento; solo cierra el acceso público accidental por esa otra
+vía. Añadidas las 3 tablas a la misma lista ya existente en
+`_auto_migrate()`.
+
+`app.py` compila sin errores. `README.md` actualizado a la versión
+actual. Badge de versión del sidebar actualizado a "V 12.29.62".
+
+# v12.29.60 — 6 agosto 2026 11:20
+
+✨ Nueva funcionalidad: comparar listado PDF de SAP contra los pedidos registrados
+
+**Petición:** poder cargar semanalmente, por hotel, el "Listado de Pedidos"
+que exporta SAP, y que la aplicación indique qué pedidos de ese listado NO
+están dados de alta aquí para su seguimiento — más un filtro para excluir
+proveedores de compra diaria (alimentación/bebida) que no se siguen en
+esta app.
+
+**Probado contra un listado real** (262 páginas / 622 pedidos, hotel
+Guayarmina) antes de dar la extracción por buena — sin extracción "de IA"
+ni nada costoso: el formato de SAP es 100% fijo y predecible (verificado
+línea a línea), así que basta con una expresión regular sobre el texto
+del PDF. Se encontró y corrigió un caso real de emparejamiento de
+proveedor por una tilde ("Pastelería" vs "Pasteleria") durante la propia
+prueba.
+
+**Cambios:**
+- Nueva dependencia `pypdf` (`requirements.txt`) — lectura del PDF en
+  Python puro, sin depender de ningún binario del sistema (más portable
+  en Render que `pdftotext`/poppler).
+- Nueva columna `sujeto_seguimiento` en `proveedores` (migración
+  automática, `DEFAULT TRUE`) — nuevo checkbox en la ficha de cada
+  proveedor ("Sujeto a seguimiento en Comparar listado PDF"),
+  desmarcable para alimentación/bebida.
+- Nuevo endpoint `POST /api/pedidos/comparar-listado-pdf` — recibe un PDF
+  + `hotel_id`, extrae todos los números de pedido de SAP con una
+  expresión regular ya verificada contra un listado real, y los compara
+  contra `pedido_num` de los pedidos de ese hotel en la app. El
+  emparejamiento de nombres de proveedor (para aplicar el filtro de
+  seguimiento) normaliza acentos, puntuación y formas societarias
+  comunes (SL/SA/SLL...), con coincidencia exacta y, si falla, parcial.
+- Nuevo botón "📄 Comparar listado PDF" en la pantalla de Pedidos (solo
+  admin/compras) — modal con selector de hotel, subida del PDF, resumen
+  (encontrados / no encontrados / excluidos por el filtro), tabla
+  filtrable ("mostrar solo los que faltan"), y botón de acceso directo
+  para crear el pedido que falte con el hotel y el Nº de SAP ya
+  rellenados.
+
+`app.py` compila sin errores; los 9 bloques `<script>` de
+`templates/index.html` pasan `node --check`. Badge de versión del sidebar
+actualizado a "V 12.29.60".
+
 # v12.29.58 — 6 agosto 2026 09:45
 
 🐛 Fix real: el panel de Alertas nunca reflejaba los correos automáticos como enviados

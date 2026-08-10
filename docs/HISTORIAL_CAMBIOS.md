@@ -22,6 +22,115 @@
 
 ---
 
+## 2026-08-10 08:15
+
+### [Control Pedidos] v12.29.64 — Fix: el +34 del teléfono salía duplicado en la firma de los correos
+- Reportado con captura de un correo real: la firma mostraba
+  `(+34) +34681111792` — el prefijo repetido.
+- Causa: `_firma_comprador_html()`/`_firma_comprador_text()`
+  anteponen siempre `"(+34)"` al móvil guardado del usuario, pero el
+  propio campo del formulario sugiere como placeholder
+  "+34 600 000 000" — algunos usuarios lo guardan ya con el prefijo
+  incluido, y entonces se duplicaba al construir la firma.
+- Corregido: nuevo helper `_formatear_movil_firma()` que quita
+  cualquier `+34`/`0034`/`34` inicial (con o sin espacio después) del
+  móvil guardado antes de anteponer el `(+34)` fijo de la firma — el
+  resultado sale limpio se haya guardado el número como se haya
+  guardado. Probado contra varios formatos realistas
+  (`+34681111792`, `34681111792`, `0034681111792`, con espacios al
+  principio/final...), todos correctos.
+- `app.py` compila sin errores. `README.md` actualizado a la versión
+  actual. Badge de versión del sidebar actualizado a "V 12.29.64";
+  entrada añadida en `CHANGELOG.md`.
+
+## 2026-08-06 11:35
+
+### [Control Pedidos] v12.29.62 — Seguridad: RLS activado en 3 tablas nuevas (aviso del Security Advisor de Supabase)
+- Reportado con el propio informe del linter de Supabase (tabla de
+  hallazgos pegada tal cual): `RLS Disabled in Public` sobre
+  `public.proveedor_contacto_hoteles`, `public.expediente_exceso` y
+  `public.bridge_popup_visto` — 3 tablas creadas en sesiones
+  recientes de esta misma semana que se quedaron sin el
+  `ENABLE ROW LEVEL SECURITY` que ya se aplicaba a otras 4 tablas
+  desde julio (`egress_tracking`, `db_size_tracking`,
+  `db_vacuum_log`, `agente_heartbeat`).
+- Mismo criterio ya verificado entonces, sin ningún cambio de
+  comportamiento: esta app nunca usa la API REST automática de
+  Supabase (PostgREST) — todo habla por conexión directa a Postgres
+  con `DATABASE_URL`, nunca con la anon key — así que activar RLS
+  sin ninguna política es 100% seguro para el funcionamiento, solo
+  cierra el acceso público accidental por esa otra vía que la app no
+  usa de todos modos.
+- Añadidas las 3 tablas a la misma tupla ya existente dentro de
+  `_auto_migrate()` — comentario actualizado para reflejar que la
+  lista ya no son solo las 4 tablas originales de julio, sino que se
+  amplía según el propio Security Advisor va señalando tablas
+  nuevas sin este `ALTER` desde el principio.
+- `app.py` compila sin errores. `README.md` actualizado a la versión
+  actual. Badge de versión del sidebar actualizado a "V 12.29.62";
+  entrada añadida en `CHANGELOG.md`.
+
+## 2026-08-06 11:20
+
+### [Control Pedidos] v12.29.60 — Nueva funcionalidad: comparar listado PDF de SAP contra los pedidos registrados
+- Petición: poder cargar semanalmente, por hotel, el "Listado de
+  Pedidos" que exporta SAP, y que la app indique qué pedidos de ese
+  listado NO están dados de alta aquí para su seguimiento — más un
+  filtro de proveedores para excluir del aviso a los de compra diaria
+  (alimentación/bebida), que no se siguen en esta aplicación.
+- Probado contra un listado real (262 páginas / 622 pedidos, hotel
+  Guayarmina) antes de dar la extracción por buena, no solo en
+  teoría. Confirmado que el formato de SAP es 100% fijo y
+  predecible — no hace falta ningún tipo de lectura "de IA" costosa,
+  basta con una expresión regular sobre el texto del PDF. Se
+  encontró y corrigió un caso real de emparejamiento de proveedor
+  por una tilde ("Pastelería" vs "Pasteleria" del listado) durante
+  la propia prueba, antes de dar el emparejamiento por bueno.
+- Nueva dependencia `pypdf` (`requirements.txt`) — lectura del PDF en
+  Python puro, sin depender de ningún binario del sistema (más
+  portable en un despliegue de Render estándar que
+  `pdftotext`/poppler, que necesitarían instalarse aparte).
+- Nueva columna `sujeto_seguimiento` en `proveedores` (migración
+  automática dentro de `_auto_migrate()`, `DEFAULT TRUE` — todos los
+  proveedores existentes quedan "sujetos" por defecto, hay que
+  desmarcar los de alimentación/bebida a mano). Nuevo checkbox en la
+  ficha de cada proveedor: "Sujeto a seguimiento en 'Comparar listado
+  PDF'".
+- Nuevo endpoint `POST /api/pedidos/comparar-listado-pdf`
+  (`hotel_id` + `file` en el `form-data`): extrae todos los números
+  de pedido de SAP con el patrón
+  `NNNNNNNN - Pedido DD/MM/AAAA HH:MM:SS (PROVEEDOR...)` (verificado
+  contra el listado real, 622/622 sin ningún fallo), y los compara
+  contra `pedido_num` de los pedidos de ese hotel en la app —
+  normalizando ceros a la izquierda para no dar falsos "no
+  encontrado" por diferencias de formato entre quien lo tecleó y el
+  número real de SAP. El emparejamiento de nombres de proveedor (para
+  aplicar el filtro de seguimiento) normaliza acentos, puntuación y
+  formas societarias comunes (SL/SA/SLL/SLU/SCOOP/CB), con
+  coincidencia exacta primero y, si falla, parcial (uno contiene al
+  otro). Los pedidos de un proveedor marcado `sujeto_seguimiento=FALSE`
+  se excluyen del todo del resultado — ni cuentan como encontrados ni
+  como no encontrados.
+- Nuevo botón "📄 Comparar listado PDF" en la pantalla de Pedidos,
+  visible solo para admin/compras (igual que el backend) — modal con
+  selector de hotel, subida del PDF, resumen visual (📄 total en el
+  listado / ✅ encontrados / ⛔ no encontrados / ➖ excluidos por el
+  filtro), tabla con filtro "mostrar solo los que faltan" (marcado
+  por defecto), aviso ⚠️ cuando un proveedor del PDF no se ha podido
+  identificar en el catálogo, y botón "➕ Crear pedido" por cada fila
+  que falte — abre el formulario de alta con el hotel y el Nº de SAP
+  ya rellenados, para no tener que volver a teclearlos.
+- `app.py` compila sin errores; los 9 bloques `<script>` de
+  `templates/index.html` pasan `node --check` sin ningún fallo.
+  `README.md` actualizado a la versión actual. Badge de versión del
+  sidebar actualizado a "V 12.29.60"; entrada añadida en
+  `CHANGELOG.md`.
+- **Pendiente / posibles mejoras futuras, no implementadas todavía**:
+  recordatorio automático semanal para que un admin no se olvide de
+  subir los listados; pantalla para revisar/editar en bloque qué
+  proveedores están marcados como no-seguidos, en vez de tener que
+  entrar ficha por ficha.
+
 ## 2026-08-06 09:45
 
 ### [Control Pedidos] v12.29.58 — Fix real: el panel de Alertas nunca reflejaba los correos automáticos como enviados

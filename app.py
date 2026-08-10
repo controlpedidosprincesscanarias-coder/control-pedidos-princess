@@ -1139,7 +1139,7 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS dashboard_prefs TEXT"
             )
-            # ── RLS en tablas propias de estas mejoras (Jul 2026) ────────────
+            # ── RLS en tablas propias de la app sin política pública (Jul-Ago 2026) ──
             # Supabase expone TODAS las tablas del esquema public vía su API
             # REST automática (PostgREST) salvo que tengan RLS activado — el
             # Security Advisor lo marca como error ("RLS Disabled in Public").
@@ -1148,15 +1148,32 @@ def _auto_migrate():
             # con la anon key), así que activar RLS sin ninguna política es
             # 100% seguro para el funcionamiento — simplemente cierra el
             # acceso público accidental por ese otro camino.
-            # Solo se tocan aquí las tablas introducidas por estas mejoras
-            # (egress/tamaño BD/vacuum/heartbeat del agente); las tablas
-            # propias de la aplicación (pedidos, usuarios, etc.) no se
-            # tocan — su RLS, si aplica, se gestiona donde ya se gestionaba.
-            for _tabla_rls in ("egress_tracking", "db_size_tracking", "db_vacuum_log", "agente_heartbeat"):
+            # (2026-08-06) Se añaden aquí, según las va señalando el propio
+            # Security Advisor de Supabase, las tablas nuevas que se han ido
+            # creando en sesiones recientes sin este ALTER desde el principio
+            # (expediente_exceso — rediseño Techo de Gastos;
+            # proveedor_contacto_hoteles — contactos de proveedor por hotel;
+            # bridge_popup_visto — dedup de avisos al Organizador). El resto
+            # de tablas propias de la aplicación (pedidos, usuarios, etc.) no
+            # se tocan aquí — su RLS, si aplica, se gestiona donde ya se
+            # gestionaba.
+            for _tabla_rls in ("egress_tracking", "db_size_tracking", "db_vacuum_log", "agente_heartbeat",
+                                "expediente_exceso", "proveedor_contacto_hoteles", "bridge_popup_visto"):
                 try:
                     cur.execute(f"ALTER TABLE IF EXISTS {_tabla_rls} ENABLE ROW LEVEL SECURITY")
                 except Exception as e:
                     log.warning(f"No se pudo activar RLS en {_tabla_rls}: {e}")
+            # ── v12.29.60 — Verificación de listados PDF de SAP ────────────────
+            # Filtro de proveedores "sujetos a seguimiento": esta app hace
+            # seguimiento de todo tipo de pedido MENOS alimentación y bebida
+            # (compra diaria, no pasa por aquí). Al comparar un listado PDF
+            # exportado de SAP contra los pedidos ya registrados, los pedidos
+            # de un proveedor marcado como NO sujeto a seguimiento se ignoran
+            # del todo — nunca se avisa de que "faltan" en la app, porque es
+            # esperable que no estén.
+            cur.execute(
+                "ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS sujeto_seguimiento BOOLEAN NOT NULL DEFAULT TRUE"
+            )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -4505,9 +4522,23 @@ def _get_compradores_cc(hotel_codigo: str):
 # email como enlace. Solo nombre/teléfono/email cambian según el comprador
 # que firma; departamento y dirección son fijos.
 
+def _formatear_movil_firma(movil: str) -> str:
+    """
+    (2026-08-10) Normaliza el móvil para la firma de los correos.
+    Algunos usuarios lo guardan ya con el prefijo +34 — el propio
+    placeholder del campo lo sugiere ("+34 600 000 000") — y anteponer
+    "(+34)" sin más duplicaba el prefijo: "(+34) +34681111792". Se quita
+    cualquier +34/0034/34 inicial (con o sin espacio después) antes de
+    anteponer el "(+34)" fijo de la firma, así el resultado es siempre
+    limpio, se haya guardado el número como se haya guardado.
+    """
+    if not movil:
+        return ""
+    return re.sub(r'^\s*(\+34|0034|34)\s*', '', movil.strip())
+
 def _firma_comprador_html(nombre: str, email: str, movil: str) -> str:
     nombre_html = f"<strong>{nombre}</strong><br>" if nombre else ""
-    tel_html    = f"(+34) {movil}<br>" if movil else ""
+    tel_html    = f"(+34) {_formatear_movil_firma(movil)}<br>" if movil else ""
     email_html  = f'<a href="mailto:{email}">{email}</a>' if email else ""
     return (
         f"{nombre_html}"
@@ -4527,7 +4558,7 @@ def _firma_comprador_text(nombre: str, email: str, movil: str) -> str:
     lineas.append("Av. Touroperador Tui, s/n")
     lineas.append("35100 - Maspalomas (Gran Canaria)")
     if movil:
-        lineas.append(f"(+34) {movil}")
+        lineas.append(f"(+34) {_formatear_movil_firma(movil)}")
     if email:
         lineas.append(email)
     return "\n".join(lineas)
@@ -7355,10 +7386,10 @@ def get_proveedores():
     q = request.args.get("q", "").strip()
     if q:
         rows = query(
-            "SELECT id,codigo,nombre,observaciones FROM proveedores WHERE activo=1 AND nombre ILIKE %s ORDER BY nombre",
+            "SELECT id,codigo,nombre,observaciones,sujeto_seguimiento FROM proveedores WHERE activo=1 AND nombre ILIKE %s ORDER BY nombre",
             (f"%{q}%",))
     else:
-        rows = query("SELECT id,codigo,nombre,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre")
+        rows = query("SELECT id,codigo,nombre,observaciones,sujeto_seguimiento FROM proveedores WHERE activo=1 ORDER BY nombre")
     result = _prov_with_contactos(rows)
     # Rol hotel: solo consulta — se eliminan observaciones de la respuesta
     if session.get("rol") == "hotel":
@@ -7392,8 +7423,8 @@ def create_proveedor():
         return jsonify({"error": f"Ya existe un proveedor con el código SAP '{codigo}'"}), 409
     db  = get_db()
     cur = execute(
-        "INSERT INTO proveedores (codigo,nombre,observaciones) VALUES (%s,%s,%s) RETURNING id",
-        (codigo, nombre, data.get("observaciones",""))
+        "INSERT INTO proveedores (codigo,nombre,observaciones,sujeto_seguimiento) VALUES (%s,%s,%s,%s) RETURNING id",
+        (codigo, nombre, data.get("observaciones",""), bool(data.get("sujeto_seguimiento", True)))
     )
     new_id = cur.fetchone()["id"]
     # Insertar contactos
@@ -7444,8 +7475,8 @@ def update_proveedor(pid):
         return jsonify({"error": f"Ya existe otro proveedor con el código SAP '{codigo}'"}), 409
     db   = get_db()
     execute(
-        "UPDATE proveedores SET codigo=%s,nombre=%s,observaciones=%s WHERE id=%s",
-        (codigo, nombre, data.get("observaciones",""), pid)
+        "UPDATE proveedores SET codigo=%s,nombre=%s,observaciones=%s,sujeto_seguimiento=%s WHERE id=%s",
+        (codigo, nombre, data.get("observaciones",""), bool(data.get("sujeto_seguimiento", True)), pid)
     )
     # Reemplazar contactos (el DELETE cascada también borra sus filas en
     # proveedor_contacto_hoteles vía ON DELETE CASCADE)
@@ -7470,6 +7501,172 @@ def update_proveedor(pid):
                 )
     db.commit()
     return jsonify({"ok": True})
+
+def _normalizar_pedido_num(s):
+    """
+    (2026-08-06) Normaliza un Nº de pedido para comparar el listado de SAP
+    contra lo que haya en la app: quita ceros a la izquierda y espacios, y
+    pasa a mayúsculas — '00040159' y '40159' deben considerarse el mismo
+    pedido aunque alguien lo haya tecleado en la app sin los ceros.
+    """
+    if not s:
+        return ""
+    s = str(s).strip().upper()
+    m = re.match(r'^0*(\d+)$', s)
+    return m.group(1) if m else s
+
+def _normalizar_nombre_proveedor(s):
+    """
+    (2026-08-06) Normaliza el nombre de un proveedor para intentar
+    emparejar el texto libre del listado de SAP ('LANDE CANARIAS SL') con
+    el nombre guardado en el catálogo de proveedores de la app — quita
+    acentos, puntuación y las formas societarias más comunes al final,
+    para que pequeñas diferencias de formato ('Pastelería' vs
+    'Pasteleria') no impidan el emparejamiento.
+    """
+    if not s:
+        return ""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s.upper().strip())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r'[.,]', '', s)
+    s = re.sub(r'\s+', ' ', s)
+    for suf in (' SLL', ' SLU', ' SCOOP', ' SL', ' SA', ' CB'):
+        if s.endswith(suf):
+            s = s[: -len(suf)].strip()
+            break
+    return s
+
+@app.route("/api/pedidos/comparar-listado-pdf", methods=["POST"])
+@login_required
+def comparar_listado_pdf():
+    """
+    (2026-08-06) Verificación de listados PDF de SAP contra los pedidos ya
+    registrados en la app — pensado para un repaso semanal por hotel.
+
+    Un "Listado de Pedidos" exportado de SAP (uno por hotel) tiene un
+    formato fijo, verificado contra un ejemplo real de 262 páginas / 622
+    pedidos: cada pedido es una línea con fondo gris
+    "NNNNNNNN - Pedido DD/MM/AAAA HH:MM:SS (PROVEEDOR Teléfono:... Fax:...)"
+    seguida de sus artículos. Se extraen todos los números de pedido del
+    PDF (con pypdf, sin necesidad de ningún binario del sistema — más
+    portable que pdftotext/poppler en un despliegue de Render estándar) y
+    se comparan contra pedido_num en esta app para ese hotel, para
+    detectar compras que se hicieron en SAP pero nunca se dieron de alta
+    aquí para su seguimiento.
+
+    El filtro de proveedores "sujeto_seguimiento" (Admin → Proveedores)
+    excluye del resultado los pedidos de proveedores marcados como no
+    seguidos por esta app (p.ej. alimentación/bebida, compra diaria) —
+    ni cuentan como encontrados ni como no encontrados, simplemente no
+    se evalúan.
+
+    POST /api/pedidos/comparar-listado-pdf
+    form-data: hotel_id, file (el PDF)
+    """
+    if session.get("rol") not in ("admin", "compras"):
+        return jsonify({"error": "Acceso restringido"}), 403
+
+    hotel_id_raw = request.form.get("hotel_id")
+    if not hotel_id_raw:
+        return jsonify({"error": "Falta indicar el hotel"}), 400
+    try:
+        hotel_id = int(hotel_id_raw)
+    except ValueError:
+        return jsonify({"error": "Hotel no válido"}), 400
+    if "file" not in request.files:
+        return jsonify({"error": "No se ha adjuntado ningún archivo"}), 400
+    archivo = request.files["file"]
+    if not archivo.filename or not archivo.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "El archivo debe ser un PDF"}), 400
+
+    try:
+        from pypdf import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(archivo.read()))
+        texto = ""
+        for pagina in reader.pages:
+            texto += (pagina.extract_text() or "") + "\n"
+    except Exception as exc:
+        log.error("[COMPARAR-PDF] Error leyendo el PDF: %s", exc)
+        return jsonify({"error": f"No se pudo leer el PDF: {exc}"}), 400
+
+    patron = re.compile(r'(\d{6,})\s*-\s*Pedido\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2})\s*\((.*?)\)')
+    encontrados_pdf = patron.findall(texto)
+    if not encontrados_pdf:
+        return jsonify({
+            "error": "No se ha reconocido ningún pedido en el PDF — "
+                     "¿es un \"Listado de Pedidos\" de SAP con el formato habitual?"
+        }), 400
+
+    # ── Catálogo de proveedores, para el filtro de seguimiento ───────────────
+    proveedores_cat = rows_to_list(query(
+        "SELECT id, nombre, sujeto_seguimiento FROM proveedores WHERE activo=1"
+    ))
+    cat_por_nombre = {_normalizar_nombre_proveedor(p["nombre"]): p for p in proveedores_cat if p["nombre"]}
+
+    def _match_proveedor(nombre_norm):
+        if not nombre_norm:
+            return None
+        if nombre_norm in cat_por_nombre:
+            return cat_por_nombre[nombre_norm]
+        # Coincidencia parcial — el nombre de SAP a veces viene truncado o
+        # con alguna palabra de más/menos respecto al catálogo.
+        for nombre_cat, prov in cat_por_nombre.items():
+            if nombre_cat and (nombre_cat in nombre_norm or nombre_norm in nombre_cat):
+                return prov
+        return None
+
+    # ── Pedidos ya registrados en la app para este hotel ──────────────────────
+    pedidos_app = rows_to_list(query(
+        "SELECT id, norden, pedido_num, estado FROM pedidos "
+        "WHERE hotel_id=%s AND pedido_num IS NOT NULL AND pedido_num != ''",
+        (hotel_id,)
+    ))
+    app_por_num = {}
+    for p in pedidos_app:
+        app_por_num.setdefault(_normalizar_pedido_num(p["pedido_num"]), p)
+
+    resultado = []
+    vistos = set()
+    for num_sap, fecha, hora, proveedor_raw in encontrados_pdf:
+        if num_sap in vistos:
+            continue
+        vistos.add(num_sap)
+
+        # El nombre del proveedor viene pegado a "Teléfono:"/"Fax:" en la
+        # misma línea — se separa quedándonos solo con la parte del nombre.
+        nombre_prov = re.split(r'\s+Tel[eé]fono:|\s+Fax:', proveedor_raw)[0].strip()
+        prov_match = _match_proveedor(_normalizar_nombre_proveedor(nombre_prov))
+
+        if prov_match and not prov_match["sujeto_seguimiento"]:
+            continue  # proveedor excluido a propósito (p.ej. alimentación/bebida)
+
+        pedido_app = app_por_num.get(_normalizar_pedido_num(num_sap))
+        resultado.append({
+            "pedido_num_sap":         num_sap,
+            "fecha":                  fecha,
+            "hora":                   hora,
+            "proveedor_pdf":          nombre_prov,
+            "proveedor_id":           prov_match["id"] if prov_match else None,
+            "proveedor_identificado": bool(prov_match),
+            "encontrado":             bool(pedido_app),
+            "pedido_id":              pedido_app["id"] if pedido_app else None,
+            "norden":                 pedido_app["norden"] if pedido_app else None,
+            "estado_app":             pedido_app["estado"] if pedido_app else None,
+        })
+
+    total_evaluados = len(resultado)
+    no_encontrados  = sum(1 for r in resultado if not r["encontrado"])
+    return jsonify({
+        "ok": True,
+        "total_pdf":             len(encontrados_pdf),
+        "total_evaluados":       total_evaluados,
+        "excluidos_seguimiento": len(encontrados_pdf) - total_evaluados,
+        "encontrados":           total_evaluados - no_encontrados,
+        "no_encontrados":        no_encontrados,
+        "pedidos":               resultado,
+    })
 
 @app.route("/api/proveedores/<int:pid>", methods=["DELETE"])
 @admin_required
