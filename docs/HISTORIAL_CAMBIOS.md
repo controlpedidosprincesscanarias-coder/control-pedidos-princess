@@ -22,6 +22,42 @@
 
 ---
 
+## 2026-08-11 13:30
+
+### [Control Pedidos] v12.29.90 — Nuevo "estado aparente" en el correo (ENTREGA PARCIAL / ENTREGA COMPLETA), a partir de la 8ª columna del listado SAP
+- Petición del usuario: si el valor de la 8ª columna del PDF (importe
+  pendiente) es superior a 0, indicar en el correo con estado aparente
+  "ENTREGA PARCIAL"; si es 0 o negativo, "ENTREGA COMPLETA" — ambos
+  casos se muestran, para revisión final por el comprador y el hotel.
+- Cambio: la 8ª columna del listado simplificado (importe pendiente),
+  que hasta ahora se descartaba (grupo no capturado del patrón), pasa a
+  capturarse y usarse. Nueva función `_estado_aparente_entrega()` — a
+  propósito **independiente** de `_entrega_estado()` (que compara base
+  vs. recibido, columnas 6/7): el importe pendiente que trae SAP no
+  siempre coincide con "base − recibido" calculado a mano (confirmado
+  con el propio PDF real, p.ej. pedido 00029249: base 164,39, recibido
+  0,00, pendiente informado 193,40 — no cuadra la resta), así que se
+  usa tal cual lo da SAP en vez de recalcularlo.
+- Regla aplicada literalmente: `pendiente > 0` → `"ENTREGA PARCIAL"`;
+  `pendiente == 0` o negativo → `"ENTREGA COMPLETA"`. Se llama
+  "aparente" a propósito: es una lectura directa del PDF, no una
+  verificación.
+- Nuevo campo `estado_aparente` en cada pedido del resultado (además de
+  `importe_pendiente`). `_email_resumen_pdf_sap()` añade una columna
+  "Estado aparente" a la tabla del correo (verde para ENTREGA COMPLETA,
+  ámbar para ENTREGA PARCIAL) y una nota aclaratoria de que es una
+  lectura automática pendiente de confirmación final por el comprador y
+  el hotel.
+- Verificado contra el listado real de 221 pedidos (hotel MT): 221/221
+  reconocidos con los 10 grupos del patrón (antes 9), 116 ENTREGA
+  PARCIAL / 105 ENTREGA COMPLETA, suma correcta. Probado también el
+  correo con datos reales: la columna y la nota aparecen correctamente.
+- `app.py` compila sin errores. Los 9 bloques `<script>` de
+  `templates/index.html` pasan `node --check` (sin cambios de frontend
+  en esta entrega — el cambio es 100% de `app.py`). `README.md`
+  actualizado a la versión actual. Badge de versión del sidebar
+  actualizado a "V 12.29.90"; entrada añadida en `CHANGELOG.md`.
+
 ## 2026-08-11 13:15
 
 ### [Control Pedidos] v12.29.88 — Correo de resumen "Comparar listado PDF": solo pedidos con proveedor identificado

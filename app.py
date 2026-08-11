@@ -7803,12 +7803,18 @@ def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltant
     mostrar = pedidos_faltantes[:LIMITE_FILAS]
     resto = len(pedidos_faltantes) - len(mostrar)
 
+    def _color_estado_aparente(estado):
+        return "#856404" if estado == "ENTREGA PARCIAL" else "#155724"
+
     filas = "".join(f"""
         <tr style="{'background:#f5f5f5' if i % 2 else ''}">
           <td style="padding:8px 12px;border:1px solid #ddd">{p['pedido_num_sap']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{p['proveedor_pdf']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{p.get('fecha_pedido') or p.get('fecha', '')}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{p.get('entrega_estado', '')}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd;color:{_color_estado_aparente(p.get('estado_aparente', ''))};font-weight:700">
+            {p.get('estado_aparente', '')}
+          </td>
         </tr>""" for i, p in enumerate(mostrar))
 
     aviso_resto = (
@@ -7835,9 +7841,14 @@ def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltant
             <th style="padding:8px 12px;text-align:left">Proveedor</th>
             <th style="padding:8px 12px;text-align:left">Fecha</th>
             <th style="padding:8px 12px;text-align:left">Entrega</th>
+            <th style="padding:8px 12px;text-align:left">Estado aparente</th>
           </tr>
           {filas}
         </table>
+        <p style="font-size:12px;color:#888;font-style:italic">"Estado aparente" se calcula
+           directamente sobre el importe pendiente que trae el listado de SAP — es una lectura
+           automática, no una verificación: pendiente de confirmación final por el comprador y
+           el hotel.</p>
         {aviso_resto}
         {f'<p style="font-size:12px;color:#856404;background:#fff3cd;padding:8px 12px;border-radius:4px">'
           f'⚠️ Hay además <strong>{no_identificados}</strong> pedido(s) sin dar de alta cuyo proveedor '
@@ -7911,6 +7922,22 @@ def _entrega_estado(importe_base: float, importe_recibido: float) -> str:
         return "Entregado"
     return "Entrega parcial"
 
+def _estado_aparente_entrega(importe_pendiente: float) -> str:
+    """
+    (2026-08-11) "Estado aparente" de entrega, a petición del usuario —
+    distinto de `_entrega_estado()` (que compara base vs. recibido):
+    este se calcula directamente sobre la 8ª columna del listado
+    simplificado de SAP (importe pendiente, tal cual lo trae SAP — no
+    siempre coincide con "base - recibido" calculado a mano, por eso se
+    usa como dato aparte en vez de sustituir al anterior):
+      - pendiente > 0        -> "ENTREGA PARCIAL"
+      - pendiente == 0 o < 0 -> "ENTREGA COMPLETA"
+    Se llama "aparente" a propósito: es una lectura directa del PDF, no
+    una verificación — pensado para que el comprador y el hotel lo
+    revisen y confirmen, no como dato definitivo por sí solo.
+    """
+    return "ENTREGA PARCIAL" if round(importe_pendiente, 2) > 0 else "ENTREGA COMPLETA"
+
 # (2026-08-11) Listado de Pedidos SIMPLIFICADO de SAP: una línea por
 # pedido, sin el detalle de artículos. Aunque en el PDF renderizado las
 # columnas se ven en el orden "Nº pedido, fecha/hora, fecha pedido,
@@ -7942,7 +7969,7 @@ _PATRON_LISTADO_SIMPLIFICADO = re.compile(
     r'(\d{2}/\d{2}/\d{4})\s*'                     # fecha de entrega indicada
     r'(Abierto|Cerrado)\s*'                       # estado en SAP
     r'(' + _NUM_ES + r')\s*'                      # importe recibido
-    r'(?:' + _NUM_ES + r')'                       # importe pendiente (no se usa)
+    r'(' + _NUM_ES + r')'                         # importe pendiente (8ª columna — usada en _estado_aparente_entrega)
 )
 
 def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
@@ -8000,7 +8027,8 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     resultado = []
     vistos = set()
     for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
-         fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt) in encontrados_pdf:
+         fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt,
+         importe_pendiente_txt) in encontrados_pdf:
         if num_sap in vistos:
             continue
         vistos.add(num_sap)
@@ -8011,8 +8039,9 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
         if prov_match and not prov_match["sujeto_seguimiento"]:
             continue  # proveedor excluido a propósito (p.ej. alimentación/bebida)
 
-        importe_base     = _parse_importe_es(importe_base_txt)
-        importe_recibido = _parse_importe_es(importe_recibido_txt)
+        importe_base      = _parse_importe_es(importe_base_txt)
+        importe_recibido  = _parse_importe_es(importe_recibido_txt)
+        importe_pendiente = _parse_importe_es(importe_pendiente_txt)
 
         pedido_app = app_por_num.get(_normalizar_pedido_num(num_sap))
         resultado.append({
@@ -8027,8 +8056,10 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
             "proveedor_identificado": bool(prov_match),
             "importe_base":           importe_base,
             "importe_recibido":       importe_recibido,
+            "importe_pendiente":      importe_pendiente,
             "estado_sap":             estado_sap,
             "entrega_estado":         _entrega_estado(importe_base, importe_recibido),
+            "estado_aparente":        _estado_aparente_entrega(importe_pendiente),
             "encontrado":             bool(pedido_app),
             "pedido_id":              pedido_app["id"] if pedido_app else None,
             "norden":                 pedido_app["norden"] if pedido_app else None,
