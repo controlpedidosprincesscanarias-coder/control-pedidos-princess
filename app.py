@@ -7669,7 +7669,10 @@ def comparar_listado_pdf():
         limite = _time_pdf.time() - 1800
         for jid in [j for j, v in _PDF_JOBS.items() if v.get("creado_en", 0) < limite]:
             del _PDF_JOBS[jid]
-        _PDF_JOBS[job_id] = {"status": "processing", "creado_en": _time_pdf.time()}
+        _PDF_JOBS[job_id] = {
+            "status": "processing", "creado_en": _time_pdf.time(),
+            "hotel_id": hotel_id, "usuario_id": session.get("user_id"),
+        }
 
     hilo = threading.Thread(
         target=_ejecutar_comparacion_pdf_bg,
@@ -7692,6 +7695,128 @@ def comparar_listado_pdf_estado(job_id):
     job.pop("creado_en", None)
     return jsonify(job)
 
+@app.route("/api/pedidos/comparar-listado-pdf/<job_id>/enviar-resumen", methods=["POST"])
+@login_required
+def comparar_listado_pdf_enviar_resumen(job_id):
+    """
+    (2026-08-10) A petición del usuario: envía un correo interno con el
+    resumen de pedidos detectados en el listado de SAP/DALI que NO están
+    dados de alta en Control de Pedidos, al comprador responsable del
+    hotel, con copia al administrador que hizo la consulta.
+
+    Acción explícita (botón "Enviar resumen por correo" en el resultado),
+    no automática — para no reenviar sin querer cada vez que un admin
+    vuelve a comparar el mismo listado mientras revisa el resultado.
+
+    Como el resto de correos de esta app, se encola vía
+    _encolar_email_sistema() — el envío real depende de que alguien
+    tenga la aplicación abierta en el navegador (arquitectura ya
+    establecida, sin SMTP propio en el servidor).
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+
+    with _PDF_JOBS_LOCK:
+        job = dict(_PDF_JOBS.get(job_id) or {})
+    if not job:
+        return jsonify({"error": "El job no existe o ha caducado — vuelve a subir el PDF"}), 404
+    if job.get("status") != "done":
+        return jsonify({"error": "La comparación todavía no ha terminado"}), 400
+
+    resultado = job.get("resultado") or {}
+    pedidos_faltantes = [p for p in resultado.get("pedidos", []) if not p.get("encontrado")]
+    if not pedidos_faltantes:
+        return jsonify({"error": "No hay pedidos pendientes que reportar — no se envía nada"}), 400
+
+    hotel = query("SELECT codigo, nombre FROM hoteles WHERE id=%s", (job.get("hotel_id"),), one=True)
+    if not hotel:
+        return jsonify({"error": "Hotel no encontrado"}), 404
+
+    compradores = _get_compradores_hotel(hotel["codigo"])
+    destinatarios = [c["email"] for c in compradores if c.get("email")]
+    if not destinatarios:
+        return jsonify({
+            "error": f"No hay ningún comprador con email asignado al hotel {hotel['codigo']} "
+                     "— asígnalo en Admin → Usuarios → Hoteles asignados (Compras)"
+        }), 400
+
+    admin_row = query("SELECT nombre, email FROM usuarios WHERE id=%s", (job.get("usuario_id"),), one=True) or {}
+    admin_nombre = admin_row.get("nombre") or session.get("nombre") or "Administrador"
+    admin_email  = admin_row.get("email")
+
+    subject, body = _email_resumen_pdf_sap(
+        hotel["nombre"], hotel["codigo"], pedidos_faltantes,
+        resultado.get("total_pdf", 0), resultado.get("excluidos_seguimiento", 0), admin_nombre
+    )
+    _encolar_email_sistema(
+        "resumen_listado_pdf_sap", destinatarios, subject, cuerpo_html=body,
+        cc_emails=[admin_email] if admin_email else None,
+    )
+    return jsonify({"ok": True, "destinatarios": destinatarios, "cc": admin_email})
+
+def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltantes: list,
+                            total_pdf: int, excluidos: int, admin_nombre: str) -> tuple:
+    """
+    (2026-08-10) Resumen de "Comparar listado PDF" — pedidos que figuran
+    en el listado de SAP/DALI pero no están dados de alta en Control de
+    Pedidos. Mismo patrón visual que el resto de emails internos de la
+    app (_email_header_html + tabla + pie).
+    """
+    subject = f"[Control de Pedidos] {len(pedidos_faltantes)} pedido(s) de {hotel_codigo} en SAP sin registrar en la app"
+
+    # Con un listado grande podrían ser cientos de filas — se acota la
+    # tabla del correo para que no sea kilométrica; el detalle completo
+    # ya se ha visto en pantalla al comparar.
+    LIMITE_FILAS = 100
+    mostrar = pedidos_faltantes[:LIMITE_FILAS]
+    resto = len(pedidos_faltantes) - len(mostrar)
+
+    filas = "".join(f"""
+        <tr style="{'background:#f5f5f5' if i % 2 else ''}">
+          <td style="padding:8px 12px;border:1px solid #ddd">{p['pedido_num_sap']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p['fecha']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p['proveedor_pdf']}</td>
+        </tr>""" for i, p in enumerate(mostrar))
+
+    aviso_resto = (
+        f'<p style="font-size:12px;color:#888;font-style:italic">'
+        f'…y {resto} pedido(s) más — consulta el listado completo en la aplicación.</p>'
+        if resto > 0 else ""
+    )
+
+    body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:650px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+      {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
+                            color_fondo="#1a3a6b", color_subtitulo="#a8c0e8")}
+      <div style="padding:24px">
+        <p>Se ha comparado el listado de pedidos exportado de SAP/DALI para el hotel
+           <strong>{hotel_nombre}</strong> ({hotel_codigo}) contra los pedidos ya
+           registrados en Control de Pedidos.</p>
+        <p>Se han detectado <strong>{len(pedidos_faltantes)}</strong> pedido(s) que
+           figuran en SAP/DALI pero <strong>no están dados de alta en la aplicación</strong>
+           todavía, de un total de {total_pdf} pedidos en el listado
+           ({excluidos} de proveedores no sujetos a seguimiento, no evaluados).</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+          <tr style="background:#1a3a6b;color:#fff">
+            <th style="padding:8px 12px;text-align:left">Nº Pedido SAP</th>
+            <th style="padding:8px 12px;text-align:left">Fecha</th>
+            <th style="padding:8px 12px;text-align:left">Proveedor</th>
+          </tr>
+          {filas}
+        </table>
+        {aviso_resto}
+        <p>Por favor, revise estos pedidos y dé de alta en Control de Pedidos los que
+           corresponda, para que queden dentro del seguimiento habitual.</p>
+        <p style="font-size:12px;color:#888">Consulta generada por {admin_nombre} desde
+           "Comparar listado PDF".</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+        <p style="font-size:12px;color:#666">Mensaje automático generado por el sistema de Control de Pedidos.<br>
+           <strong>Princess Hotels &amp; Resorts</strong></p>
+      </div>
+    </div>
+    """
+    return subject, body
+
 def _ejecutar_comparacion_pdf_bg(job_id, hotel_id, pdf_bytes):
     """
     (2026-08-10) Cuerpo real de la comparación — corre en un hilo aparte,
@@ -7707,14 +7832,12 @@ def _ejecutar_comparacion_pdf_bg(job_id, hotel_id, pdf_bytes):
             resultado = _comparar_listado_pdf_logica(hotel_id, pdf_bytes)
             with _PDF_JOBS_LOCK:
                 if job_id in _PDF_JOBS:
-                    _PDF_JOBS[job_id] = {"status": "done", "resultado": resultado,
-                                          "creado_en": _PDF_JOBS[job_id].get("creado_en", _time_pdf.time())}
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "done", "resultado": resultado}
         except Exception as exc:
             log.error("[COMPARAR-PDF] Error en job %s: %s", job_id, exc)
             with _PDF_JOBS_LOCK:
                 if job_id in _PDF_JOBS:
-                    _PDF_JOBS[job_id] = {"status": "error", "error": str(exc),
-                                          "creado_en": _PDF_JOBS[job_id].get("creado_en", _time_pdf.time())}
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
 
 def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     """Lógica pura de extracción+comparación — separada de la vista Flask

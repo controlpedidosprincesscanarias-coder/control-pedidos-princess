@@ -1288,7 +1288,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.78
+          V 12.29.80
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2448,6 +2448,11 @@ tbody tr:last-child{border-bottom:none}
             Mostrar solo los que faltan en la app
           </label>
           <div style="flex:1"></div>
+          <button class="btn btn-sm" id="cmp-pdf-btn-enviar-resumen" style="background:#198754;color:#fff;border:none;display:none"
+                  onclick="enviarResumenComparacionPdf()"
+                  title="Envía un correo interno al comprador responsable del hotel, con copia al administrador que hace la consulta">
+            📧 Enviar resumen por correo
+          </button>
           <button class="btn btn-ghost btn-sm" onclick="_resetModalCompararPdf()">↺ Nuevo listado</button>
         </div>
         <div class="table-wrap" style="max-height:420px">
@@ -5765,6 +5770,7 @@ async function saveProveedor() {
    un hotel y compara los números de pedido contra pedido_num en la app.
 ═══════════════════════════════════════════════════════════════════════ */
 let _cmpPdfResultado = null;
+let _cmpPdfJobId = null;
 
 function abrirModalCompararListado() {
   const sel = document.getElementById('cmp-pdf-hotel');
@@ -5776,6 +5782,7 @@ function abrirModalCompararListado() {
 
 function _resetModalCompararPdf() {
   _cmpPdfResultado = null;
+  _cmpPdfJobId = null;
   document.getElementById('cmp-pdf-form').style.display = '';
   document.getElementById('cmp-pdf-loading').style.display = 'none';
   document.getElementById('cmp-pdf-resultado').style.display = 'none';
@@ -5817,6 +5824,7 @@ async function compararListadoPdf() {
       return;
     }
     jobId = d.job_id;
+    _cmpPdfJobId = jobId;
   } catch (e) {
     toast('Error comparando el listado: ' + e.message, 'error');
     document.getElementById('cmp-pdf-form').style.display = '';
@@ -5881,7 +5889,14 @@ function _renderCompararPdfResultado() {
     pill(`📄 ${d.total_pdf} pedidos en el listado`, '#e9ecef', '#495057') +
     pill(`✅ ${d.encontrados} encontrados`, '#d4edda', '#155724') +
     pill(`⛔ ${d.no_encontrados} NO encontrados`, d.no_encontrados ? '#f8d7da' : '#d4edda', d.no_encontrados ? '#721c24' : '#155724') +
-    (d.excluidos_seguimiento ? pill(`➖ ${d.excluidos_seguimiento} excluidos (sin seguimiento)`, '#fff3cd', '#856404') : '');
+    (d.excluidos_seguimiento ? pill(`➖ ${d.excluidos_seguimiento} pedidos de proveedores no sujetos a seguimiento`, '#fff3cd', '#856404') : '');
+
+  // (2026-08-10) A petición del usuario: botón para avisar por correo al
+  // comprador responsable del hotel (con copia al admin que consulta) —
+  // acción explícita, no automática, para no reenviar sin querer si se
+  // vuelve a comparar el mismo listado mientras se revisa el resultado.
+  const btnEnviar = document.getElementById('cmp-pdf-btn-enviar-resumen');
+  if (btnEnviar) btnEnviar.style.display = d.no_encontrados > 0 ? '' : 'none';
 
   const soloFaltantes = document.getElementById('cmp-pdf-solo-faltantes').checked;
   const filas = soloFaltantes ? d.pedidos.filter(p => !p.encontrado) : d.pedidos;
@@ -5911,6 +5926,30 @@ function _renderCompararPdfResultado() {
       <td>${accion}</td>
     </tr>`;
   }).join('');
+}
+
+async function enviarResumenComparacionPdf() {
+  if (!_cmpPdfJobId) { toast('No hay ninguna comparación activa', 'error'); return; }
+  const btn = document.getElementById('cmp-pdf-btn-enviar-resumen');
+  btn.disabled = true;
+  const textoOriginal = btn.textContent;
+  btn.textContent = 'Enviando…';
+  try {
+    const r = await fetch(`/api/pedidos/comparar-listado-pdf/${_cmpPdfJobId}/enviar-resumen`,
+                           { method: 'POST', credentials: 'same-origin' });
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error enviando el resumen', 'error');
+    } else {
+      const destTxt = (d.destinatarios || []).join(', ');
+      toast(`📧 Resumen encolado para ${destTxt}${d.cc ? ' (copia: ' + d.cc + ')' : ''}`, 'success');
+    }
+  } catch (e) {
+    toast('Error enviando el resumen: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+  }
 }
 
 function _crearPedidoDesdeComparacion(pedidoNumSap) {

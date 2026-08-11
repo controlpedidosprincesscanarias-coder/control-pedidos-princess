@@ -22,6 +22,49 @@
 
 ---
 
+## 2026-08-10 12:50
+
+### [Control Pedidos] v12.29.80 — "Comparar listado PDF": correo de resumen al comprador + texto aclarado
+- Petición: 1) que el resultado solo muestre pedidos de proveedores
+  sujetos a seguimiento, indicando el resto solo como recuento;
+  2) enviar un correo interno al comprador responsable del hotel,
+  con copia al administrador que hace la consulta, con el resumen
+  de pedidos detectados en SAP/DALI pendientes de dar de alta en la
+  app.
+- Punto 1 ya lo hacía la funcionalidad desde su diseño original
+  (la tabla de resultados nunca ha mostrado los proveedores
+  excluidos) — solo se ajustó el texto del recuento a la redacción
+  exacta pedida: "➖ X pedidos de proveedores no sujetos a
+  seguimiento" (antes decía "excluidos (sin seguimiento)").
+- Punto 2, nuevo:
+  - Botón "📧 Enviar resumen por correo" en el resultado, visible
+    solo si hay pedidos sin registrar (`no_encontrados > 0`).
+    Acción explícita, no automática al terminar la comparación —
+    para no reenviar sin querer si se vuelve a comparar el mismo
+    listado mientras se revisa el resultado.
+  - Nuevo
+    `POST /api/pedidos/comparar-listado-pdf/<job_id>/enviar-resumen`:
+    busca el/los comprador(es) del hotel con
+    `_get_compradores_hotel()` (ya existente, misma asignación que
+    usan las alertas), y encola un correo con copia al administrador
+    que hizo la consulta, vía `_encolar_email_sistema()` — mismo
+    mecanismo de cola que el resto de correos automáticos de la app
+    (se despacha desde el navegador de quien tenga la app abierta,
+    sin SMTP propio en el servidor).
+  - Nueva plantilla `_email_resumen_pdf_sap()` — mismo estilo visual
+    que el resto de correos internos de la app (`_email_header_html`
+    + tabla + pie); tabla con Nº de pedido SAP, fecha y proveedor,
+    acotada a 100 filas (con aviso de "y X más" si hay más) para no
+    generar un correo kilométrico con listados grandes. Probada con
+    datos simulados extraídos con `ast`: asunto correcto, recorte a
+    100 filas y aviso del resto, todo funcionando.
+  - Si el hotel no tiene ningún comprador con email asignado, el
+    endpoint avisa con un error claro en vez de fallar en silencio.
+- `app.py` compila sin errores; los 9 bloques `<script>` de
+  `templates/index.html` pasan `node --check`. `README.md`
+  actualizado a la versión actual. Badge de versión del sidebar
+  actualizado a "V 12.29.80"; entrada añadida en `CHANGELOG.md`.
+
 ## 2026-08-10 12:15
 
 ### [Control Pedidos] v12.29.78 — Fix: "El job no existe o ha caducado" al comparar un listado PDF
