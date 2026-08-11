@@ -3,7 +3,7 @@ Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase)
 Despliegue: Render.com  |  BD: Supabase  |  Email: EmailJS (frontend)
 """
 
-import os, json, logging, secrets, atexit, hashlib, re
+import os, json, logging, secrets, atexit, hashlib, re, threading
 from html import unescape as _html_unescape
 from datetime import datetime, timedelta, timezone, date as _date
 from functools import wraps
@@ -7551,6 +7551,15 @@ def update_proveedor(pid):
     db.commit()
     return jsonify({"ok": True})
 
+# (2026-08-10) Estado en memoria de los jobs de "Comparar listado PDF" —
+# ver comparar_listado_pdf()/_ejecutar_comparacion_pdf_bg() más abajo para
+# el porqué (evitar timeouts de proxy con PDFs grandes). Vive en memoria
+# del propio proceso, no en BD — asumible porque son resultados de
+# consulta efímeros (se limpian solos a los 30 min) y no algo que
+# necesite sobrevivir a un reinicio del servidor.
+_PDF_JOBS = {}
+_PDF_JOBS_LOCK = threading.Lock()
+
 def _normalizar_pedido_num(s):
     """
     (2026-08-06) Normaliza un Nº de pedido para comparar el listado de SAP
@@ -7594,9 +7603,24 @@ def comparar_listado_pdf():
     registrados en la app — pensado para un repaso semanal por hotel.
     Restringido solo a rol admin (2026-08-10, a petición del usuario).
 
+    (2026-08-10) FIX: con un PDF real de 178 páginas, el usuario recibía
+    "Unexpected token '<' ... is not valid JSON" — el proceso completo
+    (leer+extraer texto de las 178 páginas, ~8s solo en la extracción, más
+    lo que tarde el cold-start del servicio gratuito de Render) tardaba
+    más que el timeout de algún punto intermedio entre el navegador y el
+    servidor (el proxy de Cloudflare Worker delante de la app), que
+    devolvía su propia página de error HTML en vez de dejar pasar la
+    respuesta JSON — de ahí el "<html>" en el mensaje de error.
+    Solucionado haciendo el endpoint asíncrono: esta petición SOLO valida
+    y arranca el trabajo pesado en un hilo aparte, devolviendo
+    inmediatamente un job_id (habrá respondido en milisegundos, muy por
+    debajo de cualquier timeout). El resultado real se consulta aparte,
+    vía polling, con GET /api/pedidos/comparar-listado-pdf/<job_id>.
+
     Un "Listado de Pedidos" exportado de SAP (uno por hotel) tiene un
-    formato fijo, verificado contra un ejemplo real de 262 páginas / 622
-    pedidos: cada pedido es una línea con fondo gris
+    formato fijo, verificado contra dos ejemplos reales (262 páginas/622
+    pedidos, y 178 páginas/563 pedidos): cada pedido es una línea con
+    fondo gris
     "NNNNNNNN - Pedido DD/MM/AAAA HH:MM:SS (PROVEEDOR Teléfono:... Fax:...)"
     seguida de sus artículos. Se extraen todos los números de pedido del
     PDF (con pypdf, sin necesidad de ningún binario del sistema — más
@@ -7616,6 +7640,7 @@ def comparar_listado_pdf():
 
     POST /api/pedidos/comparar-listado-pdf
     form-data: hotel_id, file (el PDF)
+    → 202 {"ok": true, "job_id": "..."}
     """
     if session.get("rol") != "admin":
         return jsonify({"error": "Acceso restringido a administradores"}), 403
@@ -7633,24 +7658,87 @@ def comparar_listado_pdf():
     if not archivo.filename or not archivo.filename.lower().endswith(".pdf"):
         return jsonify({"error": "El archivo debe ser un PDF"}), 400
 
+    pdf_bytes = archivo.read()
+    if not pdf_bytes:
+        return jsonify({"error": "El archivo está vacío"}), 400
+
+    import time as _time_pdf
+    job_id = secrets.token_hex(16)
+    with _PDF_JOBS_LOCK:
+        # Limpieza de jobs viejos (>30 min) para no acumular memoria indefinidamente
+        limite = _time_pdf.time() - 1800
+        for jid in [j for j, v in _PDF_JOBS.items() if v.get("creado_en", 0) < limite]:
+            del _PDF_JOBS[jid]
+        _PDF_JOBS[job_id] = {"status": "processing", "creado_en": _time_pdf.time()}
+
+    hilo = threading.Thread(
+        target=_ejecutar_comparacion_pdf_bg,
+        args=(job_id, hotel_id, pdf_bytes),
+        daemon=True,
+    )
+    hilo.start()
+    return jsonify({"ok": True, "job_id": job_id}), 202
+
+@app.route("/api/pedidos/comparar-listado-pdf/<job_id>", methods=["GET"])
+@login_required
+def comparar_listado_pdf_estado(job_id):
+    """Consulta del resultado de un job lanzado por comparar_listado_pdf()."""
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    with _PDF_JOBS_LOCK:
+        job = dict(_PDF_JOBS.get(job_id) or {})
+    if not job:
+        return jsonify({"error": "El job no existe o ha caducado — vuelve a subir el PDF"}), 404
+    job.pop("creado_en", None)
+    return jsonify(job)
+
+def _ejecutar_comparacion_pdf_bg(job_id, hotel_id, pdf_bytes):
+    """
+    (2026-08-10) Cuerpo real de la comparación — corre en un hilo aparte,
+    fuera del ciclo petición/respuesta original, por eso necesita su
+    propio contexto de aplicación (with app.app_context()) para poder
+    usar query()/get_db(), que dependen de Flask g (con ámbito de
+    petición, no accesible desde un hilo nuevo sin esto). Mismo patrón ya
+    usado en init_db() para lo mismo.
+    """
+    import time as _time_pdf
+    with app.app_context():
+        try:
+            resultado = _comparar_listado_pdf_logica(hotel_id, pdf_bytes)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {"status": "done", "resultado": resultado,
+                                          "creado_en": _PDF_JOBS[job_id].get("creado_en", _time_pdf.time())}
+        except Exception as exc:
+            log.error("[COMPARAR-PDF] Error en job %s: %s", job_id, exc)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {"status": "error", "error": str(exc),
+                                          "creado_en": _PDF_JOBS[job_id].get("creado_en", _time_pdf.time())}
+
+def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
+    """Lógica pura de extracción+comparación — separada de la vista Flask
+    para poder llamarla igual desde una petición normal o desde un hilo
+    en segundo plano. Lanza excepción con el mensaje de error si algo
+    falla (el PDF no es legible, no se reconoce ningún pedido, etc.)."""
     try:
         from pypdf import PdfReader
         import io
-        reader = PdfReader(io.BytesIO(archivo.read()))
+        reader = PdfReader(io.BytesIO(pdf_bytes))
         texto = ""
         for pagina in reader.pages:
             texto += (pagina.extract_text() or "") + "\n"
     except Exception as exc:
         log.error("[COMPARAR-PDF] Error leyendo el PDF: %s", exc)
-        return jsonify({"error": f"No se pudo leer el PDF: {exc}"}), 400
+        raise RuntimeError(f"No se pudo leer el PDF: {exc}")
 
     patron = re.compile(r'(\d{6,})\s*-\s*Pedido\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2})\s*\((.*?)\)')
     encontrados_pdf = patron.findall(texto)
     if not encontrados_pdf:
-        return jsonify({
-            "error": "No se ha reconocido ningún pedido en el PDF — "
-                     "¿es un \"Listado de Pedidos\" de SAP con el formato habitual?"
-        }), 400
+        raise RuntimeError(
+            "No se ha reconocido ningún pedido en el PDF — "
+            "¿es un \"Listado de Pedidos\" de SAP con el formato habitual?"
+        )
 
     # ── Catálogo de proveedores, para el filtro de seguimiento ───────────────
     proveedores_cat = rows_to_list(query(
@@ -7711,7 +7799,7 @@ def comparar_listado_pdf():
 
     total_evaluados = len(resultado)
     no_encontrados  = sum(1 for r in resultado if not r["encontrado"])
-    return jsonify({
+    return {
         "ok": True,
         "total_pdf":             len(encontrados_pdf),
         "total_evaluados":       total_evaluados,
@@ -7719,7 +7807,7 @@ def comparar_listado_pdf():
         "encontrados":           total_evaluados - no_encontrados,
         "no_encontrados":        no_encontrados,
         "pedidos":               resultado,
-    })
+    }
 
 @app.route("/api/proveedores/<int:pid>", methods=["DELETE"])
 @admin_required

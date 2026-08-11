@@ -22,6 +22,73 @@
 
 ---
 
+## 2026-08-10 11:35
+
+### [Control Pedidos] v12.29.76 — Spinner de carga profesional, en los colores de marca
+- Petición: algo visual y profesional mientras se procesa (p. ej. el
+  listado PDF) — en vez del texto plano actual, algo tipo el círculo
+  de carga de Windows, o la animación de "pensando" de Claude.
+- Cambio: la clase `.loading` (usada en "cargando pedidos" y en
+  "Comparar listado PDF") ahora dibuja un spinner con CSS puro, sin
+  imágenes ni dependencias nuevas — un anillo girando en dorado
+  (estilo Windows) con un círculo interior que se llena y se vacía en
+  azul marino, usando los propios colores de marca de la app
+  (`--gold`/`--gold2`/`--navy2`). Construido con `::before`/`::after`
+  sobre la propia clase `.loading`, así que no ha hecho falta tocar
+  el HTML de ninguna de las 2 pantallas que ya la usaban — lo heredan
+  automáticamente sin cambios de marcado.
+- `app.py` sin cambios (solo CSS). Los 9 bloques `<script>` de
+  `templates/index.html` pasan `node --check`; llaves del bloque
+  `<style>` comprobadas cuadradas (301 abiertas / 301 cerradas).
+  `README.md` actualizado a la versión actual. Badge de versión del
+  sidebar actualizado a "V 12.29.76"; entrada añadida en
+  `CHANGELOG.md`.
+
+## 2026-08-10 11:10
+
+### [Control Pedidos] v12.29.74 — Fix: "Comparar listado PDF" fallaba con PDFs grandes ("Unexpected token '<' ... is not valid JSON")
+- Reportado con captura y el PDF real que lo disparó (178 páginas,
+  hotel MT): al comparar, saltaba
+  `Unexpected token '<', "<html>" is not valid JSON`.
+- Causa: el proceso completo —leer el PDF, extraer el texto de las
+  178 páginas (~8s medidos contra el propio PDF real) y comparar
+  contra los pedidos ya registrados— se hacía todo dentro de una
+  única petición HTTP. Con el cold-start del servicio gratuito de
+  Render sumado a esos ~8s de proceso, la petición tardaba más que
+  el timeout de algún punto intermedio entre el navegador y el
+  servidor (el proxy delante de la app), que cortaba la conexión y
+  devolvía su propia página de error HTML en lugar de dejar pasar la
+  respuesta JSON — de ahí el `<html>` en el mensaje de error que veía
+  el usuario.
+- Corregido haciendo el endpoint asíncrono:
+  - `POST /api/pedidos/comparar-listado-pdf` ahora solo valida el
+    archivo y arranca el trabajo pesado en un hilo aparte
+    (`threading`), respondiendo al momento con un `job_id` — muy por
+    debajo de cualquier timeout, sea cual sea.
+  - Nuevo `GET /api/pedidos/comparar-listado-pdf/<job_id>` para
+    consultar el resultado — el frontend hace polling cada 2
+    segundos (hasta 5 minutos) en vez de esperar una sola respuesta
+    larga.
+  - El hilo en segundo plano usa `with app.app_context()` — mismo
+    patrón ya usado en `init_db()` — porque `query()`/`get_db()`
+    dependen de `g`, con ámbito de petición, no accesible desde un
+    hilo nuevo sin esto.
+  - Estado de los jobs en memoria (`_PDF_JOBS` + `threading.Lock()`
+    a nivel de módulo), con limpieza automática de jobs de más de 30
+    minutos para no acumular memoria indefinidamente.
+  - La lógica de extracción/comparación en sí no cambia de
+    comportamiento — se movió a una función aparte,
+    `_comparar_listado_pdf_logica()`, para poder llamarla igual
+    desde una petición normal o desde el hilo en segundo plano.
+    Verificada de nuevo, extraída directamente del código con `ast`
+    (mismo patrón ya usado en la Fase 8 del rediseño de Techo),
+    contra el PDF real del reporte (178 páginas / 563 pedidos,
+    tiempo total ~8,3s) — mismo resultado que antes del refactor.
+- `app.py` compila sin errores; los 9 bloques `<script>` de
+  `templates/index.html` pasan `node --check`. `README.md`
+  actualizado a la versión actual. Badge de versión del sidebar
+  actualizado a "V 12.29.74"; entrada añadida en `CHANGELOG.md`.
+
 ## 2026-08-10 10:30
 
 ### [Control Pedidos] v12.29.72 — "Sujeto a seguimiento" restringido solo a Admin

@@ -603,6 +603,29 @@ tbody tr:last-child{border-bottom:none}
 .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
 .empty-state .icon{font-size:40px;margin-bottom:12px}
 .loading{text-align:center;padding:40px;color:var(--muted);font-size:13px}
+/* (2026-08-10) Spinner profesional — anillo girando (estilo Windows) +
+   centro que se llena y se vacía, en los colores de marca. Se dibuja con
+   ::before/::after sobre el propio .loading, así que no hace falta tocar
+   ningún HTML existente — las 2 pantallas que ya usaban esta clase
+   (carga de pedidos, "Comparar listado PDF") lo heredan automáticamente. */
+.loading{position:relative;padding-top:96px}
+.loading::before{
+  content:'';position:absolute;top:14px;left:50%;margin-left:-28px;
+  width:56px;height:56px;border-radius:50%;
+  border:4px solid rgba(15,32,68,.10);
+  border-top-color:var(--gold);border-right-color:var(--gold2);
+  animation:loadingSpin .9s linear infinite;
+}
+.loading::after{
+  content:'';position:absolute;top:28px;left:50%;margin-left:-14px;
+  width:28px;height:28px;border-radius:50%;background:var(--navy2);
+  animation:loadingPulse 1.6s ease-in-out infinite;
+}
+@keyframes loadingSpin{to{transform:rotate(360deg)}}
+@keyframes loadingPulse{
+  0%,100%{transform:scale(.5);opacity:.3}
+  50%{transform:scale(1);opacity:.9}
+}
 .section-hidden{display:none!important}
 .monospace{font-family:'DM Mono',monospace;font-size:12px}
 .text-muted{color:var(--muted)}
@@ -1265,7 +1288,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.72
+          V 12.29.76
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5768,12 +5791,22 @@ async function compararListadoPdf() {
 
   document.getElementById('cmp-pdf-form').style.display = 'none';
   document.getElementById('cmp-pdf-loading').style.display = '';
+  document.getElementById('cmp-pdf-loading').textContent = 'Subiendo y leyendo el PDF…';
   document.getElementById('cmp-pdf-resultado').style.display = 'none';
 
   const fd = new FormData();
   fd.append('hotel_id', hotelId);
   fd.append('file', file);
 
+  // (2026-08-10) FIX: con PDFs grandes (170+ páginas) el proceso completo
+  // podía tardar más que el timeout de algún punto intermedio (el proxy
+  // delante de la app), que cortaba la petición y devolvía su propia
+  // página de error HTML — de ahí el "Unexpected token '<'" que veía el
+  // usuario. Se arregla en dos pasos: este POST solo arranca el trabajo
+  // en el servidor y responde al momento con un job_id; el resultado real
+  // se recoge aparte, con sondeos (polling) cortos que nunca se acercan a
+  // ningún timeout por sí solos.
+  let jobId;
   try {
     const r = await fetch('/api/pedidos/comparar-listado-pdf', { method: 'POST', body: fd, credentials: 'same-origin' });
     const d = await r.json();
@@ -5783,16 +5816,59 @@ async function compararListadoPdf() {
       document.getElementById('cmp-pdf-loading').style.display = 'none';
       return;
     }
-    _cmpPdfResultado = d;
-    document.getElementById('cmp-pdf-loading').style.display = 'none';
-    document.getElementById('cmp-pdf-resultado').style.display = '';
-    document.getElementById('cmp-pdf-solo-faltantes').checked = true;
-    _renderCompararPdfResultado();
+    jobId = d.job_id;
   } catch (e) {
     toast('Error comparando el listado: ' + e.message, 'error');
     document.getElementById('cmp-pdf-form').style.display = '';
     document.getElementById('cmp-pdf-loading').style.display = 'none';
+    return;
   }
+
+  document.getElementById('cmp-pdf-loading').textContent = 'Comparando con los pedidos ya registrados…';
+  _pollCompararListadoPdf(jobId, 0);
+}
+
+async function _pollCompararListadoPdf(jobId, intentos) {
+  // Sondeo cada 2s, hasta 5 minutos (150 intentos) — de sobra incluso
+  // para un listado varias veces más grande que los probados hasta ahora.
+  if (intentos > 150) {
+    toast('La comparación está tardando demasiado — inténtalo de nuevo en unos minutos', 'error');
+    document.getElementById('cmp-pdf-form').style.display = '';
+    document.getElementById('cmp-pdf-loading').style.display = 'none';
+    return;
+  }
+  let d;
+  try {
+    const r = await fetch(`/api/pedidos/comparar-listado-pdf/${jobId}`, { credentials: 'same-origin' });
+    d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error comparando el listado', 'error');
+      document.getElementById('cmp-pdf-form').style.display = '';
+      document.getElementById('cmp-pdf-loading').style.display = 'none';
+      return;
+    }
+  } catch (e) {
+    // Fallo puntual de red en un sondeo — no se abandona, se reintenta
+    setTimeout(() => _pollCompararListadoPdf(jobId, intentos + 1), 2000);
+    return;
+  }
+
+  if (d.status === 'processing') {
+    setTimeout(() => _pollCompararListadoPdf(jobId, intentos + 1), 2000);
+    return;
+  }
+  if (d.status === 'error') {
+    toast(d.error || 'Error comparando el listado', 'error');
+    document.getElementById('cmp-pdf-form').style.display = '';
+    document.getElementById('cmp-pdf-loading').style.display = 'none';
+    return;
+  }
+  // status === 'done'
+  _cmpPdfResultado = d.resultado;
+  document.getElementById('cmp-pdf-loading').style.display = 'none';
+  document.getElementById('cmp-pdf-resultado').style.display = '';
+  document.getElementById('cmp-pdf-solo-faltantes').checked = true;
+  _renderCompararPdfResultado();
 }
 
 function _renderCompararPdfResultado() {
