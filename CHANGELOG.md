@@ -1,3 +1,27 @@
+# v12.29.84 — 11 agosto 2026 09:00
+
+⚡ Correo de resumen: despacho inmediato en vez de esperar al ciclo de 5 min
+
+**Consulta del usuario**: el correo de resumen llegó bien, pero tardó "un
+ratito" — no fue casi automático como el resto de correos, ¿por qué?
+
+**Respuesta**: es exactamente el mismo sistema de siempre (confirmado
+revisando el código) — pero el navegador solo revisa la cola de correos
+pendientes cada 5 minutos (`_startEmailsSistemaPolling`,
+`setInterval(...,  5*60*1000)`). Con las alertas automáticas nunca se
+nota, porque solo se ven ya llegadas en la bandeja; al pulsar un botón y
+quedarse esperando, si toca a mitad del ciclo de 5 min, sí se nota.
+
+**Mejora**: `enviarResumenComparacionPdf()` dispara ahora un despacho
+inmediato (`_enviarEmailsSistemaPendientes()`) justo después de encolar
+el correo, desde el propio navegador que acaba de generarlo — mismo
+mecanismo de siempre (EmailJS desde el navegador), solo se adelanta el
+primer intento en vez de esperar al siguiente ciclo automático.
+
+`app.py` sin cambios (solo frontend). Los 9 bloques `<script>` pasan
+`node --check`. `README.md` actualizado. Badge de versión del sidebar
+actualizado a "V 12.29.84".
+
 # v12.29.82 — 10 agosto 2026 13:10
 
 🔧 Correo de resumen: confirmado el filtrado + columnas reordenadas

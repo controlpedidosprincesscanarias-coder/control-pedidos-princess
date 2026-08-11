@@ -1288,7 +1288,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.82
+          V 12.29.84
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5943,6 +5943,16 @@ async function enviarResumenComparacionPdf() {
     } else {
       const destTxt = (d.destinatarios || []).join(', ');
       toast(`📧 Resumen encolado para ${destTxt}${d.cc ? ' (copia: ' + d.cc + ')' : ''}`, 'success');
+      // (2026-08-11) A petición del usuario: el sondeo automático de la
+      // cola de correos solo corre cada 5 min (_startEmailsSistemaPolling),
+      // así que sin esto el correo podía tardar hasta ese rato en salir —
+      // se notaba más aquí porque es una acción manual con espera activa,
+      // a diferencia de las alertas automáticas, que solo se ven ya
+      // llegadas. Se dispara aquí un despacho inmediato desde el propio
+      // navegador que acaba de generarlo, sin esperar al siguiente ciclo —
+      // mismo mecanismo de siempre (EmailJS desde el navegador), solo se
+      // adelanta el primer intento.
+      _enviarEmailsSistemaPendientes();
     }
   } catch (e) {
     toast('Error enviando el resumen: ' + e.message, 'error');
