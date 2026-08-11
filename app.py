@@ -7893,16 +7893,28 @@ def _entrega_estado(importe_base: float, importe_recibido: float) -> str:
 # real de 221 pedidos:
 # "NNNNNNNN Pedido DD/MM/AAAA HH:MM:SS IMPORTE_BASE PROVEEDOR
 #  DD/MM/AAAA(pedido) DD/MM/AAAA(entrega) Abierto|Cerrado IMPORTE_RECIBIDO IMPORTE_PENDIENTE ..."
+#
+# (2026-08-11) FIX: entre ciertos pares de columnas contiguas (importe
+# base→proveedor, proveedor→fecha de pedido, estado→importe recibido)
+# el PDF no tiene un espacio real entre celdas — solo separación visual
+# por posición X. pypdf 3.x rellenaba ese hueco con un espacio al
+# extraer el texto; pypdf ≥4 (lo que instala este proyecto, sin techo de
+# versión en requirements.txt: "pypdf>=4.0") ya NO lo hace, así que el
+# texto sale pegado ("2.852,10PILSA HOSTELERIA..."). Por eso los
+# separadores van con \s* (cero o más) y no \s+ — sigue funcionando
+# igual si hay espacio, y no rompe si no lo hay. Verificado contra el
+# mismo listado real con pypdf 3.17.4 y con pypdf 6.15.0 (221/221 en
+# ambos casos).
 _NUM_ES = r'-?\d{1,3}(?:\.\d{3})*,\d{2}'
 _PATRON_LISTADO_SIMPLIFICADO = re.compile(
-    r'(\d{6,})\s+Pedido\s+'                       # Nº pedido
-    r'(\d{2}/\d{2}/\d{4})\s+(\d{1,2}:\d{2}:\d{2})\s+'  # fecha y hora de realización
-    r'(' + _NUM_ES + r')\s+'                      # importe (base imponible)
-    r'(.+?)\s+'                                   # proveedor
-    r'(\d{2}/\d{2}/\d{4})\s+'                     # fecha de pedido
-    r'(\d{2}/\d{2}/\d{4})\s+'                     # fecha de entrega indicada
-    r'(Abierto|Cerrado)\s+'                       # estado en SAP
-    r'(' + _NUM_ES + r')\s+'                      # importe recibido
+    r'(\d{6,})\s*Pedido\s*'                       # Nº pedido
+    r'(\d{2}/\d{2}/\d{4})\s*(\d{1,2}:\d{2}:\d{2})\s*'  # fecha y hora de realización
+    r'(' + _NUM_ES + r')\s*'                      # importe (base imponible)
+    r'(.+?)\s*'                                   # proveedor
+    r'(\d{2}/\d{2}/\d{4})\s*'                     # fecha de pedido
+    r'(\d{2}/\d{2}/\d{4})\s*'                     # fecha de entrega indicada
+    r'(Abierto|Cerrado)\s*'                       # estado en SAP
+    r'(' + _NUM_ES + r')\s*'                      # importe recibido
     r'(?:' + _NUM_ES + r')'                       # importe pendiente (no se usa)
 )
 
