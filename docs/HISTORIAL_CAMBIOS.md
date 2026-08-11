@@ -22,6 +22,41 @@
 
 ---
 
+## 2026-08-10 12:15
+
+### [Control Pedidos] v12.29.78 — Fix: "El job no existe o ha caducado" al comparar un listado PDF
+- Reportado con captura: al comparar el listado, el primer sondeo ya
+  daba "El job no existe o ha caducado — vuelve a subir el PDF",
+  pese a que el `job_id` se había creado bien un instante antes
+  (v12.29.74).
+- Causa probable: `render.yaml` arrancaba gunicorn con `--workers 1`
+  sin más — que usa por defecto el tipo de worker "sync", capaz de
+  atender solo una petición a la vez en todo el proceso. Mientras el
+  hilo en segundo plano de v12.29.74 procesaba el PDF (~8s de
+  trabajo intensivo), el proceso podía quedarse sin responder con la
+  rapidez que exige el health check de Render
+  (`healthCheckPath: /ping`) — y si Render considera el proceso no
+  saludable aunque sea un instante, reinicia el contenedor, lo que
+  borra de golpe toda la memoria del proceso (incluido `_PDF_JOBS`,
+  donde vivía el job a medias).
+- Corregido: `startCommand` en `render.yaml` cambia a
+  `--worker-class gthread --threads 4` — reparte las peticiones
+  entrantes del mismo worker entre varios hilos, así que el health
+  check y los sondeos del navegador se siguen atendiendo con
+  normalidad mientras el hilo de fondo procesa el PDF. No requiere
+  ninguna dependencia nueva (`gthread` es un tipo de worker propio de
+  gunicorn, ya presente vía `requirements.txt`).
+- **Aviso importante para el despliegue**: si el servicio en Render
+  tiene el "Start Command" configurado directamente en el panel de
+  Render (Settings → Start Command) en vez de leerlo de
+  `render.yaml` en cada despliegue, hay que actualizarlo también ahí
+  a mano con el mismo comando — `render.yaml` por sí solo no basta
+  si el servicio no está gestionado como Blueprint desde este
+  archivo.
+- `app.py` sin cambios — este fix es solo de configuración de
+  despliegue (`render.yaml`). Badge de versión del sidebar
+  actualizado a "V 12.29.78"; entrada añadida en `CHANGELOG.md`.
+
 ## 2026-08-10 11:35
 
 ### [Control Pedidos] v12.29.76 — Spinner de carga profesional, en los colores de marca

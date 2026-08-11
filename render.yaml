@@ -3,7 +3,19 @@ services:
     name: control-pedidos-princess
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 300
+    # (2026-08-10) --worker-class gthread --threads 4: el "Comparar
+    # listado PDF" arranca un hilo en segundo plano para procesar el PDF
+    # (ver app.py, _ejecutar_comparacion_pdf_bg) y el navegador sondea el
+    # resultado cada 2s con peticiones nuevas mientras tanto. Con el
+    # worker "sync" por defecto, el proceso solo puede atender UNA
+    # petición a la vez — mientras el hilo de fondo trabaja, el proceso
+    # se queda sin poder responder a esos sondeos, y Render puede llegar
+    # a considerarlo colgado y reiniciarlo, lo que borra el job en
+    # memoria a mitad de proceso ("El job no existe o ha caducado").
+    # gthread reparte las peticiones entrantes entre varios hilos del
+    # mismo worker, así que los sondeos se siguen atendiendo con
+    # normalidad mientras el hilo de fondo hace lo suyo.
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 300
     envVars:
       - key: DATABASE_URL
         sync: false          # Lo pegas manualmente en Render → Environment
