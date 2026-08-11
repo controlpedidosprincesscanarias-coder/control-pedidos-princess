@@ -2403,12 +2403,16 @@ tbody tr:last-child{border-bottom:none}
   </div>
 </div>
 
-<!-- ── MODAL COMPARAR LISTADO PDF (2026-08-06) ──────────────────────────────
-     Verificación semanal: sube el "Listado de Pedidos" que exporta SAP para
-     un hotel y compara los números de pedido contra lo ya registrado aquí.
+<!-- ── MODAL COMPARAR LISTADO PDF (2026-08-06, adaptado 2026-08-11 al
+     listado simplificado) ────────────────────────────────────────────
+     Verificación semanal: sube el "Listado de Pedidos" SIMPLIFICADO que
+     exporta SAP para un hotel y compara los números de pedido contra lo
+     ya registrado aquí, además de deducir el estado de entrega real
+     (Entregado / Entrega parcial / No entregado) a partir del importe
+     pedido vs. el importe recibido de cada línea.
 -->
 <div class="modal-overlay" id="modal-comparar-pdf">
-  <div class="modal" style="max-width:900px">
+  <div class="modal" style="max-width:1100px">
     <div class="modal-header">
       <div class="modal-title">📄 Comparar listado PDF (SAP)</div>
       <button class="close-btn" onclick="closeModal('modal-comparar-pdf')">✕</button>
@@ -2416,12 +2420,14 @@ tbody tr:last-child{border-bottom:none}
     <div class="modal-body">
       <div id="cmp-pdf-form">
         <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
-          Sube el "Listado de Pedidos" que exporta SAP para un hotel (un PDF por hotel) —
-          se comparan todos los números de pedido del listado contra los que ya están dados
-          de alta aquí, para detectar compras hechas en SAP que se hayan quedado sin
-          registrar en esta aplicación. Los proveedores marcados como
-          <strong>no sujetos a seguimiento</strong> (Proveedores → ficha del proveedor —
-          pensado para alimentación/bebida) se excluyen del todo del resultado.
+          Sube el "Listado de Pedidos" <strong>simplificado</strong> que exporta SAP para un
+          hotel (un PDF por hotel, una línea por pedido) — se comparan todos los números de
+          pedido del listado contra los que ya están dados de alta aquí, para detectar compras
+          hechas en SAP que se hayan quedado sin registrar en esta aplicación, y además se
+          deduce el estado de entrega de cada pedido (Entregado / Entrega parcial / No
+          entregado) comparando el importe del pedido con el importe recibido. Los proveedores
+          marcados como <strong>no sujetos a seguimiento</strong> (Proveedores → ficha del
+          proveedor — pensado para alimentación/bebida) se excluyen del todo del resultado.
         </div>
         <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;align-items:end">
           <div class="form-group">
@@ -2442,10 +2448,19 @@ tbody tr:last-child{border-bottom:none}
 
       <div id="cmp-pdf-resultado" style="display:none;margin-top:18px">
         <div id="cmp-pdf-resumen" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
           <label style="display:flex;align-items:center;gap:6px;font-size:.85rem;cursor:pointer">
             <input type="checkbox" id="cmp-pdf-solo-faltantes" checked onchange="_renderCompararPdfResultado()">
             Mostrar solo los que faltan en la app
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:.85rem">
+            Entrega:
+            <select class="form-control" id="cmp-pdf-filtro-entrega" style="width:auto" onchange="_renderCompararPdfResultado()">
+              <option value="">Todos</option>
+              <option value="Entregado">Entregado</option>
+              <option value="Entrega parcial">Entrega parcial</option>
+              <option value="No entregado">No entregado</option>
+            </select>
           </label>
           <div style="flex:1"></div>
           <button class="btn btn-sm" id="cmp-pdf-btn-enviar-resumen" style="background:#198754;color:#fff;border:none;display:none"
@@ -2459,7 +2474,8 @@ tbody tr:last-child{border-bottom:none}
           <table>
             <thead>
               <tr>
-                <th>Pedido SAP</th><th>Fecha</th><th>Proveedor (SAP)</th><th>Estado</th><th></th>
+                <th>Pedido SAP</th><th>F. pedido</th><th>F. entrega</th><th>Proveedor (SAP)</th>
+                <th>Importe</th><th>Recibido</th><th>Entrega</th><th>En la app</th><th></th>
               </tr>
             </thead>
             <tbody id="cmp-pdf-tbody"></tbody>
@@ -5787,6 +5803,8 @@ function _resetModalCompararPdf() {
   document.getElementById('cmp-pdf-loading').style.display = 'none';
   document.getElementById('cmp-pdf-resultado').style.display = 'none';
   document.getElementById('cmp-pdf-file').value = '';
+  const filtroEntrega = document.getElementById('cmp-pdf-filtro-entrega');
+  if (filtroEntrega) filtroEntrega.value = '';
 }
 
 async function compararListadoPdf() {
@@ -5889,6 +5907,9 @@ function _renderCompararPdfResultado() {
     pill(`📄 ${d.total_pdf} pedidos en el listado`, '#e9ecef', '#495057') +
     pill(`✅ ${d.encontrados} encontrados`, '#d4edda', '#155724') +
     pill(`⛔ ${d.no_encontrados} NO encontrados`, d.no_encontrados ? '#f8d7da' : '#d4edda', d.no_encontrados ? '#721c24' : '#155724') +
+    pill(`📦 ${d.entregados ?? 0} entregados`, '#d4edda', '#155724') +
+    pill(`🚚 ${d.entregas_parciales ?? 0} entregas parciales`, '#fff3cd', '#856404') +
+    pill(`⏳ ${d.no_entregados ?? 0} no entregados`, '#f8d7da', '#721c24') +
     (d.excluidos_seguimiento ? pill(`➖ ${d.excluidos_seguimiento} pedidos de proveedores no sujetos a seguimiento`, '#fff3cd', '#856404') : '');
 
   // (2026-08-10) A petición del usuario: botón para avisar por correo al
@@ -5899,17 +5920,24 @@ function _renderCompararPdfResultado() {
   if (btnEnviar) btnEnviar.style.display = d.no_encontrados > 0 ? '' : 'none';
 
   const soloFaltantes = document.getElementById('cmp-pdf-solo-faltantes').checked;
-  const filas = soloFaltantes ? d.pedidos.filter(p => !p.encontrado) : d.pedidos;
+  const filtroEntrega = document.getElementById('cmp-pdf-filtro-entrega').value;
+  let filas = soloFaltantes ? d.pedidos.filter(p => !p.encontrado) : d.pedidos;
+  if (filtroEntrega) filas = filas.filter(p => p.entrega_estado === filtroEntrega);
   const tbody = document.getElementById('cmp-pdf-tbody');
   if (!filas.length) {
-    tbody.innerHTML = `<tr><td colspan="5" style="text-align:center;color:var(--text-secondary);padding:20px">
+    tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;color:var(--text-secondary);padding:20px">
       ${soloFaltantes ? '🎉 Ningún pedido del listado falta en la aplicación.' : 'Sin pedidos.'}</td></tr>`;
     return;
   }
+  const colorEntrega = { 'Entregado': '#155724', 'Entrega parcial': '#856404', 'No entregado': '#721c24' };
+  const iconoEntrega = { 'Entregado': '📦', 'Entrega parcial': '🚚', 'No entregado': '⏳' };
+  const fmtImporte = n => (n ?? 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   tbody.innerHTML = filas.map(p => {
     const provLabel = p.proveedor_identificado
       ? p.proveedor_pdf
       : `${p.proveedor_pdf} <span title="No se ha identificado en el catálogo de proveedores" style="color:#e67700">⚠️</span>`;
+    const entrega = `<span style="color:${colorEntrega[p.entrega_estado] || '#495057'};font-weight:600">
+        ${iconoEntrega[p.entrega_estado] || ''} ${p.entrega_estado}</span>`;
     const estado = p.encontrado
       ? `<span style="color:#155724;font-weight:600">✅ En la app${p.norden ? ' (Nº' + p.norden + ')' : ''}</span><br>
          <span style="font-size:.78rem;color:var(--text-secondary)">${p.estado_app || ''}</span>`
@@ -5920,8 +5948,12 @@ function _renderCompararPdfResultado() {
                  onclick="_crearPedidoDesdeComparacion('${p.pedido_num_sap}')">➕ Crear pedido</button>`;
     return `<tr>
       <td class="monospace">${p.pedido_num_sap}</td>
-      <td>${p.fecha}</td>
+      <td>${p.fecha_pedido || p.fecha}</td>
+      <td>${p.fecha_entrega || ''}</td>
       <td>${provLabel}</td>
+      <td>${fmtImporte(p.importe_base)}</td>
+      <td>${fmtImporte(p.importe_recibido)}</td>
+      <td>${entrega}</td>
       <td>${estado}</td>
       <td>${accion}</td>
     </tr>`;

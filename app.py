@@ -7617,17 +7617,27 @@ def comparar_listado_pdf():
     debajo de cualquier timeout). El resultado real se consulta aparte,
     vía polling, con GET /api/pedidos/comparar-listado-pdf/<job_id>.
 
-    Un "Listado de Pedidos" exportado de SAP (uno por hotel) tiene un
-    formato fijo, verificado contra dos ejemplos reales (262 páginas/622
-    pedidos, y 178 páginas/563 pedidos): cada pedido es una línea con
-    fondo gris
-    "NNNNNNNN - Pedido DD/MM/AAAA HH:MM:SS (PROVEEDOR Teléfono:... Fax:...)"
-    seguida de sus artículos. Se extraen todos los números de pedido del
+    (2026-08-11) Se lee el "Listado de Pedidos" SIMPLIFICADO que exporta
+    SAP (uno por hotel) — una tabla de una línea por pedido, sin el
+    detalle de artículos del listado completo (mucho más ligero: unas
+    pocas páginas en vez de cientos). Cada línea tiene el formato fijo:
+    "NNNNNNNN Pedido DD/MM/AAAA HH:MM:SS DD/MM/AAAA DD/MM/AAAA PROVEEDOR
+    IMPORTE_BASE IMPORTE_RECIBIDO IMPORTE_PENDIENTE Abierto|Cerrado ..."
+    es decir: Nº pedido, fecha y hora de realización, fecha de pedido,
+    fecha de entrega indicada, proveedor, importe (base imponible),
+    importe recibido, un importe pendiente que no se usa aquí, y el
+    estado del pedido en SAP. Se extraen todos los números de pedido del
     PDF (con pypdf, sin necesidad de ningún binario del sistema — más
     portable que pdftotext/poppler en un despliegue de Render estándar) y
     se comparan contra pedido_num en esta app para ese hotel, para
     detectar compras que se hicieron en SAP pero nunca se dieron de alta
     aquí para su seguimiento.
+
+    Además, comparando el importe (base imponible) contra el importe
+    recibido de cada línea se deduce el estado real de entrega —
+    "No entregado" si lo recibido es cero, "Entregado" si coincide con el
+    importe del pedido, y "Entrega parcial" en cualquier otro caso — sin
+    necesidad de abrir el listado completo con el detalle de artículos.
 
     El filtro de proveedores "sujeto_seguimiento" (Admin → Proveedores)
     es opt-in (2026-08-10): por defecto NINGÚN proveedor está sujeto a
@@ -7775,7 +7785,8 @@ def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltant
         <tr style="{'background:#f5f5f5' if i % 2 else ''}">
           <td style="padding:8px 12px;border:1px solid #ddd">{p['pedido_num_sap']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{p['proveedor_pdf']}</td>
-          <td style="padding:8px 12px;border:1px solid #ddd">{p['fecha']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p.get('fecha_pedido') or p.get('fecha', '')}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p.get('entrega_estado', '')}</td>
         </tr>""" for i, p in enumerate(mostrar))
 
     aviso_resto = (
@@ -7801,6 +7812,7 @@ def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltant
             <th style="padding:8px 12px;text-align:left">Nº Pedido SAP</th>
             <th style="padding:8px 12px;text-align:left">Proveedor</th>
             <th style="padding:8px 12px;text-align:left">Fecha</th>
+            <th style="padding:8px 12px;text-align:left">Entrega</th>
           </tr>
           {filas}
         </table>
@@ -7839,6 +7851,61 @@ def _ejecutar_comparacion_pdf_bg(job_id, hotel_id, pdf_bytes):
                 if job_id in _PDF_JOBS:
                     _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
 
+def _parse_importe_es(s: str):
+    """
+    (2026-08-11) Convierte un importe con formato español ('2.852,10',
+    '0,00', '-401,84') a float. Los listados de SAP siempre traen dos
+    decimales y '.' como separador de miles, ',' como decimal.
+    """
+    if s is None:
+        return 0.0
+    s = str(s).strip().replace(".", "").replace(",", ".")
+    try:
+        return float(s)
+    except ValueError:
+        return 0.0
+
+def _entrega_estado(importe_base: float, importe_recibido: float) -> str:
+    """
+    (2026-08-11) Deriva el estado real de entrega de un pedido a partir
+    de los importes del listado simplificado de SAP (base imponible vs.
+    recibido), a petición del usuario:
+      - recibido == 0                  -> "No entregado"
+      - recibido == base (con céntimos)-> "Entregado"
+      - cualquier otro caso            -> "Entrega parcial"
+    Se compara redondeando a 2 decimales para evitar falsos negativos
+    por errores de coma flotante.
+    """
+    recibido = round(importe_recibido, 2)
+    base = round(importe_base, 2)
+    if recibido == 0:
+        return "No entregado"
+    if recibido == base:
+        return "Entregado"
+    return "Entrega parcial"
+
+# (2026-08-11) Listado de Pedidos SIMPLIFICADO de SAP: una línea por
+# pedido, sin el detalle de artículos. Aunque en el PDF renderizado las
+# columnas se ven en el orden "Nº pedido, fecha/hora, fecha pedido,
+# fecha entrega, proveedor, base, recibido, pendiente, estado", el texto
+# que realmente devuelve pypdf (extract_text, por flujo del PDF, no por
+# posición visual) viene en OTRO orden, verificado contra un listado
+# real de 221 pedidos:
+# "NNNNNNNN Pedido DD/MM/AAAA HH:MM:SS IMPORTE_BASE PROVEEDOR
+#  DD/MM/AAAA(pedido) DD/MM/AAAA(entrega) Abierto|Cerrado IMPORTE_RECIBIDO IMPORTE_PENDIENTE ..."
+_NUM_ES = r'-?\d{1,3}(?:\.\d{3})*,\d{2}'
+_PATRON_LISTADO_SIMPLIFICADO = re.compile(
+    r'(\d{6,})\s+Pedido\s+'                       # Nº pedido
+    r'(\d{2}/\d{2}/\d{4})\s+(\d{1,2}:\d{2}:\d{2})\s+'  # fecha y hora de realización
+    r'(' + _NUM_ES + r')\s+'                      # importe (base imponible)
+    r'(.+?)\s+'                                   # proveedor
+    r'(\d{2}/\d{2}/\d{4})\s+'                     # fecha de pedido
+    r'(\d{2}/\d{2}/\d{4})\s+'                     # fecha de entrega indicada
+    r'(Abierto|Cerrado)\s+'                       # estado en SAP
+    r'(' + _NUM_ES + r')\s+'                      # importe recibido
+    r'(?:' + _NUM_ES + r')'                       # importe pendiente (no se usa)
+)
+
 def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     """Lógica pura de extracción+comparación — separada de la vista Flask
     para poder llamarla igual desde una petición normal o desde un hilo
@@ -7855,12 +7922,12 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
         log.error("[COMPARAR-PDF] Error leyendo el PDF: %s", exc)
         raise RuntimeError(f"No se pudo leer el PDF: {exc}")
 
-    patron = re.compile(r'(\d{6,})\s*-\s*Pedido\s+(\d{2}/\d{2}/\d{4})\s+(\d{2}:\d{2}:\d{2})\s*\((.*?)\)')
-    encontrados_pdf = patron.findall(texto)
+    encontrados_pdf = _PATRON_LISTADO_SIMPLIFICADO.findall(texto)
     if not encontrados_pdf:
         raise RuntimeError(
             "No se ha reconocido ningún pedido en el PDF — "
-            "¿es un \"Listado de Pedidos\" de SAP con el formato habitual?"
+            "¿es el \"Listado de Pedidos\" simplificado de SAP, con el formato habitual "
+            "(Nº pedido, fechas, proveedor, importes y estado en una sola línea por pedido)?"
         )
 
     # ── Catálogo de proveedores, para el filtro de seguimiento ───────────────
@@ -7893,27 +7960,36 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
 
     resultado = []
     vistos = set()
-    for num_sap, fecha, hora, proveedor_raw in encontrados_pdf:
+    for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
+         fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt) in encontrados_pdf:
         if num_sap in vistos:
             continue
         vistos.add(num_sap)
 
-        # El nombre del proveedor viene pegado a "Teléfono:"/"Fax:" en la
-        # misma línea — se separa quedándonos solo con la parte del nombre.
-        nombre_prov = re.split(r'\s+Tel[eé]fono:|\s+Fax:', proveedor_raw)[0].strip()
+        nombre_prov = proveedor_raw.strip()
         prov_match = _match_proveedor(_normalizar_nombre_proveedor(nombre_prov))
 
         if prov_match and not prov_match["sujeto_seguimiento"]:
             continue  # proveedor excluido a propósito (p.ej. alimentación/bebida)
 
+        importe_base     = _parse_importe_es(importe_base_txt)
+        importe_recibido = _parse_importe_es(importe_recibido_txt)
+
         pedido_app = app_por_num.get(_normalizar_pedido_num(num_sap))
         resultado.append({
             "pedido_num_sap":         num_sap,
-            "fecha":                  fecha,
-            "hora":                   hora,
+            "fecha":                  fecha_pedido,
+            "hora":                   fecha_hora_hora,
+            "fecha_realizacion":      fecha_hora_fecha,
+            "fecha_pedido":           fecha_pedido,
+            "fecha_entrega":          fecha_entrega,
             "proveedor_pdf":          nombre_prov,
             "proveedor_id":           prov_match["id"] if prov_match else None,
             "proveedor_identificado": bool(prov_match),
+            "importe_base":           importe_base,
+            "importe_recibido":       importe_recibido,
+            "estado_sap":             estado_sap,
+            "entrega_estado":         _entrega_estado(importe_base, importe_recibido),
             "encontrado":             bool(pedido_app),
             "pedido_id":              pedido_app["id"] if pedido_app else None,
             "norden":                 pedido_app["norden"] if pedido_app else None,
@@ -7922,6 +7998,9 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
 
     total_evaluados = len(resultado)
     no_encontrados  = sum(1 for r in resultado if not r["encontrado"])
+    no_entregados   = sum(1 for r in resultado if r["entrega_estado"] == "No entregado")
+    parciales       = sum(1 for r in resultado if r["entrega_estado"] == "Entrega parcial")
+    entregados      = sum(1 for r in resultado if r["entrega_estado"] == "Entregado")
     return {
         "ok": True,
         "total_pdf":             len(encontrados_pdf),
@@ -7929,6 +8008,9 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
         "excluidos_seguimiento": len(encontrados_pdf) - total_evaluados,
         "encontrados":           total_evaluados - no_encontrados,
         "no_encontrados":        no_encontrados,
+        "entregados":            entregados,
+        "no_entregados":         no_entregados,
+        "entregas_parciales":    parciales,
         "pedidos":               resultado,
     }
 
