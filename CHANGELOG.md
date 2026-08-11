@@ -1,3 +1,59 @@
+# v12.29.86 — 11 agosto 2026 12:10
+
+✨ "Comparar listado PDF" pasa a leer el listado SIMPLIFICADO de SAP (MT2) + estado de entrega derivado
+
+**Petición del usuario**: adaptar "Comparar listado PDF" para leer el
+"Listado de Pedidos" SIMPLIFICADO que exporta SAP (una línea por pedido,
+sin el detalle de artículos — mucho más ligero que el listado completo
+usado hasta ahora, MT) y, aprovechando que esa vista trae el importe del
+pedido y el importe recibido en la misma línea, deducir el estado real
+de entrega de cada pedido sin abrir el listado completo: importe
+recibido = 0 → "No entregado"; importe recibido = importe del pedido →
+"Entregado"; cualquier otra cantidad → "Entrega parcial".
+
+**Cambio principal**: nuevo patrón de reconocimiento
+`_PATRON_LISTADO_SIMPLIFICADO` (sustituye al anterior, pensado para el
+listado completo con artículos) — verificado contra un listado real de
+221 pedidos del hotel MT, 221/221 reconocidos.
+
+**Hallazgo 1** (durante la propia verificación): el texto que devuelve
+`pypdf.extract_text()` para este PDF NO sigue el orden visual de las
+columnas de la tabla, sino el orden real del contenido del PDF (Nº
+pedido, fecha/hora, importe base, proveedor, fecha pedido, fecha
+entrega, estado, importe recibido, importe pendiente) — el patrón se
+construyó contra ese orden real, no el visual.
+
+**Hallazgo 2** (tras una primera entrega que el usuario reportó con "No
+se ha reconocido ningún pedido en el PDF"): la verificación previa se
+hizo sin querer con `pypdf` 3.17.4 (versión antigua ya presente en el
+entorno de pruebas), no con la que realmente instala este proyecto
+(`requirements.txt`: `pypdf>=4.0`, sin techo → instala la última
+disponible, 6.15.0 en el momento de esta entrega). Entre pypdf 3.x y ≥4
+cambió el extractor de texto: donde el PDF no tiene un espacio real
+entre dos columnas contiguas (solo separación por posición X), pypdf
+3.x rellenaba con un espacio al extraer el texto y pypdf ≥4 ya no lo
+hace — el texto sale pegado ("2.852,10PILSA HOSTELERIA...") justo en 3
+de los separadores del patrón, que exigían espacio obligatorio y por
+eso no reconocían nada en el entorno real.
+
+**Corrección**: esos separadores (y el resto, por consistencia) pasan de
+"uno o más espacios" a "cero o más" — sigue funcionando igual si hay
+espacio, y ya no rompe si no lo hay. Reverificado contra el mismo
+listado real de 221 pedidos con pypdf 3.17.4 Y con pypdf 6.15.0
+(221/221 en ambos casos) antes de esta entrega.
+
+**Nuevos campos** por pedido en el resultado: `fecha_pedido`,
+`fecha_entrega`, `importe_base`, `importe_recibido`, `estado_sap`
+(Abierto/Cerrado tal cual lo trae SAP) y `entrega_estado` (Entregado /
+Entrega parcial / No entregado). El resumen añade contadores
+`entregados`/`entregas_parciales`/`no_entregados`. Tabla de "Comparar
+listado PDF" con columnas nuevas, filtro por estado de entrega y
+píldoras de resumen; correo de resumen con columna de estado de entrega.
+
+`app.py` compila sin errores. Los 9 bloques `<script>` de
+`templates/index.html` pasan `node --check`. `README.md` actualizado.
+Badge de versión del sidebar actualizado a "V 12.29.86".
+
 # v12.29.84 — 11 agosto 2026 09:00
 
 ⚡ Correo de resumen: despacho inmediato en vez de esperar al ciclo de 5 min
