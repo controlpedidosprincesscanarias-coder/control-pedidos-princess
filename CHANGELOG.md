@@ -1,3 +1,26 @@
+# v12.29.82 — 10 agosto 2026 13:10
+
+🔧 Correo de resumen: confirmado el filtrado + columnas reordenadas
+
+**Pregunta del usuario**: ¿qué tratamiento reciben los "NO encontrados"
+en el correo de resumen? ¿solo se envían los sujetos a seguimiento?
+
+**Confirmado revisando el propio código**: `resultado["pedidos"]` (de
+donde se filtran los "no encontrados" para el correo) nunca contiene los
+proveedores excluidos — se descartan antes, en
+`_comparar_listado_pdf_logica()` (`if prov_match and not
+prov_match["sujeto_seguimiento"]: continue`). Es decir, el correo ya
+enviaba exactamente lo pedido: solo pedidos sujetos a seguimiento y no
+registrados en la app — es imposible que se cuele uno excluido, porque
+nunca llega a entrar en la lista de la que se filtra.
+
+**Único ajuste real**: orden de columnas de la tabla del correo, a
+petición del usuario — Nº Pedido → Proveedor → Fecha (antes Nº Pedido →
+Fecha → Proveedor). Verificado con datos simulados extraídos con `ast`.
+
+`app.py` compila sin errores. `README.md` actualizado. Badge de versión
+del sidebar actualizado a "V 12.29.82".
+
 # v12.29.80 — 10 agosto 2026 12:50
 
 ✨ "Comparar listado PDF": correo de resumen al comprador + texto aclarado

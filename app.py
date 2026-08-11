@@ -7774,8 +7774,8 @@ def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltant
     filas = "".join(f"""
         <tr style="{'background:#f5f5f5' if i % 2 else ''}">
           <td style="padding:8px 12px;border:1px solid #ddd">{p['pedido_num_sap']}</td>
-          <td style="padding:8px 12px;border:1px solid #ddd">{p['fecha']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{p['proveedor_pdf']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p['fecha']}</td>
         </tr>""" for i, p in enumerate(mostrar))
 
     aviso_resto = (
@@ -7799,8 +7799,8 @@ def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltant
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
           <tr style="background:#1a3a6b;color:#fff">
             <th style="padding:8px 12px;text-align:left">Nº Pedido SAP</th>
-            <th style="padding:8px 12px;text-align:left">Fecha</th>
             <th style="padding:8px 12px;text-align:left">Proveedor</th>
+            <th style="padding:8px 12px;text-align:left">Fecha</th>
           </tr>
           {filas}
         </table>
