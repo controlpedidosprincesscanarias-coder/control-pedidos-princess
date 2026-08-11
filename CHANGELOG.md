@@ -1,3 +1,43 @@
+# v12.29.88 — 11 agosto 2026 13:15
+
+📧 Correo de resumen "Comparar listado PDF": solo pedidos con proveedor identificado
+
+**Petición del usuario**: en el correo de resumen que se envía al
+comprador, solo deben aparecer los pedidos cuyo proveedor se ha
+identificado correctamente contra el catálogo — el resto de información
+(pedidos de proveedor no identificado) es solo para revisión visual del
+admin en la propia pantalla, no debe salir en el correo.
+
+**Cambio** (`comparar_listado_pdf_enviar_resumen`): los pedidos sin dar
+de alta se filtran ahora en dos grupos —
+`pedidos_faltantes` (proveedor identificado, `proveedor_identificado:
+true`) es lo único que entra en la tabla del correo; `no_identificados`
+es solo un recuento. Si no queda ningún pedido con proveedor
+identificado, el endpoint devuelve un aviso claro en vez de enviar un
+correo vacío (indicando cuántos hay pendientes de revisar en pantalla,
+si los hay).
+
+`_email_resumen_pdf_sap()` gana el parámetro `no_identificados`: si es
+mayor que 0, añade una nota de aviso (⚠️, fondo amarillo) indicando
+cuántos pedidos adicionales hay sin dar de alta pero con proveedor no
+identificado, sin listarlos — remite a revisarlos en pantalla en vez de
+incluirlos con datos no del todo fiables.
+
+`templates/index.html`: el botón "📧 Enviar resumen por correo" ahora
+solo se muestra si hay al menos un pedido faltante CON proveedor
+identificado (antes se mostraba con cualquier pedido faltante,
+identificado o no) — evita un clic que solo lleva a un error si todo lo
+pendiente es de proveedor no identificado.
+
+Probado con datos simulados extraídos directamente de las funciones
+reales del código (`_email_resumen_pdf_sap`): un pedido de proveedor no
+identificado no aparece en la tabla del correo, y si hay alguno, la nota
+de aviso con el recuento sí aparece.
+
+`app.py` compila sin errores. Los 9 bloques `<script>` de
+`templates/index.html` pasan `node --check`. `README.md` actualizado.
+Badge de versión del sidebar actualizado a "V 12.29.88".
+
 # v12.29.86 — 11 agosto 2026 12:10
 
 ✨ "Comparar listado PDF" pasa a leer el listado SIMPLIFICADO de SAP (MT2) + estado de entrega derivado

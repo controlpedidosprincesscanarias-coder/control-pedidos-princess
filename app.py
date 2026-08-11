@@ -7734,9 +7734,22 @@ def comparar_listado_pdf_enviar_resumen(job_id):
         return jsonify({"error": "La comparación todavía no ha terminado"}), 400
 
     resultado = job.get("resultado") or {}
-    pedidos_faltantes = [p for p in resultado.get("pedidos", []) if not p.get("encontrado")]
+    pedidos_no_encontrados = [p for p in resultado.get("pedidos", []) if not p.get("encontrado")]
+    # (2026-08-11) A petición del usuario: el correo al comprador solo debe
+    # listar pedidos cuyo proveedor se ha identificado con certeza contra
+    # el catálogo — un pedido con proveedor NO identificado (nombre
+    # truncado o distinto en SAP respecto al catálogo, `proveedor_pdf` tal
+    # cual vino del PDF) es menos fiable y podría confundir al comprador;
+    # esos quedan solo para revisión visual del admin en la propia
+    # pantalla (con su aviso ⚠️), no se envían por correo.
+    pedidos_faltantes = [p for p in pedidos_no_encontrados if p.get("proveedor_identificado")]
+    no_identificados = len(pedidos_no_encontrados) - len(pedidos_faltantes)
     if not pedidos_faltantes:
-        return jsonify({"error": "No hay pedidos pendientes que reportar — no se envía nada"}), 400
+        aviso_no_id = (
+            f" ({no_identificados} pendiente(s) más de proveedor no identificado — "
+            "revísalos en pantalla)" if no_identificados else ""
+        )
+        return jsonify({"error": f"No hay pedidos con proveedor identificado que reportar — no se envía nada{aviso_no_id}"}), 400
 
     hotel = query("SELECT codigo, nombre FROM hoteles WHERE id=%s", (job.get("hotel_id"),), one=True)
     if not hotel:
@@ -7756,7 +7769,8 @@ def comparar_listado_pdf_enviar_resumen(job_id):
 
     subject, body = _email_resumen_pdf_sap(
         hotel["nombre"], hotel["codigo"], pedidos_faltantes,
-        resultado.get("total_pdf", 0), resultado.get("excluidos_seguimiento", 0), admin_nombre
+        resultado.get("total_pdf", 0), resultado.get("excluidos_seguimiento", 0), admin_nombre,
+        no_identificados,
     )
     _encolar_email_sistema(
         "resumen_listado_pdf_sap", destinatarios, subject, cuerpo_html=body,
@@ -7765,12 +7779,20 @@ def comparar_listado_pdf_enviar_resumen(job_id):
     return jsonify({"ok": True, "destinatarios": destinatarios, "cc": admin_email})
 
 def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltantes: list,
-                            total_pdf: int, excluidos: int, admin_nombre: str) -> tuple:
+                            total_pdf: int, excluidos: int, admin_nombre: str,
+                            no_identificados: int = 0) -> tuple:
     """
     (2026-08-10) Resumen de "Comparar listado PDF" — pedidos que figuran
     en el listado de SAP/DALI pero no están dados de alta en Control de
     Pedidos. Mismo patrón visual que el resto de emails internos de la
     app (_email_header_html + tabla + pie).
+
+    (2026-08-11) `pedidos_faltantes` ya viene filtrado por el llamador
+    para incluir solo proveedor identificado — `no_identificados` es
+    solo el recuento de los que se quedaron fuera por eso, para que el
+    correo avise de que hay más pendientes de revisar en pantalla, sin
+    listarlos (no son fiables al 100%: el nombre del proveedor no se
+    pudo emparejar con el catálogo).
     """
     subject = f"[Control de Pedidos] {len(pedidos_faltantes)} pedido(s) de {hotel_codigo} en SAP sin registrar en la app"
 
@@ -7817,6 +7839,11 @@ def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltant
           {filas}
         </table>
         {aviso_resto}
+        {f'<p style="font-size:12px;color:#856404;background:#fff3cd;padding:8px 12px;border-radius:4px">'
+          f'⚠️ Hay además <strong>{no_identificados}</strong> pedido(s) sin dar de alta cuyo proveedor '
+          f'no se ha podido identificar con certeza en el catálogo — no se incluyen aquí por fiabilidad; '
+          f'revísalos en pantalla, en "Comparar listado PDF" (mostrar solo los que faltan).</p>'
+          if no_identificados else ''}
         <p>Por favor, revise estos pedidos y dé de alta en Control de Pedidos los que
            corresponda, para que queden dentro del seguimiento habitual.</p>
         <p style="font-size:12px;color:#888">Consulta generada por {admin_nombre} desde
