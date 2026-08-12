@@ -5545,6 +5545,12 @@ def login():
                 "Si no has sido tú, ignora este mensaje y avisa al administrador.",
             ],
         )
+        # (2026-08-11) Este email lo envía el navegador vía EmailJS ANTES de
+        # que exista sesión (_completar_login() aún no se ha llamado) — sin
+        # esta marca, /api/emailjs/registrar-envio lo rechazaría con 401 y
+        # el contador de envíos no se enteraría de un email que sí se envía
+        # de verdad. Ver _permite_registrar_envio_no_autenticado().
+        session["pdte_registrar_envio_email"] = True
         return jsonify({
             "ok": True,
             "requiere_verificacion": True,
@@ -5801,6 +5807,12 @@ def solicitar_reset_password():
 
     # El envío real lo hace el frontend vía EmailJS
     log.info("PASSWORD RESET — datos pendientes de envío vía EmailJS a '%s' (%s)", user["username"], user.get("email"))
+    # (2026-08-11) Igual que en el código de verificación de login: este
+    # email lo envía un navegador SIN sesión iniciada (nadie ha hecho
+    # login todavía — está pidiendo restablecer su contraseña). Marca de
+    # un solo uso para que /api/emailjs/registrar-envio no lo rechace con
+    # 401 y el contador cuente también estos envíos reales.
+    session["pdte_registrar_envio_email"] = True
     return jsonify({
         "ok":        True,
         "sin_email": True,
@@ -6641,6 +6653,12 @@ def solicitar_usuario_fase2():
     )
 
     # Email via EmailJS en el frontend (sin_email=True siempre)
+    # (2026-08-11) Igual que en el código de verificación de login y en la
+    # recuperación de contraseña: quien completa esta Fase 2 es un usuario
+    # NUEVO, sin cuenta todavía — no hay sesión posible. Marca de un solo
+    # uso para que /api/emailjs/registrar-envio no rechace este envío real
+    # con 401 y el contador lo cuente también.
+    session["pdte_registrar_envio_email"] = True
     return jsonify({
         "ok":            True,
         "sin_email":     True,
@@ -12704,14 +12722,44 @@ def api_emailjs_config():
     })
 
 
+def _permite_registrar_envio_no_autenticado() -> bool:
+    """
+    (2026-08-11) Hay 3 flujos que envían un email REAL vía EmailJS desde un
+    navegador SIN sesión iniciada todavía — recuperación de contraseña
+    (solicitar_reset_password), código de verificación de login (login(),
+    la sesión aún no existe en ese punto: _completar_login() no se ha
+    llamado) y confirmación de Fase 2 de "solicitar acceso"
+    (solicitar_usuario_fase2(), usuario nuevo sin cuenta). Antes de este
+    fix, /api/emailjs/registrar-envio exigía sesión sin excepción — esos 3
+    envíos SÍ consumían cuota real de EmailJS pero el contador nunca se
+    enteraba, porque la llamada fallaba con 401 y el frontend se limita a
+    loguearlo en consola sin más (a propósito, para no romper el envío ya
+    hecho — ver enviarEmailJS() en templates/index.html).
+
+    Arreglo: cada uno de esos 3 endpoints deja, justo antes de devolver los
+    datos del email pendiente de enviar por el frontend, una marca de UN
+    SOLO USO en la sesión (Flask permite `session` sin necesidad de
+    "user_id" — no exige login por sí sola). Aquí se consume con `pop`
+    (no `get`) para que no sirva más que para ese envío concreto — no es
+    una puerta abierta a incrementar el contador a voluntad desde fuera;
+    cada marca solo la puede haber puesto el propio backend, una vez, al
+    preparar un envío real.
+    """
+    return bool(session.pop("pdte_registrar_envio_email", False))
+
+
 @app.route("/api/emailjs/registrar-envio", methods=["POST"])
-@login_required
 def api_emailjs_registrar_envio():
     """
     v12.27.8 — Llamado por el frontend justo después de cada emailjs.send()
     correcto (desde el helper central enviarEmailJS()). Incrementa el
     contador de forma atómica (UPDATE ... RETURNING, sin races entre
     usuarios concurrentes).
+
+    (2026-08-11) Ya no lleva @login_required a secas: se acepta también
+    sin sesión si el propio backend dejó la marca de un solo uso de
+    _permite_registrar_envio_no_autenticado() (los 3 flujos de email sin
+    login, ver esa función) — antes esos envíos reales no se contaban.
 
     v12.27.10 — Cambio de cuenta BIDIRECCIONAL (antes solo 1→2 una vez):
     al llegar al umbral se cambia a la OTRA cuenta (1→2 o 2→1) y el
@@ -12724,6 +12772,13 @@ def api_emailjs_registrar_envio():
     NO cambia (evita dejar la app sin poder enviar) y se queda como aviso
     en Admin → Integridad para que un admin las rellene a tiempo.
     """
+    autenticado = "user_id" in session
+    if autenticado and session.get("login_date") != _hoy_canarias().isoformat():
+        session.clear()          # mismo criterio de caducidad diaria que login_required
+        autenticado = False
+    if not autenticado and not _permite_registrar_envio_no_autenticado():
+        return jsonify({"error": "No autenticado"}), 401
+
     db  = get_db()
     cur = db.cursor()
     cur.execute("""

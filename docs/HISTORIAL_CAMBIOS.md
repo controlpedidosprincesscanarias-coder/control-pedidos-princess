@@ -22,6 +22,63 @@
 
 ---
 
+## 2026-08-12 08:05
+
+### [Control Pedidos] v12.29.92 — Fix: 3 tipos de email SÍ consumían cuota real de EmailJS pero el contador no los contaba
+- Pregunta del usuario (de cara a incorporar una 3ª cuenta EmailJS de
+  backup): ¿el contador de envíos se está llevando correctamente? ¿se
+  descuentan todos los correos, incluidos los automáticos, los de
+  recuperación de contraseña, los de petición de usuario, etc.?
+- Investigación: revisado el helper central `enviarEmailJS()`
+  (`templates/index.html`) — confirmado que es el único punto que llama
+  a `emailjs.send()` en todo el frontend (un único resultado en el
+  código para `emailjs\.send\(`, dentro del propio helper), así que no
+  hay ningún envío que se salte el wrapper por error de código. El
+  wrapper llama después a `POST /api/emailjs/registrar-envio` para
+  incrementar el contador.
+- Bug real encontrado: ese endpoint llevaba `@login_required` a secas.
+  Tres flujos legítimos llaman a `enviarEmailJS()` desde un navegador
+  SIN sesión iniciada todavía — el email SÍ se envía de verdad
+  (`emailjs.send()` no necesita login), pero la llamada posterior a
+  `registrar-envio` fallaba con 401 y se descartaba en silencio (a
+  propósito, para no romper el envío ya hecho), así que el contador
+  nunca se enteraba: 1) recuperación de contraseña
+  (`solicitar_reset_password`, usuario aún sin sesión); 2) código de
+  verificación de login (`login()`, cuando hace falta verificación por
+  inactividad — se envía ANTES de que `_completar_login()` cree la
+  sesión); 3) confirmación de "Fase 2" de solicitar acceso
+  (`solicitar_usuario_fase2()`, usuario nuevo sin cuenta —
+  `sin_email=True` siempre, no solo como fallback).
+- Los correos automáticos de sistema (reclamaciones, avisos de firma
+  pendiente, resumen de "Comparar listado PDF", etc.) SÍ se contaban
+  bien — se despachan vía `_enviarEmailsSistemaPendientes()`, pero solo
+  mientras un admin/compras tiene la app abierta, es decir, con sesión
+  ya iniciada.
+- Corrección (sin quitar la protección del endpoint por completo):
+  nueva función `_permite_registrar_envio_no_autenticado()` — los 3
+  endpoints anteriores dejan ahora, justo antes de devolver los datos
+  del email pendiente de enviar, una marca de UN SOLO USO en la sesión
+  (`session["pdte_registrar_envio_email"] = True`, sin necesidad de
+  login). `registrar-envio` acepta la petición si hay sesión válida O
+  si esa marca está presente — y la consume con `pop` (no `get`), así
+  que no sirve más que para ese envío concreto: no abre la puerta a que
+  cualquiera incremente el contador a voluntad desde fuera.
+- Verificado con un Flask de prueba aislado (sin depender de la base de
+  datos real): sin marca ni sesión → 401 (protegido); tras la marca que
+  deja el backend → el siguiente registrar-envio → 200; un segundo
+  intento sin volver a marcar → 401 de nuevo (uso único confirmado, no
+  reutilizable).
+- `app.py` compila sin errores. Sin cambios en `templates/index.html`
+  (el frontend ya llamaba correctamente a
+  `enviarEmailJS()`/`registrar-envio` en los 3 casos — el bug estaba
+  solo en el backend). `README.md` actualizado a la versión actual.
+  Badge de versión del sidebar actualizado a "V 12.29.92"; entrada
+  añadida en `CHANGELOG.md`.
+- **Pendiente, a petición del usuario**: incorporar una 3ª cuenta
+  EmailJS de backup (actualmente el sistema rota entre 2, cuenta 1 ⇄
+  cuenta 2) — no incluido en esta entrega, a la espera de confirmar
+  alcance.
+
 ## 2026-08-11 13:30
 
 ### [Control Pedidos] v12.29.90 — Nuevo "estado aparente" en el correo (ENTREGA PARCIAL / ENTREGA COMPLETA), a partir de la 8ª columna del listado SAP
