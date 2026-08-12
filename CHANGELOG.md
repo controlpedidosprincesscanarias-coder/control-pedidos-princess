@@ -1,3 +1,55 @@
+# v12.29.94 — 12 agosto 2026 09:40
+
+🔁 Tercera cuenta EmailJS de backup: rotación cíclica entre 3 cuentas (1→2→3→1)
+
+**Petición del usuario**: con la v12.29.92 ya desplegada, incorporar una
+tercera cuenta EmailJS ("Cuenta1 (principal)", "Cuenta2 (secundaria)",
+"Cuenta3 (backup)") y que el sistema salte automáticamente de una a otra
+en cuanto se consuman los envíos establecidos por cuenta.
+
+**Backend (`app.py`)**:
+- `_auto_migrate()` → `_emailjs_defaults` ampliado con 3 filas nuevas
+  (`emailjs_public_key_3`, `emailjs_service_id_3`, `emailjs_template_id_3`)
+  y renombradas las etiquetas de las cuentas 1/2 a "(principal)"/
+  "(secundaria)" (inserción idempotente vía `ON CONFLICT (clave) DO
+  NOTHING`, no toca instalaciones ya desplegadas salvo para añadir las 3
+  claves nuevas).
+- `get_config()` → añadidas las 3 claves nuevas a los valores por defecto.
+- Nuevas constantes/helpers: `_EMAILJS_MAX_CUENTAS = 3`,
+  `_emailjs_cuenta_valida(valor)` (normaliza a un entero 1–3, con 1 como
+  valor por defecto ante datos corruptos) y
+  `_emailjs_siguiente_cuenta(activa)` (siguiente cuenta del ciclo,
+  3→1 incluido).
+- `GET /api/emailjs/config` → usa `_emailjs_cuenta_valida()` en vez del
+  antiguo recorte binario (1 o 2).
+- `POST /api/emailjs/registrar-envio` → sustituido el cambio
+  BIDIRECCIONAL (1⇄2) por un cambio CÍCLICO: al llegar al umbral, se
+  busca la siguiente cuenta del ciclo (1→2→3→1) que tenga las 3
+  credenciales completas, probando hasta las 3 antes de rendirse; si
+  ninguna otra cuenta está completa, no cambia (igual que antes) y queda
+  aviso en Integridad.
+- Admin → Integridad (comprobación EmailJS) → generalizada de "la otra
+  cuenta" a "la siguiente cuenta del ciclo", y el aviso de "umbral
+  alcanzado sin backup" ahora comprueba las 2 cuentas restantes (no solo
+  la inmediatamente siguiente).
+
+**Frontend (`templates/index.html`)**: tarjeta de administración de
+EmailJS (Config alertas) ampliada de 2 a 3 paneles de cuenta ("Cuenta 1
+(principal)" / "Cuenta 2 (secundaria)" / "Cuenta 3 (backup)"), campo
+"Cuenta activa" ahora acepta 1–3, y texto explicativo actualizado para
+describir el ciclo de 3 cuentas.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; `node
+--check` sobre los bloques `<script>` extraídos de `templates/index.html`
+sin errores; lógica de rotación cíclica verificada en un script aislado
+(ciclo completo 1→2→3→1 con las 3 cuentas completas, salto correcto de 1
+directamente a 3 cuando la cuenta 2 no tiene credenciales, sin cambio
+cuando solo la cuenta activa está completa, y `_emailjs_cuenta_valida`
+recortando correctamente valores fuera de rango o inválidos).
+
+Badge de versión del sidebar actualizado a "V 12.29.94". `README.md`
+actualizado.
+
 # v12.29.92 — 12 agosto 2026 08:05
 
 🐛 Fix: 3 tipos de email SÍ consumían cuota real de EmailJS pero el contador no los contaba

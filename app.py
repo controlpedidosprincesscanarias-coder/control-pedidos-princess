@@ -733,17 +733,29 @@ def _auto_migrate():
             # /api/emailjs/registrar-envio. Los valores de la cuenta 1 se
             # inicializan con las credenciales ya en uso en producción para
             # no cortar nada en el primer deploy de esta versión.
+            #
+            # (2026-08-12) 3ª cuenta EmailJS, a petición del usuario: cuenta 1
+            # (principal) → cuenta 2 (secundaria) → cuenta 3 (backup) → vuelta
+            # a la cuenta 1, en ciclo indefinido — ver el nuevo
+            # _EMAILJS_MAX_CUENTAS y la lógica cíclica de
+            # /api/emailjs/registrar-envio. `ON CONFLICT DO NOTHING` en todas
+            # estas filas: si ya existían de la v12.27.8 (2 cuentas), esta
+            # migración solo añade las 3 nuevas claves de la cuenta 3 sin
+            # tocar nada de lo ya configurado.
             _emailjs_defaults = [
-                ('emailjs_public_key_1',   'bxFzHypsIrNqcDh15',  'texto',  'Cuenta 1 (activa) — Public Key',   'emailjs', 1),
-                ('emailjs_service_id_1',   'service_shvrzuv',    'texto',  'Cuenta 1 (activa) — Service ID',   'emailjs', 2),
-                ('emailjs_template_id_1',  'template_1zrv4ze',   'texto',  'Cuenta 1 (activa) — Template ID',  'emailjs', 3),
-                ('emailjs_public_key_2',   '',                   'texto',  'Cuenta 2 (backup) — Public Key',   'emailjs', 4),
-                ('emailjs_service_id_2',   '',                   'texto',  'Cuenta 2 (backup) — Service ID',   'emailjs', 5),
-                ('emailjs_template_id_2',  '',                   'texto',  'Cuenta 2 (backup) — Template ID',  'emailjs', 6),
-                ('emailjs_cuenta_activa',  '1',                  'numero', 'Cuenta actualmente en uso (1 o 2)', 'emailjs', 7),
-                ('emailjs_contador',       '0',                  'numero', 'Envíos contabilizados este ciclo', 'emailjs', 8),
-                ('emailjs_umbral_cambio',  '195',                'numero', 'Cambiar de cuenta al llegar a',    'emailjs', 9),
-                ('emailjs_cambio_automatico_en', '',             'texto',  'Último cambio automático (fecha)', 'emailjs', 10),
+                ('emailjs_public_key_1',   'bxFzHypsIrNqcDh15',  'texto',  'Cuenta 1 (principal) — Public Key',    'emailjs', 1),
+                ('emailjs_service_id_1',   'service_shvrzuv',    'texto',  'Cuenta 1 (principal) — Service ID',    'emailjs', 2),
+                ('emailjs_template_id_1',  'template_1zrv4ze',   'texto',  'Cuenta 1 (principal) — Template ID',   'emailjs', 3),
+                ('emailjs_public_key_2',   '',                   'texto',  'Cuenta 2 (secundaria) — Public Key',   'emailjs', 4),
+                ('emailjs_service_id_2',   '',                   'texto',  'Cuenta 2 (secundaria) — Service ID',   'emailjs', 5),
+                ('emailjs_template_id_2',  '',                   'texto',  'Cuenta 2 (secundaria) — Template ID',  'emailjs', 6),
+                ('emailjs_public_key_3',   '',                   'texto',  'Cuenta 3 (backup) — Public Key',       'emailjs', 7),
+                ('emailjs_service_id_3',   '',                   'texto',  'Cuenta 3 (backup) — Service ID',       'emailjs', 8),
+                ('emailjs_template_id_3',  '',                   'texto',  'Cuenta 3 (backup) — Template ID',      'emailjs', 9),
+                ('emailjs_cuenta_activa',  '1',                  'numero', 'Cuenta actualmente en uso (1, 2 o 3)', 'emailjs', 10),
+                ('emailjs_contador',       '0',                  'numero', 'Envíos contabilizados este ciclo',     'emailjs', 11),
+                ('emailjs_umbral_cambio',  '195',                'numero', 'Cambiar de cuenta al llegar a',        'emailjs', 12),
+                ('emailjs_cambio_automatico_en', '',             'texto',  'Último cambio automático (fecha)',     'emailjs', 13),
             ]
             for _clave, _valor, _tipo, _label, _grupo, _orden in _emailjs_defaults:
                 cur.execute("""
@@ -2840,6 +2852,7 @@ def get_config() -> dict:
         "familia_repetida_admin_reenvio_dias": 2,
         "emailjs_public_key_1": "", "emailjs_service_id_1": "", "emailjs_template_id_1": "",
         "emailjs_public_key_2": "", "emailjs_service_id_2": "", "emailjs_template_id_2": "",
+        "emailjs_public_key_3": "", "emailjs_service_id_3": "", "emailjs_template_id_3": "",
         "emailjs_cuenta_activa": 1, "emailjs_contador": 0, "emailjs_umbral_cambio": 195,
         "emailjs_cambio_automatico_en": "",
     }
@@ -11923,40 +11936,49 @@ def _validar_integridad_operativa() -> dict:
         ))
         problemas["hoteles_duplicados"] = duplicados
 
-        # ── EmailJS: contador, backup y cambio automático (v12.27.8/.10) ─────
+        # ── EmailJS: contador, backup y cambio automático (v12.27.8/.10, v12.29.94: ciclo de 3 cuentas) ─
         try:
             _c = get_config()
             _contador  = int(_c.get("emailjs_contador", 0) or 0)
             _umbral    = int(_c.get("emailjs_umbral_cambio", 195) or 195)
-            _activa    = int(_c.get("emailjs_cuenta_activa", 1) or 1)
+            _activa    = _emailjs_cuenta_valida(_c.get("emailjs_cuenta_activa", 1))
             _cambio_en = (_c.get("emailjs_cambio_automatico_en") or "").strip()
-            _otra      = 2 if _activa == 1 else 1
-            _otra_completa = bool(
-                (_c.get(f"emailjs_public_key_{_otra}") or "").strip()
-                and (_c.get(f"emailjs_service_id_{_otra}") or "").strip()
-                and (_c.get(f"emailjs_template_id_{_otra}") or "").strip()
-            )
+            _siguiente = _emailjs_siguiente_cuenta(_activa)
+
+            def _emailjs_cuenta_completa(_n):
+                return bool(
+                    (_c.get(f"emailjs_public_key_{_n}") or "").strip()
+                    and (_c.get(f"emailjs_service_id_{_n}") or "").strip()
+                    and (_c.get(f"emailjs_template_id_{_n}") or "").strip()
+                )
+
+            _otras_cuentas = [n for n in range(1, _EMAILJS_MAX_CUENTAS + 1) if n != _activa]
+            _hay_backup_completo = any(_emailjs_cuenta_completa(n) for n in _otras_cuentas)
+            _siguiente_completa  = _emailjs_cuenta_completa(_siguiente)
+
             if _cambio_en and _contador < max(_umbral - 20, 0):
                 # Cambió recientemente (contador bajo tras el reset) — informativo
                 problemas["emailjs"].append({
                     "tipo": "cambio_automatico_realizado",
                     "mensaje": (f"El sistema cambió automáticamente a la cuenta EmailJS {_activa} "
                                 f"el {_cambio_en} tras alcanzar el umbral de envíos ({_umbral}). "
-                                f"Comprueba que la cuenta {_otra} (la que quedó libre) siga teniendo "
+                                f"Comprueba que la cuenta {_siguiente} (la siguiente del ciclo) siga teniendo "
                                 f"cuota disponible para el próximo cambio.")
                 })
-            elif _contador >= _umbral and not _otra_completa:
+            elif _contador >= _umbral and not _hay_backup_completo:
                 problemas["emailjs"].append({
                     "tipo": "umbral_alcanzado_sin_backup",
                     "mensaje": (f"Van {_contador} envíos contabilizados en la cuenta {_activa} (umbral: {_umbral}) "
-                                f"y la cuenta {_otra} no tiene las 3 credenciales completas — el cambio automático "
-                                f"no se pudo realizar. Rellénalas en Admin → Config Alertas → EmailJS cuanto antes.")
+                                f"y ninguna de las otras cuentas ({', '.join(str(n) for n in _otras_cuentas)}) tiene "
+                                f"las 3 credenciales completas — el cambio automático no se pudo realizar. "
+                                f"Rellénalas en Admin → Config Alertas → EmailJS cuanto antes.")
                 })
-            elif not _otra_completa and _contador >= max(_umbral - 20, 0):
+            elif not _siguiente_completa and _contador >= max(_umbral - 20, 0):
                 problemas["emailjs"].append({
                     "tipo": "cerca_del_umbral_sin_backup",
                     "mensaje": (f"Van {_contador} envíos de {_umbral} en la cuenta {_activa} antes del cambio "
-                                f"automático, y la cuenta {_otra} todavía no está configurada.")
+                                f"automático, y la cuenta {_siguiente} (siguiente del ciclo) todavía no está "
+                                f"configurada." + (f" La cuenta {[n for n in _otras_cuentas if _emailjs_cuenta_completa(n)][0]} sí lo está y se usaría como backup." if _hay_backup_completo else ""))
                 })
         except Exception as _exc_ej:
             log.error("[INTEGRIDAD] Error comprobando estado EmailJS: %s", _exc_ej)
@@ -12700,17 +12722,39 @@ def test_familia_repetida():
     })
 
 
+# (2026-08-12) Nº de cuentas EmailJS en rotación — 1 (principal), 2
+# (secundaria), 3 (backup). Único sitio a tocar si en el futuro se añade
+# o se quita alguna: el resto del ciclo (registrar-envio, el aviso de
+# Integridad y el panel de Admin) se calcula a partir de esta constante.
+_EMAILJS_MAX_CUENTAS = 3
+
+def _emailjs_cuenta_valida(valor) -> int:
+    """Normaliza `emailjs_cuenta_activa` a un entero dentro de [1, _EMAILJS_MAX_CUENTAS];
+    cualquier valor fuera de rango o no numérico cae a 1 (principal)."""
+    try:
+        n = int(valor)
+    except (TypeError, ValueError):
+        return 1
+    return n if 1 <= n <= _EMAILJS_MAX_CUENTAS else 1
+
+def _emailjs_siguiente_cuenta(activa: int) -> int:
+    """Siguiente cuenta en el ciclo 1→2→3→1→... ."""
+    return activa + 1 if activa < _EMAILJS_MAX_CUENTAS else 1
+
+
 @app.route("/api/emailjs/config", methods=["GET"])
 def api_emailjs_config():
     """
-    v12.27.8 — Credenciales EmailJS activas (cuenta 1 o 2 según
+    v12.27.8 — Credenciales EmailJS activas (cuenta 1, 2 o 3 según
     emailjs_cuenta_activa) + contador/umbral, para que el frontend inicialice
     emailjs.init() dinámicamente en vez de llevarlas hardcodeadas — así un
     cambio de cuenta (manual o automático al llegar al umbral) se aplica al
     momento, sin necesidad de desplegar nada.
+
+    (2026-08-12) Generalizado de 2 a 3 cuentas (_EMAILJS_MAX_CUENTAS).
     """
     c = get_config()
-    activa = 2 if int(c.get("emailjs_cuenta_activa", 1) or 1) == 2 else 1
+    activa = _emailjs_cuenta_valida(c.get("emailjs_cuenta_activa", 1))
     return jsonify({
         "ok": True,
         "cuenta_activa":  activa,
@@ -12761,16 +12805,18 @@ def api_emailjs_registrar_envio():
     _permite_registrar_envio_no_autenticado() (los 3 flujos de email sin
     login, ver esa función) — antes esos envíos reales no se contaban.
 
-    v12.27.10 — Cambio de cuenta BIDIRECCIONAL (antes solo 1→2 una vez):
-    al llegar al umbral se cambia a la OTRA cuenta (1→2 o 2→1) y el
-    contador se reinicia a 0, para que cada cuenta cuente siempre de 1 a
-    195 en su propio ciclo, indefinidamente — pensado para que, cuando la
-    segunda cuenta también llegue al umbral, ya haya pasado tiempo de
-    sobra para que la primera se haya renovado del lado de EmailJS (su
-    ciclo gratuito es mensual) y pueda reutilizarse como backup de la
-    backup. Si la cuenta destino no tiene las 3 credenciales completas,
-    NO cambia (evita dejar la app sin poder enviar) y se queda como aviso
-    en Admin → Integridad para que un admin las rellene a tiempo.
+    v12.29.94 — Cambio de cuenta CÍCLICO entre 3 cuentas (antes solo
+    bidireccional 1↔2): al llegar al umbral se avanza a la SIGUIENTE
+    cuenta del ciclo (1→2→3→1→...) y el contador se reinicia a 0, para
+    que cada cuenta cuente siempre de 1 a 195 en su propio ciclo,
+    indefinidamente — pensado para que, cuando se vuelve a una cuenta ya
+    usada, haya pasado tiempo de sobra para que se haya renovado del lado
+    de EmailJS (su ciclo gratuito es mensual). Si la siguiente cuenta del
+    ciclo no tiene las 3 credenciales completas, se prueba con la
+    siguiente, y así hasta recorrer las 3; si ninguna otra cuenta tiene
+    credenciales completas, NO cambia (evita dejar la app sin poder
+    enviar) y se queda como aviso en Admin → Integridad para que un admin
+    las rellene a tiempo.
     """
     autenticado = "user_id" in session
     if autenticado and session.get("login_date") != _hoy_canarias().isoformat():
@@ -12790,15 +12836,23 @@ def api_emailjs_registrar_envio():
 
     c = get_config()
     umbral = int(c.get("emailjs_umbral_cambio", 195) or 195)
-    activa = int(c.get("emailjs_cuenta_activa", 1) or 1)
+    activa = _emailjs_cuenta_valida(c.get("emailjs_cuenta_activa", 1))
     cambiada = False
+    destino = activa
 
     if contador >= umbral:
-        destino = 2 if activa == 1 else 1
-        pk_d  = (c.get(f"emailjs_public_key_{destino}")  or "").strip()
-        sid_d = (c.get(f"emailjs_service_id_{destino}")  or "").strip()
-        tid_d = (c.get(f"emailjs_template_id_{destino}") or "").strip()
-        if pk_d and sid_d and tid_d:
+        candidato = activa
+        encontrado = None
+        for _ in range(_EMAILJS_MAX_CUENTAS - 1):
+            candidato = _emailjs_siguiente_cuenta(candidato)
+            pk_c  = (c.get(f"emailjs_public_key_{candidato}")  or "").strip()
+            sid_c = (c.get(f"emailjs_service_id_{candidato}")  or "").strip()
+            tid_c = (c.get(f"emailjs_template_id_{candidato}") or "").strip()
+            if pk_c and sid_c and tid_c:
+                encontrado = candidato
+                break
+        if encontrado is not None:
+            destino = encontrado
             cur.execute("UPDATE config_alertas SET valor=%s WHERE clave='emailjs_cuenta_activa'", (str(destino),))
             cur.execute("UPDATE config_alertas SET valor='0' WHERE clave='emailjs_contador'")
             _ahora_es = datetime.now(pytz.timezone("Atlantic/Canary")).strftime("%d/%m/%Y %H:%M")
@@ -12808,11 +12862,11 @@ def api_emailjs_registrar_envio():
             log.warning("[EMAILJS] Contador alcanzó %s/%s — cambio automático de cuenta %s a cuenta %s (contador reiniciado)",
                         umbral, umbral, activa, destino)
         else:
-            log.warning("[EMAILJS] Contador alcanzó %s/%s pero la cuenta %s (destino) no tiene credenciales completas — sin cambiar",
-                        contador, umbral, destino)
+            log.warning("[EMAILJS] Contador alcanzó %s/%s pero ninguna otra cuenta tiene credenciales completas — sin cambiar",
+                        contador, umbral)
     db.commit()
 
-    activa_final = (2 if activa == 1 else 1) if cambiada else activa
+    activa_final = destino if cambiada else activa
     c2 = get_config()  # releer tras el posible cambio, para devolver las credenciales correctas
     return jsonify({
         "ok": True,

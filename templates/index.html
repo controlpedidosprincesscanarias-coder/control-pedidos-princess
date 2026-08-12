@@ -1288,7 +1288,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.29.92
+          V 12.29.94
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -7112,8 +7112,8 @@ async function loadConfigAlertas() {
 
           <div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:12px 14px;margin-bottom:12px">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-              <span style="font-size:13px;font-weight:700;color:${activa === 2 ? '#8B0000' : '#1a73e8'}">
-                Cuenta en uso ahora mismo: ${activa}${activa === 2 ? ' (backup — ya se activó el cambio automático)' : ''}
+              <span style="font-size:13px;font-weight:700;color:${activa !== 1 ? '#8B0000' : '#1a73e8'}">
+                Cuenta en uso ahora mismo: ${activa}${activa !== 1 ? ' (backup — ya se activó el cambio automático)' : ''}
               </span>
               ${cambioEn ? `<span style="font-size:11px;color:#888">Último cambio automático: ${esc(cambioEn)}</span>` : ''}
             </div>
@@ -7125,7 +7125,7 @@ async function loadConfigAlertas() {
                 style="width:70px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
               <span>Cambiar de cuenta al llegar a: <input type="number" min="1" id="cfg_emailjs_umbral_cambio" value="${umbral}"
                 style="width:60px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
-              <span>Cuenta activa (1 o 2): <input type="number" min="1" max="2" id="cfg_emailjs_cuenta_activa" value="${activa}"
+              <span>Cuenta activa (1, 2 o 3): <input type="number" min="1" max="3" id="cfg_emailjs_cuenta_activa" value="${activa}"
                 style="width:40px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
             </div>
             <div style="font-size:10.5px;color:#888;margin-top:6px">
@@ -7134,11 +7134,11 @@ async function loadConfigAlertas() {
             </div>
           </div>
 
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-            ${[1, 2].map(n => `
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+            ${[1, 2, 3].map(n => `
               <div style="background:${activa === n ? '#eef6ff' : '#fafafa'};border:1px solid ${activa === n ? '#b6d4fe' : '#e9ecef'};border-radius:8px;padding:10px 12px">
                 <div style="font-size:12px;font-weight:700;color:${activa === n ? '#1a73e8' : '#555'};margin-bottom:8px">
-                  Cuenta ${n} ${n === 1 ? '(principal)' : '(backup)'} ${activa === n ? ' · en uso' : ''}
+                  Cuenta ${n} ${n === 1 ? '(principal)' : n === 2 ? '(secundaria)' : '(backup)'} ${activa === n ? ' · en uso' : ''}
                 </div>
                 <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Public Key</label>
                 <input type="text" id="cfg_emailjs_public_key_${n}" value="${esc(get('emailjs_public_key_' + n))}"
@@ -7152,10 +7152,12 @@ async function loadConfigAlertas() {
               </div>`).join('')}
           </div>
           <div style="font-size:10.5px;color:#888;margin-top:8px">
-            Rellena ambas cuentas con las 3 credenciales (misma plantilla en las dos, mismos campos
+            Rellena las 3 cuentas con sus credenciales completas (misma plantilla en las tres, mismos campos
             <code>to_email</code>/<code>bcc</code>/<code>reply_to</code>/<code>subject</code>/<code>message</code>) —
-            en cuanto los "Envíos contados" lleguen al umbral, el sistema cambia solo a la OTRA cuenta
-            (1→2 o 2→1) y reinicia el contador a 0, sin desplegar nada. Se avisará en 🔍 Integridad.
+            en cuanto los "Envíos contados" lleguen al umbral, el sistema pasa solo a la SIGUIENTE cuenta del ciclo
+            (1→2→3→1→...) y reinicia el contador a 0, sin desplegar nada. Si la siguiente cuenta no tiene las
+            credenciales completas, prueba con la de después, recorriendo las 3 antes de rendirse. Se avisará en
+            🔍 Integridad.
           </div>
         </div>`;
         continue;
