@@ -1004,6 +1004,24 @@ def _auto_migrate():
                 "ALTER TABLE emails_sistema_pendientes "
                 "ADD COLUMN IF NOT EXISTS recordado_en TIMESTAMPTZ"
             )
+            # Migración v12.29.96: reserva atómica anti-duplicados. Antes
+            # GET /api/emails-sistema-pendientes devolvía las filas
+            # enviado=FALSE sin marcar nada, así que si dos pestañas/
+            # sesiones (o un poll + una recarga de página) pedían la cola
+            # casi a la vez, ambas veían la misma fila pendiente y ambas
+            # la enviaban de verdad por EmailJS antes de que ninguna la
+            # marcara como enviada — duplicados reales al destinatario
+            # (reportado por el usuario: pedido 39909, 2 correos idénticos).
+            # `en_proceso_desde` guarda cuándo se "reservó" una fila para
+            # que la pida solo una sesión a la vez (ver claim atómico en
+            # api_emails_sistema_pendientes); si esa sesión nunca confirma
+            # el envío (fallo de EmailJS, pestaña cerrada a media faena...),
+            # la reserva caduca sola a los 2 minutos y otra sesión puede
+            # reintentarla.
+            cur.execute(
+                "ALTER TABLE emails_sistema_pendientes "
+                "ADD COLUMN IF NOT EXISTS en_proceso_desde TIMESTAMPTZ"
+            )
             cur.execute("SELECT COUNT(*) as n FROM eventos_aviso")
             _row_ev = cur.fetchone()
             _n_ev = _row_ev[0] if isinstance(_row_ev, tuple) else _row_ev['n']
@@ -13077,18 +13095,53 @@ def api_resolver_config_avisos():
 def api_emails_sistema_pendientes():
     """
     Devuelve los emails de sistema pendientes de envío (encolados por jobs
-    sin navegador abierto) para que el frontend los envíe vía EmailJS.
+    sin navegador abierto) para que el frontend los envíe vía EmailJS —
+    y los RESERVA atómicamente en el mismo paso (v12.29.96).
+
+    (2026-08-13) Antes esto era un SELECT simple: si dos pestañas/sesiones
+    (o un poll normal solapado con una recarga de página) pedían la cola
+    casi a la vez, ambas recibían la misma fila "pendiente" y ambas la
+    mandaban de verdad por EmailJS antes de que ninguna llegara a marcarla
+    como enviada — duplicados reales al destinatario (reportado por el
+    usuario: pedido 39909, 2 correos idénticos el mismo minuto). La app
+    corre con varios hilos (`--worker-class gthread --threads 4` en
+    render.yaml), así que dos peticiones sí pueden ejecutarse en paralelo
+    de verdad dentro del mismo proceso.
+
+    Corrección: `UPDATE ... SELECT ... FOR UPDATE SKIP LOCKED ... RETURNING`
+    en una sola sentencia atómica marca `en_proceso_desde = NOW()` en las
+    filas que devuelve, así que una segunda petición concurrente ya no las
+    ve como disponibles (el filtro excluye las reservadas hace menos de 2
+    minutos) y con `SKIP LOCKED` ni siquiera se bloquea esperando a que la
+    primera termine. Si la sesión que reservó una fila nunca confirma el
+    envío (fallo de EmailJS, se cierra la pestaña a media faena...), la
+    reserva caduca sola pasados 2 minutos y otra sesión puede reintentarla
+    con normalidad — no se pierden envíos por este cambio.
     GET /api/emails-sistema-pendientes
     """
     try:
-        pendientes = rows_to_list(query(
-            "SELECT id, evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text, "
-            "cc_emails, pedido_id "
-            "FROM emails_sistema_pendientes WHERE enviado=FALSE ORDER BY id LIMIT 20"
-        )) or []
+        cur = execute(
+            """
+            UPDATE emails_sistema_pendientes
+               SET en_proceso_desde = NOW()
+             WHERE id IN (
+                 SELECT id FROM emails_sistema_pendientes
+                  WHERE enviado = FALSE
+                    AND (en_proceso_desde IS NULL OR en_proceso_desde < NOW() - INTERVAL '2 minutes')
+                  ORDER BY id
+                  LIMIT 20
+                  FOR UPDATE SKIP LOCKED
+             )
+            RETURNING id, evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
+                      cc_emails, pedido_id
+            """
+        )
+        pendientes = rows_to_list(cur.fetchall()) or []
+        pendientes.sort(key=lambda p: p["id"])
+        get_db().commit()
         return jsonify({"ok": True, "pendientes": pendientes})
     except Exception as exc:
-        log.error("[EMAILS-SISTEMA] Error listando pendientes: %s", exc)
+        log.error("[EMAILS-SISTEMA] Error listando/reservando pendientes: %s", exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 

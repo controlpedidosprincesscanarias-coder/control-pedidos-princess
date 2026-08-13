@@ -1,3 +1,67 @@
+# v12.29.96 — 13 agosto 2026 08:15
+
+🐛 Fix: correos de la cola de sistema duplicados por carrera (race condition) entre pestañas/sesiones
+
+**Reporte del usuario**: el pedido Nº 39909 (reclamación automática por
+"Entrega parcial pendiente de completar") llegó DOS veces idénticas a la
+bandeja de entrada del admin, y aparece dos veces en "Enviados" de Gmail,
+ambas a las 7:43. Se adjuntaron capturas del panel de alertas, la bandeja
+de entrada, la bandeja de enviados de Gmail, y un fragmento de los logs
+de Render de ese minuto.
+
+**Investigación**: la reclamación automática al proveedor
+(`_encolar_reclamacion_proveedor_auto`, dentro del job diario de
+alertas) ya tiene buena protección contra insertar la fila dos veces el
+mismo día (`_ya_notificado_hoy`, más una comprobación final de
+seguridad) — descartado que el problema esté en el ENCOLADO.
+
+El problema real está en el DESPACHO de la cola
+(`emails_sistema_pendientes`): `_enviarEmailsSistemaPendientes()`
+(frontend) hacía `GET /api/emails-sistema-pendientes` (lista las filas
+`enviado=FALSE`), enviaba de verdad por EmailJS, y solo DESPUÉS marcaba
+la fila como enviada con `POST .../marcar-enviado`. Entre esos dos pasos
+no había ningún bloqueo: si dos pestañas/sesiones (dos usuarios
+admin/compras, o simplemente una recarga de página mientras el ciclo de
+5 minutos ya estaba en marcha) pedían la cola casi a la vez, **ambas
+veían la misma fila como pendiente y ambas la mandaban de verdad por
+EmailJS** antes de que ninguna llegara a marcarla — dos correos reales
+por un solo aviso. Esto es posible porque el servidor corre con varios
+hilos (`render.yaml`: `--worker-class gthread --threads 4`), así que dos
+peticiones sí se procesan en paralelo de verdad dentro del mismo
+proceso.
+
+**Corrección**: `GET /api/emails-sistema-pendientes` ahora RESERVA
+atómicamente las filas que devuelve, en la misma sentencia SQL
+(`UPDATE ... SELECT ... FOR UPDATE SKIP LOCKED ... RETURNING`), marcando
+`en_proceso_desde = NOW()`. Una segunda petición concurrente ya no ve
+esas filas como disponibles (se excluyen las reservadas hace menos de 2
+minutos) y con `SKIP LOCKED` ni siquiera espera bloqueada a que la
+primera termine — sigue con lo que quede libre. Si una sesión reserva
+una fila y nunca confirma el envío (falla EmailJS, se cierra la pestaña
+a media faena…), la reserva caduca sola a los 2 minutos y otra sesión
+puede reintentarla con normalidad, sin perder ningún envío.
+
+Nueva columna `emails_sistema_pendientes.en_proceso_desde` (migración
+idempotente en `_auto_migrate()`, `ALTER TABLE ... ADD COLUMN IF NOT
+EXISTS`).
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Reproducido
+el bug y la corrección con un PostgreSQL real (no simulado): dos
+"sesiones" en hilos separados pidiendo la cola en el mismo instante
+(con una barrera para maximizar la colisión) — con el SQL antiguo
+(`SELECT` simple) ambas ven y "envían" la misma fila (duplicado
+reproducido tal cual lo reportó el usuario); con el SQL nuevo
+(`UPDATE ... FOR UPDATE SKIP LOCKED`) solo una de las dos la reclama, la
+otra recibe 0 filas. Verificada también la caducidad de la reserva: una
+fila "reservada" hace 3 minutos vuelve a ser reclamable, una reservada
+hace 0 minutos NO lo es, y una fila ya marcada `enviado=TRUE` nunca
+vuelve a aparecer aunque su reserva haya caducado.
+
+Sin cambios necesarios en `templates/index.html` (el frontend ya hacía
+correctamente GET → enviar → marcar-enviado; el fix es enteramente del
+lado del servidor). Badge de versión del sidebar actualizado a
+"V 12.29.96". `README.md` actualizado.
+
 # v12.29.94 — 12 agosto 2026 09:40
 
 🔁 Tercera cuenta EmailJS de backup: rotación cíclica entre 3 cuentas (1→2→3→1)
