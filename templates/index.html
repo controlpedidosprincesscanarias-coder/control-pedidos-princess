@@ -157,6 +157,21 @@ html,body{min-height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);
 .stat-label{font-size:12px;color:var(--muted);margin-top:4px}
 .stat-card.alert-card{border-color:#fbbf24;background:#fffbeb}
 .stat-card.alert-card .stat-num{color:#b45309}
+.stat-card.dash-dali-card{
+  background:linear-gradient(135deg,var(--navy),var(--navy2));
+  border:none;color:var(--white);
+  display:flex;align-items:center;gap:16px;
+  transition:transform .15s ease,box-shadow .15s ease;
+}
+.stat-card.dash-dali-card:hover{transform:translateY(-2px);box-shadow:var(--shadow-lg)}
+.stat-card.dash-dali-card .dash-dali-icon{
+  width:44px;height:44px;border-radius:50%;flex-shrink:0;
+  background:rgba(232,201,106,.18);
+  display:flex;align-items:center;justify-content:center;font-size:22px;
+}
+.stat-card.dash-dali-card .dash-dali-title{font-size:15px;font-weight:600;color:var(--gold2)}
+.stat-card.dash-dali-card .dash-dali-sub{font-size:12.5px;color:rgba(255,255,255,.75);margin-top:2px}
+.stat-card.dash-dali-card .dash-dali-arrow{margin-left:auto;font-size:20px;color:var(--gold2);flex-shrink:0}
 .stat-card-top{display:flex;align-items:flex-start;justify-content:space-between;gap:10px}
 .stat-spark{width:64px;height:30px;flex-shrink:0;margin-top:2px}
 .stat-spark svg{display:block;width:100%;height:100%;overflow:visible}
@@ -1337,13 +1352,13 @@ tbody tr:last-child{border-bottom:none}
       <div id="view-dashboard">
         <div id="dash-necesita-atencion" style="display:none"></div>
 
-        <div class="stat-card" id="dash-dali-card" style="margin-bottom:16px;cursor:pointer" onclick="abrirDali()" title="Se abre en una pestaña nueva">
-          <div class="stat-card-top">
-            <div>
-              <div class="stat-label" style="font-size:14px;font-weight:600;color:var(--gold2,#c9a84c);margin-bottom:4px">🧾 Catálogo DALI de artículos/materiales</div>
-              <div style="font-size:13px;color:#888">Consulta de artículos, códigos SAP y fichas técnicas/seguridad — entras con tu mismo usuario, sin contraseña adicional</div>
-            </div>
+        <div class="stat-card dash-dali-card" id="dash-dali-card" style="margin-bottom:16px;cursor:pointer" onclick="abrirDali()" title="Se abre en una pestaña nueva">
+          <div class="dash-dali-icon">🧾</div>
+          <div>
+            <div class="dash-dali-title">Catálogo DALI de artículos/materiales</div>
+            <div class="dash-dali-sub">Consulta de artículos, códigos SAP y fichas técnicas/seguridad</div>
           </div>
+          <div class="dash-dali-arrow">→</div>
         </div>
 
         <div class="stats-grid" id="stats-cards">
