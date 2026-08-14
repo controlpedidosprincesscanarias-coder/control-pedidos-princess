@@ -3,8 +3,11 @@
 > Documento único de seguimiento. Se actualiza cambio a cambio, entrada
 > más reciente arriba. Componentes: **Organizador** (main_agenda,
 > desktop), **Control Pedidos** (backend Flask principal), **Chat**
-> (backend Flask/SocketIO independiente), **Infra** (Render /
-> Cloudflare / GitHub Actions, no es código de la app).
+> (backend Flask/SocketIO independiente), **DALI** (catálogo de
+> artículos/materiales — repo `dali-sap-articulos-app`, aparte pero
+> integrado con Control Pedidos vía SSO desde el 2026-08-14, ver más
+> abajo), **Infra** (Render / Cloudflare / GitHub Actions, no es código
+> de la app).
 
 > **Normas de entrega (obligatorias para cualquier cambio, ya lo
 > implemente Claude, otra IA o cualquier programador humano):**
@@ -21,6 +24,60 @@
 >    y esta entrada.
 
 ---
+
+## 2026-08-14 11:35
+
+### [Control Pedidos + DALI] v12.30.02/v12.30.03 (Control Pedidos) — Integración: acceso SSO de un clic al catálogo DALI desde el menú lateral y el Dashboard
+- Petición del usuario (Víctor): que cualquier usuario de Control de
+  Pedidos (admin, compras u hotel) pudiera acceder a la nueva app
+  DALI (`dali-sap-articulos-app`, hasta ahora un proyecto aparte, sin
+  ninguna relación operativa con este) desde el dashboard o el menú
+  lateral, con los usuarios ya dados de alta allí automáticamente y
+  con rol comprador → administrador en DALI, rol hotel → mismo rol
+  (hotel, de solo consulta) en DALI.
+- Diseño elegido, de entre tres opciones planteadas (SSO transparente /
+  cuentas sincronizadas con login propio / solo enlace sin sincronizar):
+  **SSO transparente por token firmado entre los dos backends** — el
+  usuario nunca ve el login de DALI. Encajaba bien porque los dos
+  proyectos ya comparten el mismo patrón de sesión (cookie firmada, sin
+  store de servidor) — de hecho DALI documentó en su día
+  (`docs/hallazgo-seguridad-princess.md`) que copió ese patrón de este
+  mismo proyecto.
+- **Cambios en Control Pedidos** (`app.py`): `DALI_SSO_SECRET` /
+  `DALI_FRONTEND_URL` / `DALI_ROL_MAP` (`admin`→`admin`,
+  `compras`→`admin`, `hotel`→`hotel`), función
+  `_generar_token_sso_dali()` (HMAC-SHA256, token de un solo uso,
+  ~60s de validez), endpoint `GET /api/dali/sso`
+  (`@login_required`, devuelve la URL con el token o un error claro si
+  el usuario no tiene email registrado — DALI identifica por email).
+  `templates/index.html`: ítem "🧾 Catálogo DALI" en el menú lateral y
+  tarjeta de acceso rápido en el Dashboard (rediseñada en v12.30.03 a
+  petición del usuario: icono en círculo, fondo degradado navy/dorado,
+  sin mencionar el detalle de usuario/contraseña), función JS
+  `abrirDali()`. `render.yaml`: variables `DALI_SSO_SECRET` /
+  `DALI_FRONTEND_URL`.
+- **Cambios en DALI** (repo aparte, no incluido en este historial
+  unificado salvo este resumen — ver su propio `HISTORIAL.md`):
+  `POST /auth/sso` (`authController.js`) verifica la firma y caducidad
+  del token, aprovisiona o actualiza el usuario en su tabla `usuarios`
+  con el rol recibido, y abre sesión. En el frontend, `App.jsx` detecta
+  `?dali_token=` al cargar y llama a ese endpoint en vez de mostrar el
+  login; si falla, cae al login normal explicando el motivo.
+- **Verificación:** `python3 -m py_compile app.py` sin errores;
+  `node --check` sobre los ficheros JS tocados del backend de DALI sin
+  errores; JSX comprobado con `esbuild` (sin bundlear) sin errores.
+  Probado en producción por el usuario con los tres roles reales tras
+  desplegar y configurar `DALI_SSO_SECRET` en ambos servicios de
+  Render: admin → admin ✅, compras → admin ✅, hotel → hotel ✅.
+- Pendiente/a vigilar: la organización de Supabase
+  (`controlpedidosprincesscanarias-coder's Org`) está en "grace period"
+  por cuota del plan Free (Fair Use Policy) — no bloquea lo de hoy
+  (este proyecto va holgado en su propio uso), pero conviene que el
+  usuario revise qué proyecto de la org la está agotando antes de que
+  algo empiece a devolver 402. Fuera del alcance de este cambio.
+- Sin cambios en `README.md` de Control Pedidos (no documenta
+  integraciones externas de este tipo); badge de versión actualizado a
+  "V 12.30.02" en v12.30.02.
 
 ## 2026-08-14 09:40
 

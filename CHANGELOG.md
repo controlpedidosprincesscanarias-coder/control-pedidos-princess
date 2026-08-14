@@ -1,3 +1,17 @@
+# v12.30.03 — 14 agosto 2026
+
+🎨 Tarjeta "Catálogo DALI" del Dashboard, rediseñada
+
+**Petición del usuario**: la tarjeta de acceso a DALI en el Dashboard
+(añadida en v12.30.02) tenía que ser "más visual", y no hacía falta
+explicar que se entra sin contraseña adicional — solo qué hace.
+
+**Cambio**: nueva clase `.dash-dali-card` — icono en círculo, fondo
+degradado navy/dorado (misma paleta que el resto de la app), flecha "→"
+indicando que abre algo, efecto hover (elevación + sombra). Texto
+reducido a qué es y qué permite consultar, sin mencionar el mecanismo de
+acceso. Mismo `onclick="abrirDali()"` de siempre, sin cambios de lógica.
+
 # v12.30.02 — 14 agosto 2026
 
 🧾 Nuevo: acceso de un clic al catálogo DALI desde el menú lateral y el dashboard
