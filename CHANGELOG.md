@@ -1,3 +1,87 @@
+# v12.30.00 — 14 agosto 2026 09:40
+
+🔧 Columna "Entrega": ahora es "Entregado" si el importe recibido es igual O SUPERIOR a la base (antes exigía igualdad exacta)
+
+**Petición del usuario**: precisar la regla de la columna "Entrega" —
+"entrega completa es cuando columna 7 => 6; entrega parcial cuando
+7 >0 y <6; no entregado 7 = 0" (columna 6 = base imponible, columna 7 =
+importe recibido, del listado simplificado de SAP).
+
+**Antes** (`_entrega_estado`): "Entregado" exigía columna 7 == columna 6
+exacto — si el importe recibido informado en SAP superaba ligeramente a
+la base (recargos, ajustes, redondeos…), el pedido se quedaba mal
+clasificado como "Entrega parcial" aunque en realidad ya estaba
+completo.
+
+**Ahora**: columna 7 ≥ columna 6 → "Entregado"; 0 < columna 7 < columna
+6 → "Entrega parcial"; columna 7 ≤ 0 → "No entregado" (se trata también
+un importe recibido negativo, dato anómalo, como "No entregado" por
+seguridad). Afecta tanto a la columna "Entrega" en pantalla como al
+recuento de entregados/parciales/no entregados y al correo de resumen.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Reprocesados
+los 2 PDF reales disponibles comparando la regla antigua vs. la nueva:
+- PDF de La Palma Princess (199 pedidos): 13 pedidos cambian de "Entrega
+  parcial" a "Entregado" (todos con recibido ligeramente por encima de
+  la base, p. ej. pedido 00015988: base 118,00 / recibido 127,00).
+  Recuento total: antes 35 Entregado / 36 Entrega parcial, ahora 48
+  Entregado / 23 Entrega parcial (los 128 "No entregado" no cambian).
+- Listado simplificado de 221 pedidos: 38 pedidos cambian de igual
+  forma. Recuento total: antes 66 Entregado / 57 Entrega parcial, ahora
+  104 Entregado / 19 Entrega parcial (los 98 "No entregado" no cambian).
+
+Sin cambios en `templates/index.html` más allá del badge de versión (la
+columna "Entrega" ya se pinta con el valor que devuelve
+`_entrega_estado()`, sin lógica propia en el frontend). Badge del
+sidebar actualizado a "V 12.30.00". `README.md` actualizado.
+
+# v12.29.98 — 14 agosto 2026 09:10
+
+🏷️ "Estado aparente" del correo de "Comparar listado PDF": nuevo caso "SIN ENTREGAR" (antes se confundía con "ENTREGA PARCIAL")
+
+**Reporte del usuario**: en el correo de pedidos de SAP/DALI sin dar de
+alta (hotel La Palma Princess, LP.pdf adjunto), 4 pedidos salían con
+"Estado aparente: ENTREGA PARCIAL" y a la vez columna "Entrega: No
+entregado" — parecía contradictorio. Se preguntó "¿por qué indica
+entrega parcial?".
+
+**Diagnóstico**: comprobado con el propio PDF que el usuario adjuntó
+(00016080, 00016147, 00016165, 00016171) — los 4 tienen importe
+recibido = 0,00 (nada recibido todavía) e importe pendiente = importe
+base completo. No es contradictorio: son dos columnas independientes a
+propósito ("Entrega" compara base vs. recibido; "Estado aparente" mira
+solo si columna 8 del SAP, importe pendiente, es > 0). El problema es
+que esa regla original de "Estado aparente" era binaria (pendiente >0 =
+PARCIAL, si no COMPLETA) y no distinguía "no ha llegado nada todavía"
+de "ya llegó una parte" — ambos casos tienen importe pendiente > 0, así
+que ambos salían como "ENTREGA PARCIAL", aunque en el primer caso no ha
+llegado literalmente nada.
+
+**Ajuste, a petición del usuario** ("ajustar lógica"): `_estado_aparente_entrega()`
+pasa a mirar también el importe recibido (columna 7, dato en bruto del
+SAP, no un cálculo) y ahora distingue 3 casos en vez de 2:
+- pendiente ≤ 0 → **ENTREGA COMPLETA** (igual que antes)
+- pendiente > 0 y recibido ≤ 0 → **SIN ENTREGAR** (nuevo — nada recibido todavía)
+- pendiente > 0 y recibido > 0 → **ENTREGA PARCIAL** (reservado ahora a cuando de verdad ha llegado algo, pero falta el resto)
+
+Actualizado también el color del correo (rojo oscuro para "SIN
+ENTREGAR", ámbar para "ENTREGA PARCIAL", verde para "ENTREGA COMPLETA")
+y el texto explicativo bajo la tabla, que ahora describe los 3 casos.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; `node
+--check` sobre el JS de `templates/index.html` sin errores (no hay
+cambios de frontend — "Estado aparente" solo se usa en el correo, nunca
+se pinta en pantalla). Reprocesados los 2 PDF reales disponibles:
+- `LP.pdf` (el reportado, 199 pedidos): los 4 pedidos del correo pasan
+  de "ENTREGA PARCIAL" a "SIN ENTREGAR", confirmado con los importes
+  reales extraídos del propio PDF (recibido=0,00 en los 4). Recuento
+  total: 128 SIN ENTREGAR, 23 ENTREGA PARCIAL, 48 ENTREGA COMPLETA.
+- `MT2.pdf` (regresión, 221 pedidos): sigue parseando sin errores, 97
+  SIN ENTREGAR, 19 ENTREGA PARCIAL, 105 ENTREGA COMPLETA.
+
+Badge de versión del sidebar actualizado a "V 12.29.98". `README.md`
+actualizado.
+
 # v12.29.96 — 13 agosto 2026 08:15
 
 🐛 Fix: correos de la cola de sistema duplicados por carrera (race condition) entre pestañas/sesiones

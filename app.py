@@ -7853,7 +7853,11 @@ def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltant
     resto = len(pedidos_faltantes) - len(mostrar)
 
     def _color_estado_aparente(estado):
-        return "#856404" if estado == "ENTREGA PARCIAL" else "#155724"
+        if estado == "SIN ENTREGAR":
+            return "#8B0000"
+        if estado == "ENTREGA PARCIAL":
+            return "#856404"
+        return "#155724"
 
     filas = "".join(f"""
         <tr style="{'background:#f5f5f5' if i % 2 else ''}">
@@ -7895,9 +7899,12 @@ def _email_resumen_pdf_sap(hotel_nombre: str, hotel_codigo: str, pedidos_faltant
           {filas}
         </table>
         <p style="font-size:12px;color:#888;font-style:italic">"Estado aparente" se calcula
-           directamente sobre el importe pendiente que trae el listado de SAP — es una lectura
-           automática, no una verificación: pendiente de confirmación final por el comprador y
-           el hotel.</p>
+           directamente sobre el importe recibido y el importe pendiente que trae el listado de
+           SAP: <strong>SIN ENTREGAR</strong> si todavía no se ha recibido nada,
+           <strong>ENTREGA PARCIAL</strong> si ya se ha recibido algo pero queda importe
+           pendiente, y <strong>ENTREGA COMPLETA</strong> si no queda nada pendiente — es una
+           lectura automática, no una verificación: pendiente de confirmación final por el
+           comprador y el hotel.</p>
         {aviso_resto}
         {f'<p style="font-size:12px;color:#856404;background:#fff3cd;padding:8px 12px;border-radius:4px">'
           f'⚠️ Hay además <strong>{no_identificados}</strong> pedido(s) sin dar de alta cuyo proveedor '
@@ -7955,37 +7962,61 @@ def _parse_importe_es(s: str):
 def _entrega_estado(importe_base: float, importe_recibido: float) -> str:
     """
     (2026-08-11) Deriva el estado real de entrega de un pedido a partir
-    de los importes del listado simplificado de SAP (base imponible vs.
-    recibido), a petición del usuario:
-      - recibido == 0                  -> "No entregado"
-      - recibido == base (con céntimos)-> "Entregado"
-      - cualquier otro caso            -> "Entrega parcial"
+    de los importes del listado simplificado de SAP — columna 6 (base
+    imponible) vs. columna 7 (importe recibido).
+
+    (2026-08-14) Ajuste a petición del usuario — antes "Entregado" exigía
+    columna 7 == columna 6 exacto; ahora es columna 7 >= columna 6 (cubre
+    el caso de que el importe recibido informado en SAP supere ligeramente
+    a la base, p. ej. por ajustes/recargos, que antes caía por error en
+    "Entrega parcial"):
+      - columna 7 == 0             -> "No entregado"
+      - columna 7 >= columna 6     -> "Entregado"
+      - 0 < columna 7 < columna 6  -> "Entrega parcial"
     Se compara redondeando a 2 decimales para evitar falsos negativos
-    por errores de coma flotante.
+    por errores de coma flotante. Un importe recibido negativo (dato
+    anómalo) se trata también como "No entregado", por seguridad.
     """
     recibido = round(importe_recibido, 2)
     base = round(importe_base, 2)
-    if recibido == 0:
+    if recibido <= 0:
         return "No entregado"
-    if recibido == base:
+    if recibido >= base:
         return "Entregado"
     return "Entrega parcial"
 
-def _estado_aparente_entrega(importe_pendiente: float) -> str:
+def _estado_aparente_entrega(importe_recibido: float, importe_pendiente: float) -> str:
     """
     (2026-08-11) "Estado aparente" de entrega, a petición del usuario —
-    distinto de `_entrega_estado()` (que compara base vs. recibido):
-    este se calcula directamente sobre la 8ª columna del listado
-    simplificado de SAP (importe pendiente, tal cual lo trae SAP — no
-    siempre coincide con "base - recibido" calculado a mano, por eso se
-    usa como dato aparte en vez de sustituir al anterior):
-      - pendiente > 0        -> "ENTREGA PARCIAL"
-      - pendiente == 0 o < 0 -> "ENTREGA COMPLETA"
+    distinto de `_entrega_estado()` (que compara base vs. recibido): este
+    se calcula directamente sobre columnas "en bruto" del listado
+    simplificado de SAP (importe recibido e importe pendiente, tal cual
+    las trae SAP — el pendiente no siempre coincide con "base - recibido"
+    calculado a mano, por eso se usa como dato aparte en vez de sustituir
+    al anterior):
+      - pendiente <= 0                 -> "ENTREGA COMPLETA"
+      - pendiente > 0 y recibido <= 0  -> "SIN ENTREGAR"    (nada recibido todavía)
+      - pendiente > 0 y recibido > 0   -> "ENTREGA PARCIAL" (ha llegado algo, falta el resto)
+
+    (2026-08-14) Ajuste a petición del usuario: antes cualquier pedido
+    con algo pendiente salía como "ENTREGA PARCIAL", incluso si no se
+    había recibido NADA todavía (recibido = 0) — confuso, porque
+    "parcial" da a entender que ya llegó una parte cuando en realidad no
+    ha llegado nada. Ahora ese caso se distingue como "SIN ENTREGAR", y
+    "ENTREGA PARCIAL" queda reservado a cuando de verdad se ha recibido
+    algo pero todavía queda importe pendiente.
+
     Se llama "aparente" a propósito: es una lectura directa del PDF, no
     una verificación — pensado para que el comprador y el hotel lo
     revisen y confirmen, no como dato definitivo por sí solo.
     """
-    return "ENTREGA PARCIAL" if round(importe_pendiente, 2) > 0 else "ENTREGA COMPLETA"
+    pendiente = round(importe_pendiente, 2)
+    recibido = round(importe_recibido, 2)
+    if pendiente <= 0:
+        return "ENTREGA COMPLETA"
+    if recibido <= 0:
+        return "SIN ENTREGAR"
+    return "ENTREGA PARCIAL"
 
 # (2026-08-11) Listado de Pedidos SIMPLIFICADO de SAP: una línea por
 # pedido, sin el detalle de artículos. Aunque en el PDF renderizado las
@@ -8108,7 +8139,7 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
             "importe_pendiente":      importe_pendiente,
             "estado_sap":             estado_sap,
             "entrega_estado":         _entrega_estado(importe_base, importe_recibido),
-            "estado_aparente":        _estado_aparente_entrega(importe_pendiente),
+            "estado_aparente":        _estado_aparente_entrega(importe_recibido, importe_pendiente),
             "encontrado":             bool(pedido_app),
             "pedido_id":              pedido_app["id"] if pedido_app else None,
             "norden":                 pedido_app["norden"] if pedido_app else None,

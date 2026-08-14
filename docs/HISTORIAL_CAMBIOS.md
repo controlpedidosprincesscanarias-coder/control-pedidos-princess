@@ -22,6 +22,71 @@
 
 ---
 
+## 2026-08-14 09:40
+
+### [Control Pedidos] v12.30.00 — Columna "Entrega": ahora es "Entregado" si el importe recibido es igual O SUPERIOR a la base (antes exigía igualdad exacta)
+- Petición del usuario: precisar la regla de la columna "Entrega" —
+  "entrega completa es cuando columna 7 => 6; entrega parcial cuando
+  7 >0 y <6; no entregado 7 = 0" (columna 6 = base imponible, columna 7
+  = importe recibido, listado simplificado de SAP).
+- Antes (`_entrega_estado`): "Entregado" exigía columna 7 == columna 6
+  exacto — si el importe recibido superaba ligeramente a la base
+  (recargos, ajustes, redondeos…), el pedido quedaba mal clasificado
+  como "Entrega parcial" aunque ya estaba completo.
+- Ahora: columna 7 ≥ columna 6 → "Entregado"; 0 < columna 7 < columna 6
+  → "Entrega parcial"; columna 7 ≤ 0 → "No entregado" (un importe
+  recibido negativo, dato anómalo, se trata también como "No
+  entregado"). Afecta a la columna "Entrega" en pantalla, al recuento
+  de entregados/parciales/no entregados y al correo de resumen.
+- Verificación: `python3 -m py_compile app.py` sin errores. Reprocesados
+  los 2 PDF reales disponibles comparando regla antigua vs. nueva: PDF
+  de La Palma Princess (199 pedidos) — 13 pedidos pasan de "Entrega
+  parcial" a "Entregado" (recuento total: antes 35/36, ahora 48/23, los
+  128 "No entregado" no cambian); listado simplificado de 221 pedidos —
+  38 pedidos cambian igual (antes 66/57, ahora 104/19, los 98 "No
+  entregado" no cambian).
+- Sin cambios en `templates/index.html` más allá del badge de versión
+  (la columna "Entrega" ya se pinta con el valor de `_entrega_estado()`,
+  sin lógica propia en el frontend). Badge del sidebar actualizado a
+  "V 12.30.00"; entrada añadida en `CHANGELOG.md`; `README.md`
+  actualizado.
+
+## 2026-08-14 09:10
+
+### [Control Pedidos] v12.29.98 — "Estado aparente" del correo de "Comparar listado PDF": nuevo caso "SIN ENTREGAR" (antes se confundía con "ENTREGA PARCIAL")
+- Reporte del usuario: en el correo de pedidos de SAP/DALI sin dar de
+  alta (hotel La Palma Princess, PDF adjunto), 4 pedidos salían con
+  "Estado aparente: ENTREGA PARCIAL" y a la vez columna "Entrega: No
+  entregado" — parecía contradictorio.
+- Diagnóstico: comprobado con el propio PDF adjunto (pedidos 00016080,
+  00016147, 00016165, 00016171) — los 4 tienen importe recibido = 0,00
+  (nada recibido todavía) e importe pendiente = importe base completo.
+  No es contradictorio: son dos columnas independientes a propósito
+  ("Entrega" compara base vs. recibido; "Estado aparente" mira solo si
+  la columna 8 del SAP, importe pendiente, es > 0). El problema es que
+  esa regla era binaria y no distinguía "no ha llegado nada todavía" de
+  "ya llegó una parte" — ambos casos tienen importe pendiente > 0, así
+  que ambos salían como "ENTREGA PARCIAL".
+- Ajuste, a petición del usuario ("ajustar lógica"): `_estado_aparente_entrega()`
+  pasa a mirar también el importe recibido (columna 7, dato en bruto,
+  no un cálculo) y distingue 3 casos: pendiente ≤ 0 → ENTREGA COMPLETA
+  (igual que antes); pendiente > 0 y recibido ≤ 0 → SIN ENTREGAR
+  (nuevo); pendiente > 0 y recibido > 0 → ENTREGA PARCIAL (reservado
+  ahora a cuando de verdad ha llegado algo pero falta el resto).
+  Actualizado el color del correo (rojo oscuro / ámbar / verde) y el
+  texto explicativo bajo la tabla.
+- Verificación: `python3 -m py_compile app.py` sin errores; `node
+  --check` sobre el JS del frontend sin errores (sin cambios de
+  frontend — el campo solo se usa en el correo). Reprocesados los 2 PDF
+  reales disponibles: el PDF reportado (199 pedidos) — los 4 pedidos
+  del correo pasan de "ENTREGA PARCIAL" a "SIN ENTREGAR" confirmado con
+  los importes reales (recibido=0,00 en los 4), recuento total 128 SIN
+  ENTREGAR / 23 ENTREGA PARCIAL / 48 ENTREGA COMPLETA; y el listado
+  simplificado de 221 pedidos usado en entregas anteriores, que sigue
+  parseando sin errores (97 / 19 / 105).
+- Badge de versión del sidebar actualizado a "V 12.29.98"; entrada
+  añadida en `CHANGELOG.md`; `README.md` actualizado.
+
 ## 2026-08-13 08:15
 
 ### [Control Pedidos] v12.29.96 — Fix: correos de la cola de sistema duplicados por carrera (race condition) entre pestañas/sesiones
