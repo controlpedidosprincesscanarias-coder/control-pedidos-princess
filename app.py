@@ -470,12 +470,22 @@ def _auto_migrate():
                     mensaje      TEXT NOT NULL,
                     nivel        TEXT NOT NULL DEFAULT 'aviso',  -- 'aviso' | 'urgente'
                     leido        BOOLEAN NOT NULL DEFAULT FALSE,
-                    creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    creado_en    TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    visible_en   TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
             cur.execute(
                 "CREATE INDEX IF NOT EXISTS idx_bridge_notif_usuario_leido "
                 "ON bridge_notificaciones(usuario, leido)"
+            )
+            # ── (2026-08-14) Antirrepetición de popups por cambio de estado ────
+            # visible_en: hasta qué momento se retiene el aviso antes de que el
+            # bridge (main_agenda) pueda recogerlo. Por defecto NOW() (visible
+            # de inmediato, comportamiento de siempre). _encolar_bridge_notifi
+            # cacion() la adelanta 5 minutos solo para tipo='cambio_estado' —
+            # ver esa función para el porqué.
+            cur.execute(
+                "ALTER TABLE bridge_notificaciones ADD COLUMN IF NOT EXISTS visible_en TIMESTAMPTZ NOT NULL DEFAULT NOW()"
             )
             # ── v12.29.47 (PRUEBA) — Popup de main_agenda: entrega única persistida ──
             # Hasta ahora /api/bridge/alertas devolvía SIEMPRE los pedidos en
@@ -1859,9 +1869,10 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
 
     # ── Correo al proveedor (solo ENVIADO AL PROVEEDOR) ───────────────────────
     # Para:  todos los contactos principales del proveedor
-    # BCC:   todos los usuarios del hotel (compradores + rol hotel)
-    # Nota:  NO se envía correo interno adicional para este estado —
-    #        el BCC ya cubre a todos los internos sin duplicar.
+    # BCC:   ninguno — el correo interno de más abajo (ESTADOS_EMAIL_INTERNO)
+    #        ya avisa a todos los compradores y usuarios hotel del cambio de
+    #        estado, así que este correo va exclusivamente al proveedor y no
+    #        duplica destinatarios ni información interna.
     if estado_nuevo in ESTADOS_EMAIL_PROVEEDOR and _proveedor_emails:
         _compradores_firma = _usuarios_hotel["compradores"]
         if not (_compradores_firma and _compradores_firma[0].get("email")):
@@ -1927,7 +1938,6 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             pendientes.append({
                 "tipo":      "proveedor",
                 "to_email":  _destino_proveedor,
-                "bcc":       _todos_internos,   # compradores + usuarios hotel en BCC
                 "asunto":    subject,
                 "body_html": body_html,
                 "body_text": body_text,
@@ -1937,11 +1947,12 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     # Para:  primer comprador del hotel
     # BCC:   resto de compradores + usuarios hotel del mismo hotel
     # Nota:  para ENVIADO AL PROVEEDOR este correo interno se manda ADEMÁS
-    #        del correo al proveedor de arriba (que también lleva a los
-    #        internos en BCC) — el de arriba es la comunicación externa al
-    #        proveedor; este es el aviso interno propiamente dicho, con
-    #        datos que nunca deben salir fuera de la empresa (quién hizo el
-    #        cambio).
+    #        del correo al proveedor de arriba — el de arriba es la
+    #        comunicación externa al proveedor (sin BCC interno desde
+    #        2026-08-14, ver comentario de arriba); este es el único aviso
+    #        interno propiamente dicho, con datos que nunca deben salir
+    #        fuera de la empresa (quién hizo el cambio), sin duplicar
+    #        destinatarios ni correos entre ambos envíos.
     if estado_nuevo in ESTADOS_EMAIL_INTERNO and _todos_internos:
         _resumen_ent = _resumen_entregas(pedido, estado_nuevo)
 
@@ -2438,7 +2449,8 @@ def _send_telegram(chat_id: str, text: str) -> dict:
 
 
 def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: str,
-                                  nivel: str = "aviso", pedido_id: int = None) -> None:
+                                  nivel: str = "aviso", pedido_id: int = None,
+                                  retraso_segundos: int = 0) -> None:
     """
     Inserta una fila en bridge_notificaciones para que el bridge de main_agenda
     la recoja en la próxima consulta a /api/bridge/notificaciones.
@@ -2447,21 +2459,65 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
     garantizando paridad total entre los avisos de Telegram y los de main_agenda.
 
     Parámetros:
-        usuario   – username del destinatario (igual que en la tabla usuarios)
-        tipo      – 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida' | 'supervision'
-        titulo    – línea resumen (se mostrará como título del popup)
-        mensaje   – cuerpo completo del aviso
-        nivel     – 'aviso' | 'urgente'
-        pedido_id – id del pedido (None para alertas de techo sin pedido concreto)
+        usuario           – username del destinatario (igual que en la tabla usuarios)
+        tipo               – 'cambio_estado' | 'alerta_auto' | 'techo' | 'familia_repetida' | 'supervision'
+        titulo             – línea resumen (se mostrará como título del popup)
+        mensaje            – cuerpo completo del aviso
+        nivel              – 'aviso' | 'urgente'
+        pedido_id          – id del pedido (None para alertas de techo sin pedido concreto)
+        retraso_segundos   – (2026-08-14) si > 0, el aviso no será "visible" para
+            el bridge hasta pasados esos segundos (columna visible_en =
+            NOW() + retraso_segundos) — /api/bridge/notificaciones solo
+            devuelve avisos con visible_en <= NOW(). Además, si ya existe un
+            aviso pendiente (no leído, todavía no visible) para el mismo
+            (usuario, pedido_id, tipo), NO se inserta uno nuevo: se
+            SOBRESCRIBE ese con el contenido más reciente y se reinicia la
+            cuenta atrás. Con esto, varios cambios seguidos sobre el mismo
+            pedido en esa ventana (p. ej. un error corregido al momento)
+            solo generan un popup, con el contenido del último cambio —
+            pedido explícitamente por el usuario (Víctor) para
+            'cambio_estado_pedido', que hasta ahora enviaba un popup
+            inmediato por cada cambio de estado sin ninguna protección.
+            retraso_segundos=0 (default) mantiene el comportamiento de
+            siempre: visible de inmediato, un aviso por llamada.
     """
     try:
         db = get_db()
-        db.cursor().execute(
-            """INSERT INTO bridge_notificaciones
-               (usuario, tipo, pedido_id, titulo, mensaje, nivel)
-               VALUES (%s, %s, %s, %s, %s, %s)""",
-            (usuario.lower(), tipo, pedido_id, titulo, mensaje, nivel)
-        )
+        cur = db.cursor()
+        if retraso_segundos > 0 and pedido_id is not None:
+            # ¿Ya hay un aviso del mismo tipo para este pedido/usuario sin
+            # leer? Si lo hay —esté ya visible o todavía en espera—, se
+            # reemplaza su contenido y se reinicia la espera, en vez de
+            # encolar uno más. Se comprueba también el ya-visible-pero-aún-
+            # no-leído (no solo visible_en > NOW()) para cubrir el margen
+            # entre que un aviso se hace visible y el siguiente poll del
+            # bridge lo recoge — si en ese margen llega otro cambio del
+            # mismo pedido, también se absorbe en vez de duplicarse.
+            cur.execute(
+                """UPDATE bridge_notificaciones
+                   SET titulo=%s, mensaje=%s, nivel=%s,
+                       creado_en=NOW(), visible_en=NOW() + make_interval(secs => %s)
+                   WHERE usuario=%s AND tipo=%s AND pedido_id=%s
+                     AND leido=FALSE
+                   RETURNING id""",
+                (titulo, mensaje, nivel, retraso_segundos, usuario.lower(), tipo, pedido_id)
+            )
+            if cur.fetchone() is not None:
+                db.commit()
+                return
+            cur.execute(
+                """INSERT INTO bridge_notificaciones
+                   (usuario, tipo, pedido_id, titulo, mensaje, nivel, visible_en)
+                   VALUES (%s, %s, %s, %s, %s, %s, NOW() + make_interval(secs => %s))""",
+                (usuario.lower(), tipo, pedido_id, titulo, mensaje, nivel, retraso_segundos)
+            )
+        else:
+            cur.execute(
+                """INSERT INTO bridge_notificaciones
+                   (usuario, tipo, pedido_id, titulo, mensaje, nivel)
+                   VALUES (%s, %s, %s, %s, %s, %s)""",
+                (usuario.lower(), tipo, pedido_id, titulo, mensaje, nivel)
+            )
         db.commit()
     except Exception as exc:
         log.warning("bridge_notif: no se pudo encolar para %s — %s", usuario, exc)
@@ -2766,6 +2822,13 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
                 resultados.append({"username": username, "chat_id": chat_id, **res})
 
         # ── Popup (bridge agenda) — lista propia, independiente de Telegram ───
+        # (2026-08-14) retraso_segundos=300: antirrepetición pedida por el
+        # usuario — si el mismo pedido cambia de estado varias veces en menos
+        # de 5 minutos (p. ej. un error corregido al momento), no se manda un
+        # popup por cada cambio; se espera 5 min desde el último y se entrega
+        # solo ese, el definitivo. Ver _encolar_bridge_notificacion(). El
+        # Telegram de arriba NO se retrasa — sigue siendo inmediato, el
+        # usuario solo pidió cambiar el popup.
         for dest in destinatarios_popup:
             _encolar_bridge_notificacion(
                 usuario=dest.get("username", "?"),
@@ -2774,6 +2837,7 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
                 mensaje=texto.replace("*", ""),
                 nivel=nivel_estado,
                 pedido_id=pedido_id,
+                retraso_segundos=300,
             )
 
         # ── Copia de supervisión a admins: solo si la alerta es urgente ────────
@@ -10918,7 +10982,11 @@ def bridge_notificaciones_usuario():
 
     Garantiza paridad total con Telegram: cada vez que se envía un Telegram a un
     comprador o admin, se encola una fila en bridge_notificaciones para que
-    main_agenda la reciba como popup inmediato.
+    main_agenda la reciba como popup — inmediato salvo para 'cambio_estado'
+    (2026-08-14), que se retiene 5 minutos desde el último cambio del mismo
+    pedido antes de quedar visible aquí (columna visible_en, ver
+    _encolar_bridge_notificacion) para no generar un popup por cada cambio
+    de estado si hay varios seguidos sobre el mismo pedido.
 
     Respuesta:
     {
@@ -10945,7 +11013,7 @@ def bridge_notificaciones_usuario():
         rows = rows_to_list(query(
             """SELECT id, tipo, pedido_id, titulo, mensaje, nivel, creado_en
                FROM bridge_notificaciones
-               WHERE usuario = %s AND leido = FALSE
+               WHERE usuario = %s AND leido = FALSE AND visible_en <= NOW()
                ORDER BY creado_en ASC""",
             (usuario,)
         ))

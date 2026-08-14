@@ -1,3 +1,52 @@
+# v12.30.05 — 14 agosto 2026
+
+🔕 Popup de cambio de estado: antirrepetición con espera de 5 minutos
+
+**Petición del usuario**: cada cambio de estado de un pedido disparaba un
+popup inmediato en el Organizador (main_agenda) — si un pedido cambiaba
+de estado varias veces seguidas por error (y se corregía al momento), el
+comprador/hotel recibía un popup por cada cambio, en vez de uno solo con
+el estado final.
+
+**Cambio**: `_encolar_bridge_notificacion()` (`app.py`) admite ahora
+`retraso_segundos` — para el popup de `cambio_estado_pedido` se pasa
+`retraso_segundos=300` (5 min). El aviso no se hace visible para el
+bridge (`GET /api/bridge/notificaciones`, columna nueva `visible_en`)
+hasta pasados esos 5 minutos desde el último cambio de ese pedido; si
+llega otro cambio antes de que se cumpla el plazo, se sobrescribe el
+mismo aviso (contenido + cuenta atrás) en vez de encolar uno nuevo. El
+resultado: como mucho un popup por pedido cada 5 minutos, siempre con el
+último estado. El Telegram de cambio de estado **no** se ha tocado —
+sigue siendo inmediato, tal y como pidió el usuario (solo el popup).
+Sin cambios para el resto de tipos de popup (`alerta_auto`, `techo`,
+`familia_repetida`, `supervision`, `consumo`, `integridad`): siguen
+siendo inmediatos, `visible_en` por defecto es `NOW()`.
+
+**Base de datos**: columna nueva `bridge_notificaciones.visible_en`
+(`TIMESTAMPTZ NOT NULL DEFAULT NOW()`), añadida automáticamente por
+`_auto_migrate()` al arrancar — no requiere ninguna acción manual en
+Supabase.
+
+# v12.30.04 — 14 agosto 2026
+
+📧 Fix: el correo al proveedor ya no duplica el aviso interno
+
+**Problema reportado por el usuario**: al pasar un pedido a `ENVIADO AL
+PROVEEDOR` se enviaban dos correos que informaban dos veces a los mismos
+destinatarios internos — el correo interno propiamente dicho (a
+compradores y usuarios hotel) y, además, el correo externo al
+proveedor, que llevaba en copia oculta (BCC) a esos mismos compradores y
+usuarios hotel. El comprador y el hotel recibían la misma notificación
+dos veces.
+
+**Cambio**: en `enviar_emails_estado()` (`app.py`), el correo al
+proveedor deja de llevar `bcc` a los internos — ahora se envía única y
+exclusivamente al proveedor. El correo interno (que ya se enviaba en
+paralelo para este mismo estado) sigue siendo, él solo, quien informa a
+compradores y usuarios hotel del cambio de estado. Sin cambios en el
+resto de estados (`ENTREGA PARCIAL`, `ENTREGADO`, `CANCELADO`,
+`DENEGADO POR DIRECCION GENERAL`), que nunca llevaban ese BCC duplicado.
+
 # v12.30.03 — 14 agosto 2026
 
 🎨 Tarjeta "Catálogo DALI" del Dashboard, rediseñada

@@ -25,6 +25,135 @@
 
 ---
 
+## 2026-08-14 13:00 — [Control Pedidos] Popup de cambio de estado: antirrepetición con espera de 5 minutos
+
+- Petición del usuario (Víctor): "vamos a modificar los envios de popup
+  ... cada vez que se realiza un cambio de estado en los pedidos, se
+  envia un popup automatico, para evitar que se envien repeticiones
+  automaticas debido a errores en cambios de pedidos, podemos
+  relentizar el envio a 5 minutos, realizando unicamente el envio del
+  ultimo cambio realizado en el pedido entendiendo que es el unico y
+  final?"
+- **Alcance**: el popup entregado al Organizador (main_agenda) vía la
+  cola `bridge_notificaciones` (`GET /api/bridge/notificaciones`),
+  específicamente el de tipo `cambio_estado` (evento
+  `cambio_estado_pedido`, disparado desde `_telegram_cambio_estado()`
+  en cada `PUT /api/pedidos/<id>` que cambia el estado). El Telegram de
+  ese mismo evento **no se ha tocado** — el usuario pidió explícitamente
+  solo el popup, y ambos canales ya eran independientes entre sí desde
+  v12.17.0.
+- **Diseño**: la cola `bridge_notificaciones` es de tipo "pull" — el
+  Organizador la consume sondeando `GET /api/bridge/notificaciones`, que
+  devuelve las filas no leídas y las marca leídas en el momento. Eso
+  permite implementar el retraso sin ningún planificador/cron nuevo:
+  basta con que una fila no sea "visible" hasta que corresponda.
+  - Columna nueva `bridge_notificaciones.visible_en` (`TIMESTAMPTZ NOT
+    NULL DEFAULT NOW()`) — por defecto inmediata (compatible con el
+    resto de tipos de popup, que no cambian).
+  - `_encolar_bridge_notificacion()` (`app.py`) gana el parámetro
+    `retraso_segundos`; para `cambio_estado` se llama con
+    `retraso_segundos=300`.
+  - Con `retraso_segundos>0`: si ya existe un aviso sin leer para el
+    mismo `(usuario, tipo, pedido_id)`, se SOBRESCRIBE su contenido y se
+    reinicia `visible_en = NOW() + 5min`, en vez de insertar una fila
+    nueva — así, varias correcciones seguidas sobre el mismo pedido
+    dentro de esa ventana colapsan en un único popup, con el contenido
+    del último cambio. Si no hay ninguno pendiente, se inserta uno
+    nuevo con `visible_en = NOW() + 5min`.
+  - `GET /api/bridge/notificaciones` añade `AND visible_en <= NOW()` al
+    filtro — una fila con `visible_en` en el futuro simplemente no se
+    devuelve todavía (ni se marca leída), así que reaparece sondeo tras
+    sondeo hasta que el plazo se cumple.
+- **Base de datos**: la columna se añade automáticamente al arrancar
+  (`_auto_migrate()`, tanto en el `CREATE TABLE IF NOT EXISTS` para
+  instalaciones nuevas como en un `ALTER TABLE ADD COLUMN IF NOT
+  EXISTS` explícito para la base de datos ya existente en producción)
+  — sin ninguna acción manual en Supabase, a diferencia de los cambios
+  recientes en DALI.
+- Versión: `V 12.30.05` (badge en `templates/index.html`),
+  `CHANGELOG.md` actualizado con la misma entrada.
+- Verificación: `python3 -m py_compile app.py` sin errores. Pendiente
+  de confirmación del usuario en producción: cambiar de estado el mismo
+  pedido dos o tres veces seguidas (en menos de 5 min) y comprobar que
+  el Organizador recibe un único popup, con el último estado, pasados
+  los 5 minutos desde el último cambio — y que un cambio de estado
+  aislado (sin repetición) también llega con normalidad, solo que 5
+  minutos más tarde que antes.
+
+## 2026-08-14 12:15 — [Control Pedidos] Implementado: correo a proveedor ya no duplica el aviso interno
+
+- Implementa lo pedido en la entrada anterior ("PENDIENTE — Correo a
+  proveedor en 'ENVIADO AL PROVEEDOR' duplica aviso a comprador/hotel",
+  ver más abajo) a petición del usuario ("podemos realizar las
+  operacion pendientes en control_pedidos?").
+- **Cambio en `app.py`** (`enviar_emails_estado()`): quitada la clave
+  `"bcc": _todos_internos` del `pendientes.append({...})` del bloque
+  "Correo al proveedor" (~línea 1930) — ese correo pasa a enviarse
+  única y exclusivamente a los contactos del proveedor. Actualizado el
+  comentario de ese bloque (~línea 1860) y el del bloque "Correo
+  interno" (~línea 1936) para que ambos describan correctamente el
+  comportamiento real: el correo interno (a compradores + usuarios
+  hotel) es ahora el único que informa a los internos del cambio a
+  `ENVIADO AL PROVEEDOR`, sin duplicado.
+- No fue necesario tocar `_log_email` ni el consumo en frontend: el
+  `bcc` en el JSON que arma el backend ya se trataba como opcional en
+  `templates/index.html` (`(p.bcc || []).join(',') || ''`, ~línea
+  5078), así que quitar la clave no rompe el envío vía EmailJS —
+  simplemente no añade destinatarios en copia oculta.
+- Sin cambios en el resto de estados (`ENTREGA PARCIAL`, `ENTREGADO`,
+  `CANCELADO`, `DENEGADO POR DIRECCION GENERAL`): esos correos internos
+  nunca llevaron ese BCC duplicado, el problema era exclusivo de
+  `ENVIADO AL PROVEEDOR`.
+- Versión: `V 12.30.04` (badge en `templates/index.html`),
+  `CHANGELOG.md` actualizado con la misma entrada.
+- Verificación: `python3 -m py_compile app.py` sin errores. Pendiente
+  de que el usuario confirme en producción tras el próximo despliegue
+  (pasar un pedido real a `ENVIADO AL PROVEEDOR` y comprobar que
+  comprador/hotel reciben el aviso una sola vez, vía el correo
+  interno, y que el proveedor recibe el suyo sin BCC).
+
+## 2026-08-14 (pendiente — ya implementado, ver entrada de arriba 2026-08-14 12:15)
+
+### [Control Pedidos] PENDIENTE — Correo a proveedor en "ENVIADO AL PROVEEDOR" duplica aviso a comprador/hotel
+- **Reportado por el usuario (Víctor), como recordatorio de trabajo
+  pendiente — no implementado en esta entrada** (implementado después,
+  ver la entrada `2026-08-14 12:15` arriba).
+- Comportamiento actual (`app.py`, función que envía los correos al
+  cambiar de estado, ~línea 1853 en adelante): cuando un pedido pasa a
+  `ENVIADO AL PROVEEDOR` se disparan **dos** correos:
+  1. Correo al proveedor (bloque `## Correo al proveedor`, ~línea
+     1860): para los contactos del proveedor, **con BCC a
+     `_todos_internos`** (compradores + usuarios hotel del hotel, línea
+     ~1930).
+  2. Correo interno de cambio de estado (bloque `## Correo interno`,
+     ~línea 1936): para el primer comprador, BCC al resto de
+     compradores + usuarios hotel — `ESTADOS_EMAIL_INTERNO` incluye
+     `ENVIADO AL PROVEEDOR`.
+- El propio comentario del código en el bloque 1 (línea ~1863: "NO se
+  envía correo interno adicional para este estado — el BCC ya cubre a
+  todos los internos sin duplicar") **ya no es cierto** respecto al
+  comportamiento real: el comentario del bloque 2 (línea ~1939) lo
+  contradice explícitamente ("para ENVIADO AL PROVEEDOR este correo
+  interno se manda ADEMÁS del correo al proveedor de arriba") — es
+  decir, el código evolucionó y quedó un comentario desactualizado
+  justo donde describe lo contrario de lo que pasa. Resultado: comprador
+  y hotel reciben el aviso de "enviado al proveedor" **dos veces**
+  (una vía BCC del correo al proveedor, otra vía el correo interno
+  dedicado), con el mismo pedido e información.
+- **Corrección pedida por el usuario**: el correo al proveedor debe
+  enviarse **únicamente al proveedor** (quitar el BCC a
+  `_todos_internos` en ese bloque, ~línea 1930) — el correo interno ya
+  informa a comprador y hotel, así que no hace falta duplicar.
+- **Dónde tocar cuando se implemente**: quitar o vaciar la clave
+  `"bcc": _todos_internos` del diccionario `pendientes.append({...})`
+  del bloque "Correo al proveedor" (~línea 1930), y actualizar el
+  comentario de ese bloque (~línea 1863) para que refleje el
+  comportamiento real ya existente del bloque de correo interno (que
+  no cambia). Revisar también si `_log_email` (~línea 1926) o algún
+  resumen/exportación depende de que ese correo lleve BCC.
+- Sin cambios de código en esta entrada — queda solo como recordatorio
+  para una próxima entrega.
+
 ## 2026-08-14 11:35
 
 ### [Control Pedidos + DALI] v12.30.02/v12.30.03 (Control Pedidos) — Integración: acceso SSO de un clic al catálogo DALI desde el menú lateral y el Dashboard
