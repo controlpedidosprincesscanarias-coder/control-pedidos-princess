@@ -27,4 +27,8 @@ services:
         value: compras@princess.es
       - key: EMAILS_INTERNOS
         sync: false          # Opcional: emails separados por coma
+      - key: DALI_SSO_SECRET
+        sync: false          # Mismo valor que DALI_SSO_SECRET en dali-backend — acceso de un clic al catálogo DALI
+      - key: DALI_FRONTEND_URL
+        sync: false          # URL pública del frontend de DALI (el Worker de Cloudflare). Por defecto: dali-proxy.centralcompras1-canarias.workers.dev
     healthCheckPath: /ping

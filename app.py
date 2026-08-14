@@ -3,7 +3,7 @@ Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase)
 Despliegue: Render.com  |  BD: Supabase  |  Email: EmailJS (frontend)
 """
 
-import os, json, logging, secrets, atexit, hashlib, re, threading
+import os, json, logging, secrets, atexit, hashlib, re, threading, base64, hmac
 from html import unescape as _html_unescape
 from datetime import datetime, timedelta, timezone, date as _date
 from functools import wraps
@@ -49,6 +49,25 @@ SUPABASE_SERVICE_ROLE_KEY = os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "")
 SUPABASE_STORAGE_BUCKET = os.environ.get("SUPABASE_STORAGE_BUCKET", "adjuntos-cerrados")
 STORAGE_CONFIGURADO = bool(SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY)
 ESTADOS_CERRADOS = ("ENTREGADO", "CANCELADO")
+
+# ── SSO hacia el catálogo DALI (v12.30.02) ──────────────────────────────────
+# Acceso de un clic desde el menú lateral "Catálogo DALI": este backend
+# firma un token de un solo uso (ver _generar_token_sso_dali) con el rol ya
+# mapeado (compras -> admin, hotel -> hotel), y el backend de DALI
+# (backend/src/controllers/authController.js, DALI_SSO_SECRET debe ser
+# IDÉNTICA en los dos servicios de Render) lo verifica, aprovisiona/actualiza
+# el usuario en su propia tabla `usuarios` y abre sesión sin pedir
+# contraseña. DALI_FRONTEND_URL es la URL pública del frontend de DALI (el
+# Worker de Cloudflare que hace de proxy, no la de onrender.com directa).
+DALI_SSO_SECRET = os.environ.get("DALI_SSO_SECRET", "")
+DALI_FRONTEND_URL = os.environ.get(
+    "DALI_FRONTEND_URL", "https://dali-proxy.centralcompras1-canarias.workers.dev"
+).rstrip("/")
+# compras (comprador) -> admin: gestiona el catálogo igual que en Compras.
+# hotel -> hotel: mismo acceso de solo consulta que ya tiene en DALI.
+# admin -> admin. Cualquier otro rol (p.ej. "user", legado) no tiene mapeo:
+# sin acceso a DALI.
+DALI_ROL_MAP = {"admin": "admin", "compras": "admin", "hotel": "hotel"}
 
 # ── Hotel de pruebas (v12.29.41 / v12.29.42) ────────────────────────────────
 # El hotel "PR" (⚠️ HOTEL PRUEBAS) existe solo para pruebas internas. Solo
@@ -5623,6 +5642,57 @@ def _completar_login(user):
 
     return jsonify({"ok": True, "id": user["id"], "username": user["username"],
                     "nombre": user["nombre"], "rol": user["rol"], "hoteles_ids": hoteles_ids})
+
+
+def _generar_token_sso_dali(payload: dict, ttl_segundos: int = 60) -> str:
+    """
+    Token de un solo uso para el acceso automático a la app DALI:
+    `<payload-b64url>.<hmac-sha256-hex>`, firmado con el secreto compartido
+    DALI_SSO_SECRET (debe ser idéntico en el servicio de Render de DALI —
+    ver backend/src/controllers/authController.js de ese repo). No cifra
+    el contenido (no lleva nada más sensible que email/nombre/rol), solo
+    garantiza que lo emitió este backend, que no ha caducado y que no se
+    ha reutilizado (jti, comprobado en el lado de DALI).
+    """
+    if not DALI_SSO_SECRET:
+        raise RuntimeError("DALI_SSO_SECRET no está configurada.")
+    cuerpo = dict(payload)
+    cuerpo["exp"] = int(datetime.now(timezone.utc).timestamp()) + ttl_segundos
+    cuerpo["jti"] = secrets.token_hex(16)
+    datos_b64 = base64.urlsafe_b64encode(
+        json.dumps(cuerpo, separators=(",", ":")).encode()
+    ).decode().rstrip("=")
+    firma = hmac.new(DALI_SSO_SECRET.encode(), datos_b64.encode(), hashlib.sha256).hexdigest()
+    return f"{datos_b64}.{firma}"
+
+
+@app.route("/api/dali/sso", methods=["GET"])
+@login_required
+def dali_sso():
+    """
+    Menú lateral "Catálogo DALI": genera la URL de acceso automático a la
+    app DALI para el usuario de la sesión actual, con su rol ya mapeado
+    (ver DALI_ROL_MAP). El frontend abre esa URL en una pestaña nueva
+    (ver abrirDali() en templates/index.html); DALI se encarga de
+    verificar el token y abrir sesión sin pedir contraseña.
+    """
+    if not DALI_SSO_SECRET:
+        return jsonify({"error": "El acceso a DALI no está configurado todavía (falta DALI_SSO_SECRET)."}), 503
+
+    rol_dali = DALI_ROL_MAP.get(session.get("rol"))
+    if not rol_dali:
+        return jsonify({"error": "Tu perfil no tiene acceso al catálogo DALI."}), 403
+
+    user = query("SELECT nombre, email FROM usuarios WHERE id=%s", (session["user_id"],), one=True)
+    email = (user.get("email") or "").strip().lower() if user else ""
+    if not email:
+        return jsonify({
+            "error": "Tu usuario no tiene un email configurado. Pide a un administrador que te lo "
+                     "añada en Usuarios antes de entrar a DALI (DALI identifica a cada usuario por su email)."
+        }), 400
+
+    token = _generar_token_sso_dali({"email": email, "nombre": user["nombre"], "rol": rol_dali})
+    return jsonify({"url": f"{DALI_FRONTEND_URL}/?dali_token={token}"})
 
 
 @app.route("/api/login/verificar-codigo", methods=["POST"])

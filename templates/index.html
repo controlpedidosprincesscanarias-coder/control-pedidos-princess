@@ -1246,6 +1246,9 @@ tbody tr:last-child{border-bottom:none}
       <span class="icon">⚠️</span> Alertas
       <span class="sb-badge" id="sb-alert-count" style="display:none">0</span>
     </div>
+    <div class="sb-item" data-roles="admin,compras,hotel" onclick="abrirDali()" title="Se abre en una pestaña nueva">
+      <span class="icon">🧾</span> Catálogo DALI
+    </div>
 
     <div class="sb-section">Gestión</div>
     <div class="sb-item" data-view="proveedores" data-roles="admin,compras,hotel" onclick="showViewGuarded('proveedores',this)">
@@ -1288,7 +1291,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.00
+          V 12.30.02
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1333,6 +1336,15 @@ tbody tr:last-child{border-bottom:none}
       <!-- VIEW: DASHBOARD ─────────────────────────────────────────────── -->
       <div id="view-dashboard">
         <div id="dash-necesita-atencion" style="display:none"></div>
+
+        <div class="stat-card" id="dash-dali-card" style="margin-bottom:16px;cursor:pointer" onclick="abrirDali()" title="Se abre en una pestaña nueva">
+          <div class="stat-card-top">
+            <div>
+              <div class="stat-label" style="font-size:14px;font-weight:600;color:var(--gold2,#c9a84c);margin-bottom:4px">🧾 Catálogo DALI de artículos/materiales</div>
+              <div style="font-size:13px;color:#888">Consulta de artículos, códigos SAP y fichas técnicas/seguridad — entras con tu mismo usuario, sin contraseña adicional</div>
+            </div>
+          </div>
+        </div>
 
         <div class="stats-grid" id="stats-cards">
           <div class="stat-card">
@@ -2776,6 +2788,20 @@ async function _entrarEnApp(r) {
 async function doLogout() {
   await api('/api/logout','POST');
   location.reload();
+}
+
+// Menú lateral / dashboard: "Catálogo DALI" (v12.30.02). Pide al backend
+// una URL de acceso automático (token de un solo uso, ~60s de validez) y la
+// abre en una pestaña nueva — DALI verifica el token, aprovisiona/actualiza
+// el usuario con el rol ya mapeado y abre sesión sin pedir contraseña. Ver
+// /api/dali/sso en app.py.
+async function abrirDali() {
+  try {
+    const data = await api('/api/dali/sso');
+    window.open(data.url, '_blank', 'noopener');
+  } catch (e) {
+    toast(e.message || 'No se pudo abrir el catálogo DALI', 'error');
+  }
 }
 
 document.getElementById('login-pass').addEventListener('keydown', e => { if(e.key==='Enter') doLogin(); });

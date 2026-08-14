@@ -1,3 +1,37 @@
+# v12.30.02 — 14 agosto 2026
+
+🧾 Nuevo: acceso de un clic al catálogo DALI desde el menú lateral y el dashboard
+
+**Petición del usuario**: que cualquier usuario (admin, compras u hotel)
+pueda acceder a la nueva app de catálogo DALI desde el dashboard o el
+menú lateral, con los usuarios de aquí ya dados de alta allí — rol
+compras -> administrador en DALI, rol hotel -> mismo rol (hotel, de solo
+consulta) en DALI.
+
+**Qué se añade**: nuevo endpoint `GET /api/dali/sso` (`@login_required`):
+genera un token firmado de un solo uso (HMAC-SHA256, ~60s de validez,
+secreto compartido `DALI_SSO_SECRET`) con el email/nombre del usuario de
+la sesión y su rol ya mapeado (`DALI_ROL_MAP`: admin->admin,
+compras->admin, hotel->hotel), y devuelve la URL de DALI con ese token.
+Nuevo item "🧾 Catálogo DALI" en el menú lateral (visible para los tres
+roles) y una tarjeta de acceso rápido en el Dashboard — ambos llaman a
+`abrirDali()`, que pide la URL y la abre en una pestaña nueva.
+
+El backend de DALI (repo aparte) verifica la firma, aprovisiona o
+actualiza el usuario en su propia tabla `usuarios` con el rol recibido, y
+abre sesión sin pedir contraseña — el usuario nunca ve el login de DALI.
+Si el usuario no tiene email registrado aquí, se avisa con un mensaje
+claro en vez de fallar en silencio (DALI identifica usuarios por email).
+
+**Configuración pendiente antes de desplegar**: variables de entorno
+`DALI_SSO_SECRET` (idéntica en este servicio y en el backend de DALI) y
+`DALI_FRONTEND_URL` en Render — ver `render.yaml` y el informe de
+integración entregado junto con este cambio.
+
+**Verificación**: `python3 -c "import ast; ast.parse(open('app.py').read())"`
+sin errores. Pendiente de probar en caliente contra un DALI_SSO_SECRET
+real una vez configurado en ambos servicios de Render.
+
 # v12.30.00 — 14 agosto 2026 09:40
 
 🔧 Columna "Entrega": ahora es "Entregado" si el importe recibido es igual O SUPERIOR a la base (antes exigía igualdad exacta)
