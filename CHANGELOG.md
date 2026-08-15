@@ -1,3 +1,76 @@
+# v12.30.07 — 15 agosto 2026
+
+📦 Comparar Pedidos + Albaranes: cruce automático propuesto con el listado de albaranes de DALI
+
+**Petición del usuario**: en Pedidos → Comparar listado PDF, ampliar la
+comparación existente (que solo lee el "Listado de Pedidos" de SAP contra
+lo ya dado de alta en la app) para leer también un segundo PDF — el
+"Listado de Albaranes" que exporta DALI — y cruzar ambos: los pedidos que
+SAP ya muestra como Entregado/Entrega parcial contra los albaranes ya
+registrados en DALI para ese mismo proveedor e importe. Al coincidir,
+proponer completar en el pedido la fecha de tramitación, el número de
+entrada del albarán y el cambio de estado, y en el correo final indicar
+tanto lo registrado automáticamente como lo pendiente de revisar. Solo se
+tienen en cuenta proveedores marcados como sujetos a seguimiento, en
+ambos PDF.
+
+**Diseño acordado con el usuario** (antes de tocar nada, por tratarse de
+escritura automática sobre datos de producción):
+- El importe que debe coincidir es el **recibido** del pedido (no el
+  base/total), frente al importe del albarán.
+- Ninguna coincidencia se escribe sola: siempre hay que **revisarla y
+  confirmarla** en pantalla antes de aplicarla (una a una o en bloque).
+- La fecha de tramitación del PDF 1 solo se rellena si el pedido **no
+  tiene ya una guardada** — nunca se sobrescribe una existente.
+- Si un mismo proveedor + importe encaja con más de una pareja posible
+  (varios pedidos y/o albaranes ese día), **no se adivina**: todos esos
+  casos van a una lista de "pendientes de revisión manual".
+
+**Cambio — backend (`app.py`)**: nueva función `_comparar_listado_albaranes_logica()`
+que lee el segundo PDF con un patrón de texto nuevo (`_PATRON_LISTADO_ALBARANES`,
+validado 265/265 líneas contra un listado real de muestra), identifica
+proveedor y departamento de cada albarán — el nombre del departamento
+llega pegado al del proveedor sin separador en el texto extraído del PDF,
+así que se identifica por coincidencia de prefijo contra el catálogo de
+`departamentos` — y cruza ambos listados por `(proveedor_id, importe)`.
+El resultado se reparte en `coincidencias` (pareja única en ambos lados),
+`pendientes_ambiguos` (más de una pareja posible), `pendientes_sin_albaran`
+(pedido Entregado/Parcial en SAP sin albarán DALI que encaje) y
+`pendientes_sin_pedido` (albarán DALI sin pedido que encaje). Nueva
+`_aplicar_coincidencia_albaran()` aplica una coincidencia ya confirmada de
+forma idempotente (no duplica el albarán si ya estaba registrado, no
+retrocede el estado si ya estaba más avanzado, no repite notificaciones si
+no hay nada que cambiar) reutilizando `_notificar_cambio_estado()` — así
+hereda automáticamente el antirrepetición de 5 minutos del popup y el
+correo de cambio de estado (v12.30.05/06). Tres endpoints nuevos, todo
+solo para administradores y con el mismo patrón de job en segundo plano +
+sondeo que ya usaba la comparación de un solo PDF (para no toparse con
+timeouts de proxy en listados grandes): `POST/GET
+/api/pedidos/comparar-listado-albaranes[/<job_id>]`,
+`POST .../<job_id>/aplicar` (aplica una o varias coincidencias
+confirmadas) y `POST .../<job_id>/enviar-resumen` (correo con lo
+registrado y lo pendiente, mismo mecanismo de cola que el resto de
+correos internos de la app).
+
+**Cambio — frontend (`templates/index.html`)**: en el modal "Comparar
+listado PDF" se añade una casilla opcional "+ Comparar también con el
+listado de Albaranes registrados en DALI" que revela un segundo selector
+de fichero; al marcarla, el botón Comparar llama al nuevo endpoint en vez
+del existente. El resultado se muestra en una sección nueva con las
+coincidencias propuestas (una fila por pareja, con casilla de selección y
+botón "Aplicar" individual, más un botón para aplicar todas las
+seleccionadas de golpe) y una lista plegable de pendientes de revisión
+manual, además del botón para enviar el correo resumen.
+
+**Verificación**: `python3 -m py_compile app.py` y comprobación de
+sintaxis de los bloques `<script>` de `templates/index.html` (vía
+`node --check` sobre el JS extraído), ambos sin errores. El patrón de
+lectura del segundo PDF se validó por separado contra el listado de
+muestra real (265/265 filas reconocidas). Sin pruebas contra base de
+datos en vivo — no hay acceso a una en este entorno; queda pendiente de
+probar en producción con un listado real de albaranes antes de darlo por
+cerrado.
+
 # v12.30.06 — 14 agosto 2026
 
 📧 Correo de cambio de estado: mismo retraso de 5 minutos y antirrepetición que el popup

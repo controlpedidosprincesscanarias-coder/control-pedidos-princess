@@ -25,6 +25,124 @@
 
 ---
 
+## 2026-08-15 — [Control Pedidos] Comparar Pedidos + Albaranes: cruce automático propuesto con el listado de albaranes de DALI
+
+- **Petición del usuario**: ampliar la comparación de listado PDF ya
+  existente (Pedidos → Comparar listado PDF, que lee el "Listado de
+  Pedidos" de SAP contra lo ya dado de alta en la app) para leer también
+  un segundo PDF — el "Listado de Albaranes" que exporta DALI — y buscar
+  similitudes entre ambos: el primero es un listado de pedidos, el
+  segundo un listado de albaranes registrados en DALI en base a esos
+  pedidos (columnas: nº registro DALI, nº registro + nº albarán
+  proveedor, proveedor, fecha de registro, departamento del hotel,
+  importe). La coincidencia a buscar es proveedor + importe del albarán
+  contra proveedor + importe del pedido Entregado/Entrega parcial del
+  primer listado; al coincidir, registrar en el pedido la fecha de
+  tramitación (la del PDF 1), la fecha/nº de entrega (la del PDF 2) y el
+  estado automático según el resultado; en el correo final indicar los
+  registros hechos automáticamente y los pendientes de hacer; usar
+  siempre solo proveedores sujetos a seguimiento, en ambos PDF. Se
+  adjuntaron dos PDF de muestra (GY.pdf con el formato ya soportado,
+  GY2.pdf con el formato nuevo de albaranes).
+- **Decisiones acordadas con el usuario antes de implementar** (vía
+  pregunta de aclaración, por tratarse de escritura automática sobre
+  datos de producción — las cuatro respuestas fueron la opción
+  recomendada):
+  1. El importe a cruzar del PDF 1 es el **recibido** (no el
+     base/total) de cada pedido Entregado/Entrega parcial.
+  2. Ninguna coincidencia se aplica sola: siempre hay que **revisar y
+     confirmar** en pantalla antes de escribir nada en la base de datos.
+  3. La fecha de tramitación del PDF 1 **solo se rellena si el pedido no
+     tiene ya una guardada** — nunca sobrescribe una existente.
+  4. Si un mismo proveedor + importe encaja con más de una pareja
+     posible (ambigüedad en cualquiera de los dos lados), **todas esas
+     parejas van a una lista de pendientes de revisión manual** — nunca
+     se adivina cuál es la correcta.
+- **Formato del segundo PDF (albaranes DALI)** — reto principal: pypdf
+  extrae el texto en el orden del flujo interno del PDF, no en el orden
+  visual de las columnas, y varios campos llegan pegados sin separador
+  (importe→fecha, departamento→nombre de proveedor). Se resolvió con un
+  patrón de expresión regular nuevo (`_PATRON_LISTADO_ALBARANES`, con
+  `re.S` para tolerar saltos de línea dentro de un mismo campo),
+  validado **265/265** líneas contra el PDF de muestra real. El
+  departamento (pegado al proveedor sin separador) se identifica tratando
+  los nombres de departamento como catálogo cerrado y comprobando cuál de
+  ellos es *prefijo* del texto combinado (`_match_departamento_prefijo`);
+  lo que sobra tras quitar ese prefijo se trata como nombre de proveedor
+  y se cruza contra el catálogo de `proveedores` con el mismo
+  emparejamiento por normalización ya usado en la comparación de un solo
+  PDF (`_match_proveedor_catalogo`, extraído a nivel de módulo para
+  reutilizarlo). El importe con 4 decimales que aparece a veces en este
+  formato ("8.350,8600") no necesitó parser nuevo: `_parse_importe_es`
+  (sin tocar) ya lo interpreta bien al solo intercambiar separadores
+  antes de `float()`.
+- **Cambios en `app.py`**:
+  - `_comparar_listado_albaranes_logica(hotel_id, pdf1_bytes, pdf2_bytes)`:
+    lógica pura (sin escritura en BD) que lee ambos PDF, filtra por
+    `sujeto_seguimiento` en los dos lados, agrupa por
+    `(proveedor_id, importe redondeado a 2 decimales)` y reparte el
+    resultado en `coincidencias` (pareja única 1↔1), `pendientes_ambiguos`
+    (más de una pareja posible en cualquier lado), `pendientes_sin_albaran`
+    (pedido Entregado/Parcial en SAP sin albarán DALI que encaje en
+    importe) y `pendientes_sin_pedido` (albarán DALI sin pedido que
+    encaje) — reparto exhaustivo y sin solapes en un único bucle sobre
+    las claves de ambos grupos, para no contar nada dos veces. Pedidos en
+    estado `CANCELADO`/`DENEGADO POR DIRECCION GENERAL` quedan siempre
+    excluidos de la escritura automática.
+  - `_aplicar_coincidencia_albaran(db, coincidencia, usuario_id, usuario_nombre)`:
+    aplica una coincidencia ya confirmada por el admin, de forma
+    idempotente — vuelve a leer el pedido fresco de BD, rellena
+    `fecha_tramitacion` solo si estaba vacía, añade el número de albarán
+    a `entrada_albaran_num` (formato `"NUM::FECHA"`, mismo que ya usa la
+    edición manual) solo si no estaba ya presente, y sube el `estado`
+    solo si supone avanzar (nunca lo retrocede, vía un orden explícito
+    ENVIADO AL PROVEEDOR/PENDIENTE COTIZACIÓN < ENTREGA PARCIAL <
+    ENTREGADO). Si no hay nada que cambiar, no escribe ni notifica y lo
+    indica en la respuesta. Si el estado sí cambia, llama a
+    `_notificar_cambio_estado()` — la misma función que ya usa el resto
+    de la app — así el email y el popup de este cambio automático
+    heredan sin código adicional el retraso de 5 minutos y la
+    antirrepetición recién implementados (v12.30.05/06).
+  - Tres endpoints nuevos, solo para `admin`, con el mismo patrón de job
+    en segundo plano (`threading.Thread` + diccionario `_PDF_JOBS`) y
+    sondeo corto desde el frontend que ya usaba la comparación de un
+    único PDF, para no toparse con timeouts de proxy en listados
+    grandes: `POST /api/pedidos/comparar-listado-albaranes` (arranca el
+    job, recibe los dos ficheros por `multipart/form-data`), `GET
+    .../comparar-listado-albaranes/<job_id>` (sondeo de estado/resultado),
+    `POST .../<job_id>/aplicar` (aplica una o varias coincidencias
+    confirmadas, `{"claves": [...]}` o `{"todas": true}`, devuelve
+    `aplicadas`/`sin_cambios`/`errores`) y `POST
+    .../<job_id>/enviar-resumen` (correo con lo aplicado en la sesión —
+    acumulado en el propio job entre llamadas a `/aplicar` — y lo que
+    sigue pendiente, encolado vía `_encolar_email_sistema`, mismo
+    mecanismo sin SMTP propio que el resto de correos internos).
+- **Cambios en `templates/index.html`**: el modal "Comparar listado PDF"
+  gana una casilla opcional "+ Comparar también con el listado de
+  Albaranes registrados en DALI" que revela un segundo selector de
+  fichero; al marcarla, `compararListadoPdf()` llama al endpoint nuevo en
+  vez del de siempre y el resultado se muestra en una sección aparte
+  (`_pollCompararListadoAlbaranes` / `_renderCompararAlbaranesResultado`):
+  tabla de coincidencias propuestas con casilla de selección por fila y
+  botón "Aplicar" individual, botón para aplicar de golpe todas las
+  seleccionadas (`aplicarCoincidenciasAlbaranes`), lista plegable de
+  pendientes de revisión manual agrupando los tres tipos
+  (`_togglePendientesAlbaran`) y botón de correo resumen
+  (`enviarResumenComparacionAlbaranes`, mismo patrón de despacho
+  inmediato de la cola que el resto de acciones de envío manual de esta
+  app).
+- **Verificación**: `python3 -m py_compile app.py` sin errores tras cada
+  edición. Sintaxis de los bloques `<script>` de `templates/index.html`
+  comprobada extrayéndolos y pasándolos por `node --check` (no hay
+  linter de JS embebido disponible en este entorno) — sin errores. El
+  patrón de lectura del PDF de albaranes se validó aparte, por script
+  independiente, contra el listado de muestra real (265/265 filas). **Sin
+  probar contra base de datos en vivo** — este entorno no tiene acceso a
+  una; queda pendiente de una prueba real en producción con hotel,
+  catálogo de proveedores/departamentos y un listado de albaranes real
+  antes de darlo por cerrado del todo.
+- Versión: `V 12.30.06` → `V 12.30.07`.
+
 ## 2026-08-14 13:45 — [Control Pedidos] Correo de cambio de estado: mismo retraso de 5 minutos y antirrepetición que el popup
 
 - Continuación directa de la entrada anterior (`2026-08-14 13:00`, popup).

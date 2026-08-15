@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.06
+          V 12.30.07
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2462,10 +2462,33 @@ tbody tr:last-child{border-bottom:none}
             <select class="form-control" id="cmp-pdf-hotel"><option value="">— Selecciona —</option></select>
           </div>
           <div class="form-group">
-            <label class="form-label">Listado PDF <span style="color:#e74c3c">*</span></label>
+            <label class="form-label">Listado de Pedidos (SAP) <span style="color:#e74c3c">*</span></label>
             <input class="form-control" type="file" id="cmp-pdf-file" accept="application/pdf">
           </div>
         </div>
+
+        <!-- (2026-08-15) Segundo PDF opcional: listado de albaranes registrados en
+             DALI. Si se marca, además de la comparación de siempre (pedidos que
+             faltan por dar de alta) se cruzan ambos listados por proveedor+importe
+             para proponer el registro automático de la entrega. -->
+        <div style="margin-top:16px;padding-top:14px;border-top:1px dashed var(--border,#dde1e8)">
+          <label style="display:flex;align-items:center;gap:8px;font-size:.85rem;cursor:pointer;font-weight:600">
+            <input type="checkbox" id="cmp-pdf-con-albaranes" onchange="_toggleCompararConAlbaranes()">
+            + Comparar también con el listado de Albaranes registrados en DALI
+          </label>
+          <div style="font-size:.8rem;color:var(--text-secondary);margin-top:4px">
+            Cruza el importe ya <strong>recibido</strong> de cada pedido que SAP muestra como
+            Entregado/Entrega parcial (arriba) con el importe de cada albarán de este segundo
+            listado — al coincidir proveedor e importe, propone registrar en el pedido la fecha
+            de tramitación, el número de entrada del albarán y el cambio de estado, para que los
+            confirmes antes de aplicarlos.
+          </div>
+          <div class="form-group" id="cmp-pdf-file2-wrap" style="display:none;margin-top:10px;max-width:420px">
+            <label class="form-label">Listado de Albaranes (DALI) <span style="color:#e74c3c">*</span></label>
+            <input class="form-control" type="file" id="cmp-pdf-file2" accept="application/pdf">
+          </div>
+        </div>
+
         <div style="margin-top:16px;text-align:right">
           <button class="btn btn-gold" id="btn-cmp-pdf-comparar" onclick="compararListadoPdf()">Comparar</button>
         </div>
@@ -2507,6 +2530,55 @@ tbody tr:last-child{border-bottom:none}
             </thead>
             <tbody id="cmp-pdf-tbody"></tbody>
           </table>
+        </div>
+      </div>
+
+      <!-- ── Resultado de la comparación Pedidos + Albaranes (2026-08-15) ──── -->
+      <div id="cmp-alb-resultado" style="display:none;margin-top:24px;padding-top:18px;border-top:2px solid var(--border,#dde1e8)">
+        <div style="font-weight:700;font-size:.95rem;margin-bottom:10px">📦 Coincidencias con el listado de Albaranes</div>
+        <div id="cmp-alb-resumen" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px"></div>
+
+        <div id="cmp-alb-coincidencias-wrap">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+            <strong style="font-size:.85rem">Coincidencias propuestas</strong>
+            <div style="flex:1"></div>
+            <button class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none"
+                    onclick="aplicarCoincidenciasAlbaranes(true)">✅ Aplicar todas las seleccionadas</button>
+          </div>
+          <div class="table-wrap" style="max-height:320px">
+            <table>
+              <thead>
+                <tr>
+                  <th style="width:28px"><input type="checkbox" id="cmp-alb-check-todas" checked onchange="_toggleTodasCoincidenciasAlbaran(this)"></th>
+                  <th>Pedido SAP</th><th>Proveedor</th><th>Importe</th><th>Estado actual → propuesto</th>
+                  <th>Albarán DALI</th><th>Fecha registro</th><th></th>
+                </tr>
+              </thead>
+              <tbody id="cmp-alb-tbody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <div style="margin-top:16px">
+          <button class="btn btn-ghost btn-sm" onclick="_togglePendientesAlbaran()" id="cmp-alb-btn-toggle-pendientes">
+            ▸ Ver pendientes de revisión manual (<span id="cmp-alb-count-pendientes">0</span>)
+          </button>
+          <div id="cmp-alb-pendientes-wrap" style="display:none;margin-top:10px">
+            <div class="table-wrap" style="max-height:280px">
+              <table>
+                <thead><tr><th>Referencia</th><th>Proveedor</th><th>Importe</th><th>Motivo</th></tr></thead>
+                <tbody id="cmp-alb-pendientes-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div style="margin-top:16px;text-align:right">
+          <button class="btn btn-sm" id="cmp-alb-btn-enviar-resumen" style="background:#198754;color:#fff;border:none"
+                  onclick="enviarResumenComparacionAlbaranes()"
+                  title="Envía un correo interno con lo registrado automáticamente y lo pendiente de realizar">
+            📧 Enviar resumen por correo
+          </button>
         </div>
       </div>
     </div>
@@ -5832,6 +5904,9 @@ async function saveProveedor() {
 ═══════════════════════════════════════════════════════════════════════ */
 let _cmpPdfResultado = null;
 let _cmpPdfJobId = null;
+// (2026-08-15) Pedidos + Albaranes — estado de la segunda comparación
+let _cmpAlbResultado = null;
+let _cmpAlbJobId = null;
 
 function abrirModalCompararListado() {
   const sel = document.getElementById('cmp-pdf-hotel');
@@ -5850,23 +5925,43 @@ function _resetModalCompararPdf() {
   document.getElementById('cmp-pdf-file').value = '';
   const filtroEntrega = document.getElementById('cmp-pdf-filtro-entrega');
   if (filtroEntrega) filtroEntrega.value = '';
+  // (2026-08-15) Pedidos + Albaranes
+  document.getElementById('cmp-pdf-con-albaranes').checked = false;
+  document.getElementById('cmp-pdf-file2-wrap').style.display = 'none';
+  document.getElementById('cmp-pdf-file2').value = '';
+  document.getElementById('cmp-alb-resultado').style.display = 'none';
+  document.getElementById('cmp-alb-pendientes-wrap').style.display = 'none';
+  _cmpAlbResultado = null;
+  _cmpAlbJobId = null;
+}
+
+function _toggleCompararConAlbaranes() {
+  const checked = document.getElementById('cmp-pdf-con-albaranes').checked;
+  document.getElementById('cmp-pdf-file2-wrap').style.display = checked ? '' : 'none';
 }
 
 async function compararListadoPdf() {
   const hotelId = val('cmp-pdf-hotel');
   const fileInput = document.getElementById('cmp-pdf-file');
   const file = fileInput.files[0];
+  const conAlbaranes = document.getElementById('cmp-pdf-con-albaranes').checked;
+  const file2Input = document.getElementById('cmp-pdf-file2');
+  const file2 = file2Input.files[0];
   if (!hotelId) { toast('Selecciona un hotel', 'error'); return; }
-  if (!file) { toast('Selecciona el PDF del listado', 'error'); return; }
+  if (!file) { toast('Selecciona el listado de pedidos (SAP)', 'error'); return; }
+  if (conAlbaranes && !file2) { toast('Selecciona también el listado de albaranes (DALI)', 'error'); return; }
 
   document.getElementById('cmp-pdf-form').style.display = 'none';
   document.getElementById('cmp-pdf-loading').style.display = '';
-  document.getElementById('cmp-pdf-loading').textContent = 'Subiendo y leyendo el PDF…';
+  document.getElementById('cmp-pdf-loading').textContent = conAlbaranes
+    ? 'Subiendo y leyendo los dos PDF…' : 'Subiendo y leyendo el PDF…';
   document.getElementById('cmp-pdf-resultado').style.display = 'none';
+  document.getElementById('cmp-alb-resultado').style.display = 'none';
 
   const fd = new FormData();
   fd.append('hotel_id', hotelId);
   fd.append('file', file);
+  if (conAlbaranes) fd.append('file2', file2);
 
   // (2026-08-10) FIX: con PDFs grandes (170+ páginas) el proceso completo
   // podía tardar más que el timeout de algún punto intermedio (el proxy
@@ -5876,9 +5971,10 @@ async function compararListadoPdf() {
   // en el servidor y responde al momento con un job_id; el resultado real
   // se recoge aparte, con sondeos (polling) cortos que nunca se acercan a
   // ningún timeout por sí solos.
+  const endpoint = conAlbaranes ? '/api/pedidos/comparar-listado-albaranes' : '/api/pedidos/comparar-listado-pdf';
   let jobId;
   try {
-    const r = await fetch('/api/pedidos/comparar-listado-pdf', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const r = await fetch(endpoint, { method: 'POST', body: fd, credentials: 'same-origin' });
     const d = await r.json();
     if (!r.ok || d.error) {
       toast(d.error || 'Error comparando el listado', 'error');
@@ -5887,7 +5983,6 @@ async function compararListadoPdf() {
       return;
     }
     jobId = d.job_id;
-    _cmpPdfJobId = jobId;
   } catch (e) {
     toast('Error comparando el listado: ' + e.message, 'error');
     document.getElementById('cmp-pdf-form').style.display = '';
@@ -5895,8 +5990,15 @@ async function compararListadoPdf() {
     return;
   }
 
-  document.getElementById('cmp-pdf-loading').textContent = 'Comparando con los pedidos ya registrados…';
-  _pollCompararListadoPdf(jobId, 0);
+  if (conAlbaranes) {
+    _cmpAlbJobId = jobId;
+    document.getElementById('cmp-pdf-loading').textContent = 'Cruzando pedidos con albaranes…';
+    _pollCompararListadoAlbaranes(jobId, 0);
+  } else {
+    _cmpPdfJobId = jobId;
+    document.getElementById('cmp-pdf-loading').textContent = 'Comparando con los pedidos ya registrados…';
+    _pollCompararListadoPdf(jobId, 0);
+  }
 }
 
 async function _pollCompararListadoPdf(jobId, intentos) {
@@ -6034,6 +6136,223 @@ async function enviarResumenComparacionPdf() {
       // navegador que acaba de generarlo, sin esperar al siguiente ciclo —
       // mismo mecanismo de siempre (EmailJS desde el navegador), solo se
       // adelanta el primer intento.
+      _enviarEmailsSistemaPendientes();
+    }
+  } catch (e) {
+    toast('Error enviando el resumen: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Comparar listado PDF (SAP) + Albaranes (DALI) — 2026-08-15
+   Segunda comparación opcional dentro del mismo modal: cruza los pedidos
+   que SAP muestra como Entregado/Entrega parcial con los albaranes ya
+   registrados en DALI (mismo proveedor + importe), y propone completar
+   fecha de tramitación, número de entrada de albarán y cambio de estado —
+   siempre a confirmar por el admin antes de escribir nada.
+═══════════════════════════════════════════════════════════════════════ */
+async function _pollCompararListadoAlbaranes(jobId, intentos) {
+  // Mismo patrón de sondeo que _pollCompararListadoPdf (evita timeouts de
+  // proxy con PDFs grandes): 2s entre intentos, hasta 5 minutos.
+  if (intentos > 150) {
+    toast('La comparación está tardando demasiado — inténtalo de nuevo en unos minutos', 'error');
+    document.getElementById('cmp-pdf-form').style.display = '';
+    document.getElementById('cmp-pdf-loading').style.display = 'none';
+    return;
+  }
+  let d;
+  try {
+    const r = await fetch(`/api/pedidos/comparar-listado-albaranes/${jobId}`, { credentials: 'same-origin' });
+    d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error comparando los listados', 'error');
+      document.getElementById('cmp-pdf-form').style.display = '';
+      document.getElementById('cmp-pdf-loading').style.display = 'none';
+      return;
+    }
+  } catch (e) {
+    setTimeout(() => _pollCompararListadoAlbaranes(jobId, intentos + 1), 2000);
+    return;
+  }
+
+  if (d.status === 'processing') {
+    setTimeout(() => _pollCompararListadoAlbaranes(jobId, intentos + 1), 2000);
+    return;
+  }
+  if (d.status === 'error') {
+    toast(d.error || 'Error comparando los listados', 'error');
+    document.getElementById('cmp-pdf-form').style.display = '';
+    document.getElementById('cmp-pdf-loading').style.display = 'none';
+    return;
+  }
+  // status === 'done'
+  document.getElementById('cmp-pdf-loading').style.display = 'none';
+  document.getElementById('cmp-alb-resultado').style.display = '';
+  _renderCompararAlbaranesResultado(d.resultado);
+}
+
+function _renderCompararAlbaranesResultado(d) {
+  _cmpAlbResultado = d;
+  if (!d) return;
+  const fmtImporte = n => (n ?? 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const resumen = document.getElementById('cmp-alb-resumen');
+  const pill = (txt, bg, color) => `<span style="background:${bg};color:${color};font-weight:700;
+      padding:5px 12px;border-radius:20px;font-size:.85rem">${txt}</span>`;
+  const coincidencias = d.coincidencias || [];
+  const totalPendientes = (d.pendientes_ambiguos || []).length + (d.pendientes_sin_albaran || []).length + (d.pendientes_sin_pedido || []).length;
+  resumen.innerHTML =
+    pill(`📄 ${d.total_pdf1} pedidos / 📦 ${d.total_pdf2} albaranes`, '#e9ecef', '#495057') +
+    pill(`✅ ${coincidencias.length} coincidencias propuestas`, coincidencias.length ? '#d4edda' : '#e9ecef', coincidencias.length ? '#155724' : '#495057') +
+    pill(`⏳ ${totalPendientes} pendientes de revisión manual`, totalPendientes ? '#fff3cd' : '#d4edda', totalPendientes ? '#856404' : '#155724') +
+    (d.excluidos_pdf1 ? pill(`➖ ${d.excluidos_pdf1} pedidos de proveedores no sujetos a seguimiento`, '#f1f3f5', '#495057') : '') +
+    (d.excluidos_pdf2 ? pill(`➖ ${d.excluidos_pdf2} albaranes de proveedores no sujetos a seguimiento`, '#f1f3f5', '#495057') : '');
+
+  const tbody = document.getElementById('cmp-alb-tbody');
+  if (!coincidencias.length) {
+    tbody.innerHTML = `<tr><td colspan="8" style="text-align:center;color:var(--text-secondary);padding:20px">
+      Sin coincidencias propuestas.</td></tr>`;
+  } else {
+    tbody.innerHTML = coincidencias.map(c => {
+      const estadoTxt = c.ya_en_estado_objetivo
+        ? `<span style="color:#155724">${c.estado_app_actual}</span> <span style="font-size:.78rem;color:var(--text-secondary)">(ya en ese estado)</span>`
+        : `${c.estado_app_actual || '—'} → <strong>${c.estado_objetivo}</strong>`;
+      const albaranTxt = c.albaran_proveedor && c.albaran_proveedor !== c.registro_dali
+        ? `${c.registro_dali} <span style="font-size:.78rem;color:var(--text-secondary)">(prov.: ${c.albaran_proveedor})</span>`
+        : (c.registro_dali || '');
+      const yaTodo = c.sin_cambios_pendientes;
+      return `<tr${yaTodo ? ' style="opacity:.6"' : ''}>
+        <td><input type="checkbox" value="${c.clave}" ${yaTodo ? '' : 'checked'}></td>
+        <td class="monospace">${c.pedido_num_sap}${c.norden ? ' (Nº' + c.norden + ')' : ''}</td>
+        <td>${c.proveedor_nombre || ''}</td>
+        <td>${fmtImporte(c.importe)}</td>
+        <td>${estadoTxt}</td>
+        <td>${albaranTxt}</td>
+        <td>${c.fecha_registro_dali_es || ''}</td>
+        <td><button class="btn btn-ghost btn-sm" onclick="aplicarUnaCoincidenciaAlbaran('${c.clave}')">Aplicar</button></td>
+      </tr>`;
+    }).join('');
+  }
+  const checkTodas = document.getElementById('cmp-alb-check-todas');
+  if (checkTodas) checkTodas.checked = true;
+
+  const filas = [];
+  (d.pendientes_ambiguos || []).forEach(p => filas.push({
+    ref: `${(p.pedidos || []).length} pedido(s) / ${(p.albaranes || []).length} albarán(es)`,
+    prov: p.proveedor_nombre,
+    importe: p.importe,
+    motivo: 'Mismo proveedor e importe en más de una pareja posible — revisión manual'
+  }));
+  (d.pendientes_sin_albaran || []).forEach(p => filas.push({
+    ref: `Pedido ${p.pedido_num_sap}${p.norden ? ' (Nº' + p.norden + ')' : ''}`,
+    prov: p.proveedor_nombre,
+    importe: p.importe_recibido,
+    motivo: `SAP lo muestra como ${p.entrega_estado} pero ningún albarán DALI coincide en importe`
+  }));
+  (d.pendientes_sin_pedido || []).forEach(p => filas.push({
+    ref: `Albarán DALI ${p.registro_dali}`,
+    prov: p.proveedor_nombre,
+    importe: p.importe,
+    motivo: 'Sin pedido Entregado/Parcial que coincida en el listado de SAP'
+  }));
+  document.getElementById('cmp-alb-count-pendientes').textContent = filas.length;
+  document.getElementById('cmp-alb-pendientes-tbody').innerHTML = filas.length
+    ? filas.map(f => `<tr>
+        <td>${f.ref}</td><td>${f.prov || ''}</td><td>${fmtImporte(f.importe)}</td><td>${f.motivo}</td>
+      </tr>`).join('')
+    : `<tr><td colspan="4" style="text-align:center;color:var(--text-secondary);padding:14px">Ninguno.</td></tr>`;
+}
+
+function _toggleTodasCoincidenciasAlbaran(chk) {
+  document.querySelectorAll('#cmp-alb-tbody input[type=checkbox]').forEach(c => c.checked = chk.checked);
+}
+
+function _togglePendientesAlbaran() {
+  const wrap = document.getElementById('cmp-alb-pendientes-wrap');
+  const btn = document.getElementById('cmp-alb-btn-toggle-pendientes');
+  const abierto = wrap.style.display !== 'none';
+  wrap.style.display = abierto ? 'none' : '';
+  btn.innerHTML = btn.innerHTML.replace(abierto ? '▾' : '▸', abierto ? '▸' : '▾');
+}
+
+async function _postAplicarCoincidenciasAlbaran(body) {
+  if (!_cmpAlbJobId) { toast('No hay ninguna comparación activa', 'error'); return null; }
+  try {
+    const r = await fetch(`/api/pedidos/comparar-listado-albaranes/${_cmpAlbJobId}/aplicar`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify(body)
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error aplicando la comparación', 'error');
+      return null;
+    }
+    return d;
+  } catch (e) {
+    toast('Error aplicando la comparación: ' + e.message, 'error');
+    return null;
+  }
+}
+
+function _procesarResultadoAplicarAlbaran(d) {
+  if (!d) return;
+  const aplicadas = d.aplicadas || [];
+  const sinCambios = d.sin_cambios || [];
+  const errores = d.errores || [];
+  // Las coincidencias ya resueltas (aplicadas o sin cambios pendientes) se
+  // quitan de la lista en memoria para que no se puedan volver a marcar
+  // por error — las que dieron error se dejan, por si se quiere reintentar.
+  const resueltas = new Set([...aplicadas, ...sinCambios].map(x => x.clave));
+  if (_cmpAlbResultado) {
+    _cmpAlbResultado.coincidencias = (_cmpAlbResultado.coincidencias || []).filter(c => !resueltas.has(c.clave));
+  }
+  let msg = '';
+  if (aplicadas.length) msg += `✅ ${aplicadas.length} registrada(s) automáticamente. `;
+  if (sinCambios.length) msg += `ℹ️ ${sinCambios.length} ya estaban al día. `;
+  if (errores.length) msg += `⛔ ${errores.length} con error — revisa manualmente.`;
+  toast(msg.trim() || 'Sin cambios que aplicar', errores.length ? 'error' : 'success');
+  _renderCompararAlbaranesResultado(_cmpAlbResultado);
+}
+
+async function aplicarUnaCoincidenciaAlbaran(clave) {
+  const d = await _postAplicarCoincidenciasAlbaran({ claves: [clave] });
+  _procesarResultadoAplicarAlbaran(d);
+}
+
+async function aplicarCoincidenciasAlbaranes(soloSeleccionadas) {
+  let body;
+  if (soloSeleccionadas) {
+    const claves = Array.from(document.querySelectorAll('#cmp-alb-tbody input[type=checkbox]:checked')).map(c => c.value);
+    if (!claves.length) { toast('No hay ninguna coincidencia seleccionada', 'error'); return; }
+    body = { claves };
+  } else {
+    body = { todas: true };
+  }
+  const d = await _postAplicarCoincidenciasAlbaran(body);
+  _procesarResultadoAplicarAlbaran(d);
+}
+
+async function enviarResumenComparacionAlbaranes() {
+  if (!_cmpAlbJobId) { toast('No hay ninguna comparación activa', 'error'); return; }
+  const btn = document.getElementById('cmp-alb-btn-enviar-resumen');
+  const textoOriginal = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = 'Enviando…';
+  try {
+    const r = await fetch(`/api/pedidos/comparar-listado-albaranes/${_cmpAlbJobId}/enviar-resumen`,
+                           { method: 'POST', credentials: 'same-origin' });
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error enviando el resumen', 'error');
+    } else {
+      const destTxt = (d.destinatarios || []).join(', ');
+      toast(`📧 Resumen encolado para ${destTxt}${d.cc ? ' (copia: ' + d.cc + ')' : ''}`, 'success');
+      // Mismo motivo que en enviarResumenComparacionPdf(): adelanta el
+      // primer despacho de la cola en vez de esperar al sondeo de 5 min.
       _enviarEmailsSistemaPendientes();
     }
   } catch (e) {

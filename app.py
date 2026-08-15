@@ -7866,6 +7866,79 @@ def _normalizar_nombre_proveedor(s):
             break
     return s
 
+def _match_proveedor_catalogo(nombre_norm: str, cat_por_nombre: dict):
+    """
+    (2026-08-06, hoisted a nivel de módulo 2026-08-15 para reutilizarlo
+    también en la comparación de listado de albaranes) Empareja un nombre
+    de proveedor ya normalizado (_normalizar_nombre_proveedor) contra el
+    catálogo de proveedores de la app — primero coincidencia exacta,
+    luego parcial (el nombre de SAP/DALI a veces viene truncado o con
+    alguna palabra de más/menos respecto al catálogo).
+
+    cat_por_nombre: {nombre_normalizado: fila_proveedor} — construir con
+    {_normalizar_nombre_proveedor(p["nombre"]): p for p in proveedores_cat}
+    """
+    if not nombre_norm:
+        return None
+    if nombre_norm in cat_por_nombre:
+        return cat_por_nombre[nombre_norm]
+    for nombre_cat, prov in cat_por_nombre.items():
+        if nombre_cat and (nombre_cat in nombre_norm or nombre_norm in nombre_cat):
+            return prov
+    return None
+
+def _normalizar_texto_generico(s: str) -> str:
+    """
+    (2026-08-15) Normaliza texto genérico (mayúsculas, sin acentos,
+    espacios/saltos de línea colapsados a uno solo) — usado para
+    identificar el departamento al principio del bloque "departamento +
+    proveedor" del listado de albaranes de DALI (ver
+    _match_departamento_prefijo). A diferencia de
+    _normalizar_nombre_proveedor, no quita formas societarias (no aplica
+    a nombres de departamento).
+    """
+    if not s:
+        return ""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", s.upper())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+def _match_departamento_prefijo(blob: str, deptos_norm: list):
+    """
+    (2026-08-15) En el listado de albaranes de DALI, el nombre del
+    departamento y el del proveedor quedan pegados sin separador fiable
+    en el texto que extrae pypdf (p. ej. "COCINAPASTELERIA FLOYPE SLL" o,
+    partido en varias líneas de ajuste de página, "BAR SALON\n(Discoteca,
+    Princess)FRUCAPE S.L"). Como los nombres de departamento son un
+    catálogo cerrado (tabla departamentos, igual que se hace con
+    proveedores más abajo), se identifica buscando cuál de ellos es
+    PREFIJO del bloque completo, en vez de intentar adivinar dónde corta
+    con un separador — verificado 265/265 líneas contra un listado real.
+
+    blob: texto crudo "departamento+proveedor", puede traer saltos de
+    línea de ajuste de página.
+    deptos_norm: [(id, nombre, nombre_normalizado), ...] de la tabla
+    departamentos, ordenada de nombre normalizado MÁS LARGO a más corto
+    (para que un nombre específico no quede enmascarado por otro más
+    corto que sea prefijo suyo, p. ej. "BAR SALON" dentro de un nombre
+    más largo que también empezara así).
+
+    Devuelve (departamento_id_o_None, nombre_o_None, resto_normalizado)
+    — "resto" es ya el texto del proveedor (normalizado), listo para
+    _match_proveedor_catalogo(). Si no se identifica ningún departamento
+    del catálogo, devuelve (None, None, blob_normalizado_completo) para
+    intentar igualmente el proveedor contra el bloque entero — mejor un
+    intento imperfecto que perder la fila entera por no reconocer el
+    departamento.
+    """
+    blob_norm = _normalizar_texto_generico(blob)
+    for dep_id, dep_nombre, dep_norm in deptos_norm:
+        if dep_norm and blob_norm.startswith(dep_norm):
+            return dep_id, dep_nombre, blob_norm[len(dep_norm):].strip()
+    return None, None, blob_norm
+
 @app.route("/api/pedidos/comparar-listado-pdf", methods=["POST"])
 @login_required
 def comparar_listado_pdf():
@@ -8304,17 +8377,12 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     ))
     cat_por_nombre = {_normalizar_nombre_proveedor(p["nombre"]): p for p in proveedores_cat if p["nombre"]}
 
+    # (2026-08-15) _match_proveedor() vivía aquí como función anidada;
+    # ahora es _match_proveedor_catalogo() a nivel de módulo, para poder
+    # reutilizarla también en _comparar_listado_albaranes_logica() sin
+    # duplicar la lógica de emparejamiento.
     def _match_proveedor(nombre_norm):
-        if not nombre_norm:
-            return None
-        if nombre_norm in cat_por_nombre:
-            return cat_por_nombre[nombre_norm]
-        # Coincidencia parcial — el nombre de SAP a veces viene truncado o
-        # con alguna palabra de más/menos respecto al catálogo.
-        for nombre_cat, prov in cat_por_nombre.items():
-            if nombre_cat and (nombre_cat in nombre_norm or nombre_norm in nombre_cat):
-                return prov
-        return None
+        return _match_proveedor_catalogo(nombre_norm, cat_por_nombre)
 
     # ── Pedidos ya registrados en la app para este hotel ──────────────────────
     pedidos_app = rows_to_list(query(
@@ -8385,6 +8453,691 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
         "entregas_parciales":    parciales,
         "pedidos":               resultado,
     }
+
+# (2026-08-15) Listado de Albaranes registrados en DALI — segundo PDF de
+# "Comparar listado PDF" (ahora "Pedidos + Albaranes"), a petición del
+# usuario: cruzar el listado de pedidos de SAP (arriba) con el listado de
+# albaranes que se van registrando en DALI en base a esos pedidos, para
+# proponer el registro automático de la entrega en Control de Pedidos.
+#
+# Verificado 265/265 líneas contra un listado real. Igual que con el
+# listado de pedidos, el texto que extrae pypdf no sigue el orden visual
+# de columnas sino el orden real del flujo del PDF:
+#   Nº registro DALI (8 dígitos) · "Albarán: " · el mismo Nº de registro
+#   otra vez · " - " · Nº de albarán del PROVEEDOR (texto libre: puede
+#   llevar '/', '.', espacios, y partirse en varias líneas por ajuste de
+#   página) · "(EURO)" · importe (con 2 O 4 decimales — SAP a veces trae
+#   4, _parse_importe_es ya los soporta a ambos por igual) · fecha de
+#   registro en DALI (DD/MM/AAAA) · hora (HH:MM:SS) · departamento del
+#   hotel donde se registra la mercancía, pegado sin separador al nombre
+#   del proveedor (ambos texto libre, cualquiera de los dos puede partirse
+#   en 2-3 líneas) — ver _match_departamento_prefijo() para cómo se
+#   separan sin necesitar un separador explícito.
+_PATRON_LISTADO_ALBARANES = re.compile(
+    r'(\d{8})\s*Albar[aá]n:\s*(\d{8})\s*-\s*'    # nº registro DALI (aparece dos veces)
+    r'([^\(]+?)\s*'                               # nº de albarán del proveedor
+    r'\(EURO\)\s*'
+    r'(' + _NUM_ES + r'\d{0,2})\s*'               # importe (2 o 4 decimales)
+    r'(\d{2}/\d{2}/\d{4})\s*'                     # fecha de registro en DALI
+    r'(\d{1,2}:\d{2}:\d{2})\s*'                   # hora de registro
+    r'(.+?)(?=\d{8}\s*Albar[aá]n:|$)',            # departamento + proveedor, pegados
+    re.S
+)
+
+def _parsear_fecha_es_a_iso(fecha_ddmmyyyy):
+    """'DD/MM/AAAA' -> 'AAAA-MM-DD' (ISO, formato de columna DATE), o None
+    si no se puede parsear — misma idea que _fecha_es() pero a la inversa."""
+    if not fecha_ddmmyyyy:
+        return None
+    try:
+        return datetime.strptime(str(fecha_ddmmyyyy).strip(), "%d/%m/%Y").strftime("%Y-%m-%d")
+    except Exception:
+        return None
+
+def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_bytes: bytes) -> dict:
+    """
+    (2026-08-15) Ampliación de "Comparar listado PDF" a petición del
+    usuario (Víctor): además del "Listado de Pedidos" simplificado de SAP
+    (PDF 1, igual que _comparar_listado_pdf_logica), lee un segundo PDF —
+    el "Listado de Albaranes" registrados en DALI en base a esos pedidos —
+    y cruza ambos para proponer el registro automático de la entrega
+    (fecha de tramitación, número de entrada del albarán y estado) en los
+    pedidos de esta app que ya están dados de alta.
+
+    Criterio de coincidencia (decisión del usuario, preguntado
+    explícitamente): mismo proveedor Y mismo importe entre el importe YA
+    RECIBIDO de un pedido del PDF 1 que SAP ya muestra como "Entregado" o
+    "Entrega parcial", y el importe de un albarán del PDF 2 — se comparó
+    contra el importe recibido (no el importe base/total del pedido)
+    porque en una entrega parcial el importe base puede ser mayor que lo
+    que trae un albarán suelto y daría falsos negativos.
+
+    Solo se evalúan proveedores marcados como sujetos a seguimiento (Admin
+    → Proveedores) en AMBOS PDF — mismo filtro que ya usa
+    _comparar_listado_pdf_logica, aplicado aquí también a los albaranes.
+
+    Empates (mismo proveedor+importe con más de un candidato en cualquiera
+    de los dos PDF): a petición del usuario, NINGUNA de las combinaciones
+    posibles se autorregistra — todas quedan en "pendientes_ambiguos" para
+    decisión manual, en vez de arriesgarse a emparejar mal.
+
+    Esta función es de solo lectura — NO escribe nada en la base de
+    datos, solo propone. La escritura real (fecha_tramitacion si estaba
+    vacía, nuevo albarán en entrada_albaran_num, cambio de estado con su
+    notificación) la hace _aplicar_coincidencia_albaran(), llamada desde
+    el endpoint .../aplicar solo cuando el usuario confirma explícitamente
+    qué coincidencias aplicar — decisión de diseño explícita: revisar y
+    confirmar antes de aplicar, nunca automático al comparar.
+
+    Devuelve dict con: coincidencias, pendientes_ambiguos,
+    pendientes_sin_albaran (pedido Entregado/Parcial en SAP sin albarán
+    DALI con ese importe), pendientes_sin_pedido (albarán DALI sin pedido
+    Entregado/Parcial con ese importe en la app), total_pdf1, total_pdf2,
+    excluidos_pdf1, excluidos_pdf2 (proveedor no identificado o no sujeto
+    a seguimiento, en cada PDF).
+
+    Lanza RuntimeError si algún PDF no se puede leer o no se reconoce
+    ningún registro en él.
+    """
+    import io
+    from pypdf import PdfReader
+    from collections import defaultdict
+
+    def _leer_texto(pdf_bytes, etiqueta):
+        try:
+            reader = PdfReader(io.BytesIO(pdf_bytes))
+            texto = ""
+            for pagina in reader.pages:
+                texto += (pagina.extract_text() or "") + "\n"
+            return texto
+        except Exception as exc:
+            log.error("[COMPARAR-ALBARANES] Error leyendo PDF (%s): %s", etiqueta, exc)
+            raise RuntimeError(f"No se pudo leer el PDF de {etiqueta}: {exc}")
+
+    texto1 = _leer_texto(pdf1_bytes, "pedidos")
+    texto2 = _leer_texto(pdf2_bytes, "albaranes")
+
+    encontrados_pdf1 = _PATRON_LISTADO_SIMPLIFICADO.findall(texto1)
+    if not encontrados_pdf1:
+        raise RuntimeError(
+            "No se ha reconocido ningún pedido en el primer PDF — "
+            "¿es el \"Listado de Pedidos\" simplificado de SAP?"
+        )
+    encontrados_pdf2 = _PATRON_LISTADO_ALBARANES.findall(texto2)
+    if not encontrados_pdf2:
+        raise RuntimeError(
+            "No se ha reconocido ningún albarán en el segundo PDF — "
+            "¿es el \"Listado de Albaranes\" registrados en DALI?"
+        )
+
+    # ── Catálogos: proveedores (sujeto_seguimiento) y departamentos ──────────
+    proveedores_cat = rows_to_list(query(
+        "SELECT id, nombre, sujeto_seguimiento FROM proveedores WHERE activo=1"
+    ))
+    cat_por_nombre = {_normalizar_nombre_proveedor(p["nombre"]): p for p in proveedores_cat if p["nombre"]}
+
+    deptos_cat = rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1"))
+    deptos_norm = sorted(
+        (
+            (d["id"], d["nombre"], _normalizar_texto_generico(d["nombre"]))
+            for d in deptos_cat if d["nombre"]
+        ),
+        key=lambda x: -len(x[2])
+    )
+
+    # ── Pedidos ya registrados en la app para este hotel ──────────────────────
+    pedidos_app = rows_to_list(query(
+        """SELECT id, norden, pedido_num, estado, fecha_tramitacion, entrada_albaran_num
+           FROM pedidos WHERE hotel_id=%s AND pedido_num IS NOT NULL AND pedido_num != ''""",
+        (hotel_id,)
+    ))
+    app_por_num = {}
+    for p in pedidos_app:
+        app_por_num.setdefault(_normalizar_pedido_num(p["pedido_num"]), p)
+
+    ESTADOS_EXCLUIDOS_AUTO = {"CANCELADO", "DENEGADO POR DIRECCION GENERAL"}
+
+    # ── PDF1: pedidos ya dados de alta, que SAP ya muestra Entregado/Parcial ──
+    excluidos_pdf1 = 0
+    candidatos_pdf1 = []
+    vistos1 = set()
+    for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
+         fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt,
+         importe_pendiente_txt) in encontrados_pdf1:
+        if num_sap in vistos1:
+            continue
+        vistos1.add(num_sap)
+        prov_match = _match_proveedor_catalogo(_normalizar_nombre_proveedor(proveedor_raw.strip()), cat_por_nombre)
+        if not prov_match or not prov_match["sujeto_seguimiento"]:
+            excluidos_pdf1 += 1
+            continue
+        importe_base     = _parse_importe_es(importe_base_txt)
+        importe_recibido = _parse_importe_es(importe_recibido_txt)
+        entrega_estado = _entrega_estado(importe_base, importe_recibido)
+        if entrega_estado not in ("Entregado", "Entrega parcial"):
+            continue
+        pedido_app = app_por_num.get(_normalizar_pedido_num(num_sap))
+        if not pedido_app or pedido_app["estado"] in ESTADOS_EXCLUIDOS_AUTO:
+            continue  # sin pedido dado de alta, o en un estado que no se debe tocar automáticamente
+        candidatos_pdf1.append({
+            "pedido_num_sap":             num_sap,
+            "pedido_id":                  pedido_app["id"],
+            "norden":                     pedido_app["norden"],
+            "estado_app_actual":          pedido_app["estado"],
+            "fecha_tramitacion_actual":   pedido_app.get("fecha_tramitacion"),
+            "entrada_albaran_num_actual": pedido_app.get("entrada_albaran_num"),
+            "fecha_pedido_es":            fecha_pedido,
+            "proveedor_id":               prov_match["id"],
+            "proveedor_nombre":           prov_match["nombre"],
+            "importe_base":               importe_base,
+            "importe_recibido":           importe_recibido,
+            "entrega_estado":             entrega_estado,
+            "estado_objetivo":            "ENTREGADO" if entrega_estado == "Entregado" else "ENTREGA PARCIAL",
+            "clave":                      (prov_match["id"], round(importe_recibido, 2)),
+        })
+
+    # ── PDF2: albaranes de proveedores sujetos a seguimiento ─────────────────
+    excluidos_pdf2 = 0
+    candidatos_pdf2 = []
+    vistos2 = set()
+    for (registro1, registro2, albaran_prov_raw, importe_txt, fecha_registro,
+         hora_registro, resto_raw) in encontrados_pdf2:
+        registro = registro1.strip()
+        if registro in vistos2:
+            continue
+        vistos2.add(registro)
+        dep_id, dep_nombre, resto_norm = _match_departamento_prefijo(resto_raw, deptos_norm)
+        prov_match = _match_proveedor_catalogo(_normalizar_nombre_proveedor(resto_norm), cat_por_nombre)
+        if not prov_match or not prov_match["sujeto_seguimiento"]:
+            excluidos_pdf2 += 1
+            continue
+        importe = _parse_importe_es(importe_txt)
+        candidatos_pdf2.append({
+            "registro_dali":       registro,
+            "albaran_proveedor":   re.sub(r'\s+', ' ', albaran_prov_raw.strip()),
+            "proveedor_id":        prov_match["id"],
+            "proveedor_nombre":    prov_match["nombre"],
+            "proveedor_pdf":       resto_norm,
+            "departamento_id":     dep_id,
+            "departamento_nombre": dep_nombre,
+            "fecha_registro_es":   fecha_registro,
+            "hora_registro":       hora_registro,
+            "importe":             importe,
+            "clave":               (prov_match["id"], round(importe, 2)),
+        })
+
+    # ── Cruce por (proveedor_id, importe) ──────────────────────────────────────
+    grupo1 = defaultdict(list)
+    for c in candidatos_pdf1:
+        grupo1[c["clave"]].append(c)
+    grupo2 = defaultdict(list)
+    for c in candidatos_pdf2:
+        grupo2[c["clave"]].append(c)
+
+    coincidencias          = []
+    pendientes_ambiguos    = []
+    pendientes_sin_albaran = []
+    pendientes_sin_pedido  = []
+
+    for clave in set(grupo1) | set(grupo2):
+        lado1 = grupo1.get(clave, [])
+        lado2 = grupo2.get(clave, [])
+        if len(lado1) == 1 and len(lado2) == 1:
+            p1, p2 = lado1[0], lado2[0]
+            fecha_tram_iso     = _parsear_fecha_es_a_iso(p1["fecha_pedido_es"])
+            fecha_registro_iso = _parsear_fecha_es_a_iso(p2["fecha_registro_es"])
+            ya_registrado = bool(
+                p2["registro_dali"] and p1["entrada_albaran_num_actual"]
+                and p2["registro_dali"] in p1["entrada_albaran_num_actual"]
+            )
+            coincidencias.append({
+                "clave":                      f'{clave[0]}_{str(clave[1]).replace(".", "_")}',
+                "pedido_id":                  p1["pedido_id"],
+                "pedido_num_sap":             p1["pedido_num_sap"],
+                "norden":                     p1["norden"],
+                "estado_app_actual":          p1["estado_app_actual"],
+                "estado_objetivo":            p1["estado_objetivo"],
+                "proveedor_nombre":           p1["proveedor_nombre"],
+                "importe":                    clave[1],
+                "fecha_tramitacion_actual":   p1["fecha_tramitacion_actual"],
+                "fecha_tramitacion_pdf1_iso": fecha_tram_iso,
+                "fecha_tramitacion_pdf1_es":  p1["fecha_pedido_es"],
+                "registro_dali":              p2["registro_dali"],
+                "albaran_proveedor":          p2["albaran_proveedor"],
+                "fecha_registro_dali_iso":    fecha_registro_iso,
+                "fecha_registro_dali_es":     p2["fecha_registro_es"],
+                "departamento_nombre":        p2["departamento_nombre"],
+                "ya_registrado":              ya_registrado,
+                "ya_en_estado_objetivo":      p1["estado_app_actual"] == p1["estado_objetivo"],
+                "sin_cambios_pendientes":     ya_registrado and p1["estado_app_actual"] == p1["estado_objetivo"]
+                                               and p1["fecha_tramitacion_actual"],
+            })
+        elif len(lado1) == 1 and len(lado2) == 0:
+            pendientes_sin_albaran.append(lado1[0])
+        elif len(lado1) == 0 and len(lado2) == 1:
+            pendientes_sin_pedido.append(lado2[0])
+        else:
+            pendientes_ambiguos.append({
+                "clave":            f'{clave[0]}_{str(clave[1]).replace(".", "_")}',
+                "proveedor_nombre": (lado1[0]["proveedor_nombre"] if lado1 else lado2[0]["proveedor_nombre"]),
+                "importe":          clave[1],
+                "pedidos":          lado1,
+                "albaranes":        lado2,
+            })
+
+    return {
+        "ok": True,
+        "coincidencias":          coincidencias,
+        "pendientes_ambiguos":    pendientes_ambiguos,
+        "pendientes_sin_albaran": pendientes_sin_albaran,
+        "pendientes_sin_pedido":  pendientes_sin_pedido,
+        "total_pdf1":             len(encontrados_pdf1),
+        "total_pdf2":             len(encontrados_pdf2),
+        "excluidos_pdf1":         excluidos_pdf1,
+        "excluidos_pdf2":         excluidos_pdf2,
+    }
+
+def _aplicar_coincidencia_albaran(db, coincidencia: dict, usuario_id: int, usuario_nombre: str) -> dict:
+    """
+    (2026-08-15) Aplica UNA coincidencia propuesta por
+    _comparar_listado_albaranes_logica(): actualiza el pedido ya dado de
+    alta con lo detectado en los dos PDF, y dispara la misma notificación
+    de cambio de estado que un cambio manual (email retrasado 5 min +
+    Telegram inmediato + popup retrasado 5 min, ver
+    _notificar_cambio_estado) cuando el estado realmente cambia.
+
+    Solo se llama desde el endpoint .../aplicar, y solo para las
+    coincidencias que el usuario ha confirmado explícitamente — nunca de
+    forma automática al comparar (decisión de diseño explícita).
+
+    Campos que toca, y solo si hace falta (idempotente — volver a aplicar
+    la misma coincidencia dos veces no duplica nada ni reenvía avisos si
+    ya estaba todo al día):
+      - fecha_tramitacion: SOLO si el pedido no tenía ninguna ya guardada
+        (decisión del usuario: no se sobrescribe una fecha existente).
+      - entrada_albaran_num: añade "REGISTRO_DALI::FECHA_ISO" — se salta
+        si ese registro_dali ya está presente (ya aplicado antes).
+      - estado: pasa a ENTREGADO o ENTREGA PARCIAL según lo que
+        determinó el PDF 1 — se salta si el pedido ya está en ese estado.
+
+    Devuelve {"aplicado": bool, "cambios": [...], "motivo_sin_cambios": str|None}.
+    """
+    pedido_id = coincidencia["pedido_id"]
+    pedido_actual = row_to_dict(query(
+        "SELECT id, estado, fecha_tramitacion, entrada_albaran_num FROM pedidos WHERE id=%s",
+        (pedido_id,), one=True
+    ))
+    if not pedido_actual:
+        return {"aplicado": False, "cambios": [], "motivo_sin_cambios": "El pedido ya no existe"}
+
+    cambios = []
+    estado_antes = pedido_actual["estado"]
+
+    # Nunca tocar un pedido que mientras tanto se canceló/denegó, o que ya
+    # avanzó por delante del estado que proponemos (p. ej. si alguien ya
+    # lo marcó ENTREGADO a mano entre que se comparó y se aplicó).
+    if estado_antes in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL"):
+        return {"aplicado": False, "cambios": [], "motivo_sin_cambios": f"El pedido está {estado_antes}"}
+
+    nueva_fecha_tramitacion = pedido_actual["fecha_tramitacion"]
+    if not nueva_fecha_tramitacion and coincidencia.get("fecha_tramitacion_pdf1_iso"):
+        nueva_fecha_tramitacion = coincidencia["fecha_tramitacion_pdf1_iso"]
+        cambios.append(f"fecha de tramitación → {coincidencia.get('fecha_tramitacion_pdf1_es', nueva_fecha_tramitacion)}")
+
+    nuevo_albaran = pedido_actual["entrada_albaran_num"]
+    registro_dali = coincidencia.get("registro_dali")
+    if registro_dali and (not nuevo_albaran or registro_dali not in nuevo_albaran):
+        entrada_nueva = _serializar_entrada_albaran(registro_dali, coincidencia.get("fecha_registro_dali_iso"))
+        nuevo_albaran = f"{nuevo_albaran} | {entrada_nueva}" if nuevo_albaran else entrada_nueva
+        cambios.append(f"nueva entrada de albarán {registro_dali}")
+
+    estado_nuevo = coincidencia["estado_objetivo"]
+    _ORDEN_ENTREGA = {"ENVIADO AL PROVEEDOR": 0, "PENDIENTE COTIZACIÓN": 0, "ENTREGA PARCIAL": 1, "ENTREGADO": 2}
+    if estado_antes == estado_nuevo:
+        estado_nuevo = estado_antes  # sin cambio de estado
+    elif _ORDEN_ENTREGA.get(estado_antes, 0) > _ORDEN_ENTREGA.get(estado_nuevo, 0):
+        # El pedido ya está en un estado de entrega más avanzado que el que
+        # propone esta coincidencia (p. ej. ya ENTREGADO y esto solo
+        # confirma una entrega parcial anterior) — no retroceder el estado.
+        estado_nuevo = estado_antes
+    else:
+        cambios.append(f"estado → {estado_nuevo}")
+
+    if not cambios:
+        return {"aplicado": False, "cambios": [], "motivo_sin_cambios": "Ya estaba todo al día"}
+
+    execute(
+        """UPDATE pedidos SET
+               fecha_tramitacion=%s, entrada_albaran_num=%s, estado=%s,
+               modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
+           WHERE id=%s""",
+        (nueva_fecha_tramitacion, nuevo_albaran, estado_nuevo, usuario_id, usuario_nombre, pedido_id)
+    )
+    if estado_nuevo != estado_antes:
+        execute(
+            "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) "
+            "VALUES (%s,%s,%s,%s,%s,%s)",
+            (pedido_id, estado_antes, estado_nuevo, usuario_id, usuario_nombre,
+             f"Registro automático — comparación de listados PDF (pedidos + albaranes), "
+             f"albarán DALI {registro_dali or '—'}")
+        )
+    db.commit()
+
+    if estado_nuevo != estado_antes:
+        _notificar_cambio_estado(db, pedido_id, estado_nuevo, estado_antes, usuario_nombre=usuario_nombre)
+
+    return {"aplicado": True, "cambios": cambios, "motivo_sin_cambios": None}
+
+def _serializar_entrada_albaran(num: str, fecha_iso: str = None) -> str:
+    """Igual formato que _serializeAlbaranEntry() del frontend: 'NUM::FECHA' o 'NUM'."""
+    num = (num or "").strip()
+    if not num:
+        return ""
+    return f"{num}::{fecha_iso}" if fecha_iso else num
+
+def _ejecutar_comparacion_albaranes_bg(job_id, hotel_id, pdf1_bytes, pdf2_bytes):
+    """Igual patrón que _ejecutar_comparacion_pdf_bg() — corre en un hilo
+    aparte con su propio contexto de aplicación, para no bloquear la
+    petición HTTP original con la lectura de dos PDF."""
+    import time as _time_pdf
+    with app.app_context():
+        try:
+            resultado = _comparar_listado_albaranes_logica(hotel_id, pdf1_bytes, pdf2_bytes)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "done", "resultado": resultado}
+        except Exception as exc:
+            log.error("[COMPARAR-ALBARANES] Error en job %s: %s", job_id, exc)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
+
+@app.route("/api/pedidos/comparar-listado-albaranes", methods=["POST"])
+@login_required
+def comparar_listado_albaranes():
+    """
+    (2026-08-15) Ampliación de "Comparar listado PDF": ahora acepta un
+    segundo PDF — el "Listado de Albaranes" registrados en DALI en base a
+    los pedidos — y propone el registro automático de la entrega
+    (fecha de tramitación, número de albarán, estado) en los pedidos que
+    ya están dados de alta y que SAP muestra como Entregado/Entrega
+    parcial. Ver _comparar_listado_albaranes_logica() para el criterio de
+    coincidencia completo. Restringido a admin, igual que el resto de
+    "Comparar listado PDF".
+
+    Mismo patrón asíncrono que /api/pedidos/comparar-listado-pdf (job_id +
+    polling) — necesario aquí todavía más, porque ahora se leen DOS PDF.
+
+    POST /api/pedidos/comparar-listado-albaranes
+    form-data: hotel_id, file (PDF 1 — listado de pedidos SAP),
+               file2 (PDF 2 — listado de albaranes DALI)
+    → 202 {"ok": true, "job_id": "..."}
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+
+    hotel_id_raw = request.form.get("hotel_id")
+    if not hotel_id_raw:
+        return jsonify({"error": "Falta indicar el hotel"}), 400
+    try:
+        hotel_id = int(hotel_id_raw)
+    except ValueError:
+        return jsonify({"error": "Hotel no válido"}), 400
+    if "file" not in request.files or "file2" not in request.files:
+        return jsonify({"error": "Faltan uno o los dos PDF (listado de pedidos y listado de albaranes)"}), 400
+    archivo1 = request.files["file"]
+    archivo2 = request.files["file2"]
+    if not archivo1.filename or not archivo1.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "El primer archivo (listado de pedidos) debe ser un PDF"}), 400
+    if not archivo2.filename or not archivo2.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "El segundo archivo (listado de albaranes) debe ser un PDF"}), 400
+
+    pdf1_bytes = archivo1.read()
+    pdf2_bytes = archivo2.read()
+    if not pdf1_bytes or not pdf2_bytes:
+        return jsonify({"error": "Alguno de los dos archivos está vacío"}), 400
+
+    import time as _time_pdf
+    job_id = secrets.token_hex(16)
+    with _PDF_JOBS_LOCK:
+        limite = _time_pdf.time() - 1800
+        for jid in [j for j, v in _PDF_JOBS.items() if v.get("creado_en", 0) < limite]:
+            del _PDF_JOBS[jid]
+        _PDF_JOBS[job_id] = {
+            "status": "processing", "creado_en": _time_pdf.time(),
+            "hotel_id": hotel_id, "usuario_id": session.get("user_id"),
+        }
+
+    hilo = threading.Thread(
+        target=_ejecutar_comparacion_albaranes_bg,
+        args=(job_id, hotel_id, pdf1_bytes, pdf2_bytes),
+        daemon=True,
+    )
+    hilo.start()
+    return jsonify({"ok": True, "job_id": job_id}), 202
+
+@app.route("/api/pedidos/comparar-listado-albaranes/<job_id>", methods=["GET"])
+@login_required
+def comparar_listado_albaranes_estado(job_id):
+    """Consulta del resultado de un job lanzado por comparar_listado_albaranes()."""
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    with _PDF_JOBS_LOCK:
+        job = dict(_PDF_JOBS.get(job_id) or {})
+    if not job:
+        return jsonify({"error": "El job no existe o ha caducado — vuelve a subir los PDF"}), 404
+    job.pop("creado_en", None)
+    return jsonify(job)
+
+@app.route("/api/pedidos/comparar-listado-albaranes/<job_id>/aplicar", methods=["POST"])
+@login_required
+def comparar_listado_albaranes_aplicar(job_id):
+    """
+    (2026-08-15) Aplica las coincidencias que el usuario ha confirmado
+    explícitamente desde la pantalla de resultado — decisión de diseño:
+    revisar y confirmar antes de aplicar, nunca automático al comparar.
+
+    POST /api/pedidos/comparar-listado-albaranes/<job_id>/aplicar
+    body JSON: {"claves": ["12_45_30", ...]}  — claves de coincidencias.claves
+               (o {"todas": true} para aplicar todas las propuestas)
+    → {"ok": true, "aplicadas": [...], "sin_cambios": [...], "errores": [...]}
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    with _PDF_JOBS_LOCK:
+        job = dict(_PDF_JOBS.get(job_id) or {})
+    if not job:
+        return jsonify({"error": "El job no existe o ha caducado — vuelve a subir los PDF"}), 404
+    if job.get("status") != "done":
+        return jsonify({"error": "La comparación todavía no ha terminado"}), 400
+
+    body = request.get_json(silent=True) or {}
+    coincidencias = (job.get("resultado") or {}).get("coincidencias", [])
+    if body.get("todas"):
+        seleccionadas = coincidencias
+    else:
+        claves_pedidas = set(body.get("claves") or [])
+        if not claves_pedidas:
+            return jsonify({"error": "No se ha indicado ninguna coincidencia a aplicar"}), 400
+        seleccionadas = [c for c in coincidencias if c["clave"] in claves_pedidas]
+        if not seleccionadas:
+            return jsonify({"error": "Ninguna de las coincidencias indicadas existe en este resultado"}), 400
+
+    db = get_db()
+    uid = current_user_id()
+    usuario_nombre = session.get("nombre", "")
+    aplicadas, sin_cambios, errores = [], [], []
+    for c in seleccionadas:
+        try:
+            res = _aplicar_coincidencia_albaran(db, c, uid, usuario_nombre)
+            etiqueta = f"Pedido {c.get('pedido_num_sap')} — {c.get('proveedor_nombre')}"
+            if res["aplicado"]:
+                aplicadas.append({"clave": c["clave"], "descripcion": etiqueta, "cambios": res["cambios"]})
+            else:
+                sin_cambios.append({"clave": c["clave"], "descripcion": etiqueta, "motivo": res["motivo_sin_cambios"]})
+        except Exception as exc:
+            log.error("[COMPARAR-ALBARANES] Error aplicando coincidencia %s: %s", c.get("clave"), exc)
+            errores.append({"clave": c.get("clave"), "error": str(exc)})
+
+    # Guarda lo aplicado en el propio job, para que enviar-resumen() pueda
+    # distinguir "realizado ahora" de "seguía pendiente" sin que el
+    # frontend tenga que reenviar la lista.
+    with _PDF_JOBS_LOCK:
+        if job_id in _PDF_JOBS:
+            previamente = _PDF_JOBS[job_id].get("aplicadas_acumuladas", [])
+            _PDF_JOBS[job_id]["aplicadas_acumuladas"] = previamente + aplicadas
+
+    return jsonify({"ok": True, "aplicadas": aplicadas, "sin_cambios": sin_cambios, "errores": errores})
+
+@app.route("/api/pedidos/comparar-listado-albaranes/<job_id>/enviar-resumen", methods=["POST"])
+@login_required
+def comparar_listado_albaranes_enviar_resumen(job_id):
+    """
+    (2026-08-15) Envía un correo interno con el resumen de la comparación
+    de listados (pedidos + albaranes), a petición del usuario: los
+    registros realizados automáticamente (aplicados en esta sesión de
+    comparación, ver .../aplicar) y los que han quedado pendientes de
+    realizar (ambiguos, sin albarán, sin pedido, o proveedor no
+    identificado en cualquiera de los dos PDF).
+
+    Mismo patrón que .../comparar-listado-pdf/<job_id>/enviar-resumen:
+    se encola vía _encolar_email_sistema (sin SMTP propio, lo despacha
+    cualquier sesión admin/compras con la app abierta).
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    with _PDF_JOBS_LOCK:
+        job = dict(_PDF_JOBS.get(job_id) or {})
+    if not job:
+        return jsonify({"error": "El job no existe o ha caducado — vuelve a subir los PDF"}), 404
+    if job.get("status") != "done":
+        return jsonify({"error": "La comparación todavía no ha terminado"}), 400
+
+    resultado = job.get("resultado") or {}
+    aplicadas = job.get("aplicadas_acumuladas", [])
+
+    hotel = query("SELECT codigo, nombre FROM hoteles WHERE id=%s", (job.get("hotel_id"),), one=True)
+    if not hotel:
+        return jsonify({"error": "Hotel no encontrado"}), 404
+
+    compradores = _get_compradores_hotel(hotel["codigo"])
+    destinatarios = [c["email"] for c in compradores if c.get("email")]
+    if not destinatarios:
+        return jsonify({
+            "error": f"No hay ningún comprador con email asignado al hotel {hotel['codigo']} "
+                     "— asígnalo en Admin → Usuarios → Hoteles asignados (Compras)"
+        }), 400
+
+    admin_row = query("SELECT nombre, email FROM usuarios WHERE id=%s", (job.get("usuario_id"),), one=True) or {}
+    admin_nombre = admin_row.get("nombre") or session.get("nombre") or "Administrador"
+    admin_email  = admin_row.get("email")
+
+    subject, body = _email_resumen_comparacion_albaranes(
+        hotel["nombre"], hotel["codigo"], resultado, aplicadas, admin_nombre
+    )
+    _encolar_email_sistema(
+        "resumen_comparacion_albaranes", destinatarios, subject, cuerpo_html=body,
+        cc_emails=[admin_email] if admin_email else None,
+    )
+    return jsonify({"ok": True, "destinatarios": destinatarios, "cc": admin_email})
+
+def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, aplicadas, admin_nombre):
+    """
+    (2026-08-15) Cuerpo del correo de resumen de "Comparar listado PDF"
+    (pedidos + albaranes) — misma factura visual que el resto de correos
+    internos de la app. Lista los registros realizados automáticamente
+    (aplicados en esta sesión) y los que quedan pendientes de realizar:
+    ambiguos (varios candidatos, requieren decisión manual), sin albarán
+    (SAP dice entregado/parcial pero no se encontró el albarán en DALI) y
+    sin pedido (hay albarán en DALI pero ningún pedido dado de alta con
+    ese importe recibido).
+    """
+    pend_ambiguos    = resultado.get("pendientes_ambiguos", [])
+    pend_sin_albaran = resultado.get("pendientes_sin_albaran", [])
+    pend_sin_pedido  = resultado.get("pendientes_sin_pedido", [])
+    total_pendientes = len(pend_ambiguos) + len(pend_sin_albaran) + len(pend_sin_pedido)
+
+    subject = (
+        f"[Control de Pedidos] Comparación pedidos+albaranes {hotel_codigo}: "
+        f"{len(aplicadas)} registrado(s), {total_pendientes} pendiente(s)"
+    )
+
+    filas_aplicadas = "".join(f"""
+        <tr style="{'background:#f5f5f5' if i % 2 else ''}">
+          <td style="padding:8px 12px;border:1px solid #ddd">{a['descripcion']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{'; '.join(a['cambios'])}</td>
+        </tr>""" for i, a in enumerate(aplicadas))
+
+    def _fila_sin_albaran(p):
+        return f"""<tr>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p['pedido_num_sap']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p['proveedor_nombre']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p['importe_recibido']:.2f} €</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">Sin albarán DALI con ese importe recibido</td>
+        </tr>"""
+
+    def _fila_sin_pedido(a):
+        return f"""<tr>
+          <td style="padding:8px 12px;border:1px solid #ddd">Albarán DALI {a['registro_dali']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{a['proveedor_nombre']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{a['importe']:.2f} €</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">Sin pedido Entregado/Parcial con ese importe en la app</td>
+        </tr>"""
+
+    def _fila_ambiguo(g):
+        return f"""<tr>
+          <td style="padding:8px 12px;border:1px solid #ddd">{g['proveedor_nombre']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{g['importe']:.2f} €</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{len(g['pedidos'])} pedido(s) / {len(g['albaranes'])} albarán(es) posibles</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">Varios candidatos — requiere decisión manual</td>
+        </tr>"""
+
+    filas_pendientes = (
+        "".join(_fila_sin_albaran(p) for p in pend_sin_albaran)
+        + "".join(_fila_sin_pedido(a) for a in pend_sin_pedido)
+        + "".join(_fila_ambiguo(g) for g in pend_ambiguos)
+    )
+
+    bloque_aplicadas = f"""
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+          <tr style="background:#155724;color:#fff">
+            <th style="padding:8px 12px;text-align:left">Registro</th>
+            <th style="padding:8px 12px;text-align:left">Cambios aplicados</th>
+          </tr>
+          {filas_aplicadas}
+        </table>""" if aplicadas else '<p style="color:#888;font-style:italic">Ningún registro se ha aplicado en esta sesión.</p>'
+
+    bloque_pendientes = f"""
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+          <tr style="background:#856404;color:#fff">
+            <th style="padding:8px 12px;text-align:left">Referencia</th>
+            <th style="padding:8px 12px;text-align:left">Proveedor</th>
+            <th style="padding:8px 12px;text-align:left">Importe</th>
+            <th style="padding:8px 12px;text-align:left">Motivo</th>
+          </tr>
+          {filas_pendientes}
+        </table>""" if total_pendientes else '<p style="color:#155724;font-weight:600">🎉 No ha quedado ningún registro pendiente.</p>'
+
+    body = f"""
+    <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
+      {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
+                            color_fondo="#1a3a6b", color_subtitulo="#a8c0e8")}
+      <div style="padding:24px">
+        <p>Se ha comparado el listado de pedidos de SAP con el listado de albaranes
+           registrados en DALI para el hotel <strong>{hotel_nombre}</strong> ({hotel_codigo}).</p>
+        <h3 style="color:#155724;margin-bottom:6px">✅ Registrados automáticamente ({len(aplicadas)})</h3>
+        {bloque_aplicadas}
+        <h3 style="color:#856404;margin-bottom:6px">⏳ Pendientes de realizar ({total_pendientes})</h3>
+        {bloque_pendientes}
+        <p style="font-size:12px;color:#888">Consulta generada por {admin_nombre} desde
+           "Comparar listado PDF" (Pedidos + Albaranes).</p>
+        <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
+        <p style="font-size:12px;color:#666">Mensaje automático generado por el sistema de Control de Pedidos.<br>
+           <strong>Princess Hotels &amp; Resorts</strong></p>
+      </div>
+    </div>
+    """
+    return subject, body
 
 @app.route("/api/proveedores/<int:pid>", methods=["DELETE"])
 @admin_required
