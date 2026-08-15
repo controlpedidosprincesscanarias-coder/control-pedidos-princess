@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.07
+          V 12.30.08
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2576,8 +2576,8 @@ tbody tr:last-child{border-bottom:none}
         <div style="margin-top:16px;text-align:right">
           <button class="btn btn-sm" id="cmp-alb-btn-enviar-resumen" style="background:#198754;color:#fff;border:none"
                   onclick="enviarResumenComparacionAlbaranes()"
-                  title="Envía un correo interno con lo registrado automáticamente y lo pendiente de realizar">
-            📧 Enviar resumen por correo
+                  title="Envía un único correo interno con los pedidos de SAP sin dar de alta, lo registrado automáticamente y lo pendiente de realizar">
+            📧 Enviar resumen por correo (pedidos + albaranes)
           </button>
         </div>
       </div>
@@ -6190,6 +6190,26 @@ async function _pollCompararListadoAlbaranes(jobId, intentos) {
   }
   // status === 'done'
   document.getElementById('cmp-pdf-loading').style.display = 'none';
+
+  // (2026-08-15) A petición del usuario: el resultado de comparar los dos
+  // PDF debe ser la UNIÓN de ambas comparaciones — se muestra también la
+  // tabla de auditoría completa del PDF 1 (mismos pedidos/columnas que la
+  // comparación de un solo PDF: qué está sin dar de alta o sin entregar),
+  // justo encima de las coincidencias con los albaranes. Se reutiliza tal
+  // cual la tabla/función ya existente (_cmpPdfResultado / cmp-pdf-tbody).
+  const auditoria = d.resultado.auditoria_pdf1;
+  if (auditoria) {
+    _cmpPdfResultado = auditoria;
+    document.getElementById('cmp-pdf-resultado').style.display = '';
+    document.getElementById('cmp-pdf-solo-faltantes').checked = true;
+    _renderCompararPdfResultado();
+    // El envío de correo ahora es uno solo, conjunto, desde el botón de
+    // la sección de Albaranes de más abajo — se oculta el de esta tabla
+    // para no acabar enviando dos correos distintos de la misma consulta.
+    const btnAuditoria = document.getElementById('cmp-pdf-btn-enviar-resumen');
+    if (btnAuditoria) btnAuditoria.style.display = 'none';
+  }
+
   document.getElementById('cmp-alb-resultado').style.display = '';
   _renderCompararAlbaranesResultado(d.resultado);
 }

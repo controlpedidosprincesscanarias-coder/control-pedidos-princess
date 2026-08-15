@@ -1,3 +1,43 @@
+# v12.30.08 — 15 agosto 2026
+
+🔗 Comparar Pedidos + Albaranes: el resultado y el correo son la unión de las dos comparaciones
+
+**Petición del usuario**, tras ver el resultado de v12.30.07 en pantalla:
+"si se realiza el trabajo con los 2 PDF el resultado entregado deberá ser
+una unión de ambos, es decir, la información que lanza el primero mas la
+que lanza ambos, para enviar un único correo al comprador y admin" — hasta
+ahora, al marcar la casilla del segundo PDF, la tabla de auditoría del
+primer PDF (pedidos sin dar de alta o sin entregar) dejaba de mostrarse
+del todo, sustituida solo por la sección de coincidencias con los
+albaranes; y aunque hubiera aparecido, cada sección tenía su propio botón
+de correo independiente.
+
+**Cambio — backend (`app.py`)**: `_comparar_listado_albaranes_logica()`
+calcula ahora también, además del cruce con los albaranes, la auditoría
+completa del PDF 1 (reutilizando tal cual `_comparar_listado_pdf_logica()`
+sobre el mismo PDF 1) y la añade al resultado como `auditoria_pdf1`. El
+endpoint `.../enviar-resumen` construye a partir de ella la misma lista de
+"pedidos sin dar de alta" que ya usaba el correo de un solo PDF, y
+`_email_resumen_comparacion_albaranes()` la incorpora como una sección
+más del correo — que pasa a tener tres bloques en un único envío: 📋
+pedidos de SAP sin dar de alta, ✅ registrados automáticamente y ⏳
+pendientes de realizar. Si las tres secciones están vacías, no se envía
+nada (mismo criterio que el correo de un solo PDF).
+
+**Cambio — frontend (`templates/index.html`)**: al terminar la
+comparación con los dos PDF, se muestra también la tabla de auditoría
+completa del PDF 1 (reutilizando la tabla/checkbox de filtro ya
+existentes) justo encima de la sección de coincidencias con los
+albaranes — y se oculta el botón de correo de esa tabla, para que solo
+quede un botón "Enviar resumen por correo (pedidos + albaranes)" que
+envía el correo conjunto ya unificado en el backend.
+
+**Verificación**: `python3 -m py_compile app.py` y sintaxis de los
+bloques `<script>` de `templates/index.html` (`node --check` sobre el JS
+extraído), ambos sin errores. Sin pruebas contra base de datos en vivo —
+sigue pendiente la primera prueba real en producción, igual que en
+v12.30.07.
+
 # v12.30.07 — 15 agosto 2026
 
 📦 Comparar Pedidos + Albaranes: cruce automático propuesto con el listado de albaranes de DALI

@@ -8725,6 +8725,18 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
                 "albaranes":        lado2,
             })
 
+    # (2026-08-15) A petición del usuario: el resultado de esta comparación
+    # de dos PDF debe ser la UNIÓN de lo que ya hace la comparación de un
+    # solo PDF (auditoría completa: qué pedidos de SAP no están dados de
+    # alta en la app, o están dados de alta pero sin ese estado de entrega)
+    # más lo que aporta el cruce con los albaranes de DALI — para que
+    # tanto la pantalla como el correo final lo muestren junto, en vez de
+    # como dos comparaciones independientes. Se reutiliza tal cual
+    # _comparar_listado_pdf_logica() sobre el mismo PDF 1 (relee y
+    # reanaliza el mismo texto ya leído arriba — coste asumible, es un
+    # job en segundo plano) para no duplicar esa lógica.
+    auditoria_pdf1 = _comparar_listado_pdf_logica(hotel_id, pdf1_bytes)
+
     return {
         "ok": True,
         "coincidencias":          coincidencias,
@@ -8735,6 +8747,7 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
         "total_pdf2":             len(encontrados_pdf2),
         "excluidos_pdf1":         excluidos_pdf1,
         "excluidos_pdf2":         excluidos_pdf2,
+        "auditoria_pdf1":         auditoria_pdf1,
     }
 
 def _aplicar_coincidencia_albaran(db, coincidencia: dict, usuario_id: int, usuario_nombre: str) -> dict:
@@ -9016,6 +9029,27 @@ def comparar_listado_albaranes_enviar_resumen(job_id):
     resultado = job.get("resultado") or {}
     aplicadas = job.get("aplicadas_acumuladas", [])
 
+    # (2026-08-15) A petición del usuario: el correo de esta comparación
+    # (pedidos + albaranes) debe ser la UNIÓN de lo que ya envía la
+    # comparación de un solo PDF (pedidos de SAP sin dar de alta en la
+    # app) más lo que aporta el cruce con los albaranes — un único correo
+    # al comprador/admin, no dos independientes. Mismo filtro que usa
+    # .../comparar-listado-pdf/<job_id>/enviar-resumen: solo pedidos con
+    # proveedor identificado con certeza (el resto queda solo para
+    # revisión visual en pantalla).
+    auditoria_pdf1 = resultado.get("auditoria_pdf1") or {}
+    pedidos_no_encontrados_audit = [p for p in auditoria_pdf1.get("pedidos", []) if not p.get("encontrado")]
+    pedidos_faltantes_audit = [p for p in pedidos_no_encontrados_audit if p.get("proveedor_identificado")]
+    no_identificados_audit = len(pedidos_no_encontrados_audit) - len(pedidos_faltantes_audit)
+
+    total_pendientes_alb = (
+        len(resultado.get("pendientes_ambiguos", []))
+        + len(resultado.get("pendientes_sin_albaran", []))
+        + len(resultado.get("pendientes_sin_pedido", []))
+    )
+    if not pedidos_faltantes_audit and not aplicadas and not total_pendientes_alb:
+        return jsonify({"error": "No hay nada que reportar — no se envía nada"}), 400
+
     hotel = query("SELECT codigo, nombre FROM hoteles WHERE id=%s", (job.get("hotel_id"),), one=True)
     if not hotel:
         return jsonify({"error": "Hotel no encontrado"}), 404
@@ -9033,7 +9067,11 @@ def comparar_listado_albaranes_enviar_resumen(job_id):
     admin_email  = admin_row.get("email")
 
     subject, body = _email_resumen_comparacion_albaranes(
-        hotel["nombre"], hotel["codigo"], resultado, aplicadas, admin_nombre
+        hotel["nombre"], hotel["codigo"], resultado, aplicadas, admin_nombre,
+        pedidos_faltantes=pedidos_faltantes_audit,
+        total_pdf1_audit=auditoria_pdf1.get("total_pdf", 0),
+        excluidos_pdf1_audit=auditoria_pdf1.get("excluidos_seguimiento", 0),
+        no_identificados_audit=no_identificados_audit,
     )
     _encolar_email_sistema(
         "resumen_comparacion_albaranes", destinatarios, subject, cuerpo_html=body,
@@ -9041,17 +9079,26 @@ def comparar_listado_albaranes_enviar_resumen(job_id):
     )
     return jsonify({"ok": True, "destinatarios": destinatarios, "cc": admin_email})
 
-def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, aplicadas, admin_nombre):
+def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, aplicadas, admin_nombre,
+                                          pedidos_faltantes=None, total_pdf1_audit=0,
+                                          excluidos_pdf1_audit=0, no_identificados_audit=0):
     """
     (2026-08-15) Cuerpo del correo de resumen de "Comparar listado PDF"
     (pedidos + albaranes) — misma factura visual que el resto de correos
-    internos de la app. Lista los registros realizados automáticamente
-    (aplicados en esta sesión) y los que quedan pendientes de realizar:
-    ambiguos (varios candidatos, requieren decisión manual), sin albarán
-    (SAP dice entregado/parcial pero no se encontró el albarán en DALI) y
-    sin pedido (hay albarán en DALI pero ningún pedido dado de alta con
-    ese importe recibido).
+    internos de la app. Es la UNIÓN de las dos comparaciones que se hacen
+    en esta pantalla (a petición del usuario, para enviar un único correo
+    al comprador y al admin en vez de dos independientes):
+      1. La auditoría del PDF 1 solo (`pedidos_faltantes`, igual que en
+         .../comparar-listado-pdf/<job_id>/enviar-resumen): pedidos que
+         figuran en SAP pero no están dados de alta en la app todavía.
+      2. El cruce con los albaranes de DALI: los registros realizados
+         automáticamente (aplicados en esta sesión) y los que quedan
+         pendientes de realizar — ambiguos (varios candidatos, requieren
+         decisión manual), sin albarán (SAP dice entregado/parcial pero
+         no se encontró el albarán en DALI) y sin pedido (hay albarán en
+         DALI pero ningún pedido dado de alta con ese importe recibido).
     """
+    pedidos_faltantes = pedidos_faltantes or []
     pend_ambiguos    = resultado.get("pendientes_ambiguos", [])
     pend_sin_albaran = resultado.get("pendientes_sin_albaran", [])
     pend_sin_pedido  = resultado.get("pendientes_sin_pedido", [])
@@ -9059,7 +9106,29 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
 
     subject = (
         f"[Control de Pedidos] Comparación pedidos+albaranes {hotel_codigo}: "
-        f"{len(aplicadas)} registrado(s), {total_pendientes} pendiente(s)"
+        f"{len(pedidos_faltantes)} sin dar de alta, {len(aplicadas)} registrado(s), "
+        f"{total_pendientes} pendiente(s)"
+    )
+
+    # (2026-08-15) LIMITE_FILAS/resto: mismo criterio que en
+    # _email_resumen_pdf_sap — con un listado grande podrían ser cientos
+    # de filas, se acota la tabla del correo para que no sea kilométrica.
+    LIMITE_FILAS = 100
+    mostrar_faltantes = pedidos_faltantes[:LIMITE_FILAS]
+    resto_faltantes = len(pedidos_faltantes) - len(mostrar_faltantes)
+
+    filas_faltantes = "".join(f"""
+        <tr style="{'background:#f5f5f5' if i % 2 else ''}">
+          <td style="padding:8px 12px;border:1px solid #ddd">{p['pedido_num_sap']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p['proveedor_pdf']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p.get('fecha_pedido') or p.get('fecha', '')}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{p.get('entrega_estado', '')}</td>
+        </tr>""" for i, p in enumerate(mostrar_faltantes))
+
+    aviso_resto_faltantes = (
+        f'<p style="font-size:12px;color:#888;font-style:italic">'
+        f'…y {resto_faltantes} pedido(s) más — consulta el listado completo en la aplicación.</p>'
+        if resto_faltantes > 0 else ""
     )
 
     filas_aplicadas = "".join(f"""
@@ -9098,6 +9167,26 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
         + "".join(_fila_ambiguo(g) for g in pend_ambiguos)
     )
 
+    bloque_faltantes = f"""
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+          <tr style="background:#1a3a6b;color:#fff">
+            <th style="padding:8px 12px;text-align:left">Nº Pedido SAP</th>
+            <th style="padding:8px 12px;text-align:left">Proveedor</th>
+            <th style="padding:8px 12px;text-align:left">Fecha</th>
+            <th style="padding:8px 12px;text-align:left">Entrega</th>
+          </tr>
+          {filas_faltantes}
+        </table>
+        {aviso_resto_faltantes}""" if pedidos_faltantes else '<p style="color:#155724;font-weight:600">🎉 Todos los pedidos del listado de SAP están dados de alta en la app.</p>'
+
+    aviso_no_identificados_audit = (
+        f'<p style="font-size:12px;color:#856404;background:#fff3cd;padding:8px 12px;border-radius:4px">'
+        f'⚠️ Hay además <strong>{no_identificados_audit}</strong> pedido(s) sin dar de alta cuyo proveedor '
+        f'no se ha podido identificar con certeza en el catálogo — no se incluyen aquí por fiabilidad; '
+        f'revísalos en pantalla, en "Comparar listado PDF".</p>'
+        if no_identificados_audit else ''
+    )
+
     bloque_aplicadas = f"""
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
           <tr style="background:#155724;color:#fff">
@@ -9125,7 +9214,14 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
       <div style="padding:24px">
         <p>Se ha comparado el listado de pedidos de SAP con el listado de albaranes
            registrados en DALI para el hotel <strong>{hotel_nombre}</strong> ({hotel_codigo}).</p>
-        <h3 style="color:#155724;margin-bottom:6px">✅ Registrados automáticamente ({len(aplicadas)})</h3>
+
+        <h3 style="color:#1a3a6b;margin-bottom:6px">📋 Pedidos de SAP sin dar de alta en la app ({len(pedidos_faltantes)})</h3>
+        <p style="font-size:13px;color:#555">De un total de {total_pdf1_audit} pedidos en el listado de SAP
+           ({excluidos_pdf1_audit} de proveedores no sujetos a seguimiento, no evaluados).</p>
+        {bloque_faltantes}
+        {aviso_no_identificados_audit}
+
+        <h3 style="color:#155724;margin-bottom:6px;margin-top:22px">✅ Registrados automáticamente ({len(aplicadas)})</h3>
         {bloque_aplicadas}
         <h3 style="color:#856404;margin-bottom:6px">⏳ Pendientes de realizar ({total_pendientes})</h3>
         {bloque_pendientes}

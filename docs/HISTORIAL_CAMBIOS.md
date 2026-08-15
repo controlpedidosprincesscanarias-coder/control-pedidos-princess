@@ -25,6 +25,58 @@
 
 ---
 
+## 2026-08-15 (2) — [Control Pedidos] Comparar Pedidos + Albaranes: el resultado y el correo son la unión de las dos comparaciones
+
+- Continuación directa de la entrada anterior (hoy mismo, v12.30.07). Tras
+  verla en pantalla, el usuario pidió: "si se realiza el trabajo con los 2
+  PDF el resultado entregado deberá ser una unión de ambos, es decir, la
+  información que lanza el primero mas la que lanza ambos, para enviar un
+  único correo al comprador y admin" — señalando que, al marcar la
+  casilla del segundo PDF, la tabla de auditoría del primer PDF (pedidos
+  de SAP sin dar de alta en la app, o dados de alta pero sin ese estado de
+  entrega) dejaba de verse por completo, sustituida solo por la sección
+  de coincidencias con los albaranes — y que el correo final debía ser
+  uno solo, no dos independientes.
+- **Cambios en `app.py`**:
+  - `_comparar_listado_albaranes_logica()` calcula ahora, además del
+    cruce con los albaranes, la auditoría completa del PDF 1 —
+    reutilizando tal cual `_comparar_listado_pdf_logica(hotel_id,
+    pdf1_bytes)` sobre el mismo PDF 1 (releerlo y reanalizarlo tiene un
+    coste asumible, es un job en segundo plano, y evita duplicar esa
+    lógica) — y la añade al resultado devuelto como clave nueva
+    `auditoria_pdf1`.
+  - El endpoint `POST .../comparar-listado-albaranes/<job_id>/enviar-resumen`
+    calcula a partir de `auditoria_pdf1` la misma lista de "pedidos sin
+    dar de alta con proveedor identificado" que ya usaba el correo de un
+    solo PDF (mismo filtro: solo proveedor identificado con certeza,
+    igual criterio de fiabilidad que siempre), y aborta con error si las
+    tres fuentes de contenido del correo (pedidos sin dar de alta,
+    aplicados, pendientes) están vacías a la vez — no tiene sentido
+    encolar un correo vacío.
+  - `_email_resumen_comparacion_albaranes()` gana los parámetros
+    `pedidos_faltantes`, `total_pdf1_audit`, `excluidos_pdf1_audit` y
+    `no_identificados_audit`, y construye el correo con tres bloques en
+    un único envío: 📋 pedidos de SAP sin dar de alta en la app (mismo
+    formato de tabla que el correo de un solo PDF), ✅ registrados
+    automáticamente y ⏳ pendientes de realizar (los dos ya existentes de
+    v12.30.07). El asunto del correo pasa a incluir los tres recuentos.
+- **Cambios en `templates/index.html`**: al terminar la comparación con
+  los dos PDF (`_pollCompararListadoAlbaranes`, status `done`), además de
+  la sección de coincidencias con albaranes se muestra también la tabla
+  de auditoría completa del PDF 1 — reutilizando sin duplicar código la
+  tabla/checkbox/función ya existentes de la comparación de un solo PDF
+  (`_cmpPdfResultado`, `#cmp-pdf-resultado`, `_renderCompararPdfResultado()`),
+  justo encima de la sección de albaranes. El botón de correo propio de
+  esa tabla se oculta en este modo (`#cmp-pdf-btn-enviar-resumen`), para
+  que solo quede un botón — el de la sección de albaranes, renombrado a
+  "Enviar resumen por correo (pedidos + albaranes)" — que dispara el
+  correo ya unificado en el backend.
+- **Verificación**: `python3 -m py_compile app.py` y sintaxis de los
+  bloques `<script>` de `templates/index.html` (extracción + `node
+  --check`), ambos sin errores. Sigue sin probarse contra base de datos
+  en vivo, igual que la entrada anterior.
+- Versión: `V 12.30.07` → `V 12.30.08`.
+
 ## 2026-08-15 — [Control Pedidos] Comparar Pedidos + Albaranes: cruce automático propuesto con el listado de albaranes de DALI
 
 - **Petición del usuario**: ampliar la comparación de listado PDF ya
