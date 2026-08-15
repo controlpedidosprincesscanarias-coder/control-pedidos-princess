@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.05
+          V 12.30.06
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5061,12 +5061,16 @@ function onTarifaAcordadaChange() {
 }
 
 // ── _enviarEmailsPendientesEstado ─────────────────────────────────────────────
-// Envía vía EmailJS los correos de cambio de estado (proveedor / internos)
-// que el backend prepara para que el frontend envíe vía EmailJS.
-// Cada correo se intenta de forma independiente: el fallo de uno no impide
-// que se intenten los demás. Los fallos solo se registran en consola — el
-// pedido ya quedó guardado correctamente en BD, así que no se bloquea al
-// usuario por un problema de envío de correo.
+// (2026-08-14) EN DESUSO: el backend (enviar_emails_estado en app.py) ya no
+// devuelve nada en "emails_pendientes" — los correos de cambio de estado
+// (proveedor / internos) se encolan ahora con 5 minutos de retraso en
+// emails_sistema_pendientes, igual que el resto de correos automáticos, y
+// los despacha _enviarEmailsSistemaPendientes() más abajo (el poller de 5
+// min ya existente), no este envío inmediato. Se deja esta función y sus
+// llamadas (savePedido, etc.) tal cual porque son inofensivas — reciben
+// siempre una lista vacía y no hacen nada — para no tocar esos flujos sin
+// necesidad; motivo del cambio: evitar que varios cambios de estado
+// seguidos sobre el mismo pedido disparen un correo por cada uno.
 async function _enviarEmailsPendientesEstado(pendientes) {
   if (!pendientes || !pendientes.length) return;
   for (const p of pendientes) {
@@ -9636,7 +9640,17 @@ function _abrirVentanaImpresion(html) {
    emails de la aplicación. Este poller (admin y compras — v12.19.1: los
    compradores ven todos los hoteles, no solo los suyos, así que también
    pueden despachar la cola) los recoge y envía cada 5 minutos mientras
-   haya una sesión abierta. */
+   haya una sesión abierta.
+
+   (2026-08-14) Desde ahora esta misma cola/poller también despacha los
+   correos de cambio de estado de pedido (evento_codigo
+   'cambio_estado_proveedor' / 'cambio_estado_interno') — antes se
+   enviaban de inmediato desde _enviarEmailsPendientesEstado() justo tras
+   guardar el pedido; ahora el backend los encola con 5 minutos de retraso
+   (columna visible_en) para que varios cambios de estado seguidos sobre
+   el mismo pedido no disparen un correo por cada uno — solo se entrega el
+   último, pasados esos 5 min sin más cambios. Como esta cola ya se
+   sondeaba cada 5 minutos, no ha hecho falta tocar el intervalo. */
 let _emailsSistemaPollTimer = null;
 
 function _startEmailsSistemaPolling() {

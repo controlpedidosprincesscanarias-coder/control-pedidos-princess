@@ -1,3 +1,47 @@
+# v12.30.06 — 14 agosto 2026
+
+📧 Correo de cambio de estado: mismo retraso de 5 minutos y antirrepetición que el popup
+
+**Petición del usuario**, continuación directa de v12.30.05: "¿también llegan
+correos electrónicos de aviso inmediatos con el cambio de estado?" → sí, y
+además de forma más inmediata que el popup (se enviaban directamente desde
+el navegador de quien guardaba el pedido, sin ninguna cola de por medio) →
+"si por favor" a aplicar la misma protección.
+
+**Cambio**: los correos de cambio de estado (proveedor / interno,
+`enviar_emails_estado()` en `app.py`) dejan de devolverse para envío
+inmediato desde el navegador que hizo el cambio. Ahora se encolan con 5
+minutos de retraso en `emails_sistema_pendientes` — la misma cola que ya
+usaba la app para los correos generados por jobs sin navegador abierto
+(techo urgente, familias repetidas, solicitudes de acceso...) — vía la
+función nueva `_encolar_email_pedido_retrasado()`. Si el mismo pedido
+cambia de estado otra vez antes de que se cumplan esos 5 minutos, se
+sobrescribe el correo pendiente (contenido + cuenta atrás) en vez de
+encolar uno nuevo: solo se entrega el último cambio.
+
+El envío real lo sigue haciendo el navegador vía EmailJS (esta app no tiene
+SMTP propio) — pero ahora lo hace el poller de "emails de sistema" que ya
+revisaba esa cola cada 5 minutos desde cualquier sesión admin/compras
+abierta (`_enviarEmailsSistemaPendientes` en `templates/index.html`), con
+reserva atómica anti-duplicados ya existente. Efecto colateral positivo:
+el envío ya no depende de que quien hizo el cambio no cierre la pestaña
+antes de que EmailJS termine.
+
+**Base de datos**: columna nueva `emails_sistema_pendientes.visible_en`
+(`TIMESTAMPTZ NOT NULL DEFAULT NOW()`), añadida automáticamente por
+`_auto_migrate()` — sin acción manual en Supabase. Por defecto inmediata
+(`NOW()`), así que el resto de correos de esa cola no cambia de
+comportamiento.
+
+**Aviso**: a diferencia del envío inmediato de antes (que salía desde
+cualquier sesión, incluida la de rol `hotel`), el despacho de esta cola
+solo lo hacen sesiones `admin`/`compras` con la app abierta — mismo
+comportamiento que ya tenían el resto de correos automáticos de esta cola.
+Si nadie de compras/admin abre la app en un buen rato, el job de
+recordatorio ya existente (`_job_recordar_emails_sistema_pendientes`, cada
+10 min en horario 07–21h) avisa por Telegram con la cola pendiente — cubre
+también este caso nuevo sin cambios adicionales.
+
 # v12.30.05 — 14 agosto 2026
 
 🔕 Popup de cambio de estado: antirrepetición con espera de 5 minutos

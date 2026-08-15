@@ -25,6 +25,77 @@
 
 ---
 
+## 2026-08-14 13:45 — [Control Pedidos] Correo de cambio de estado: mismo retraso de 5 minutos y antirrepetición que el popup
+
+- Continuación directa de la entrada anterior (`2026-08-14 13:00`, popup).
+  El usuario preguntó "tambien llegan correos electronicos de aviso
+  inmediatos con el cambio de estado?" — respuesta: sí, y de forma aún
+  más inmediata que el popup (se enviaban directamente desde el
+  navegador de quien guardaba el pedido, sin ninguna cola de servidor de
+  por medio, vía EmailJS en el frontend). Con "si por favor" pidió
+  aplicar la misma protección de 5 minutos / solo-el-último-cambio.
+- **Diferencia clave frente al popup**: el popup ya vivía en una cola
+  "pull" en base de datos (`bridge_notificaciones`) que el Organizador
+  sondea, así que el retraso se implementó con una columna `visible_en`.
+  El correo, en cambio, se devolvía en la respuesta JSON de
+  `PUT /api/pedidos/<id>` y el frontend lo enviaba de inmediato vía
+  EmailJS — no había ninguna cola de la que tirar. Se decidió (en vez de
+  construir una cola nueva desde cero) reutilizar
+  `emails_sistema_pendientes`, una cola ya existente en esta misma app
+  para correos generados por jobs sin navegador abierto (techo urgente,
+  familias repetidas, solicitudes de acceso...), con su propio poller de
+  5 minutos ya funcionando en el frontend
+  (`_enviarEmailsSistemaPendientes`) y su propia reserva atómica
+  anti-duplicados (`en_proceso_desde`, v12.29.96) — evita reinventar esa
+  infraestructura.
+- **Cambios en `app.py`**:
+  - `emails_sistema_pendientes` gana la columna `visible_en`
+    (`TIMESTAMPTZ NOT NULL DEFAULT NOW()`) — por defecto inmediata,
+    compatible con el resto de eventos de esa cola.
+  - Función nueva `_encolar_email_pedido_retrasado()`: inserta (o
+    sobrescribe, si ya hay uno sin enviar/sin reservar para el mismo
+    pedido + tipo de correo) una fila con `visible_en = NOW() + 5min`.
+  - `enviar_emails_estado()` ya no construye una lista para devolver:
+    llama a `_encolar_email_pedido_retrasado()` para el correo al
+    proveedor (`evento_codigo='cambio_estado_proveedor'`) y para el
+    interno (`evento_codigo='cambio_estado_interno'`, con el resto de
+    compradores/hotel en `cc_emails`). Sigue devolviendo `[]` por
+    compatibilidad con los callers (`create_pedido`/`update_pedido`),
+    que lo incluyen en su respuesta JSON como `emails_pendientes`.
+  - `GET /api/emails-sistema-pendientes` añade `AND visible_en <= NOW()`
+    a la reserva atómica — mismo patrón que el filtro añadido al bridge
+    de popups.
+- **Cambios en `templates/index.html`**: comentario actualizado en
+  `_enviarEmailsPendientesEstado()` (ahora en desuso — se deja la
+  función y sus llamadas tal cual, inofensivas, para no tocar
+  `savePedido()` sin necesidad) y en el poller de `emails_sistema_
+  pendientes`, documentando que también despacha estos dos eventos
+  nuevos.
+- **Aviso trasladado al usuario** (no es un bug, es una consecuencia del
+  diseño elegido): el despacho de esta cola solo lo hacen sesiones
+  `admin`/`compras` con la app abierta (`_startEmailsSistemaPolling()`
+  nunca se llama para rol `hotel` — así ha sido siempre para el resto de
+  correos de esta cola). Antes, el envío inmediato salía desde
+  cualquier sesión, incluida una de rol `hotel` actualizando un
+  albarán. Cubierto por el job de recordatorio ya existente
+  (`_job_recordar_emails_sistema_pendientes`, cada 10 min en 07–21h),
+  que avisa por Telegram a admins si la cola lleva más de 10 min sin
+  despacharse — se aplica automáticamente también a estos dos eventos
+  nuevos, sin cambios adicionales.
+- Versión: `V 12.30.06` (badge en `templates/index.html`),
+  `CHANGELOG.md` actualizado con la misma entrada.
+- Verificación: `python3 -m py_compile app.py` sin errores. Pendiente de
+  confirmación del usuario en producción: cambiar de estado un pedido a
+  `ENVIADO AL PROVEEDOR` (o `ENTREGA PARCIAL`/`ENTREGADO`/`CANCELADO`) y
+  comprobar que el correo llega una única vez, hasta 5 + 5 minutos
+  después (5 de espera + hasta 5 de margen del siguiente sondeo del
+  poller), y no antes; revisar también que el remitente/"responder a"
+  del correo al proveedor sigue funcionando igual que antes (mismo
+  valor, `p.destinatario`, pero ahora viaja como `reply_to` en vez de
+  `email` en el payload de EmailJS — mismo patrón que el resto de la
+  cola, no debería cambiar nada, pero conviene confirmarlo con un envío
+  real).
+
 ## 2026-08-14 13:00 — [Control Pedidos] Popup de cambio de estado: antirrepetición con espera de 5 minutos
 
 - Petición del usuario (Víctor): "vamos a modificar los envios de popup

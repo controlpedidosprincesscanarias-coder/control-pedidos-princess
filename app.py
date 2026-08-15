@@ -1014,7 +1014,8 @@ def _auto_migrate():
                     cuerpo_text    TEXT,
                     enviado        BOOLEAN NOT NULL DEFAULT FALSE,
                     creado_en      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    enviado_en     TIMESTAMPTZ
+                    enviado_en     TIMESTAMPTZ,
+                    visible_en     TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
             cur.execute(
@@ -1050,6 +1051,19 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE emails_sistema_pendientes "
                 "ADD COLUMN IF NOT EXISTS en_proceso_desde TIMESTAMPTZ"
+            )
+            # Migración (2026-08-14): retraso de 5 min para los correos de
+            # cambio de estado de pedido (evento_codigo 'cambio_estado_
+            # proveedor' / 'cambio_estado_interno'), que a partir de ahora
+            # también pasan por esta cola en vez de enviarse de inmediato
+            # desde el navegador que hizo el cambio — ver
+            # _encolar_email_pedido_retrasado(). Por defecto NOW(): el resto
+            # de eventos de esta cola (techo urgente, familias repetidas,
+            # solicitudes de acceso...) siguen siendo inmediatos, sin cambio
+            # de comportamiento.
+            cur.execute(
+                "ALTER TABLE emails_sistema_pendientes "
+                "ADD COLUMN IF NOT EXISTS visible_en TIMESTAMPTZ NOT NULL DEFAULT NOW()"
             )
             cur.execute("SELECT COUNT(*) as n FROM eventos_aviso")
             _row_ev = cur.fetchone()
@@ -1807,22 +1821,94 @@ def _log_email(db, pedido_id, tipo, destinatario, asunto, enviado, error=None):
             (pedido_id, tipo, destinatario, asunto, 1 if enviado else 0, error)
         )
 
+def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinatario: str,
+                                     asunto: str, cuerpo_html: str, cuerpo_text: str,
+                                     cc_emails: str = "", retraso_segundos: int = 300) -> None:
+    """
+    (2026-08-14) Encola un correo de cambio de estado en emails_sistema_pendientes
+    con retraso (columna visible_en = NOW() + retraso_segundos), en vez de
+    devolverlo para que el navegador que hizo el cambio lo envíe de inmediato
+    vía EmailJS — mismo objetivo y mismo mecanismo que el retraso ya aplicado
+    al popup (ver _encolar_bridge_notificacion): a petición del usuario
+    (Víctor), varios cambios de estado seguidos sobre el mismo pedido (p. ej.
+    un error corregido al momento) no deben disparar un correo por cada uno.
+
+    Si ya hay un correo sin enviar y sin reservar (en_proceso_desde libre o
+    caducado) para el mismo (pedido_id, evento_codigo), se SOBRESCRIBE con el
+    contenido más reciente y se reinicia la espera, en vez de encolar uno
+    nuevo — así solo se entrega el último cambio, pasados esos minutos sin
+    más cambios sobre ese pedido.
+
+    Reutiliza la cola/poller que ya existía para "emails de sistema" (avisos
+    generados por jobs sin navegador abierto, p. ej. techo urgente o
+    familias repetidas): cualquier admin o comprador con la app abierta la
+    revisa cada 5 minutos (`_enviarEmailsSistemaPendientes` en
+    templates/index.html) y envía los correos con visible_en ya cumplido,
+    con reserva atómica (`en_proceso_desde`) para no duplicar si hay varias
+    sesiones abiertas a la vez — ver GET /api/emails-sistema-pendientes.
+    Ventaja adicional sobre el envío inmediato de antes: ya no depende de que
+    quien hizo el cambio no cierre la pestaña — lo despacha cualquier sesión
+    abierta, la que sea.
+    """
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute(
+            """UPDATE emails_sistema_pendientes
+               SET destinatario=%s, asunto=%s, cuerpo_html=%s, cuerpo_text=%s,
+                   cc_emails=%s, creado_en=NOW(),
+                   visible_en=NOW() + make_interval(secs => %s)
+               WHERE pedido_id=%s AND evento_codigo=%s
+                 AND enviado=FALSE
+                 AND (en_proceso_desde IS NULL OR en_proceso_desde < NOW() - INTERVAL '2 minutes')
+               RETURNING id""",
+            (destinatario, asunto, cuerpo_html, cuerpo_text, cc_emails,
+             retraso_segundos, pedido_id, evento_codigo)
+        )
+        if cur.fetchone() is not None:
+            db.commit()
+            return
+        cur.execute(
+            """INSERT INTO emails_sistema_pendientes
+               (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
+                cc_emails, pedido_id, visible_en)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, NOW() + make_interval(secs => %s))""",
+            (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
+             cc_emails, pedido_id, retraso_segundos)
+        )
+        db.commit()
+    except Exception as exc:
+        log.warning("emails_pedido_retrasado: no se pudo encolar (%s, pedido %s) — %s",
+                    evento_codigo, pedido_id, exc)
+
 def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str = None,
                           usuario_nombre: str = ""):
     """
     Construye los correos de notificación de cambio de estado (proveedor +
-    internos) y los registra en _log_email. El envío lo hace el frontend
-    vía EmailJS (único canal de email), por lo que no se intenta envío aquí:
-    se devuelve una lista de correos pendientes para
-    que el caller (create_pedido / update_pedido) la incluya en su respuesta
-    JSON y el frontend los envíe vía EmailJS justo después de guardar.
+    internos) y los registra en _log_email.
+
+    (2026-08-14) Ya NO se devuelven para envío inmediato desde el navegador
+    que hizo el cambio: se encolan con 5 minutos de retraso en
+    emails_sistema_pendientes vía _encolar_email_pedido_retrasado() — a
+    petición del usuario, para que varios cambios de estado seguidos sobre
+    el mismo pedido no disparen un correo por cada uno (mismo motivo y
+    mismo mecanismo que el retraso ya aplicado al popup, ver
+    _encolar_bridge_notificacion). El envío real lo sigue haciendo el
+    navegador vía EmailJS (esta app no tiene SMTP propio), pero ahora lo
+    hace el poller de "emails de sistema" que ya recorría esa cola cada 5
+    minutos desde cualquier sesión abierta — no necesariamente la del
+    usuario que hizo el cambio.
 
     usuario_nombre: quién realizó el cambio (o creó el pedido) — se incluye
     en el correo interno ("Realizado por:"), nunca en el correo al
     proveedor (es un dato interno, no debe salir fuera de la empresa).
 
-    Devuelve: list[dict] — cada dict trae lo necesario para emailjs.send:
-        {"tipo", "to_email", "bcc", "asunto", "body_text"}
+    Devuelve: [] siempre — se mantiene por compatibilidad con los callers
+    (create_pedido / update_pedido), que incluyen el valor en su respuesta
+    JSON como "emails_pendientes"; el frontend ya no tiene nada que enviar
+    de inmediato con ese valor (ver _enviarEmailsPendientesEstado en
+    templates/index.html, ahora en desuso — el envío real pasa por
+    _enviarEmailsSistemaPendientes).
     """
     pendientes = []
 
@@ -1934,14 +2020,15 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 f"Por favor, responda única y exclusivamente a la dirección que firma este comunicado."
             )
             _destino_proveedor = ", ".join(_proveedor_emails)
-            _log_email(db, pedido_id, "proveedor", _destino_proveedor, subject := f"Pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts", False, "Pendiente de envío vía EmailJS")
-            pendientes.append({
-                "tipo":      "proveedor",
-                "to_email":  _destino_proveedor,
-                "asunto":    subject,
-                "body_html": body_html,
-                "body_text": body_text,
-            })
+            _log_email(db, pedido_id, "proveedor", _destino_proveedor, subject := f"Pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts", False, "Pendiente de envío vía EmailJS (encolado con retraso)")
+            _encolar_email_pedido_retrasado(
+                pedido_id=pedido_id,
+                evento_codigo="cambio_estado_proveedor",
+                destinatario=_destino_proveedor,
+                asunto=subject,
+                cuerpo_html=body_html,
+                cuerpo_text=body_text,
+            )
 
     # ── Correo interno (ENVIADO AL PROVEEDOR, ENTREGA PARCIAL, ENTREGADO, CANCELADO) ──
     # Para:  primer comprador del hotel
@@ -2064,15 +2151,16 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         body_text_i += f"\n\n{_SEP}\nAviso automático del sistema de Control de Pedidos — Princess Hotels & Resorts."
 
         for dest in _todos_internos:
-            _log_email(db, pedido_id, "interno", dest, subject_i, False, "Pendiente de envío vía EmailJS")
-        pendientes.append({
-            "tipo":      "interno",
-            "to_email":  _todos_internos[0],
-            "bcc":       _todos_internos[1:],
-            "asunto":    subject_i,
-            "body_html": body_html_i,
-            "body_text": body_text_i,
-        })
+            _log_email(db, pedido_id, "interno", dest, subject_i, False, "Pendiente de envío vía EmailJS (encolado con retraso)")
+        _encolar_email_pedido_retrasado(
+            pedido_id=pedido_id,
+            evento_codigo="cambio_estado_interno",
+            destinatario=_todos_internos[0],
+            asunto=subject_i,
+            cuerpo_html=body_html_i,
+            cuerpo_text=body_text_i,
+            cc_emails=",".join(_todos_internos[1:]),
+        )
 
     return pendientes
 
@@ -13286,6 +13374,15 @@ def api_emails_sistema_pendientes():
     envío (fallo de EmailJS, se cierra la pestaña a media faena...), la
     reserva caduca sola pasados 2 minutos y otra sesión puede reintentarla
     con normalidad — no se pierden envíos por este cambio.
+
+    (2026-08-14) Filtro adicional `visible_en <= NOW()`: los correos de
+    cambio de estado de pedido (evento_codigo 'cambio_estado_proveedor' /
+    'cambio_estado_interno', encolados por _encolar_email_pedido_retrasado)
+    se insertan con visible_en 5 minutos en el futuro y no deben devolverse
+    hasta que se cumpla ese plazo — es la misma idea que el retraso ya
+    aplicado al popup del bridge. El resto de eventos de esta cola
+    (techo urgente, familias repetidas...) tienen visible_en = NOW() por
+    defecto, así que siguen recogiéndose de inmediato, sin cambio.
     GET /api/emails-sistema-pendientes
     """
     try:
@@ -13296,6 +13393,7 @@ def api_emails_sistema_pendientes():
              WHERE id IN (
                  SELECT id FROM emails_sistema_pendientes
                   WHERE enviado = FALSE
+                    AND visible_en <= NOW()
                     AND (en_proceso_desde IS NULL OR en_proceso_desde < NOW() - INTERVAL '2 minutes')
                   ORDER BY id
                   LIMIT 20
