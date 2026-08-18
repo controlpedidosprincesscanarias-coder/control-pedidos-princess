@@ -1,3 +1,40 @@
+# v12.30.09 — 17 agosto 2026
+
+🔕 Ningún aviso automático (Telegram/popup) en fin de semana
+
+**Petición de Víctor**: "Control pedidos no debería enviar popup ni
+Telegram los findes de semana". La mayoría de los jobs automáticos del
+scheduler (`_iniciar_scheduler()`, `app.py`) ya solo corrían lun-vie
+(alertas diarias de pedidos, techo urgente, techo mensual, familia
+repetida), pero tres se habían quedado sin esa restricción y seguían
+disparando todos los días, sábado y domingo incluidos:
+
+- `health_check_diario` (07:05) — Telegram + popup bridge a admins si
+  detecta problemas de configuración (hoteles sin comprador, etc.).
+- `alerta_consumo_diaria` (08:30) — Telegram + popup bridge a admins si
+  el consumo de Supabase (egress o tamaño de BD) se acerca o supera el
+  límite del plan Free.
+- `recordar_emails_sistema_pendientes` (cada 10 min, 07:00-21:00) —
+  Telegram con recordatorio si hay emails de sistema en cola sin
+  despachar.
+
+**Cambio**: se añade `day_of_week="mon-fri"` a los tres, mismo criterio
+que el resto de jobs de alertas — lo que caiga en fin de semana se
+retoma el lunes con normalidad, sin aviso perdido (el snapshot diario de
+tamaño de BD, que sí sigue corriendo todos los días porque no manda
+nada, conserva el histórico completo aunque el AVISO de consumo se
+retrase). Los dos jobs puramente internos sin ningún canal de aviso
+(snapshot de tamaño de BD a las 08:10, migración de adjuntos a Storage a
+las 03:00) se dejan corriendo todos los días — no tiene sentido
+restringirlos, no molestan a nadie.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Sin forma
+de probar el propio disparo del scheduler en fin de semana desde este
+entorno (dependería del reloj real del servidor en producción) —
+recomendado confirmar tras desplegar que estos tres jobs no aparecen en
+el log de un sábado/domingo (buscar "[HEALTH]", "[CONSUMO]" o
+"[RECORDATORIO EMAILS SISTEMA]" en los logs de Render de ese día).
+
 # v12.30.08 — 15 agosto 2026
 
 🔗 Comparar Pedidos + Albaranes: el resultado y el correo son la unión de las dos comparaciones

@@ -13690,10 +13690,16 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=60,
     )
-    # Job de integridad: una vez al día a las 07:05 hora Canarias
+    # Job de integridad: una vez al día a las 07:05 hora Canarias, lun-vie
+    # (2026-08-17) fin de semana: envía Telegram + popup bridge a los
+    # admins si detecta problemas — no tiene sentido avisar en fin de
+    # semana de algo que puede esperar a que alguien esté trabajando; se
+    # retoma el lunes con normalidad, mismo criterio que el resto de jobs
+    # de alertas de esta lista.
     scheduler.add_job(
         _job_health_check,
         trigger="cron",
+        day_of_week="mon-fri",
         hour="7",
         minute="5",
         second="0",
@@ -13728,18 +13734,25 @@ def _iniciar_scheduler():
         misfire_grace_time=3600,
     )
     # Job de alerta combinada de consumo Supabase (egress + tamaño BD): una
-    # vez al día a las 08:30 hora Canarias, tras el snapshot de tamaño de
-    # BD de las 08:10 — un único mensaje/popup si CUALQUIERA de las dos
-    # cuotas se acerca o supera el límite del plan Free, en vez de dos
-    # avisos separados sobre el mismo tema.
+    # vez al día a las 08:30 hora Canarias, lun-vie, tras el snapshot de
+    # tamaño de BD de las 08:10 — un único mensaje/popup si CUALQUIERA de
+    # las dos cuotas se acerca o supera el límite del plan Free, en vez de
+    # dos avisos separados sobre el mismo tema.
     #
     # Nota: egress usa el acumulado por día (tabla egress_tracking) y
     # refleja lo consumido HASTA AYER — si el umbral se cruza a media
     # tarde, el aviso no llega hasta la mañana siguiente. Tamaño de BD sí
     # se consulta en vivo en el momento del job.
+    #
+    # (2026-08-17) fin de semana: se retrasa a lunes, igual que el resto
+    # de alertas por Telegram/popup de esta lista — el snapshot de tamaño
+    # de BD (job aparte, arriba) sigue corriendo todos los días, así que
+    # no se pierde histórico, solo se retrasa el AVISO si el umbral se
+    # cruza durante el fin de semana.
     scheduler.add_job(
         _job_alerta_consumo,
         trigger="cron",
+        day_of_week="mon-fri",
         hour="8",
         minute="30",
         second="0",
@@ -13748,11 +13761,13 @@ def _iniciar_scheduler():
         misfire_grace_time=3600,
     )
     # Recordatorio de emails de sistema en cola (incluye Fase 2 de
-    # solicitudes de acceso): cada 10 min, 07:00-21:00 — fuera de ese
-    # rango puede esperar a la mañana siguiente.
+    # solicitudes de acceso): cada 10 min, 07:00-21:00, lun-vie — fuera de
+    # ese rango (incluido el fin de semana, 2026-08-17) puede esperar a
+    # que alguien vuelva a abrir la aplicación en horario laborable.
     scheduler.add_job(
         _job_recordar_emails_sistema_pendientes,
         trigger="cron",
+        day_of_week="mon-fri",
         hour="7-21",
         minute="*/10",
         second="0",
@@ -13765,10 +13780,11 @@ def _iniciar_scheduler():
     log.info("✅ Scheduler — techo URGENTE admins cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
     log.info("✅ Scheduler — alertas techo mensual diarias, lun-vie 08:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — familia/partida repetida cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
-    log.info("✅ Scheduler — health check diario a las 07:05 (Atlantic/Canary)")
-    log.info("✅ Scheduler — snapshot de tamaño de BD diario a las 08:10 (Atlantic/Canary)")
-    log.info("✅ Scheduler — migración de adjuntos cerrados a Storage diaria a las 03:00 (Atlantic/Canary)")
-    log.info("✅ Scheduler — alerta combinada de consumo (egress + tamaño BD) diaria a las 08:30 (Atlantic/Canary)")
+    log.info("✅ Scheduler — health check diario, lun-vie 07:05 (Atlantic/Canary)")
+    log.info("✅ Scheduler — snapshot de tamaño de BD diario a las 08:10, todos los días (Atlantic/Canary)")
+    log.info("✅ Scheduler — migración de adjuntos cerrados a Storage diaria a las 03:00, todos los días (Atlantic/Canary)")
+    log.info("✅ Scheduler — alerta combinada de consumo (egress + tamaño BD) diaria, lun-vie 08:30 (Atlantic/Canary)")
+    log.info("✅ Scheduler — recordatorio de emails de sistema pendientes cada 10 min, lun-vie 07:00-21:00 (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()

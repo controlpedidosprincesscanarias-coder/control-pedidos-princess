@@ -25,6 +25,43 @@
 
 ---
 
+## 2026-08-17 — [Control Pedidos] Ningún aviso automático (Telegram/popup) en fin de semana
+
+- Petición de Víctor: "Control pedidos no debería enviar popup ni
+  Telegram los findes de semana".
+- **Hallazgo**: la mayoría de los jobs automáticos del scheduler
+  (`_iniciar_scheduler()`, `app.py`) ya solo corrían lun-vie (alertas
+  diarias de pedidos, techo urgente a admins, techo mensual, familia/
+  partida repetida) — pero tres se habían quedado sin esa restricción y
+  seguían disparando todos los días, sábado y domingo incluidos:
+  - `health_check_diario` (07:05) — Telegram + popup bridge a admins si
+    detecta problemas de configuración operativa.
+  - `alerta_consumo_diaria` (08:30) — Telegram + popup bridge a admins
+    si el consumo de Supabase (egress o tamaño de BD) se acerca o
+    supera el límite del plan Free.
+  - `recordar_emails_sistema_pendientes` (cada 10 min, 07:00-21:00) —
+    Telegram con recordatorio si hay emails de sistema en cola sin
+    despachar (p.ej. Fase 2 de solicitudes de acceso).
+- **Cambio en `app.py`**: se añade `day_of_week="mon-fri"` a los tres
+  `scheduler.add_job(...)`, mismo criterio ya usado en el resto de jobs
+  de alertas — lo que caiga en fin de semana se retoma el lunes con
+  normalidad. Los dos jobs puramente internos sin ningún canal de aviso
+  (snapshot diario de tamaño de BD a las 08:10, migración de adjuntos
+  cerrados a Storage a las 03:00) se dejan corriendo todos los días —
+  no molestan a nadie y conservan el histórico completo aunque el
+  AVISO de consumo de la mañana siguiente se retrase un par de días.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Sin
+  forma de probar el disparo real del scheduler en fin de semana desde
+  este entorno (depende del reloj real del servidor en producción) —
+  recomendado confirmar tras desplegar que estos tres jobs no aparecen
+  en el log de Render de un sábado/domingo (buscar "[HEALTH]",
+  "[CONSUMO]" o "[RECORDATORIO EMAILS SISTEMA]").
+- `README.md` y el badge de versión de `templates/index.html`
+  actualizados a v12.30.09 (el de `README.md` llevaba varias versiones
+  desactualizado, se aprovecha para ponerlo al día).
+
+---
+
 ## 2026-08-15 (2) — [Control Pedidos] Comparar Pedidos + Albaranes: el resultado y el correo son la unión de las dos comparaciones
 
 - Continuación directa de la entrada anterior (hoy mismo, v12.30.07). Tras
