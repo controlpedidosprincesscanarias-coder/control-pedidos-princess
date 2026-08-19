@@ -1,3 +1,78 @@
+# v12.30.13 — 19 agosto 2026
+
+✏️ Comparar Pedidos + Albaranes: identificar los pedidos por su número DALI/SAP, no por el "Nº" lineal interno de la app
+
+**Petición de Víctor**: "MEJOR INDICAR NUMERO PEDIDO DALI / SAP Y NO EL
+LINEAL Nº; ES MAS INTUITIVO Y FACIL DE VERIFICAR EN NUESTROS LISTADOS"
+— en la pantalla de "Comparar listado PDF" (Pedidos + Albaranes), varias
+referencias a un pedido se mostraban como "42438 (Nº618)": el número de
+pedido DALI/SAP (`pedido_num`, el mismo que aparece en los listados de
+SAP y de DALI que maneja el usuario) seguido, entre paréntesis, del
+"Nº" — el número de línea interno correlativo de la app (`norden`,
+irrelevante fuera de la propia aplicación). Ese segundo número no
+aparece en los listados que Víctor consulta para verificar, así que
+solo añadía ruido.
+
+**Cambio en `app.py`** (`_motivo_sin_pedido`): el "posible candidato"
+que se sugiere para un albarán sin pareja de importe exacto ahora se
+identifica solo por su número de pedido DALI/SAP, sin el "(Nº...)".
+
+**Cambio en `templates/index.html`**: mismo criterio en las tres
+referencias a pedidos de la pantalla "Comparar listado PDF" (Pedidos +
+Albaranes) que mostraban el "(Nº...)": la tabla de coincidencias
+propuestas, la fila de "pendiente sin albarán" (pedido de SAP entregado
+sin albarán DALI con ese importe) y el "posible candidato" de
+"pendiente sin pedido". Las demás pantallas de la aplicación (listado
+de Pedidos, comparación de un solo PDF de SAP, etc.) no se han tocado —
+quedan fuera del alcance de esta petición, que Víctor hizo
+específicamente sobre esta herramienta de comparación.
+
+**Verificación**: `python3 -m py_compile app.py` y `node --check` sobre
+el JS extraído de `templates/index.html`, ambos sin errores. Cambio de
+presentación únicamente — no toca ningún criterio de coincidencia ni de
+datos.
+
+# v12.30.12 — 19 agosto 2026
+
+✏️ Comparar Pedidos + Albaranes: mensaje del "posible candidato" más claro y accionable (a petición de Víctor)
+
+**Petición de Víctor**, tras ver en pantalla el nuevo aviso de v12.30.11
+("Posible candidato ya en la app... verificar importe manualmente"):
+"SERIA MEJOR INDICAR QUE EXISTE UN PEDIDO DE FECHA ANTERIOR EL CUAL NO
+PODEMOS VERIFICAR SIN UN LISTADO DE PEDIDOS DE ESTA FECHA YA QUE EL
+IMPORTE ES SUPERIOR AL REGISTRADO; O ALGO POR EL ESTILO; PARA QUE EL
+USUARIO O ADJUNTE UN LISTADO MAS COMPLETO O QUE LO VERIFIQUE
+MANUALMENTE YA QUE SI NO SIEMPRE SEGUIRA SALIENDO EL AVISO". El texto
+anterior decía que había un "posible candidato" y pedía "verificar
+importe manualmente", pero no explicaba POR QUÉ no se podía verificar
+solo, ni qué había que hacer para que el aviso dejara de salir.
+
+**Cambio en `app.py`**: nueva función `_motivo_sin_pedido(a)`
+(compartida por la tabla de pendientes y el correo — antes el texto
+estaba repetido/hardcodeado en `_fila_sin_pedido`), con un mensaje más
+explícito: nombra el pedido candidato con su importe registrado en la
+app, explica que ese importe es solo la estimación con la que se dio de
+alta el pedido — no el importe realmente recibido según SAP, que puede
+ser distinto (p.ej. por entregas parciales) — y que por eso no se puede
+confirmar solo con los datos disponibles. Termina con la instrucción
+concreta: adjuntar un listado de SAP que cubra esa fecha, o comprobarlo
+a mano — advirtiendo explícitamente de que, si no se hace ninguna de
+las dos cosas, el aviso seguirá saliendo en todas las comparaciones
+futuras (para que quede claro que la aplicación, sin más información,
+no puede resolverlo por sí sola).
+
+**Cambio en `templates/index.html`**: mismo texto (misma redacción,
+duplicada en JS porque la tabla de pendientes se renderiza en el
+navegador) para el motivo mostrado en pantalla cuando hay
+`posible_pedido_hint`, incluyendo ahora también el importe registrado
+en la app del pedido candidato (antes no se mostraba en la fila).
+
+**Verificación**: `python3 -m py_compile app.py` y `node --check`
+sobre el JS extraído de `templates/index.html`, ambos sin errores.
+Cambio puramente de texto/mensaje — no toca el criterio de coincidencia
+introducido en v12.30.11 (mismo proveedor + pedido fuera del PDF de SAP
+recién subido), que ya se verificó por separado.
+
 # v12.30.11 — 19 agosto 2026
 
 🐛 Comparar Pedidos + Albaranes: la corrección de v12.30.10 no resolvía el caso SISCOCAN/Nº618 — corregido el criterio de coincidencia

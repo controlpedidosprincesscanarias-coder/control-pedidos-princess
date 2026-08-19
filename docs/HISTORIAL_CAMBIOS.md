@@ -25,6 +25,55 @@
 
 ---
 
+## 2026-08-19 — [Control Pedidos] Comparar Pedidos + Albaranes: identificar los pedidos por su número DALI/SAP, no por el "Nº" lineal interno (v12.30.13)
+
+- Petición de Víctor: "MEJOR INDICAR NUMERO PEDIDO DALI / SAP Y NO EL
+  LINEAL Nº; ES MAS INTUITIVO Y FACIL DE VERIFICAR EN NUESTROS
+  LISTADOS" — varias referencias a un pedido en la pantalla "Comparar
+  listado PDF" (Pedidos + Albaranes) se mostraban como "42438 (Nº618)":
+  el número de pedido DALI/SAP seguido, entre paréntesis, del número de
+  línea interno correlativo de la app. Ese segundo número no aparece en
+  los listados que Víctor consulta para verificar, así que solo añadía
+  ruido.
+- **Cambio en `app.py`** (`_motivo_sin_pedido`): el "posible candidato"
+  sugerido para un albarán sin pareja de importe exacto se identifica
+  ahora solo por su número de pedido DALI/SAP.
+- **Cambio en `templates/index.html`**: mismo criterio en las tres
+  referencias a pedidos de esa pantalla que mostraban el "(Nº...)": la
+  tabla de coincidencias propuestas, la fila de "pendiente sin
+  albarán" y el "posible candidato" de "pendiente sin pedido". El resto
+  de la aplicación no se ha tocado — la petición era específica de esta
+  herramienta.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`
+  sobre el JS extraído, ambos sin errores. Cambio de presentación
+  únicamente.
+
+## 2026-08-19 — [Control Pedidos] Comparar Pedidos + Albaranes: mensaje del "posible candidato" más claro y accionable (v12.30.12)
+
+- Petición de Víctor, tras ver en pantalla el nuevo aviso de v12.30.11
+  ("Posible candidato ya en la app... verificar importe manualmente"):
+  pedía que el texto indicara que existe un pedido de fecha anterior que
+  no se puede verificar sin un listado de pedidos de esa fecha (porque
+  el importe registrado es distinto del importe recibido), y que
+  invitara explícitamente a adjuntar un listado más completo o a
+  verificarlo a mano — para que quede claro por qué sigue saliendo el
+  aviso y qué hacer para que deje de salir.
+- **Cambio en `app.py`**: nueva función `_motivo_sin_pedido(a)`
+  (antes el texto estaba dentro de `_fila_sin_pedido`, sin reutilizar),
+  con un mensaje que nombra el pedido candidato con su importe
+  registrado en la app, explica que ese importe es solo la estimación
+  con la que se dio de alta el pedido — no el importe realmente
+  recibido según SAP — y termina con la instrucción concreta: adjuntar
+  un listado de SAP que cubra esa fecha, o comprobarlo a mano,
+  advirtiendo de que si no se hace ninguna de las dos cosas el aviso
+  seguirá saliendo en todas las comparaciones futuras.
+- **Cambio en `templates/index.html`**: misma redacción para el motivo
+  mostrado en pantalla, incluyendo ahora también el importe registrado
+  en la app del pedido candidato.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`
+  sobre el JS extraído, ambos sin errores. Cambio de texto únicamente,
+  no toca el criterio de coincidencia de v12.30.11.
+
 ## 2026-08-19 — [Control Pedidos] Comparar Pedidos + Albaranes: la corrección anterior (v12.30.10) no resolvía el caso SISCOCAN/Nº618 — corregido el criterio de coincidencia (v12.30.11)
 
 - Tras desplegar v12.30.10 (ver entrada de más abajo), Víctor volvió a

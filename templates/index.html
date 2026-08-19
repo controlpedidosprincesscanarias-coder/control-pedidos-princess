@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.11
+          V 12.30.13
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6245,7 +6245,7 @@ function _renderCompararAlbaranesResultado(d) {
       const yaTodo = c.sin_cambios_pendientes;
       return `<tr${yaTodo ? ' style="opacity:.6"' : ''}>
         <td><input type="checkbox" value="${c.clave}" ${yaTodo ? '' : 'checked'}></td>
-        <td class="monospace">${c.pedido_num_sap}${c.norden ? ' (Nº' + c.norden + ')' : ''}</td>
+        <td class="monospace">${c.pedido_num_sap}</td>
         <td>${c.proveedor_nombre || ''}</td>
         <td>${fmtImporte(c.importe)}</td>
         <td>${estadoTxt}</td>
@@ -6266,7 +6266,7 @@ function _renderCompararAlbaranesResultado(d) {
     motivo: 'Mismo proveedor e importe en más de una pareja posible — revisión manual'
   }));
   (d.pendientes_sin_albaran || []).forEach(p => filas.push({
-    ref: `Pedido ${p.pedido_num_sap}${p.norden ? ' (Nº' + p.norden + ')' : ''}`,
+    ref: `Pedido ${p.pedido_num_sap}`,
     prov: p.proveedor_nombre,
     importe: p.importe_recibido,
     motivo: `SAP lo muestra como ${p.entrega_estado} pero ningún albarán DALI coincide en importe`
@@ -6274,17 +6274,28 @@ function _renderCompararAlbaranesResultado(d) {
   // (2026-08-19) "pendientes_sin_pedido": si no hay pareja de importe
   // exacto en el PDF de SAP, puede venir con "posible_pedido_hint" — un
   // único pedido ya dado de alta en la app, mismo proveedor, fuera del
-  // rango de fechas del PDF — como pista para revisión manual (no se
-  // puede confirmar sin verificar el importe a mano, ver
-  // _comparar_listado_albaranes_logica en app.py).
+  // rango de fechas del PDF. El texto explica por qué no se puede
+  // confirmar solo (importe de la app = estimación, no el recibido) y
+  // qué hacer para resolverlo — si no, seguirá saliendo siempre (ver
+  // _motivo_sin_pedido en app.py, misma redacción que aquí).
   (d.pendientes_sin_pedido || []).forEach(p => {
     const hint = p.posible_pedido_hint;
-    const motivo = hint
-      ? `Sin pareja de importe exacto en el PDF de SAP. Posible candidato ya en la app (mismo proveedor, `
-        + `fuera del rango de fechas del PDF): Pedido ${hint.pedido_num_sap || '—'}`
-        + `${hint.norden ? ' (Nº' + hint.norden + ')' : ''} — ${hint.estado_app_actual || 'ENTREGADO'}`
-        + ` — verificar importe manualmente.`
-      : 'Sin ningún pedido Entregado/Parcial de ese proveedor que pueda corresponderle';
+    let motivo;
+    if (hint) {
+      // (2026-08-19) A petición de Víctor: identificar por el número de
+      // pedido DALI/SAP (más intuitivo, es el que aparece en los listados
+      // que maneja el usuario), no por el "Nº" lineal interno de la app.
+      const refPedido = hint.pedido_num_sap || '—';
+      const importeTxt = (hint.importe_pedido != null) ? `, importe registrado en la app: ${fmtImporte(hint.importe_pedido)} €` : '';
+      motivo = `Existe un pedido de fecha anterior del mismo proveedor ya en la app — Pedido ${refPedido} `
+        + `(${hint.estado_app_actual || 'ENTREGADO'}${importeTxt}) — pero no se puede verificar automáticamente: `
+        + `no aparece en este PDF de SAP (es de fechas anteriores a las que cubre), y el importe registrado en `
+        + `la app es solo una estimación al dar de alta el pedido, no el importe realmente recibido (puede `
+        + `diferir, p.ej. por entregas parciales). Para resolverlo, adjunta un listado de SAP que incluya esa `
+        + `fecha, o compruébalo manualmente — si no, este aviso seguirá saliendo en cada comparación.`;
+    } else {
+      motivo = 'Sin ningún pedido Entregado/Parcial de ese proveedor que pueda corresponderle';
+    }
     filas.push({
       ref: `Albarán DALI ${p.registro_dali}`,
       prov: p.proveedor_nombre,

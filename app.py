@@ -9146,6 +9146,48 @@ def comparar_listado_albaranes_enviar_resumen(job_id):
     )
     return jsonify({"ok": True, "destinatarios": destinatarios, "cc": admin_email})
 
+def _motivo_sin_pedido(a):
+    """
+    (2026-08-19) Texto de motivo para un elemento de "pendientes_sin_pedido"
+    (albarán de DALI sin pareja de importe exacto en el PDF de SAP
+    comparado). Compartido entre el correo de resumen y — en espíritu, la
+    misma redacción se replica en el JS de templates/index.html para la
+    pantalla — para no tener dos versiones del mismo texto.
+
+    A petición de Víctor (2026-08-19, tras ver que el aviso de
+    "posible_pedido_hint" seguía saliendo sin más contexto): el texto
+    debe dejar claro que el pedido antiguo detectado NO se puede
+    verificar con la información disponible (el PDF de SAP recién
+    subido no llega a esa fecha, así que no se conoce su importe
+    REALMENTE recibido — el importe que muestra la app es solo la
+    estimación/presupuesto con el que se dio de alta el pedido, que
+    puede ser mayor si hubo entregas parciales) y debe indicar
+    explícitamente qué hacer para resolverlo: adjuntar un listado de SAP
+    que cubra esa fecha, o comprobarlo a mano — si no se hace ninguna de
+    las dos cosas, el aviso seguirá saliendo en cada comparación futura,
+    porque no hay manera de que la aplicación lo confirme por sí sola.
+    """
+    hint = a.get("posible_pedido_hint")
+    if not hint:
+        return "Sin ningún pedido Entregado/Parcial de ese proveedor que pueda corresponderle"
+    # (2026-08-19) A petición de Víctor: identificar el pedido candidato por
+    # su número de pedido DALI/SAP (`pedido_num_sap`, el mismo que aparece
+    # en los listados de SAP y de DALI que maneja el usuario) en vez de por
+    # el "Nº" lineal interno de la app (`norden`) — más intuitivo y fácil
+    # de verificar contra esos listados.
+    ref_pedido = hint.get("pedido_num_sap") or "—"
+    importe_pedido = hint.get("importe_pedido")
+    importe_pedido_txt = f", importe registrado en la app: {importe_pedido:.2f} €" if importe_pedido is not None else ""
+    return (
+        f"Existe un pedido de fecha anterior del mismo proveedor ya en la app — Pedido {ref_pedido} "
+        f"({hint.get('estado_app_actual', 'ENTREGADO')}{importe_pedido_txt}) — pero no se puede verificar "
+        f"automáticamente: no aparece en este PDF de SAP (es de fechas anteriores a las que cubre), y el "
+        f"importe registrado en la app es solo una estimación al dar de alta el pedido, no el importe "
+        f"realmente recibido (puede diferir, p.ej. por entregas parciales). Para resolverlo, adjunta un "
+        f"listado de SAP que incluya esa fecha, o compruébalo manualmente — si no, este aviso seguirá "
+        f"saliendo en cada comparación."
+    )
+
 def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, aplicadas, admin_nombre,
                                           pedidos_faltantes=None, total_pdf1_audit=0,
                                           excluidos_pdf1_audit=0, no_identificados_audit=0):
@@ -9213,18 +9255,7 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
         </tr>"""
 
     def _fila_sin_pedido(a):
-        hint = a.get("posible_pedido_hint")
-        if hint:
-            ref_pedido = f"{hint['pedido_num_sap']}" if hint.get("pedido_num_sap") else "—"
-            if hint.get("norden"):
-                ref_pedido += f" (Nº{hint['norden']})"
-            motivo = (
-                f"Sin pareja de importe exacto en el PDF de SAP. Posible candidato ya en la app "
-                f"(mismo proveedor, fuera del rango de fechas del PDF): Pedido {ref_pedido} — "
-                f"{hint.get('estado_app_actual', 'ENTREGADO')} — verificar importe manualmente."
-            )
-        else:
-            motivo = "Sin ningún pedido Entregado/Parcial de ese proveedor que pueda corresponderle"
+        motivo = _motivo_sin_pedido(a)
         return f"""<tr>
           <td style="padding:8px 12px;border:1px solid #ddd">Albarán DALI {a['registro_dali']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{a['proveedor_nombre']}</td>
