@@ -1,3 +1,73 @@
+# v12.30.11 — 19 agosto 2026
+
+🐛 Comparar Pedidos + Albaranes: la corrección de v12.30.10 no resolvía el caso SISCOCAN/Nº618 — corregido el criterio de coincidencia
+
+**Aviso de Víctor**: tras desplegar v12.30.10, volvió a comparar los
+mismos PDF y envió capturas del correo resultante — el albarán DALI
+00082014 (SISCOCAN GRUPO COMERCIAL SL, 2.774,39 €) seguía en "Pendientes
+de realizar (10)", con el nuevo texto reformulado ("Sin ningún pedido
+Entregado/Parcial con ese importe...") pero SIN pasar al nuevo apartado
+"ya registrados en la app". El texto nuevo confirmaba que el despliegue
+sí había llegado a producción, pero la lógica de la v12.30.10 no
+encontraba el pedido Nº618 como candidato.
+
+**Causa encontrada**: la v12.30.10 comparaba el albarán contra los
+pedidos ya dados de alta en la base de datos usando la clave
+`(proveedor_id, importe)` — la misma que usa el cruce contra el PDF de
+SAP. Pero `pedidos.importe` (la columna de la tabla `pedidos`) es un
+importe introducido A MANO al dar de alta o editar el pedido —
+estimación/presupuesto usado para el techo de gastos mensual — y NO
+tiene por qué coincidir con el importe realmente recibido según SAP
+(que solo se conoce al leer un PDF de SAP recién subido, en la variable
+transitoria `importe_recibido`). El pedido Nº618 en la BD probablemente
+tiene un `importe` distinto de 2.774,39 € (el importe base/estimado del
+pedido, no el recibido), así que la comparación exacta por importe
+daba 0 candidatos y el caso seguía cayendo en "pendientes_sin_pedido".
+
+**Corrección en `app.py`** (`_comparar_listado_albaranes_logica`): se
+sustituye la comparación exacta por importe contra la base de datos por
+un criterio más flojo pero fiable — mismo proveedor Y que el número de
+pedido de la app NO esté entre los vistos en el PDF de SAP recién
+subido (`vistos1`, ya usado internamente por la función para deduplicar
+el PDF1) — es decir, que quede fuera del rango de fechas que cubre ese
+PDF, como el caso real del pedido Nº618. Si para un proveedor hay
+EXACTAMENTE UN pedido de la app en esa situación (Entregado o Entrega
+parcial), se adjunta como `posible_pedido_hint` al elemento
+correspondiente de `pendientes_sin_pedido` — SIN sacarlo de la lista de
+pendientes (el importe no se puede verificar con este criterio, así que
+no se da por resuelto automáticamente) y sin aplicar ningún cambio: es
+solo una pista para que la persona que revisa lo pendiente no tenga que
+buscar el pedido a mano. Se elimina el apartado independiente
+`ya_registrados_en_app` (v12.30.10) — con la nueva lógica ningún caso
+puede darse por "resuelto" con seguridad, así que ya no tiene sentido
+sacarlo de pendientes; el pedido candidato se muestra como pista dentro
+de la misma fila de "pendientes de revisión manual".
+
+**Cambio en `templates/index.html`**: se elimina la sección plegable
+"Ver albaranes de pedidos más antiguos ya registrados en la app" (ya no
+se genera ese apartado). La fila de "pendientes_sin_pedido" en la tabla
+de pendientes muestra ahora, cuando aplica, el motivo con la pista del
+posible pedido candidato en vez de un texto genérico.
+
+**Cambio en el correo** (`_email_resumen_comparacion_albaranes`): se
+elimina el bloque "📎 Albaranes de DALI de pedidos más antiguos, ya
+registrados en la app". El motivo de cada fila "sin pedido" en la tabla
+de pendientes incluye la misma pista de posible candidato cuando la
+hay.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; `node
+--check` sobre el JS extraído de `templates/index.html` sin errores.
+Se simuló el caso SISCOCAN/Nº618 con un script Python independiente
+(mismo algoritmo que el nuevo código: `vistos1` sin el pedido 618,
+un único pedido ENTREGADO de ese proveedor en la "base de datos"
+simulada) y se confirmó que ahora sí se adjunta como
+`posible_pedido_hint` al albarán 00082014. Sin poder probar contra la
+base de datos real de producción desde este entorno (sandbox sin
+acceso a Supabase) — recomendado volver a lanzar la misma comparación
+(mismos dos PDF) tras desplegar, para confirmar en pantalla que la fila
+de SISCOCAN/00082014 en "Pendientes de realizar" ahora menciona el
+pedido Nº618 como posible candidato.
+
 # v12.30.10 — 19 agosto 2026
 
 🐛 Comparar Pedidos + Albaranes: "Sin pedido... en la app" salía aunque el pedido SÍ estuviera registrado y Entregado

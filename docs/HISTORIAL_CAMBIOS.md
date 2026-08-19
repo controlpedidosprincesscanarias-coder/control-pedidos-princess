@@ -25,6 +25,67 @@
 
 ---
 
+## 2026-08-19 — [Control Pedidos] Comparar Pedidos + Albaranes: la corrección anterior (v12.30.10) no resolvía el caso SISCOCAN/Nº618 — corregido el criterio de coincidencia (v12.30.11)
+
+- Tras desplegar v12.30.10 (ver entrada de más abajo), Víctor volvió a
+  lanzar la misma comparación con los mismos PDF y envió capturas del
+  correo resultante: el albarán DALI 00082014 (SISCOCAN GRUPO COMERCIAL
+  SL, 2.774,39 €) seguía en "Pendientes de realizar (10)", ya con el
+  texto reformulado de v12.30.10 ("Sin ningún pedido Entregado/Parcial
+  con ese importe...") pero SIN pasar al nuevo apartado "ya registrados
+  en la app" que se había añadido. El texto nuevo confirmaba que el
+  despliegue sí había llegado a producción, pero la lógica de v12.30.10
+  no encontraba el pedido Nº618 como candidato — la corrección anterior
+  era insuficiente.
+- **Causa encontrada**: v12.30.10 comparaba el albarán contra los
+  pedidos ya dados de alta en la base de datos usando la misma clave
+  `(proveedor_id, importe)` que el cruce contra el PDF de SAP. Pero
+  `pedidos.importe` es un importe introducido A MANO al dar de alta o
+  editar el pedido — estimación/presupuesto usado para el techo de
+  gastos mensual — y no tiene por qué coincidir con el importe
+  realmente recibido según SAP (que solo se conoce leyendo un PDF de
+  SAP recién subido). El pedido Nº618 en la BD tiene, con toda
+  probabilidad, un `importe` distinto de 2.774,39 € (el importe
+  base/estimado, no el recibido), así que la comparación exacta por
+  importe daba 0 candidatos y el caso seguía cayendo en
+  "pendientes_sin_pedido".
+- **Corrección en `app.py`** (`_comparar_listado_albaranes_logica`): se
+  sustituye la comparación exacta por importe contra la BD por un
+  criterio más flojo pero fiable — mismo proveedor Y que el número de
+  pedido de la app NO esté entre los vistos en el PDF de SAP recién
+  subido (`vistos1`), es decir, que quede fuera del rango de fechas que
+  cubre ese PDF (como el caso real del pedido Nº618). Si para un
+  proveedor hay EXACTAMENTE UN pedido de la app en esa situación
+  (Entregado o Entrega parcial), se adjunta como `posible_pedido_hint`
+  al elemento correspondiente de `pendientes_sin_pedido` — sin sacarlo
+  de la lista de pendientes (el importe no se puede verificar con este
+  criterio, así que no se da por resuelto automáticamente) y sin
+  aplicar ningún cambio: es solo una pista para la revisión manual. Se
+  elimina el apartado independiente `ya_registrados_en_app` de
+  v12.30.10 — con la nueva lógica ningún caso puede darse por
+  "resuelto" con seguridad, así que ya no tiene sentido sacarlo de
+  pendientes.
+- **Cambio en `templates/index.html`**: se elimina la sección plegable
+  "Ver albaranes de pedidos más antiguos ya registrados en la app"
+  añadida en v12.30.10. La fila de "pendientes_sin_pedido" muestra
+  ahora, cuando aplica, el motivo con la pista del posible pedido
+  candidato.
+- **Cambio en el correo** (`_email_resumen_comparacion_albaranes`): se
+  elimina el bloque verde "📎 Albaranes de DALI de pedidos más
+  antiguos, ya registrados en la app" de v12.30.10. El motivo de cada
+  fila "sin pedido" en la tabla de pendientes incluye la pista de
+  posible candidato cuando la hay.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`
+  sobre el JS extraído de `templates/index.html`, ambos sin errores. Se
+  simuló el caso SISCOCAN/Nº618 con un script Python independiente
+  (mismo algoritmo que el nuevo código, con `vistos1` sin el pedido 618
+  y un único pedido ENTREGADO de ese proveedor en la "base de datos"
+  simulada) y se confirmó que ahora sí se adjunta como
+  `posible_pedido_hint`. Sin poder probar contra la base de datos real
+  de producción desde este entorno — recomendado, de nuevo, volver a
+  lanzar la misma comparación tras desplegar para confirmar en pantalla
+  que la fila de SISCOCAN/00082014 menciona el pedido Nº618.
+
 ## 2026-08-19 — [Control Pedidos] Comparar Pedidos + Albaranes: "Sin pedido... en la app" salía aunque el pedido SÍ estuviera registrado y Entregado
 
 - Aviso de Víctor, con capturas: la tabla "Pendientes de realizar" del

@@ -8531,14 +8531,13 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
 
     Devuelve dict con: coincidencias, pendientes_ambiguos,
     pendientes_sin_albaran (pedido Entregado/Parcial en SAP sin albarán
-    DALI con ese importe), pendientes_sin_pedido (albarán DALI sin ningún
-    pedido Entregado/Parcial con ese importe — NI en el PDF 1 recién
-    subido NI ya dado de alta en la app, ver nota 2026-08-19 más abajo),
-    ya_registrados_en_app (albarán DALI sin pareja en el PDF 1, pero que
-    SÍ corresponde a un pedido ya dado de alta y Entregado/Parcial en la
-    app — informativo, no requiere ninguna acción), total_pdf1,
-    total_pdf2, excluidos_pdf1, excluidos_pdf2 (proveedor no identificado
-    o no sujeto a seguimiento, en cada PDF).
+    DALI con ese importe), pendientes_sin_pedido (albarán DALI sin
+    pareja de importe exacto en el PDF 1 recién subido — cada elemento
+    puede llevar opcionalmente "posible_pedido_hint", ver nota
+    2026-08-19 más abajo, con un pedido ya dado de alta en la app que
+    podría corresponder a ese albarán, a falta de verificación manual),
+    total_pdf1, total_pdf2, excluidos_pdf1, excluidos_pdf2 (proveedor no
+    identificado o no sujeto a seguimiento, en cada PDF).
 
     Lanza RuntimeError si algún PDF no se puede leer o no se reconoce
     ningún registro en él.
@@ -8729,56 +8728,69 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
                 "albaranes":        lado2,
             })
 
-    # (2026-08-19) FIX: "pendientes_sin_pedido" solo comprobaba contra
-    # PDF1 (el listado de pedidos de SAP recién subido) — pero ese PDF
-    # puede cubrir solo un rango de fechas reciente (p.ej. "pedidos
-    # abiertos" de las últimas semanas), sin incluir pedidos más antiguos
-    # que, aun así, ya están dados de alta y ENTREGADOS en la app desde
-    # hace tiempo. Caso real detectado (Víctor): pedido Nº618 tramitado
-    # 02/06/2026 y ya ENTREGADO en la app, cuyo albarán en DALI se
-    # registró mucho después (10/08/2026) — muy fuera del rango del PDF
-    # de SAP comparado ese día (que solo llegaba hasta finales de julio).
-    # El resultado decía "Sin pedido Entregado/Parcial con ese importe EN
-    # LA APP", dando a entender que el pedido no existía, cuando sí
-    # existía — solo faltaba en el PDF recién comparado.
+    # (2026-08-19) NOTA sobre "pendientes_sin_pedido" y su
+    # "posible_pedido_hint" — dos intentos:
     #
-    # Antes de dar por perdido un albarán sin pareja en PDF1, se comprueba
-    # aquí una segunda vez contra los pedidos YA DADOS DE ALTA en la base
-    # de datos de la app (misma clave proveedor+importe, sin depender de
-    # qué traiga el PDF de turno). Si hay exactamente un pedido de la app
-    # que cuadra, se saca de "pendientes_sin_pedido" (no es un problema,
-    # no requiere ninguna acción) y se apunta en "ya_registrados_en_app"
-    # para que quede visible igualmente, con un motivo que no induzca a
-    # error. Si hay 0 o más de 1 candidato en la app, se deja tal cual en
-    # pendientes_sin_pedido — mismo criterio de "ante la duda, no
+    # Intento 1 (v12.30.10, descartado): antes de dar por perdido un
+    # albarán sin pareja en PDF1, se comprobaba contra los pedidos YA
+    # DADOS DE ALTA en la base de datos de la app usando la MISMA clave
+    # (proveedor_id, importe) que el cruce con PDF1. Caso real detectado
+    # (Víctor): pedido Nº618 (SISCOCAN, 2.774,39 €), tramitado 02/06/2026
+    # y ya ENTREGADO en la app, cuyo albarán en DALI se registró mucho
+    # después (10/08/2026) — muy fuera del rango del PDF de SAP
+    # comparado ese día. Ese intento SEGUÍA fallando en producción porque
+    # `pedidos.importe` es un importe introducido a mano al dar de alta
+    # el pedido (estimación/presupuesto, usado para el techo de gastos
+    # mensual) — NO el importe realmente recibido según SAP, que solo se
+    # conoce al leer un PDF de SAP recién subido. No hay ninguna garantía
+    # de que coincida con el importe del albarán de DALI, así que
+    # comparar por importe contra la BD daba 0 candidatos y el caso
+    # seguía cayendo en "pendientes_sin_pedido" sin más explicación.
+    #
+    # Intento 2 (este, v12.30.11): en vez de exigir importe exacto contra
+    # la BD, se usa un criterio más flojo pero fiable — mismo proveedor Y
+    # que el pedido de la app NO aparezca entre los `vistos1` (todos los
+    # números de pedido SAP vistos en el PDF 1, tenga o no tenga ese
+    # pedido seguimiento/estado de entrega), es decir, que quede fuera
+    # del rango de fechas que cubre el PDF de SAP recién subido — como el
+    # caso real del pedido Nº618. Si para un proveedor hay EXACTAMENTE UN
+    # pedido de la app en esa situación, se adjunta como
+    # "posible_pedido_hint" al elemento de "pendientes_sin_pedido"
+    # correspondiente — sin sacarlo de la lista de pendientes (el importe
+    # no se ha podido verificar, así que no se puede dar por resuelto
+    # automáticamente) y sin aplicar ningún cambio; solo es una pista
+    # para que la persona que revisa lo pendiente no tenga que buscar el
+    # pedido a mano. Si hay 0 o más de 1 candidato para ese proveedor, no
+    # se adjunta ninguna pista — mismo criterio de "ante la duda, no
     # inventar" que el resto de esta función.
+    vistos1_normalizados = {_normalizar_pedido_num(n) for n in vistos1}
     pedidos_entregados_bd = rows_to_list(query(
         """SELECT id, norden, pedido_num, proveedor_id, importe, estado
            FROM pedidos
            WHERE hotel_id=%s AND estado IN ('ENTREGADO', 'ENTREGA PARCIAL')
-             AND proveedor_id IS NOT NULL AND importe IS NOT NULL""",
+             AND proveedor_id IS NOT NULL
+             AND pedido_num IS NOT NULL AND pedido_num != ''""",
         (hotel_id,)
     ))
-    bd_por_clave = defaultdict(list)
+    candidatos_hint_por_proveedor = defaultdict(list)
     for p in pedidos_entregados_bd:
-        bd_por_clave[(p["proveedor_id"], round(float(p["importe"]), 2))].append(p)
+        if _normalizar_pedido_num(p["pedido_num"]) in vistos1_normalizados:
+            continue  # ya cubierto por el PDF1 recién subido, no es el caso que buscamos
+        candidatos_hint_por_proveedor[p["proveedor_id"]].append(p)
 
-    pendientes_sin_pedido_real = []
-    ya_registrados_en_app = []
     for a in pendientes_sin_pedido:
-        candidatos_bd = bd_por_clave.get(a["clave"], [])
-        if len(candidatos_bd) == 1:
-            p = candidatos_bd[0]
-            ya_registrados_en_app.append({
-                **a,
+        candidatos_hint = candidatos_hint_por_proveedor.get(a["proveedor_id"], [])
+        if len(candidatos_hint) == 1:
+            p = candidatos_hint[0]
+            a["posible_pedido_hint"] = {
                 "pedido_id":         p["id"],
                 "norden":            p["norden"],
                 "pedido_num_sap":    p["pedido_num"],
                 "estado_app_actual": p["estado"],
-            })
+                "importe_pedido":    float(p["importe"]) if p["importe"] is not None else None,
+            }
         else:
-            pendientes_sin_pedido_real.append(a)
-    pendientes_sin_pedido = pendientes_sin_pedido_real
+            a["posible_pedido_hint"] = None
 
     # (2026-08-15) A petición del usuario: el resultado de esta comparación
     # de dos PDF debe ser la UNIÓN de lo que ya hace la comparación de un
@@ -8798,7 +8810,6 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
         "pendientes_ambiguos":    pendientes_ambiguos,
         "pendientes_sin_albaran": pendientes_sin_albaran,
         "pendientes_sin_pedido":  pendientes_sin_pedido,
-        "ya_registrados_en_app":  ya_registrados_en_app,
         "total_pdf1":             len(encontrados_pdf1),
         "total_pdf2":             len(encontrados_pdf2),
         "excluidos_pdf1":         excluidos_pdf1,
@@ -9158,13 +9169,6 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
     pend_ambiguos      = resultado.get("pendientes_ambiguos", [])
     pend_sin_albaran   = resultado.get("pendientes_sin_albaran", [])
     pend_sin_pedido    = resultado.get("pendientes_sin_pedido", [])
-    # (2026-08-19) Ver nota en _comparar_listado_albaranes_logica: estos NO
-    # cuentan como pendientes — son albaranes de DALI sin pareja en el PDF
-    # de SAP recién subido, pero que sí corresponden a un pedido ya dado de
-    # alta y Entregado/Parcial en la app (más antiguo que el rango de
-    # fechas del PDF). Se muestran aparte, en verde, solo para que quede
-    # constancia — no requieren ninguna acción.
-    ya_registrados_en_app = resultado.get("ya_registrados_en_app", [])
     total_pendientes = len(pend_ambiguos) + len(pend_sin_albaran) + len(pend_sin_pedido)
 
     subject = (
@@ -9209,11 +9213,23 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
         </tr>"""
 
     def _fila_sin_pedido(a):
+        hint = a.get("posible_pedido_hint")
+        if hint:
+            ref_pedido = f"{hint['pedido_num_sap']}" if hint.get("pedido_num_sap") else "—"
+            if hint.get("norden"):
+                ref_pedido += f" (Nº{hint['norden']})"
+            motivo = (
+                f"Sin pareja de importe exacto en el PDF de SAP. Posible candidato ya en la app "
+                f"(mismo proveedor, fuera del rango de fechas del PDF): Pedido {ref_pedido} — "
+                f"{hint.get('estado_app_actual', 'ENTREGADO')} — verificar importe manualmente."
+            )
+        else:
+            motivo = "Sin ningún pedido Entregado/Parcial de ese proveedor que pueda corresponderle"
         return f"""<tr>
           <td style="padding:8px 12px;border:1px solid #ddd">Albarán DALI {a['registro_dali']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{a['proveedor_nombre']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{a['importe']:.2f} €</td>
-          <td style="padding:8px 12px;border:1px solid #ddd">Sin ningún pedido Entregado/Parcial con ese importe (ni en el PDF de SAP ni ya dado de alta en la app)</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{motivo}</td>
         </tr>"""
 
     def _fila_ambiguo(g):
@@ -9224,23 +9240,11 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
           <td style="padding:8px 12px;border:1px solid #ddd">Varios candidatos — requiere decisión manual</td>
         </tr>"""
 
-    def _fila_ya_registrado(a):
-        ref_pedido = f"{a['pedido_num_sap']}" if a.get("pedido_num_sap") else "—"
-        if a.get("norden"):
-            ref_pedido += f" (Nº{a['norden']})"
-        return f"""<tr>
-          <td style="padding:8px 12px;border:1px solid #ddd">Albarán DALI {a['registro_dali']}</td>
-          <td style="padding:8px 12px;border:1px solid #ddd">{a['proveedor_nombre']}</td>
-          <td style="padding:8px 12px;border:1px solid #ddd">{a['importe']:.2f} €</td>
-          <td style="padding:8px 12px;border:1px solid #ddd">Pedido {ref_pedido} — ya {a.get('estado_app_actual', 'ENTREGADO')} en la app (más antiguo que el PDF de SAP comparado)</td>
-        </tr>"""
-
     filas_pendientes = (
         "".join(_fila_sin_albaran(p) for p in pend_sin_albaran)
         + "".join(_fila_sin_pedido(a) for a in pend_sin_pedido)
         + "".join(_fila_ambiguo(g) for g in pend_ambiguos)
     )
-    filas_ya_registrados = "".join(_fila_ya_registrado(a) for a in ya_registrados_en_app)
 
     bloque_faltantes = f"""
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
@@ -9282,29 +9286,6 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
           {filas_pendientes}
         </table>""" if total_pendientes else '<p style="color:#155724;font-weight:600">🎉 No ha quedado ningún registro pendiente.</p>'
 
-    # (2026-08-19) Bloque aparte, informativo (no cuenta como pendiente):
-    # albaranes de DALI sin pareja en el PDF de SAP recién subido, pero que
-    # sí corresponden a un pedido más antiguo ya dado de alta y
-    # Entregado/Parcial en la app. Ver nota en
-    # _comparar_listado_albaranes_logica.
-    bloque_ya_registrados = (
-        f"""
-        <h3 style="color:#155724;margin-bottom:6px;margin-top:22px">📎 Albaranes de DALI de pedidos más antiguos, ya registrados en la app ({len(ya_registrados_en_app)})</h3>
-        <p style="font-size:13px;color:#555">Estos pedidos no aparecen en el PDF de SAP comparado (es de fechas
-           anteriores a las que cubre ese listado), pero ya están dados de alta y correctamente marcados en la
-           app — no requieren ninguna acción, se muestran solo para que quede constancia.</p>
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
-          <tr style="background:#155724;color:#fff">
-            <th style="padding:8px 12px;text-align:left">Albarán DALI</th>
-            <th style="padding:8px 12px;text-align:left">Proveedor</th>
-            <th style="padding:8px 12px;text-align:left">Importe</th>
-            <th style="padding:8px 12px;text-align:left">Pedido en la app</th>
-          </tr>
-          {filas_ya_registrados}
-        </table>"""
-        if ya_registrados_en_app else ""
-    )
-
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
       {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
@@ -9323,7 +9304,6 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
         {bloque_aplicadas}
         <h3 style="color:#856404;margin-bottom:6px">⏳ Pendientes de realizar ({total_pendientes})</h3>
         {bloque_pendientes}
-        {bloque_ya_registrados}
         <p style="font-size:12px;color:#888">Consulta generada por {admin_nombre} desde
            "Comparar listado PDF" (Pedidos + Albaranes).</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
