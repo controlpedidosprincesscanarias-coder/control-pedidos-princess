@@ -9353,32 +9353,19 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
         f"{total_pendientes} pendiente(s)"
     )
 
-    # (2026-08-15) LIMITE_FILAS/resto: mismo criterio que en
-    # _email_resumen_pdf_sap — con un listado grande podrían ser cientos
-    # de filas, se acota la tabla del correo para que no sea kilométrica.
-    LIMITE_FILAS = 100
-    mostrar_faltantes = pedidos_faltantes[:LIMITE_FILAS]
-    resto_faltantes = len(pedidos_faltantes) - len(mostrar_faltantes)
-
-    filas_faltantes = "".join(f"""
-        <tr style="{'background:#f5f5f5' if i % 2 else ''}">
+    def _fila_faltante(p):
+        return f"""<tr>
           <td style="padding:8px 12px;border:1px solid #ddd">{p['pedido_num_sap']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{p['proveedor_pdf']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{p.get('fecha_pedido') or p.get('fecha', '')}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{p.get('entrega_estado', '')}</td>
-        </tr>""" for i, p in enumerate(mostrar_faltantes))
+        </tr>"""
 
-    aviso_resto_faltantes = (
-        f'<p style="font-size:12px;color:#888;font-style:italic">'
-        f'…y {resto_faltantes} pedido(s) más — consulta el listado completo en la aplicación.</p>'
-        if resto_faltantes > 0 else ""
-    )
-
-    filas_aplicadas = "".join(f"""
-        <tr style="{'background:#f5f5f5' if i % 2 else ''}">
+    def _fila_aplicada(a):
+        return f"""<tr>
           <td style="padding:8px 12px;border:1px solid #ddd">{a['descripcion']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{'; '.join(a['cambios'])}</td>
-        </tr>""" for i, a in enumerate(aplicadas))
+        </tr>"""
 
     def _fila_sin_albaran(p):
         return f"""<tr>
@@ -9405,42 +9392,16 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
           <td style="padding:8px 12px;border:1px solid #ddd">Varios candidatos — requiere decisión manual</td>
         </tr>"""
 
-    # (2026-08-19) FIX: EmailJS rechaza con HTTP 413 (Payload Too Large)
-    # peticiones por encima de cierto tamaño — la petición SÍ se cuenta
-    # contra el cupo de la cuenta (por eso el cupo bajaba sin que llegase
-    # ningún correo), pero nunca se entrega. Con hoteles de mucho volumen
-    # (caso real: 79 filas en "pendientes de revisión manual") el HTML de
-    # esta tabla por sí sola podía superar ese límite. Igual que ya se
-    # hacía con `pedidos_faltantes` (LIMITE_FILAS más arriba), se acota
-    # también esta tabla en el CORREO — la pantalla no tiene este límite,
-    # ahí se sigue viendo el listado completo sin recortar.
-    LIMITE_FILAS_PENDIENTES = 50
-    todas_filas_pendientes = (
+    # Filas ya renderizadas una sola vez (independiente del recorte que se
+    # aplique después) — la lista de "pendientes" es la unión de las 3
+    # categorías, igual que ya hacía la pantalla.
+    filas_faltantes_todas  = [_fila_faltante(p) for p in pedidos_faltantes]
+    filas_aplicadas_todas  = [_fila_aplicada(a) for a in aplicadas]
+    filas_pendientes_todas = (
         [_fila_sin_albaran(p) for p in pend_sin_albaran]
         + [_fila_sin_pedido(a) for a in pend_sin_pedido]
         + [_fila_ambiguo(g) for g in pend_ambiguos]
     )
-    mostrar_pendientes = todas_filas_pendientes[:LIMITE_FILAS_PENDIENTES]
-    resto_pendientes = len(todas_filas_pendientes) - len(mostrar_pendientes)
-    filas_pendientes = "".join(mostrar_pendientes)
-    aviso_resto_pendientes = (
-        f'<p style="font-size:12px;color:#888;font-style:italic">'
-        f'…y {resto_pendientes} pendiente(s) más — consulta el listado completo en la aplicación '
-        f'(este correo se acorta para no superar el límite de tamaño de envío).</p>'
-        if resto_pendientes > 0 else ""
-    )
-
-    bloque_faltantes = f"""
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
-          <tr style="background:#1a3a6b;color:#fff">
-            <th style="padding:8px 12px;text-align:left">Nº Pedido SAP</th>
-            <th style="padding:8px 12px;text-align:left">Proveedor</th>
-            <th style="padding:8px 12px;text-align:left">Fecha</th>
-            <th style="padding:8px 12px;text-align:left">Entrega</th>
-          </tr>
-          {filas_faltantes}
-        </table>
-        {aviso_resto_faltantes}""" if pedidos_faltantes else '<p style="color:#155724;font-weight:600">🎉 Todos los pedidos del listado de SAP están dados de alta en la app.</p>'
 
     aviso_no_identificados_audit = (
         f'<p style="font-size:12px;color:#856404;background:#fff3cd;padding:8px 12px;border-radius:4px">'
@@ -9450,28 +9411,53 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
         if no_identificados_audit else ''
     )
 
-    bloque_aplicadas = f"""
+    def _bloque(titulo_html, filas_todas, cap, cols_header, celda_extra_vacio):
+        mostrar = filas_todas[:cap]
+        resto = len(filas_todas) - len(mostrar)
+        aviso_resto = (
+            f'<p style="font-size:12px;color:#888;font-style:italic">'
+            f'…y {resto} más — consulta el listado completo en la aplicación '
+            f'(este correo se acorta para no superar el límite de tamaño de envío).</p>'
+            if resto > 0 else ""
+        )
+        tabla = f"""
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
-          <tr style="background:#155724;color:#fff">
-            <th style="padding:8px 12px;text-align:left">Registro</th>
-            <th style="padding:8px 12px;text-align:left">Cambios aplicados</th>
-          </tr>
-          {filas_aplicadas}
-        </table>""" if aplicadas else '<p style="color:#888;font-style:italic">Ningún registro se ha aplicado en esta sesión.</p>'
-
-    bloque_pendientes = f"""
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
-          <tr style="background:#856404;color:#fff">
-            <th style="padding:8px 12px;text-align:left">Referencia</th>
-            <th style="padding:8px 12px;text-align:left">Proveedor</th>
-            <th style="padding:8px 12px;text-align:left">Importe</th>
-            <th style="padding:8px 12px;text-align:left">Motivo</th>
-          </tr>
-          {filas_pendientes}
+          {cols_header}
+          {"".join(mostrar)}
         </table>
-        {aviso_resto_pendientes}""" if total_pendientes else '<p style="color:#155724;font-weight:600">🎉 No ha quedado ningún registro pendiente.</p>'
+        {aviso_resto}""" if filas_todas else celda_extra_vacio
+        return tabla
 
-    body = f"""
+    def _construir_body(cap_falt, cap_apl, cap_pend):
+        bloque_faltantes = _bloque(
+            None, filas_faltantes_todas, cap_falt,
+            """<tr style="background:#1a3a6b;color:#fff">
+                 <th style="padding:8px 12px;text-align:left">Nº Pedido SAP</th>
+                 <th style="padding:8px 12px;text-align:left">Proveedor</th>
+                 <th style="padding:8px 12px;text-align:left">Fecha</th>
+                 <th style="padding:8px 12px;text-align:left">Entrega</th>
+               </tr>""",
+            '<p style="color:#155724;font-weight:600">🎉 Todos los pedidos del listado de SAP están dados de alta en la app.</p>'
+        )
+        bloque_aplicadas = _bloque(
+            None, filas_aplicadas_todas, cap_apl,
+            """<tr style="background:#155724;color:#fff">
+                 <th style="padding:8px 12px;text-align:left">Registro</th>
+                 <th style="padding:8px 12px;text-align:left">Cambios aplicados</th>
+               </tr>""",
+            '<p style="color:#888;font-style:italic">Ningún registro se ha aplicado en esta sesión.</p>'
+        )
+        bloque_pendientes = _bloque(
+            None, filas_pendientes_todas, cap_pend,
+            """<tr style="background:#856404;color:#fff">
+                 <th style="padding:8px 12px;text-align:left">Referencia</th>
+                 <th style="padding:8px 12px;text-align:left">Proveedor</th>
+                 <th style="padding:8px 12px;text-align:left">Importe</th>
+                 <th style="padding:8px 12px;text-align:left">Motivo</th>
+               </tr>""",
+            '<p style="color:#155724;font-weight:600">🎉 No ha quedado ningún registro pendiente.</p>'
+        )
+        return f"""
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
       {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
                             color_fondo="#1a3a6b", color_subtitulo="#a8c0e8")}
@@ -9497,6 +9483,31 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
       </div>
     </div>
     """
+
+    # (2026-08-19) FIX tamaño de correo, definitivo — hasta ahora cada una
+    # de las 3 tablas (faltantes / aplicadas / pendientes) se acotaba por
+    # separado con un límite de filas fijo (primero solo "pendientes" en
+    # v12.30.15, luego también "faltantes" y "aplicadas" aquí mismo) — pero
+    # un límite fijo por tabla no evita que la SUMA de las tres, cuando las
+    # tres son grandes a la vez, siga superando el límite real de tamaño
+    # de EmailJS: fue justo lo que le pasó a Víctor (el correo acabó
+    # llegando, pero después de que ~10 intentos anteriores fallasen y
+    # descontasen cupo igualmente). En vez de adivinar un límite fijo que
+    # sirva para todos los casos, se prueban unos niveles de recorte cada
+    # vez más agresivos y se usa el primero cuyo resultado quede por
+    # debajo de un margen de seguridad conocido (el caso real de 79 filas
+    # "pendientes" solo, recortado a 50, dio 24.002 caracteres y SÍ llegó;
+    # el mismo caso sin recortar, 36.445 caracteres, dio 413 — el margen
+    # se fija bastante por debajo de ese límite conocido). La pantalla NO
+    # tiene este límite en ningún caso, ahí se ve siempre el listado
+    # completo sin recortar.
+    MARGEN_SEGURO_CHARS = 22000
+    NIVELES_RECORTE = [(50, 50, 50), (30, 30, 25), (15, 15, 12), (6, 6, 5)]
+    body = None
+    for cap_falt, cap_apl, cap_pend in NIVELES_RECORTE:
+        body = _construir_body(cap_falt, cap_apl, cap_pend)
+        if len(body) <= MARGEN_SEGURO_CHARS:
+            break
     return subject, body
 
 @app.route("/api/proveedores/<int:pid>", methods=["DELETE"])

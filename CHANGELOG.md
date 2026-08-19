@@ -1,3 +1,15 @@
+# v12.30.20 — 19 agosto 2026
+
+🐛 Correo de resumen de "Comparar Pedidos + Albaranes": recorte de tamaño definitivo — límite conjunto en vez de tres límites independientes
+
+**Petición de Víctor**: "llego un correo con el resumen pero descontó casi 10 correos en emailjs, en F12 salen varios intentos fallidos".
+
+**Causa**: el fix de v12.30.15 (y el de hace un momento, ampliando el recorte a "sin dar de alta" y "registrados automáticamente") acotaba cada una de las 3 tablas del correo (📋 sin dar de alta, ✅ registrados automáticamente, ⏳ pendientes de realizar) por SEPARADO, con un límite de filas fijo cada una. El problema: un límite fijo por tabla no evita que la SUMA de las tres, cuando las tres tienen muchas filas a la vez (como el caso real de Víctor), siga superando el límite real de tamaño de EmailJS — simulación con 120 "sin dar de alta" + 90 "registrados" + 79 "pendientes" (los tres recortados a 50 cada uno, el límite anterior): 62.083 caracteres, muy por encima del límite conocido que causa 413. Eso explica el síntoma: el correo llegó, pero después de que ~10 intentos anteriores (con contenido ligeramente distinto en cada recomparación) fallasen por tamaño y descontasen cupo igualmente.
+
+**Cambio en `app.py`**: `_email_resumen_comparacion_albaranes()` reescrita para probar varios niveles de recorte cada vez más agresivos — (50,50,50) → (30,30,25) → (15,15,12) → (6,6,5) filas por tabla — y quedarse con el primer resultado cuyo tamaño total quede por debajo de un margen de seguridad (22.000 caracteres, con margen respecto al caso real conocido: 24.002 caracteres SÍ llegó, 36.445 dio 413). Ya no hay tres límites fijos independientes — el correo se recorta lo justo para entrar dentro del margen conocido, sea cual sea la combinación de tamaños de las tres tablas. La pantalla sigue sin ningún límite, como siempre — el listado completo se ve siempre ahí.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Simulación aislada con el caso extremo (120/90/79 filas grandes en las tres tablas a la vez): el resultado ahora recorta automáticamente hasta 19.078 caracteres (nivel de recorte (15,15,12)), por debajo del margen de seguridad. El caso real de 79 "pendientes" solos (sin las otras dos tablas) se queda en el primer nivel (50,50,50) con 16.264 caracteres, sin recorte adicional innecesario.
+
 # v12.30.19 — 19 agosto 2026
 
 ✏️ Correo de cambio de estado: excluir solo a la persona que hizo el cambio (no a todo su rol) — y 🐛 Comparar Pedidos + Albaranes: dejar de mostrar como "pendiente" un pedido ya ENTREGADO solo porque SAP aún marca un pequeño importe pendiente (caso pedido 42644)

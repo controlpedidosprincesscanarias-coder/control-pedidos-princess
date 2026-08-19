@@ -25,6 +25,30 @@
 
 ---
 
+## 2026-08-19 — [Control Pedidos] Correo de resumen de "Comparar Pedidos + Albaranes": límite de tamaño conjunto en vez de tres límites independientes (v12.30.20)
+
+- Víctor: "llego un correo con el resumen pero descontó casi 10 correos
+  en emailjs, en F12 salen varios intentos fallidos".
+- **Causa**: los fixes anteriores de hoy acotaban cada una de las 3
+  tablas del correo (sin dar de alta / registrados automáticamente /
+  pendientes) por separado, con un límite de filas fijo cada una — pero
+  eso no evita que la SUMA de las tres, cuando las tres son grandes a
+  la vez, siga superando el límite real de EmailJS. Simulación: 120 +
+  90 + 79 filas (recortadas a 50 cada una, el límite anterior) daban
+  62.083 caracteres — muy por encima del límite conocido que causa 413.
+- **Cambio en `app.py`**: `_email_resumen_comparacion_albaranes()`
+  reescrita para probar niveles de recorte cada vez más agresivos —
+  (50,50,50) → (30,30,25) → (15,15,12) → (6,6,5) filas por tabla — y
+  quedarse con el primero cuyo tamaño total quede bajo un margen de
+  seguridad (22.000 caracteres; el caso real conocido: 24.002 SÍ
+  llegó, 36.445 dio 413). Ya no hay límites fijos independientes por
+  tabla. La pantalla sigue sin ningún límite, como siempre.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+  Simulación con el caso extremo (120/90/79 filas grandes a la vez):
+  recorta automáticamente a 19.078 caracteres. El caso real de 79
+  pendientes solos se queda en el primer nivel, 16.264 caracteres, sin
+  recorte innecesario.
+
 ## 2026-08-19 — [Control Pedidos] Correo de cambio de estado: excluir solo a la persona concreta (no a todo su rol) + Comparar Pedidos + Albaranes: pedido 42644 dejaba de mostrarse siempre pendiente aunque ya estaba ENTREGADO (v12.30.19)
 
 - Víctor, sobre el correo (v12.30.18): "solo se excluya a la persona
