@@ -1,3 +1,17 @@
+# v12.30.14 — 19 agosto 2026
+
+✨ Admin → Config alertas → EmailJS: campo de fecha de reinicio de cupo por cuenta
+
+**Contexto**: investigando por qué había dejado de enviarse el resumen de "Comparar Pedidos + Albaranes" descubrimos que las 3 cuentas EmailJS que usa la app en rotación automática (Cuenta 1 principal, Cuenta 2 secundaria, Cuenta 3 backup) son 3 cuentas EmailJS.com independientes, cada una con su propio cupo de 200 envíos/mes y su propia fecha de reinicio — y que en ese momento la Cuenta 2 y la Cuenta 3 estaban agotadas (200/200), lo que había forzado el cambio automático a la Cuenta 1. Para saber cuándo recupera cupo cada cuenta había que entrar a cada una de las 3 por separado en EmailJS.com — nada de esto se veía desde la propia aplicación.
+
+**Petición de Víctor**: "Podemos insertar un espacio donde indicar la fecha de reinicio de cada una de las cuentas a 0, para tenerlas controladas desde este mismo panel?"
+
+**Cambio en `app.py`**: 3 nuevas claves de configuración (`emailjs_reinicio_fecha_1/2/3`, tipo `fecha`, grupo `emailjs`), añadidas a `_auto_migrate()` con `ON CONFLICT DO NOTHING` (no toca nada existente) y a los valores por defecto de `get_config()`. Son puramente informativas — no las usa ninguna lógica automática, solo se guardan para consulta desde el panel; el admin las rellena a mano copiando la fecha "Resets on ..." que muestra cada cuenta en su propio panel de EmailJS.com.
+
+**Cambio en `templates/index.html`** (Admin → Config alertas → EmailJS): nuevo campo de fecha "Reinicia cupo el" dentro de cada una de las 3 tarjetas de cuenta (junto a Public Key/Service ID/Template ID) — se guarda solo con "Guardar cambios" como el resto de campos de ese panel (el guardado ya es genérico por `id="cfg_..."`, no ha hecho falta tocar `saveConfigAlertas()`). Además, en la cabecera del panel ("Cuenta en uso ahora mismo: N") se muestra ahora también la fecha de reinicio de la cuenta actualmente activa, si está rellena, para verla de un vistazo sin desplegarse hasta su tarjeta.
+
+**Verificación**: `python3 -m py_compile app.py` y `node --check` sobre el JS extraído de `templates/index.html`, ambos sin errores. Cambio aditivo y puramente informativo — no afecta a la lógica de envío ni de rotación automática de cuentas.
+
 # v12.30.13 — 19 agosto 2026
 
 ✏️ Comparar Pedidos + Albaranes: identificar los pedidos por su número DALI/SAP, no por el "Nº" lineal interno de la app

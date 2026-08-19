@@ -25,6 +25,32 @@
 
 ---
 
+## 2026-08-19 — [Control Pedidos] Admin → Config alertas → EmailJS: campo de fecha de reinicio de cupo por cuenta (v12.30.14)
+
+- Investigando por qué había dejado de enviarse el resumen de "Comparar
+  Pedidos + Albaranes" (ver más abajo) se descubrió que las 3 cuentas
+  EmailJS que usa la app en rotación automática son 3 cuentas EmailJS.com
+  independientes, cada una con su propio cupo de 200 envíos/mes y su
+  propia fecha de reinicio — y que la Cuenta 2 y la Cuenta 3 estaban
+  agotadas (200/200) en ese momento, forzando el cambio automático a la
+  Cuenta 1. Saber cuándo recupera cupo cada cuenta exigía entrar a cada
+  una por separado en EmailJS.com.
+- Petición de Víctor: poder indicar la fecha de reinicio de cada cuenta
+  desde el propio panel de la app, para tenerlas todas controladas de un
+  vistazo.
+- **Cambio en `app.py`**: 3 nuevas claves de configuración
+  (`emailjs_reinicio_fecha_1/2/3`, puramente informativas, sin uso en
+  ninguna lógica automática), añadidas a `_auto_migrate()` y a los
+  valores por defecto de `get_config()`.
+- **Cambio en `templates/index.html`**: nuevo campo de fecha "Reinicia
+  cupo el" en cada una de las 3 tarjetas de cuenta del panel Admin →
+  Config alertas → EmailJS, y aviso con la fecha de la cuenta
+  actualmente activa en la cabecera del panel. El guardado ya era
+  genérico (por `id="cfg_..."`), no hizo falta tocar el JS de guardado.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`
+  sobre el JS extraído, ambos sin errores. Cambio aditivo y puramente
+  informativo.
+
 ## 2026-08-19 — [Control Pedidos] Comparar Pedidos + Albaranes: identificar los pedidos por su número DALI/SAP, no por el "Nº" lineal interno (v12.30.13)
 
 - Petición de Víctor: "MEJOR INDICAR NUMERO PEDIDO DALI / SAP Y NO EL

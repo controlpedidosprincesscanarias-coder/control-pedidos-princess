@@ -785,6 +785,16 @@ def _auto_migrate():
                 ('emailjs_contador',       '0',                  'numero', 'Envíos contabilizados este ciclo',     'emailjs', 11),
                 ('emailjs_umbral_cambio',  '195',                'numero', 'Cambiar de cuenta al llegar a',        'emailjs', 12),
                 ('emailjs_cambio_automatico_en', '',             'texto',  'Último cambio automático (fecha)',     'emailjs', 13),
+                # (2026-08-19) A petición del usuario: campo informativo (sin
+                # ningún uso automático, solo para consulta desde el propio
+                # panel) con la fecha en la que cada cuenta EmailJS recupera
+                # su cupo mensual de 200 envíos — visible en el panel de cada
+                # cuenta en EmailJS.com ("Resets on ..."), pero solo se ve
+                # entrando a cada cuenta por separado; el admin la copia aquí
+                # a mano para tenerlas las tres controladas de un vistazo.
+                ('emailjs_reinicio_fecha_1', '',                 'fecha',  'Cuenta 1 (principal) — Reinicia cupo el',  'emailjs', 14),
+                ('emailjs_reinicio_fecha_2', '',                 'fecha',  'Cuenta 2 (secundaria) — Reinicia cupo el', 'emailjs', 15),
+                ('emailjs_reinicio_fecha_3', '',                 'fecha',  'Cuenta 3 (backup) — Reinicia cupo el',     'emailjs', 16),
             ]
             for _clave, _valor, _tipo, _label, _grupo, _orden in _emailjs_defaults:
                 cur.execute("""
@@ -3044,6 +3054,7 @@ def get_config() -> dict:
         "emailjs_public_key_3": "", "emailjs_service_id_3": "", "emailjs_template_id_3": "",
         "emailjs_cuenta_activa": 1, "emailjs_contador": 0, "emailjs_umbral_cambio": 195,
         "emailjs_cambio_automatico_en": "",
+        "emailjs_reinicio_fecha_1": "", "emailjs_reinicio_fecha_2": "", "emailjs_reinicio_fecha_3": "",
     }
     for k, v in defaults.items():
         cfg.setdefault(k, v)
