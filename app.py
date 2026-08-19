@@ -7855,6 +7855,24 @@ def _normalizar_pedido_num(s):
     m = re.match(r'^0*(\d+)$', s)
     return m.group(1) if m else s
 
+def _normalizar_num_albaran(s):
+    """
+    (2026-08-19) Normaliza un número de albarán/registro DALI para poder
+    comparar aunque tenga o no ceros a la izquierda ('81970' y '00081970'
+    deben considerarse el MISMO albarán) — mismo criterio que
+    _normalizar_pedido_num(), con nombre propio para dejar claro dónde se
+    usa: al detectar si un albarán ya está registrado en el pedido
+    (comparación "Comparar Pedidos + Albaranes", ver ya_registrado en
+    _comparar_listado_albaranes_logica() y el guard de duplicados en
+    _aplicar_coincidencia_albaran()). Antes de este fix se comparaba con
+    un simple "in" de texto, que no reconocía '00081970' como el mismo
+    albarán que '81970' ya registrado: se añadía una entrada duplicada
+    con los ceros a la izquierda y, como esa nueva entrada tampoco casaba
+    por texto exacto en la siguiente comparación, el pedido volvía a salir
+    como pendiente indefinidamente.
+    """
+    return _normalizar_pedido_num(s)
+
 def _normalizar_nombre_proveedor(s):
     """
     (2026-08-06) Normaliza el nombre de un proveedor para intentar
@@ -8700,9 +8718,16 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
             p1, p2 = lado1[0], lado2[0]
             fecha_tram_iso     = _parsear_fecha_es_a_iso(p1["fecha_pedido_es"])
             fecha_registro_iso = _parsear_fecha_es_a_iso(p2["fecha_registro_es"])
+            # (2026-08-19) Comparación por número normalizado (ignora ceros a
+            # la izquierda) en vez de un simple "in" de texto — ver
+            # _normalizar_num_albaran() para el motivo del cambio.
+            _reg_dali_norm = _normalizar_num_albaran(p2["registro_dali"])
             ya_registrado = bool(
                 p2["registro_dali"] and p1["entrada_albaran_num_actual"]
-                and p2["registro_dali"] in p1["entrada_albaran_num_actual"]
+                and any(
+                    _normalizar_num_albaran(_e["num"]) == _reg_dali_norm
+                    for _e in _parse_albaran_entries(p1["entrada_albaran_num_actual"])
+                )
             )
             coincidencias.append({
                 "clave":                      f'{clave[0]}_{str(clave[1]).replace(".", "_")}',
@@ -8877,7 +8902,16 @@ def _aplicar_coincidencia_albaran(db, coincidencia: dict, usuario_id: int, usuar
 
     nuevo_albaran = pedido_actual["entrada_albaran_num"]
     registro_dali = coincidencia.get("registro_dali")
-    if registro_dali and (not nuevo_albaran or registro_dali not in nuevo_albaran):
+    # (2026-08-19) Comparación por número normalizado (ignora ceros a la
+    # izquierda), no por texto exacto — antes, si el pedido ya tenía
+    # registrado p.ej. "81970" y el PDF de DALI traía "00081970", el "in"
+    # de texto no lo reconocía como el mismo albarán y se añadía una
+    # entrada duplicada. Ver _normalizar_num_albaran().
+    ya_presente = bool(registro_dali) and any(
+        _normalizar_num_albaran(_e["num"]) == _normalizar_num_albaran(registro_dali)
+        for _e in _parse_albaran_entries(nuevo_albaran)
+    )
+    if registro_dali and not ya_presente:
         entrada_nueva = _serializar_entrada_albaran(registro_dali, coincidencia.get("fecha_registro_dali_iso"))
         nuevo_albaran = f"{nuevo_albaran} | {entrada_nueva}" if nuevo_albaran else entrada_nueva
         cambios.append(f"nueva entrada de albarán {registro_dali}")
@@ -9161,22 +9195,30 @@ def _motivo_sin_pedido(a):
     """
     (2026-08-19) Texto de motivo para un elemento de "pendientes_sin_pedido"
     (albarán de DALI sin pareja de importe exacto en el PDF de SAP
-    comparado). Compartido entre el correo de resumen y — en espíritu, la
-    misma redacción se replica en el JS de templates/index.html para la
-    pantalla — para no tener dos versiones del mismo texto.
+    comparado), para el CORREO de resumen — ver nota de tamaño más abajo.
+    El JS de templates/index.html tiene su propia versión, más larga/
+    explicativa, para la pantalla (sin límite de tamaño ahí).
 
-    A petición de Víctor (2026-08-19, tras ver que el aviso de
-    "posible_pedido_hint" seguía saliendo sin más contexto): el texto
-    debe dejar claro que el pedido antiguo detectado NO se puede
-    verificar con la información disponible (el PDF de SAP recién
-    subido no llega a esa fecha, así que no se conoce su importe
-    REALMENTE recibido — el importe que muestra la app es solo la
-    estimación/presupuesto con el que se dio de alta el pedido, que
-    puede ser mayor si hubo entregas parciales) y debe indicar
-    explícitamente qué hacer para resolverlo: adjuntar un listado de SAP
-    que cubra esa fecha, o comprobarlo a mano — si no se hace ninguna de
-    las dos cosas, el aviso seguirá saliendo en cada comparación futura,
-    porque no hay manera de que la aplicación lo confirme por sí sola.
+    A petición de Víctor (2026-08-19): el texto debe dejar claro que el
+    pedido antiguo detectado NO se puede verificar con la información
+    disponible (el PDF de SAP recién subido no llega a esa fecha, y el
+    importe de la app es solo una estimación, no el importe realmente
+    recibido) y qué hacer para resolverlo: adjuntar un listado de SAP que
+    cubra esa fecha, o comprobarlo a mano.
+
+    (2026-08-19) FIX tamaño de correo: la primera redacción de este
+    texto (~540 caracteres) multiplicada por decenas de "pendientes" en
+    hoteles con mucho volumen (caso real: 79 pendientes) hacía que el
+    correo completo superase el límite de tamaño por petición de
+    EmailJS — la petición se enviaba, EmailJS la contaba contra el cupo,
+    pero la rechazaba con HTTP 413 (Payload Too Large) sin llegar a
+    entregarse, y sin ningún aviso visible salvo la discrepancia entre
+    el cupo consumido en EmailJS y el contador propio de la app
+    (confirmado viendo el Network del navegador: varias peticiones
+    `send` a EmailJS con status 413). Se acorta a menos de la mitad
+    mantenimiento la información esencial (pedido candidato, estado,
+    importe de la app, y las dos acciones a tomar) — ver también el
+    límite de filas añadido en _email_resumen_comparacion_albaranes.
     """
     hint = a.get("posible_pedido_hint")
     if not hint:
@@ -9188,15 +9230,11 @@ def _motivo_sin_pedido(a):
     # de verificar contra esos listados.
     ref_pedido = hint.get("pedido_num_sap") or "—"
     importe_pedido = hint.get("importe_pedido")
-    importe_pedido_txt = f", importe registrado en la app: {importe_pedido:.2f} €" if importe_pedido is not None else ""
+    importe_pedido_txt = f", importe app: {importe_pedido:.2f} €" if importe_pedido is not None else ""
     return (
-        f"Existe un pedido de fecha anterior del mismo proveedor ya en la app — Pedido {ref_pedido} "
-        f"({hint.get('estado_app_actual', 'ENTREGADO')}{importe_pedido_txt}) — pero no se puede verificar "
-        f"automáticamente: no aparece en este PDF de SAP (es de fechas anteriores a las que cubre), y el "
-        f"importe registrado en la app es solo una estimación al dar de alta el pedido, no el importe "
-        f"realmente recibido (puede diferir, p.ej. por entregas parciales). Para resolverlo, adjunta un "
-        f"listado de SAP que incluya esa fecha, o compruébalo manualmente — si no, este aviso seguirá "
-        f"saliendo en cada comparación."
+        f"Posible pedido de fecha anterior ya en la app: Pedido {ref_pedido} "
+        f"({hint.get('estado_app_actual', 'ENTREGADO')}{importe_pedido_txt}) — sin confirmar, no está en "
+        f"este PDF de SAP. Sube un listado que cubra esa fecha o verifícalo a mano."
     )
 
 def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, aplicadas, admin_nombre,
@@ -9282,10 +9320,29 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
           <td style="padding:8px 12px;border:1px solid #ddd">Varios candidatos — requiere decisión manual</td>
         </tr>"""
 
-    filas_pendientes = (
-        "".join(_fila_sin_albaran(p) for p in pend_sin_albaran)
-        + "".join(_fila_sin_pedido(a) for a in pend_sin_pedido)
-        + "".join(_fila_ambiguo(g) for g in pend_ambiguos)
+    # (2026-08-19) FIX: EmailJS rechaza con HTTP 413 (Payload Too Large)
+    # peticiones por encima de cierto tamaño — la petición SÍ se cuenta
+    # contra el cupo de la cuenta (por eso el cupo bajaba sin que llegase
+    # ningún correo), pero nunca se entrega. Con hoteles de mucho volumen
+    # (caso real: 79 filas en "pendientes de revisión manual") el HTML de
+    # esta tabla por sí sola podía superar ese límite. Igual que ya se
+    # hacía con `pedidos_faltantes` (LIMITE_FILAS más arriba), se acota
+    # también esta tabla en el CORREO — la pantalla no tiene este límite,
+    # ahí se sigue viendo el listado completo sin recortar.
+    LIMITE_FILAS_PENDIENTES = 50
+    todas_filas_pendientes = (
+        [_fila_sin_albaran(p) for p in pend_sin_albaran]
+        + [_fila_sin_pedido(a) for a in pend_sin_pedido]
+        + [_fila_ambiguo(g) for g in pend_ambiguos]
+    )
+    mostrar_pendientes = todas_filas_pendientes[:LIMITE_FILAS_PENDIENTES]
+    resto_pendientes = len(todas_filas_pendientes) - len(mostrar_pendientes)
+    filas_pendientes = "".join(mostrar_pendientes)
+    aviso_resto_pendientes = (
+        f'<p style="font-size:12px;color:#888;font-style:italic">'
+        f'…y {resto_pendientes} pendiente(s) más — consulta el listado completo en la aplicación '
+        f'(este correo se acorta para no superar el límite de tamaño de envío).</p>'
+        if resto_pendientes > 0 else ""
     )
 
     bloque_faltantes = f"""
@@ -9326,7 +9383,8 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
             <th style="padding:8px 12px;text-align:left">Motivo</th>
           </tr>
           {filas_pendientes}
-        </table>""" if total_pendientes else '<p style="color:#155724;font-weight:600">🎉 No ha quedado ningún registro pendiente.</p>'
+        </table>
+        {aviso_resto_pendientes}""" if total_pendientes else '<p style="color:#155724;font-weight:600">🎉 No ha quedado ningún registro pendiente.</p>'
 
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">

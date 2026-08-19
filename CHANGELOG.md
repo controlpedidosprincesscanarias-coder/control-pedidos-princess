@@ -1,3 +1,35 @@
+# v12.30.16 — 19 agosto 2026
+
+🐛 Comparar Pedidos + Albaranes: al aplicar una coincidencia se duplicaba la entrada de albarán con ceros a la izquierda, y el pedido volvía a salir como pendiente en la siguiente comparación
+
+**Petición de Víctor**: "CUANDO SE ENCUENTRA UN PEDIDO Y SE DA LA OPCION DE ACTUALIZARLO DESDE LA COMPARATIVA, GENERA UNA NUEVA ENTRADA INDICANDO EL MISMO NUMERO DE ALBARAN PERO CON LOS CEROS A LA IZQ. LUEGO EN LA SIGUIENDE COMPARACION VUELVE A SALIR COMO NO CERRADO" — con capturas mostrando el campo "Nº Entrada DALI/SAP" de un pedido con dos entradas para el mismo albarán: "81970" y "00081970", con fechas distintas.
+
+**Causa**: dos puntos de `app.py` comparaban el número de registro DALI (`registro_dali`, tal como aparece en el PDF de "Listado de Albaranes") contra lo ya guardado en `entrada_albaran_num` con un simple `in` de texto (substring), sin normalizar los ceros a la izquierda — a diferencia de los números de pedido, que sí se comparan con `_normalizar_pedido_num()` desde v12.30.06 aprox. Si el pedido ya tenía registrado, por ejemplo, "81970" (tecleado a mano sin ceros) y el PDF de DALI traía "00081970" (como aparece literalmente en su listado), el `in` de texto no lo reconocía como el mismo albarán:
+1. `_aplicar_coincidencia_albaran()` (al confirmar "Actualizar" desde la comparativa): añadía una **entrada nueva** "00081970" en vez de detectar que ya estaba registrada — de ahí el duplicado en el campo "Nº Entrada DALI/SAP".
+2. `ya_registrado` dentro de `_comparar_listado_albaranes_logica()`: por el mismo motivo no marcaba el pedido como ya registrado, así que la siguiente comparación lo volvía a mostrar como pendiente ("no cerrado"), invitando a aplicarlo otra vez — y potencialmente a duplicar aún más si el PDF trae otra variante de ceros.
+
+**Cambio en `app.py`**: nueva función `_normalizar_num_albaran()` (mismo criterio que `_normalizar_pedido_num()`: quita ceros a la izquierda y espacios, mayúsculas). Se usa ahora en los dos puntos afectados:
+- `_comparar_listado_albaranes_logica()`: `ya_registrado` compara el `registro_dali` del PDF, normalizado, contra cada entrada ya parseada de `entrada_albaran_num_actual` (vía `_parse_albaran_entries()`), en vez de buscar el texto tal cual dentro de la cadena completa.
+- `_aplicar_coincidencia_albaran()`: antes de añadir una entrada nueva a `entrada_albaran_num`, comprueba (con la misma normalización) si ya existe una entrada equivalente — si la hay, no añade nada, evitando el duplicado.
+
+Nota: esto evita que se generen **nuevos** duplicados y hace que la siguiente comparación reconozca correctamente cualquiera de las dos variantes (con o sin ceros) como "ya registrado". No fusiona automáticamente duplicados que ya existieran en pedidos de antes de este cambio — esos pedidos concretos pueden seguir mostrando las dos entradas hasta que se editen a mano si se quiere limpiar el histórico.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Simulación aislada en Python (fuera de la app, sin BD) reproduciendo el caso reportado: con "81970" ya registrado y `registro_dali` "00081970" entrante (y también el caso inverso), `ya_registrado` y el guard de duplicados de `_aplicar_coincidencia_albaran()` dan ahora `True`/"no duplica" en ambos sentidos; un caso de control con dos números realmente distintos ("81970" vs "81971") confirma que no se marcan como iguales por error.
+
+# v12.30.15 — 19 agosto 2026
+
+🐛 Comparar Pedidos + Albaranes: el correo de resumen no llegaba en hoteles con muchos pendientes — EmailJS lo rechazaba por tamaño (HTTP 413)
+
+**Contexto**: tras descartar cupo agotado y conexión de Gmail rota (ver v12.30.14 y las entradas anteriores de hoy), el síntoma seguía sin explicación — el correo se quedaba en cola, EmailJS descontaba cupo de la cuenta activa, pero nunca llegaba. Revisando el Network del navegador (herramientas de desarrollador) al pulsar "Enviar resumen por correo" se vieron varias peticiones `send` a la API de EmailJS con **status 413 (Payload Too Large)** — la petición se envía y EmailJS la cuenta contra el cupo, pero la rechaza sin completarla por ser demasiado grande. El caso real que lo disparó: un hotel con 79 filas en "pendientes de revisión manual", cada una con el texto explicativo largo del "posible candidato" (añadido en v12.30.11/12) — el HTML del correo superaba el límite de tamaño por petición de EmailJS.
+
+**Cambio en `app.py`**:
+
+`_motivo_sin_pedido()` (usado solo en el correo — la pantalla tiene su propio texto, sin límite de tamaño): se acorta el texto del "posible candidato" a menos de la mitad, manteniendo la información esencial (pedido, estado, importe de la app, y las dos acciones a tomar).
+
+`_email_resumen_comparacion_albaranes()`: se añade un límite de 50 filas a la tabla de "pendientes de revisión manual" del correo (mismo patrón que ya usaba `pedidos_faltantes` con `LIMITE_FILAS`), con aviso "…y N más — consulta el listado completo en la aplicación" cuando se recorta. El contador que aparece en el asunto y en el título del bloque ("⏳ Pendientes de realizar (N)") sigue mostrando el total real, sin recortar — solo se acorta la tabla de filas. La pantalla de la aplicación (que lee directamente del JSON de la comparación, no de este correo) sigue mostrando siempre el listado completo, sin límite.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Se simuló un caso de 79 pendientes (con la misma mezcla de categorías que el caso real) con un script Python aparte que ejecuta `_email_resumen_comparacion_albaranes()` de forma aislada: el correo generado pasa de 36.445 caracteres (comportamiento anterior, sin límite) a 24.002 caracteres con el límite de 50 filas — margen razonable por debajo del límite de tamaño de EmailJS. No se ha podido reproducir el error 413 exacto contra la API real de EmailJS desde este entorno (sandbox sin las credenciales de producción) — recomendado repetir la comparación del hotel con más pendientes tras desplegar, y confirmar en el Network del navegador que las peticiones `send` devuelven 200 en vez de 413.
+
 # v12.30.14 — 19 agosto 2026
 
 ✨ Admin → Config alertas → EmailJS: campo de fecha de reinicio de cupo por cuenta
