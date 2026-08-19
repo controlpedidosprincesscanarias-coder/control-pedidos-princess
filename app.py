@@ -1892,7 +1892,8 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
                     evento_codigo, pedido_id, exc)
 
 def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str = None,
-                          usuario_nombre: str = ""):
+                          usuario_nombre: str = "", usuario_id: int = None,
+                          es_automatico: bool = False):
     """
     Construye los correos de notificación de cambio de estado (proveedor +
     internos) y los registra en _log_email.
@@ -1912,6 +1913,28 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     usuario_nombre: quién realizó el cambio (o creó el pedido) — se incluye
     en el correo interno ("Realizado por:"), nunca en el correo al
     proveedor (es un dato interno, no debe salir fuera de la empresa).
+
+    (2026-08-19) usuario_id / es_automatico — a petición de Víctor, el
+    correo interno de cambio de estado ya NO se manda a las dos partes por
+    igual en un cambio manual: se excluye de los destinatarios a la
+    PERSONA CONCRETA que ha realizado el cambio (no a todo su rol/lado —
+    si comparte hotel con más compañeros de compras o de hotel, esos
+    siguen recibiendo el correo con normalidad), porque esa persona ya
+    sabe lo que acaba de hacer. Quien hizo el cambio se sigue enterando
+    por el popup/Telegram de "cambio_estado_pedido" (canal totalmente
+    aparte, ver _telegram_cambio_estado — no se toca aquí), tal como
+    pidió. (2026-08-19, ajuste: la primera versión excluía a todo el
+    lado/rol de quien hacía el cambio — Víctor pidió que fuera solo la
+    persona concreta.)
+    - usuario_id: id de quien realizó el cambio; se consulta su email
+      (y email2) y se quita de la lista de destinatarios del correo
+      interno. Si no se indica, o no tiene email, se manda a todos los
+      internos como antes (comportamiento más seguro por defecto que
+      dejar a alguien sin avisar).
+    - es_automatico=True: el cambio no lo ha decidido una persona en ese
+      momento (p. ej. _aplicar_coincidencia_albaran(), al confirmar una
+      coincidencia de "Comparar Pedidos + Albaranes") — se manda SIEMPRE
+      a todos los internos, igual que antes, sin excluir a nadie.
 
     Devuelve: [] siempre — se mantiene por compatibilidad con los callers
     (create_pedido / update_pedido), que incluyen el valor en su respuesta
@@ -1960,8 +1983,24 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     _usuarios_hotel   = _get_todos_usuarios_hotel(pedido.get("hotel_codigo",""))
     _emails_compradores = [e for u in _usuarios_hotel["compradores"] for e in _emails_usuario(u)]
     _emails_hotel_users = [e for u in _usuarios_hotel["hotel_users"]  for e in _emails_usuario(u)]
-    # Todos los internos del hotel (compradores + usuarios hotel) para BCC
+
+    # (2026-08-19) Se excluye del correo interno SOLO a la persona concreta
+    # que ha realizado el cambio (no a todo su rol/lado — un comprador o
+    # usuario hotel puede compartir hotel con más compañeros de su mismo
+    # rol, y esos sí deben seguir recibiendo el correo). Esa persona ya
+    # sabe lo que acaba de hacer y se entera por el popup/Telegram de
+    # "cambio_estado_pedido" (canal aparte, no tocado aquí). Si es un
+    # cambio automático, o no se sabe quién lo ha hecho, no se excluye a
+    # nadie (más seguro que dejar a alguien sin avisar por error).
+    _emails_actor = []
+    if not es_automatico and usuario_id:
+        _actor = row_to_dict(query("SELECT email, email2 FROM usuarios WHERE id=%s", (usuario_id,), one=True))
+        if _actor:
+            _emails_actor = _emails_usuario(_actor)
+
     _todos_internos = list(dict.fromkeys(_emails_compradores + _emails_hotel_users))  # sin duplicados
+    if _emails_actor:
+        _todos_internos = [e for e in _todos_internos if e not in _emails_actor]
 
     # ── Correo al proveedor (solo ENVIADO AL PROVEEDOR) ───────────────────────
     # Para:  todos los contactos principales del proveedor
@@ -2968,7 +3007,8 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
 
 
 def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str,
-                              usuario_nombre: str = "") -> list:
+                              usuario_nombre: str = "", usuario_id: int = None,
+                              es_automatico: bool = False) -> list:
     """
     Centraliza todas las notificaciones de un cambio de estado manual.
 
@@ -2980,7 +3020,8 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
 
         if estado_nuevo != estado_antes:
             pendientes = _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
-                                     usuario_nombre=session.get("nombre", ""))
+                                     usuario_nombre=session.get("nombre", ""),
+                                     usuario_id=uid)
 
     Devuelve la lista de correos pendientes de envío vía EmailJS (ver
     enviar_emails_estado), para que el caller la incluya en su respuesta JSON.
@@ -2992,9 +3033,15 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
       para ambos flujos con un único cambio en este método.
     - es_cambio_manual=True queda encapsulado: el caller no necesita saber
       el detalle de la supresión de alertas contradictorias.
+
+    usuario_id / es_automatico: ver enviar_emails_estado() — deciden a qué
+    lado (comprador/hotel) se excluye del correo interno porque es quien ha
+    hecho el cambio. No afecta al Telegram/popup de _telegram_cambio_estado,
+    que sigue igual (canal aparte, no filtrado por quién hizo el cambio).
     """
     pendientes = enviar_emails_estado(db, pedido_id, estado_nuevo, estado_antes,
-                                       usuario_nombre=usuario_nombre)
+                                       usuario_nombre=usuario_nombre, usuario_id=usuario_id,
+                                       es_automatico=es_automatico)
     _telegram_cambio_estado(db, pedido_id, estado_nuevo, estado_antes,
                              usuario_nombre=usuario_nombre,
                              es_cambio_manual=True)
@@ -8309,6 +8356,19 @@ def _entrega_estado(importe_base: float, importe_recibido: float) -> str:
         return "Entregado"
     return "Entrega parcial"
 
+# (2026-08-19) Orden de "avance" de los estados de entrega de un pedido —
+# única fuente de verdad, usada tanto por _aplicar_coincidencia_albaran()
+# (para no retroceder el estado de un pedido) como por
+# _comparar_listado_albaranes_logica() (para no proponer/mostrar como
+# pendiente una "entrega parcial" según SAP cuando el pedido ya está en un
+# estado más avanzado en la app — ver nota en esa función, caso pedido
+# 42644: SAP seguía marcando un importe pendiente pequeño mientras el
+# pedido ya se había dado por ENTREGADO en la app, y la comparativa lo
+# volvía a mostrar como "ENTREGADO → ENTREGA PARCIAL" en cada comparación,
+# como si aplicar la coincidencia fuera a retroceder el pedido — cuando en
+# realidad _aplicar_coincidencia_albaran() ya lo protegía y no hacía nada).
+_ORDEN_ENTREGA_ESTADOS = {"ENVIADO AL PROVEEDOR": 0, "PENDIENTE COTIZACIÓN": 0, "ENTREGA PARCIAL": 1, "ENTREGADO": 2}
+
 def _estado_aparente_entrega(importe_recibido: float, importe_pendiente: float) -> str:
     """
     (2026-08-11) "Estado aparente" de entrega, a petición del usuario —
@@ -8729,6 +8789,21 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
                     for _e in _parse_albaran_entries(p1["entrada_albaran_num_actual"])
                 )
             )
+            # (2026-08-19) El pedido puede estar YA en un estado más avanzado
+            # en la app que el que propone esta línea de SAP (p. ej. la app
+            # ya lo tiene ENTREGADO, pero SAP todavía muestra un importe
+            # pendiente pequeño y por tanto "Entrega parcial" según
+            # _entrega_estado) — _aplicar_coincidencia_albaran() ya protege
+            # este caso y NO retrocede el estado, pero antes de este fix la
+            # comparativa lo seguía mostrando cada vez como
+            # "ENTREGADO → ENTREGA PARCIAL", como si aplicar fuera a
+            # retroceder el pedido, cuando en realidad no iba a cambiar
+            # nada. Ver _ORDEN_ENTREGA_ESTADOS.
+            _estado_ya_avanzado = (
+                _ORDEN_ENTREGA_ESTADOS.get(p1["estado_app_actual"], 0)
+                > _ORDEN_ENTREGA_ESTADOS.get(p1["estado_objetivo"], 0)
+            )
+            _sin_cambio_estado = p1["estado_app_actual"] == p1["estado_objetivo"] or _estado_ya_avanzado
             coincidencias.append({
                 "clave":                      f'{clave[0]}_{str(clave[1]).replace(".", "_")}',
                 "pedido_id":                  p1["pedido_id"],
@@ -8748,7 +8823,8 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
                 "departamento_nombre":        p2["departamento_nombre"],
                 "ya_registrado":              ya_registrado,
                 "ya_en_estado_objetivo":      p1["estado_app_actual"] == p1["estado_objetivo"],
-                "sin_cambios_pendientes":     ya_registrado and p1["estado_app_actual"] == p1["estado_objetivo"]
+                "estado_ya_avanzado":         _estado_ya_avanzado,
+                "sin_cambios_pendientes":     ya_registrado and _sin_cambio_estado
                                                and p1["fecha_tramitacion_actual"],
             })
         elif len(lado1) == 1 and len(lado2) == 0:
@@ -8917,10 +8993,9 @@ def _aplicar_coincidencia_albaran(db, coincidencia: dict, usuario_id: int, usuar
         cambios.append(f"nueva entrada de albarán {registro_dali}")
 
     estado_nuevo = coincidencia["estado_objetivo"]
-    _ORDEN_ENTREGA = {"ENVIADO AL PROVEEDOR": 0, "PENDIENTE COTIZACIÓN": 0, "ENTREGA PARCIAL": 1, "ENTREGADO": 2}
     if estado_antes == estado_nuevo:
         estado_nuevo = estado_antes  # sin cambio de estado
-    elif _ORDEN_ENTREGA.get(estado_antes, 0) > _ORDEN_ENTREGA.get(estado_nuevo, 0):
+    elif _ORDEN_ENTREGA_ESTADOS.get(estado_antes, 0) > _ORDEN_ENTREGA_ESTADOS.get(estado_nuevo, 0):
         # El pedido ya está en un estado de entrega más avanzado que el que
         # propone esta coincidencia (p. ej. ya ENTREGADO y esto solo
         # confirma una entrega parcial anterior) — no retroceder el estado.
@@ -8939,17 +9014,27 @@ def _aplicar_coincidencia_albaran(db, coincidencia: dict, usuario_id: int, usuar
         (nueva_fecha_tramitacion, nuevo_albaran, estado_nuevo, usuario_id, usuario_nombre, pedido_id)
     )
     if estado_nuevo != estado_antes:
+        # (2026-08-19) En la trazabilidad (Historial de estados) este cambio
+        # NO debe figurar con el nombre de quien pulsó "Aplicar" en la
+        # comparativa — no es una edición manual suya del pedido, es el
+        # propio sistema aplicando lo detectado en los PDF. Se guarda un
+        # nombre descriptivo fijo en vez del usuario real, para que se
+        # distinga a simple vista de un cambio de estado hecho a mano.
+        # Petición de Víctor: "LOS EJECUTADOS AUTOMATICAMENTE DEBERIAN
+        # SALIR ASI DEFINIDOS Y NO CON NOMBRE DE USUARIO".
+        _nombre_automatico = "Automática — listado comparativo pedidos y albaranes"
         execute(
             "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) "
             "VALUES (%s,%s,%s,%s,%s,%s)",
-            (pedido_id, estado_antes, estado_nuevo, usuario_id, usuario_nombre,
+            (pedido_id, estado_antes, estado_nuevo, usuario_id, _nombre_automatico,
              f"Registro automático — comparación de listados PDF (pedidos + albaranes), "
              f"albarán DALI {registro_dali or '—'}")
         )
     db.commit()
 
     if estado_nuevo != estado_antes:
-        _notificar_cambio_estado(db, pedido_id, estado_nuevo, estado_antes, usuario_nombre=usuario_nombre)
+        _notificar_cambio_estado(db, pedido_id, estado_nuevo, estado_antes, usuario_nombre=usuario_nombre,
+                                  usuario_id=usuario_id, es_automatico=True)
 
     return {"aplicado": True, "cambios": cambios, "motivo_sin_cambios": None}
 
@@ -10918,7 +11003,7 @@ def create_pedido():
     )
     db.commit()
 
-    _pendientes_email = enviar_emails_estado(db, pedido_id, estado, usuario_nombre=session.get("nombre", ""))
+    _pendientes_email = enviar_emails_estado(db, pedido_id, estado, usuario_nombre=session.get("nombre", ""), usuario_id=uid)
 
     # ── Telegram inmediato si el pedido está sujeto al techo de gastos ────────
     if sujeto_techo:
@@ -10988,6 +11073,7 @@ def update_pedido(pid):
                 estado_solicitado,
                 estado_antes,
                 usuario_nombre=session.get("nombre", ""),
+                usuario_id=uid,
             )
         return jsonify({"ok": True, "id": pid, "emails_pendientes": _pendientes_email})
     # ── Fin restricción hotel ──────────────────────────────────────────────────
@@ -11208,7 +11294,7 @@ def update_pedido(pid):
     _pendientes_email = []
     if estado_nuevo != estado_antes:
         _pendientes_email = _notificar_cambio_estado(db, pid, estado_nuevo, estado_antes,
-                                 usuario_nombre=session.get("nombre", ""))
+                                 usuario_nombre=session.get("nombre", ""), usuario_id=uid)
 
     return jsonify({
         "ok": True,
@@ -11281,7 +11367,7 @@ def aprobar_expediente(eid):
 
     _pendientes_email = _notificar_cambio_estado(
         db, exp["pedido_id"], "ENVIADO AL PROVEEDOR", estado_antes,
-        usuario_nombre=session.get("nombre", "")
+        usuario_nombre=session.get("nombre", ""), usuario_id=uid,
     )
     return jsonify({"ok": True, "emails_pendientes": _pendientes_email})
 
@@ -11337,7 +11423,7 @@ def denegar_expediente(eid):
 
     _pendientes_email = _notificar_cambio_estado(
         db, exp["pedido_id"], "DENEGADO POR DIRECCION GENERAL", estado_antes,
-        usuario_nombre=session.get("nombre", "")
+        usuario_nombre=session.get("nombre", ""), usuario_id=uid,
     )
     return jsonify({"ok": True, "emails_pendientes": _pendientes_email})
 

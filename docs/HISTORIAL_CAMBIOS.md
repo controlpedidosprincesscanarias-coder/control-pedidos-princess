@@ -25,6 +25,106 @@
 
 ---
 
+## 2026-08-19 — [Control Pedidos] Correo de cambio de estado: excluir solo a la persona concreta (no a todo su rol) + Comparar Pedidos + Albaranes: pedido 42644 dejaba de mostrarse siempre pendiente aunque ya estaba ENTREGADO (v12.30.19)
+
+- Víctor, sobre el correo (v12.30.18): "solo se excluya a la persona
+  concreta" — no a todo el lado/rol (comprador u hotel), porque puede
+  haber más de una persona por rol en el mismo hotel y las demás deben
+  seguir recibiendo el correo.
+- **Cambio en `app.py`**: `enviar_emails_estado()` ya no excluye por
+  rol — consulta el email (y email2) de `usuario_id` y lo quita de la
+  lista de destinatarios del correo interno; el resto de compañeros de
+  su mismo rol siguen recibiéndolo con normalidad. Automático o sin
+  `usuario_id` conocido: se manda a todos, como antes.
+- Víctor, sobre la comparativa: "seguimos con problemas de
+  identificación aun enviando el listado desde el 01-05-2026 ; sigue
+  identificando el pedido 42644 como entrega parcial" — con los dos PDF
+  completos del hotel FV adjuntos.
+- **Causa**: en los PDF, el pedido SAP 00042644 tiene base 1.513,35 €
+  pero SAP solo registra 1.274,40 € "recibido" (238,95 € pendientes
+  según SAP), así que `_entrega_estado()` lo clasifica "Entrega
+  parcial". El pedido ya está ENTREGADO en la app (esos 1.274,40 €
+  coinciden con el albarán DALI 00081970, ya registrado).
+  `_aplicar_coincidencia_albaran()` ya protegía este caso (no retrocede
+  un ENTREGADO), pero la comparativa no aplicaba esa misma protección
+  al construir la fila: seguía mostrando "ENTREGADO → ENTREGA PARCIAL"
+  como si fuera a retroceder, así que el pedido reaparecía como
+  pendiente en cada comparación aunque no había nada que hacer.
+- **Cambio en `app.py`**: nueva constante única `_ORDEN_ENTREGA_ESTADOS`
+  (antes duplicada dentro de `_aplicar_coincidencia_albaran()`), usada
+  también en `_comparar_listado_albaranes_logica()` para calcular
+  `estado_ya_avanzado` (el pedido ya está, en la app, por delante de lo
+  que propone SAP) y marcar `sin_cambios_pendientes` cuando no hay
+  ningún cambio real que aplicar, en vez de reaparecer indefinidamente.
+- **Cambio en `templates/index.html`**: con `estado_ya_avanzado`, la
+  columna de estado muestra "ENTREGADO (ya en un estado más avanzado —
+  SAP aún lo muestra como ENTREGA PARCIAL)" en vez de un falso
+  retroceso "ENTREGADO → ENTREGA PARCIAL".
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`
+  sin errores. Extraído el texto de los PDF adjuntos, localizada la
+  línea real del pedido 42644 y el albarán 00081970, y reproducido el
+  caso en una simulación aislada: `estado_ya_avanzado=True`,
+  `sin_cambios_pendientes=True` con los importes y el estado reales.
+
+## 2026-08-19 — [Control Pedidos] Correo de cambio de estado: solo a quien NO ha hecho el cambio — quien lo hizo sigue recibiendo su popup/Telegram (v12.30.18)
+
+- Víctor: "cuando se cambia un estado de pedido, actualmente se envía
+  automáticamente un correo al comprador y también al rol hotel,
+  podríamos hacer que el correo solo se le envíe al que no ha realizado
+  el cambio? es decir, si el cambio lo realiza el hotel, le llega el
+  correo al comprador y viceversa, al que ha realizado el cambio le
+  debería llegar únicamente un popup ; si el cambio es automático
+  entonces sí correo a ambas partes".
+- **Cambio en `app.py`**: `enviar_emails_estado()` gana dos parámetros,
+  `usuario_id` y `es_automatico`. El correo interno de cambio de estado
+  ya no va siempre a compradores + usuarios hotel del hotel — se
+  consulta el rol de `usuario_id` (quien hizo el cambio) y se excluye su
+  lado: rol `hotel` → correo solo a compradores; cualquier otro rol
+  (compras, admin...) → correo solo a usuarios hotel. Con
+  `es_automatico=True` (o sin `usuario_id` conocido) se mantiene el
+  comportamiento anterior, correo a ambas partes.
+  `_notificar_cambio_estado()` reenvía ambos parámetros, sin tocar
+  `_telegram_cambio_estado()` — el Telegram/popup del bridge es un canal
+  aparte, configurable por usuario en Administrador → Configuración de
+  Avisos, no filtrado por quién hizo el cambio, así que quien hizo el
+  cambio sigue enterándose por ahí.
+- Todos los puntos que disparan un cambio de estado manual (flujo
+  normal y flujo hotel de `update_pedido`, aprobar/denegar expediente
+  de exceso, creación de pedido) pasan ahora su `usuario_id`. El único
+  punto marcado `es_automatico=True` es `_aplicar_coincidencia_albaran()`
+  (comparativa de PDF, ver entrada anterior de hoy, v12.30.16/17) —
+  coherente con que ese cambio ya se etiqueta "Automática" en el
+  Historial de estados.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`
+  sobre el JS de `templates/index.html` sin errores. Simulación aislada
+  de la lógica de exclusión con 4 escenarios (comprador, hotel, admin,
+  automático/desconocido): destinatarios correctos en todos los casos.
+
+## 2026-08-19 — [Control Pedidos] Historial de estados: los registros automáticos de "Comparar Pedidos + Albaranes" ya no aparecen a nombre de quien pulsó "Aplicar" (v12.30.17)
+
+- Víctor: "EN LA TRAZABILIDAD DE CAMBIOS, LOS EJECUTADOS
+  AUTOMATICAMENTE DEBERIAN SALIR ASI DEFINIDOS Y NO CON NOMBRE DE
+  USUARIO, POR EJEMPLO ENTREGA PARCIAL Automática listado comparativo
+  pedidos y albaranes FECHA TAL" — un cambio de estado aplicado
+  automáticamente desde la comparativa de PDF salía en el "Historial de
+  estados" del pedido con el nombre de quien había pulsado "Aplicar",
+  indistinguible de un cambio hecho a mano.
+- **Causa**: `_aplicar_coincidencia_albaran()` guardaba en
+  `historial_estados.usuario_nombre` el nombre de la sesión que
+  confirmó la aplicación, igual que en un cambio manual — el aviso de
+  que era automático solo aparecía al final, entre comillas, en la
+  nota.
+- **Cambio en `app.py`**: esa fila de `historial_estados` ahora guarda
+  un texto fijo, `"Automática — listado comparativo pedidos y
+  albaranes"`, en vez del nombre real del usuario. Solo afecta a esta
+  fila (lo que se ve en el Historial de estados del pedido); no toca
+  `modificado_por_id/nombre` del pedido ni los cambios de estado
+  manuales, que siguen mostrando el nombre real de quien los hizo.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+  Confirmado que no hay otro punto de aplicación automática con el
+  mismo problema (la comparación de solo pedidos, "Comparar listado PDF
+  (SAP)", es de solo lectura, sin función de aplicación equivalente).
+
 ## 2026-08-19 — [Control Pedidos] Comparar Pedidos + Albaranes: entrada de albarán duplicada con ceros a la izquierda al aplicar una coincidencia, y el pedido volvía a salir como pendiente (v12.30.16)
 
 - Víctor reportó (con capturas) que, al aplicar una coincidencia

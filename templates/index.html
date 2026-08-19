@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.16
+          V 12.30.19
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6236,8 +6236,17 @@ function _renderCompararAlbaranesResultado(d) {
       Sin coincidencias propuestas.</td></tr>`;
   } else {
     tbody.innerHTML = coincidencias.map(c => {
+      // (2026-08-19) Si el pedido ya está en la app en un estado MÁS
+      // AVANZADO que el que propone esta línea de SAP (p. ej. ya
+      // ENTREGADO, pero SAP todavía muestra un importe pendiente pequeño
+      // y por tanto "Entrega parcial"), no mostrar "ENTREGADO → ENTREGA
+      // PARCIAL" — parece un retroceso que se va a aplicar, y no es así:
+      // _aplicar_coincidencia_albaran() ya protege este caso y no cambia
+      // el estado. Ver estado_ya_avanzado en app.py.
       const estadoTxt = c.ya_en_estado_objetivo
         ? `<span style="color:#155724">${c.estado_app_actual}</span> <span style="font-size:.78rem;color:var(--text-secondary)">(ya en ese estado)</span>`
+        : c.estado_ya_avanzado
+        ? `<span style="color:#155724">${c.estado_app_actual}</span> <span style="font-size:.78rem;color:var(--text-secondary)">(ya en un estado más avanzado — SAP aún lo muestra como ${c.estado_objetivo})</span>`
         : `${c.estado_app_actual || '—'} → <strong>${c.estado_objetivo}</strong>`;
       const albaranTxt = c.albaran_proveedor && c.albaran_proveedor !== c.registro_dali
         ? `${c.registro_dali} <span style="font-size:.78rem;color:var(--text-secondary)">(prov.: ${c.albaran_proveedor})</span>`
