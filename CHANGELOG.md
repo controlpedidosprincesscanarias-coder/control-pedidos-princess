@@ -1,3 +1,72 @@
+# v12.30.10 — 19 agosto 2026
+
+🐛 Comparar Pedidos + Albaranes: "Sin pedido... en la app" salía aunque el pedido SÍ estuviera registrado y Entregado
+
+**Aviso de Víctor**: "EN CONTROL PEDIDOS FILTRO REALIZADO EN PEDIDOS CON
+PDFs DA UN RESULTADO INCORECTO A REVISAR; HEMOS DETECTADO QUE DA UN
+PEDIDO COMO NO REGISTRADO EN LA PLATAFORMA, PERO EL CASO ES QUE SI ESTA
+REGISTRADO E INCLUSO CON ESTADO ENTREGADO" — con capturas: la tabla
+"Pendientes de realizar" del correo mostraba "Albarán DALI 00082014,
+SISCOCAN GRUPO COMERCIAL SL, 2.774,39 €, Sin pedido Entregado/Parcial
+con ese importe en la app", pero el pedido Nº618 de ese proveedor SÍ
+está dado de alta y en estado ENTREGADO en la app (captura del listado
+de Pedidos filtrado por "SISCO").
+
+**Causa encontrada**, tras leer el código de
+`_comparar_listado_albaranes_logica()` y los dos PDF adjuntados por
+Víctor (`FV.pdf` = listado de pedidos de SAP, `FV2.pdf` = listado de
+albaranes de DALI): el cruce solo comparaba el albarán contra los
+pedidos que aparecían en el PDF de SAP recién subido — nunca contra los
+pedidos ya dados de alta en la propia base de datos de la app. El PDF
+de SAP que subió Víctor solo cubría pedidos desde el 28/07/2026 en
+adelante (confirmado extrayendo el texto del PDF: ninguna fecha
+anterior, ni rastro de "SISCOCAN"), mientras que el pedido Nº618 se
+tramitó el 02/06/2026 — casi dos meses antes, fuera del rango de ese
+PDF. Su albarán en DALI, en cambio, se registró el 10/08/2026 (dentro
+del PDF de albaranes). Como el pedido nunca podía aparecer como
+candidato del lado del PDF de SAP, el cruce lo daba por "sin pedido" —
+y el texto del mensaje ("...en la app") daba a entender, incorrectamente,
+que el pedido no estaba registrado en la aplicación, cuando el problema
+real era solo que no salía en ESE PDF concreto.
+
+**Cambio en `app.py`** (`_comparar_listado_albaranes_logica`): antes de
+dar por "sin pedido" un albarán sin pareja en el PDF de SAP, se
+comprueba una segunda vez contra los pedidos ya dados de alta en la
+base de datos (mismo proveedor + mismo importe, entre los que están
+Entregado o Entrega parcial) — sin depender de qué cubra el PDF de
+turno. Si hay exactamente un pedido de la app que cuadra, se saca de
+"pendientes_sin_pedido" (no requiere ninguna acción) y pasa a un nuevo
+apartado, `ya_registrados_en_app`, informativo. Si hay 0 o más de 1
+candidato en la app, se deja tal cual pendiente — mismo criterio de
+"ante la duda, no inventar" que ya usa el resto de esta función para
+los empates. De paso, se reformula el texto del motivo para los que
+sigan quedando pendientes de verdad: "Sin ningún pedido Entregado/
+Parcial con ese importe (ni en el PDF de SAP ni ya dado de alta en la
+app)" — ya no puede confundirse con "no está en la aplicación".
+
+**Cambio en `templates/index.html`**: nueva sección plegable "Ver
+albaranes de pedidos más antiguos ya registrados en la app", en verde
+(no es un problema), justo debajo de "pendientes de revisión manual" —
+oculta por completo cuando no aplica. Nueva "pill" en el resumen cuando
+hay alguno. Mismo texto de motivo corregido en la tabla de pendientes.
+
+**Cambio en el correo** (`_email_resumen_comparacion_albaranes`): nuevo
+bloque "📎 Albaranes de DALI de pedidos más antiguos, ya registrados en
+la app", en verde, con el pedido de la app al que corresponde cada uno
+— separado del bloque de pendientes de verdad.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; `node
+--check` sobre el JS extraído de `templates/index.html` sin errores.
+Se confirmó el hallazgo leyendo el texto real de los dos PDF que
+adjuntó Víctor (`FV.pdf`/`FV2.pdf`) con `pypdf` — SISCOCAN no aparece
+en ningún sitio de `FV.pdf`, y el albarán 00082014 de `FV2.pdf` trae
+exactamente 2.774,3850 €, coincidiendo con la captura. Sin poder probar
+contra la base de datos real de producción desde este entorno (sandbox
+sin acceso a Supabase) — recomendado volver a lanzar la misma
+comparación (mismos dos PDF) tras desplegar, para confirmar en pantalla
+que el albarán 00082014/SISCOCAN pasa de "pendiente" a la nueva sección
+"ya registrados en la app".
+
 # v12.30.09 — 17 agosto 2026
 
 🔕 Ningún aviso automático (Telegram/popup) en fin de semana

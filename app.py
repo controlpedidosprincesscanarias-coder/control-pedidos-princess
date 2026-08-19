@@ -8531,10 +8531,14 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
 
     Devuelve dict con: coincidencias, pendientes_ambiguos,
     pendientes_sin_albaran (pedido Entregado/Parcial en SAP sin albarán
-    DALI con ese importe), pendientes_sin_pedido (albarán DALI sin pedido
-    Entregado/Parcial con ese importe en la app), total_pdf1, total_pdf2,
-    excluidos_pdf1, excluidos_pdf2 (proveedor no identificado o no sujeto
-    a seguimiento, en cada PDF).
+    DALI con ese importe), pendientes_sin_pedido (albarán DALI sin ningún
+    pedido Entregado/Parcial con ese importe — NI en el PDF 1 recién
+    subido NI ya dado de alta en la app, ver nota 2026-08-19 más abajo),
+    ya_registrados_en_app (albarán DALI sin pareja en el PDF 1, pero que
+    SÍ corresponde a un pedido ya dado de alta y Entregado/Parcial en la
+    app — informativo, no requiere ninguna acción), total_pdf1,
+    total_pdf2, excluidos_pdf1, excluidos_pdf2 (proveedor no identificado
+    o no sujeto a seguimiento, en cada PDF).
 
     Lanza RuntimeError si algún PDF no se puede leer o no se reconoce
     ningún registro en él.
@@ -8725,6 +8729,57 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
                 "albaranes":        lado2,
             })
 
+    # (2026-08-19) FIX: "pendientes_sin_pedido" solo comprobaba contra
+    # PDF1 (el listado de pedidos de SAP recién subido) — pero ese PDF
+    # puede cubrir solo un rango de fechas reciente (p.ej. "pedidos
+    # abiertos" de las últimas semanas), sin incluir pedidos más antiguos
+    # que, aun así, ya están dados de alta y ENTREGADOS en la app desde
+    # hace tiempo. Caso real detectado (Víctor): pedido Nº618 tramitado
+    # 02/06/2026 y ya ENTREGADO en la app, cuyo albarán en DALI se
+    # registró mucho después (10/08/2026) — muy fuera del rango del PDF
+    # de SAP comparado ese día (que solo llegaba hasta finales de julio).
+    # El resultado decía "Sin pedido Entregado/Parcial con ese importe EN
+    # LA APP", dando a entender que el pedido no existía, cuando sí
+    # existía — solo faltaba en el PDF recién comparado.
+    #
+    # Antes de dar por perdido un albarán sin pareja en PDF1, se comprueba
+    # aquí una segunda vez contra los pedidos YA DADOS DE ALTA en la base
+    # de datos de la app (misma clave proveedor+importe, sin depender de
+    # qué traiga el PDF de turno). Si hay exactamente un pedido de la app
+    # que cuadra, se saca de "pendientes_sin_pedido" (no es un problema,
+    # no requiere ninguna acción) y se apunta en "ya_registrados_en_app"
+    # para que quede visible igualmente, con un motivo que no induzca a
+    # error. Si hay 0 o más de 1 candidato en la app, se deja tal cual en
+    # pendientes_sin_pedido — mismo criterio de "ante la duda, no
+    # inventar" que el resto de esta función.
+    pedidos_entregados_bd = rows_to_list(query(
+        """SELECT id, norden, pedido_num, proveedor_id, importe, estado
+           FROM pedidos
+           WHERE hotel_id=%s AND estado IN ('ENTREGADO', 'ENTREGA PARCIAL')
+             AND proveedor_id IS NOT NULL AND importe IS NOT NULL""",
+        (hotel_id,)
+    ))
+    bd_por_clave = defaultdict(list)
+    for p in pedidos_entregados_bd:
+        bd_por_clave[(p["proveedor_id"], round(float(p["importe"]), 2))].append(p)
+
+    pendientes_sin_pedido_real = []
+    ya_registrados_en_app = []
+    for a in pendientes_sin_pedido:
+        candidatos_bd = bd_por_clave.get(a["clave"], [])
+        if len(candidatos_bd) == 1:
+            p = candidatos_bd[0]
+            ya_registrados_en_app.append({
+                **a,
+                "pedido_id":         p["id"],
+                "norden":            p["norden"],
+                "pedido_num_sap":    p["pedido_num"],
+                "estado_app_actual": p["estado"],
+            })
+        else:
+            pendientes_sin_pedido_real.append(a)
+    pendientes_sin_pedido = pendientes_sin_pedido_real
+
     # (2026-08-15) A petición del usuario: el resultado de esta comparación
     # de dos PDF debe ser la UNIÓN de lo que ya hace la comparación de un
     # solo PDF (auditoría completa: qué pedidos de SAP no están dados de
@@ -8743,6 +8798,7 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
         "pendientes_ambiguos":    pendientes_ambiguos,
         "pendientes_sin_albaran": pendientes_sin_albaran,
         "pendientes_sin_pedido":  pendientes_sin_pedido,
+        "ya_registrados_en_app":  ya_registrados_en_app,
         "total_pdf1":             len(encontrados_pdf1),
         "total_pdf2":             len(encontrados_pdf2),
         "excluidos_pdf1":         excluidos_pdf1,
@@ -9099,9 +9155,16 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
          DALI pero ningún pedido dado de alta con ese importe recibido).
     """
     pedidos_faltantes = pedidos_faltantes or []
-    pend_ambiguos    = resultado.get("pendientes_ambiguos", [])
-    pend_sin_albaran = resultado.get("pendientes_sin_albaran", [])
-    pend_sin_pedido  = resultado.get("pendientes_sin_pedido", [])
+    pend_ambiguos      = resultado.get("pendientes_ambiguos", [])
+    pend_sin_albaran   = resultado.get("pendientes_sin_albaran", [])
+    pend_sin_pedido    = resultado.get("pendientes_sin_pedido", [])
+    # (2026-08-19) Ver nota en _comparar_listado_albaranes_logica: estos NO
+    # cuentan como pendientes — son albaranes de DALI sin pareja en el PDF
+    # de SAP recién subido, pero que sí corresponden a un pedido ya dado de
+    # alta y Entregado/Parcial en la app (más antiguo que el rango de
+    # fechas del PDF). Se muestran aparte, en verde, solo para que quede
+    # constancia — no requieren ninguna acción.
+    ya_registrados_en_app = resultado.get("ya_registrados_en_app", [])
     total_pendientes = len(pend_ambiguos) + len(pend_sin_albaran) + len(pend_sin_pedido)
 
     subject = (
@@ -9150,7 +9213,7 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
           <td style="padding:8px 12px;border:1px solid #ddd">Albarán DALI {a['registro_dali']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{a['proveedor_nombre']}</td>
           <td style="padding:8px 12px;border:1px solid #ddd">{a['importe']:.2f} €</td>
-          <td style="padding:8px 12px;border:1px solid #ddd">Sin pedido Entregado/Parcial con ese importe en la app</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">Sin ningún pedido Entregado/Parcial con ese importe (ni en el PDF de SAP ni ya dado de alta en la app)</td>
         </tr>"""
 
     def _fila_ambiguo(g):
@@ -9161,11 +9224,23 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
           <td style="padding:8px 12px;border:1px solid #ddd">Varios candidatos — requiere decisión manual</td>
         </tr>"""
 
+    def _fila_ya_registrado(a):
+        ref_pedido = f"{a['pedido_num_sap']}" if a.get("pedido_num_sap") else "—"
+        if a.get("norden"):
+            ref_pedido += f" (Nº{a['norden']})"
+        return f"""<tr>
+          <td style="padding:8px 12px;border:1px solid #ddd">Albarán DALI {a['registro_dali']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{a['proveedor_nombre']}</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">{a['importe']:.2f} €</td>
+          <td style="padding:8px 12px;border:1px solid #ddd">Pedido {ref_pedido} — ya {a.get('estado_app_actual', 'ENTREGADO')} en la app (más antiguo que el PDF de SAP comparado)</td>
+        </tr>"""
+
     filas_pendientes = (
         "".join(_fila_sin_albaran(p) for p in pend_sin_albaran)
         + "".join(_fila_sin_pedido(a) for a in pend_sin_pedido)
         + "".join(_fila_ambiguo(g) for g in pend_ambiguos)
     )
+    filas_ya_registrados = "".join(_fila_ya_registrado(a) for a in ya_registrados_en_app)
 
     bloque_faltantes = f"""
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
@@ -9207,6 +9282,29 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
           {filas_pendientes}
         </table>""" if total_pendientes else '<p style="color:#155724;font-weight:600">🎉 No ha quedado ningún registro pendiente.</p>'
 
+    # (2026-08-19) Bloque aparte, informativo (no cuenta como pendiente):
+    # albaranes de DALI sin pareja en el PDF de SAP recién subido, pero que
+    # sí corresponden a un pedido más antiguo ya dado de alta y
+    # Entregado/Parcial en la app. Ver nota en
+    # _comparar_listado_albaranes_logica.
+    bloque_ya_registrados = (
+        f"""
+        <h3 style="color:#155724;margin-bottom:6px;margin-top:22px">📎 Albaranes de DALI de pedidos más antiguos, ya registrados en la app ({len(ya_registrados_en_app)})</h3>
+        <p style="font-size:13px;color:#555">Estos pedidos no aparecen en el PDF de SAP comparado (es de fechas
+           anteriores a las que cubre ese listado), pero ya están dados de alta y correctamente marcados en la
+           app — no requieren ninguna acción, se muestran solo para que quede constancia.</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px">
+          <tr style="background:#155724;color:#fff">
+            <th style="padding:8px 12px;text-align:left">Albarán DALI</th>
+            <th style="padding:8px 12px;text-align:left">Proveedor</th>
+            <th style="padding:8px 12px;text-align:left">Importe</th>
+            <th style="padding:8px 12px;text-align:left">Pedido en la app</th>
+          </tr>
+          {filas_ya_registrados}
+        </table>"""
+        if ya_registrados_en_app else ""
+    )
+
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
       {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
@@ -9225,6 +9323,7 @@ def _email_resumen_comparacion_albaranes(hotel_nombre, hotel_codigo, resultado, 
         {bloque_aplicadas}
         <h3 style="color:#856404;margin-bottom:6px">⏳ Pendientes de realizar ({total_pendientes})</h3>
         {bloque_pendientes}
+        {bloque_ya_registrados}
         <p style="font-size:12px;color:#888">Consulta generada por {admin_nombre} desde
            "Comparar listado PDF" (Pedidos + Albaranes).</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">

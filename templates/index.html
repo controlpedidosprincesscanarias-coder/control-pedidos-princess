@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.09
+          V 12.30.10
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2568,6 +2568,30 @@ tbody tr:last-child{border-bottom:none}
               <table>
                 <thead><tr><th>Referencia</th><th>Proveedor</th><th>Importe</th><th>Motivo</th></tr></thead>
                 <tbody id="cmp-alb-pendientes-tbody"></tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- (2026-08-19) Albaranes de DALI de pedidos más antiguos que el
+             rango de fechas del PDF de SAP subido, pero ya dados de alta y
+             Entregado/Parcial en la app — informativo, no cuenta como
+             pendiente (ver _comparar_listado_albaranes_logica). Oculto por
+             completo si no hay ninguno, para no añadir ruido cuando no
+             aplica. -->
+        <div id="cmp-alb-ya-registrados-wrap" style="display:none;margin-top:10px">
+          <button class="btn btn-ghost btn-sm" onclick="_toggleYaRegistradosAlbaran()" id="cmp-alb-btn-toggle-ya-registrados">
+            ▸ Ver albaranes de pedidos más antiguos ya registrados en la app (<span id="cmp-alb-count-ya-registrados">0</span>)
+          </button>
+          <div id="cmp-alb-ya-registrados-inner" style="display:none;margin-top:10px">
+            <p style="font-size:.82rem;color:var(--text-secondary);margin:0 0 8px">
+              Estos pedidos no aparecen en el PDF de SAP comparado (son de fechas anteriores a las que cubre ese
+              listado), pero ya están dados de alta y correctamente marcados en la app — no requieren ninguna acción.
+            </p>
+            <div class="table-wrap" style="max-height:280px">
+              <table>
+                <thead><tr><th>Albarán DALI</th><th>Proveedor</th><th>Importe</th><th>Pedido en la app</th></tr></thead>
+                <tbody id="cmp-alb-ya-registrados-tbody"></tbody>
               </table>
             </div>
           </div>
@@ -5931,6 +5955,8 @@ function _resetModalCompararPdf() {
   document.getElementById('cmp-pdf-file2').value = '';
   document.getElementById('cmp-alb-resultado').style.display = 'none';
   document.getElementById('cmp-alb-pendientes-wrap').style.display = 'none';
+  document.getElementById('cmp-alb-ya-registrados-wrap').style.display = 'none';
+  document.getElementById('cmp-alb-ya-registrados-inner').style.display = 'none';
   _cmpAlbResultado = null;
   _cmpAlbJobId = null;
 }
@@ -6227,6 +6253,7 @@ function _renderCompararAlbaranesResultado(d) {
     pill(`📄 ${d.total_pdf1} pedidos / 📦 ${d.total_pdf2} albaranes`, '#e9ecef', '#495057') +
     pill(`✅ ${coincidencias.length} coincidencias propuestas`, coincidencias.length ? '#d4edda' : '#e9ecef', coincidencias.length ? '#155724' : '#495057') +
     pill(`⏳ ${totalPendientes} pendientes de revisión manual`, totalPendientes ? '#fff3cd' : '#d4edda', totalPendientes ? '#856404' : '#155724') +
+    ((d.ya_registrados_en_app || []).length ? pill(`📎 ${d.ya_registrados_en_app.length} de pedidos más antiguos ya registrados`, '#d4edda', '#155724') : '') +
     (d.excluidos_pdf1 ? pill(`➖ ${d.excluidos_pdf1} pedidos de proveedores no sujetos a seguimiento`, '#f1f3f5', '#495057') : '') +
     (d.excluidos_pdf2 ? pill(`➖ ${d.excluidos_pdf2} albaranes de proveedores no sujetos a seguimiento`, '#f1f3f5', '#495057') : '');
 
@@ -6275,7 +6302,7 @@ function _renderCompararAlbaranesResultado(d) {
     ref: `Albarán DALI ${p.registro_dali}`,
     prov: p.proveedor_nombre,
     importe: p.importe,
-    motivo: 'Sin pedido Entregado/Parcial que coincida en el listado de SAP'
+    motivo: 'Sin ningún pedido Entregado/Parcial con ese importe (ni en el PDF de SAP ni ya dado de alta en la app)'
   }));
   document.getElementById('cmp-alb-count-pendientes').textContent = filas.length;
   document.getElementById('cmp-alb-pendientes-tbody').innerHTML = filas.length
@@ -6283,6 +6310,22 @@ function _renderCompararAlbaranesResultado(d) {
         <td>${f.ref}</td><td>${f.prov || ''}</td><td>${fmtImporte(f.importe)}</td><td>${f.motivo}</td>
       </tr>`).join('')
     : `<tr><td colspan="4" style="text-align:center;color:var(--text-secondary);padding:14px">Ninguno.</td></tr>`;
+
+  // (2026-08-19) Albaranes de DALI sin pareja en el PDF de SAP recién
+  // subido, pero que corresponden a un pedido más antiguo ya dado de alta
+  // y Entregado/Parcial en la app — ver nota en
+  // _comparar_listado_albaranes_logica (app.py). Sección aparte, oculta
+  // por completo si no hay ninguno.
+  const yaRegistrados = d.ya_registrados_en_app || [];
+  const wrapYaRegistrados = document.getElementById('cmp-alb-ya-registrados-wrap');
+  document.getElementById('cmp-alb-count-ya-registrados').textContent = yaRegistrados.length;
+  wrapYaRegistrados.style.display = yaRegistrados.length ? '' : 'none';
+  document.getElementById('cmp-alb-ya-registrados-tbody').innerHTML = yaRegistrados.map(a => {
+    const refPedido = `${a.pedido_num_sap || '—'}${a.norden ? ' (Nº' + a.norden + ')' : ''} — ya ${a.estado_app_actual || 'ENTREGADO'}`;
+    return `<tr>
+        <td>${a.registro_dali}</td><td>${a.proveedor_nombre || ''}</td><td>${fmtImporte(a.importe)}</td><td>${refPedido}</td>
+      </tr>`;
+  }).join('');
 }
 
 function _toggleTodasCoincidenciasAlbaran(chk) {
@@ -6294,6 +6337,14 @@ function _togglePendientesAlbaran() {
   const btn = document.getElementById('cmp-alb-btn-toggle-pendientes');
   const abierto = wrap.style.display !== 'none';
   wrap.style.display = abierto ? 'none' : '';
+  btn.innerHTML = btn.innerHTML.replace(abierto ? '▾' : '▸', abierto ? '▸' : '▾');
+}
+
+function _toggleYaRegistradosAlbaran() {
+  const inner = document.getElementById('cmp-alb-ya-registrados-inner');
+  const btn = document.getElementById('cmp-alb-btn-toggle-ya-registrados');
+  const abierto = inner.style.display !== 'none';
+  inner.style.display = abierto ? 'none' : '';
   btn.innerHTML = btn.innerHTML.replace(abierto ? '▾' : '▸', abierto ? '▸' : '▾');
 }
 
