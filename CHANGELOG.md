@@ -1,3 +1,27 @@
+# v12.30.24 — 20 agosto 2026
+
+🐛 Recordatorio de "correos de sistema en cola": seguía avisando de filas ya descartadas o ya paradas por el freno de reintentos, con un título de popup engañoso ("Nueva solicitud de acceso")
+
+**Petición/reporte de Víctor**: justo después de descartar a mano los 4 correos atascados desde el nuevo panel de admin (v12.30.22), le llegó un aviso emergente titulado "📋 Nueva solicitud de acceso" cuyo cuerpo decía "Hay 4 emails de sistema en cola sin enviar (resumen_comparacion_albaranes), esperando a que alguien abra la aplicación para despacharlos automáticamente" — justamente sobre las mismas 4 filas que acababa de descartar, con un título que no tenía nada que ver con el contenido real del aviso.
+
+**Causa (dos fallos en el mismo job)**: `_job_recordar_emails_sistema_pendientes()` (corre cada 10 min, 07:00–21:00) avisa por Telegram/popup cuando hay filas `enviado = FALSE` sin recordar en los últimos 30 minutos — pero su consulta nunca excluía las filas ya descartadas a mano (`descartado_en`) ni las que ya agotaron sus reintentos (`intentos >= MAX_INTENTOS_EMAIL_SISTEMA`, ver v12.30.21/22): las seguía contando como "pendientes" para siempre y avisando de ellas cada 30 minutos, aunque abrir la aplicación no fuera a hacer nada por ellas (una está descartada a propósito, la otra ya no se reintenta sola). Además, el job reutilizaba `_notify_solicitud_telegram()` — pensada para avisos de solicitudes de acceso (Fase 1/2) — que lleva fijo el título de popup "📋 Nueva solicitud de acceso", sin relación con este aviso.
+
+**Cambio en `app.py`**: la consulta del job añade `AND descartado_en IS NULL AND intentos < MAX_INTENTOS_EMAIL_SISTEMA`, así que una fila descartada o ya parada por el freno deja de generar recordatorios. El job ahora llama a `_notificar_evento()` directamente (mismos destinatarios configurados que antes, evento `solicitud_acceso`, sin cambios ahí) pero con un título de popup correcto: "⏰ Correos de sistema en cola".
+
+**Verificación**: `python3 -m py_compile app.py` sin errores.
+
+# v12.30.23 — 20 agosto 2026
+
+🐛 Envíos automáticos por EmailJS: correo real duplicado cuando fallaba la confirmación tras un envío exitoso — explica los reenvíos y el consumo de cupo que seguía subiendo con la cola ya vacía
+
+**Petición/reporte de Víctor**: tras desplegar v12.30.22, el panel de "Cola de correos de sistema pendientes" mostraba solo 4 filas antiguas ya descartadas/agotadas (0 filas activas) y aun así "ya paso a 116 emailjs" — el cupo siguió bajando pese a que la cola visible estaba limpia.
+
+**Causa**: en `_enviarEmailsSistemaPendientes()` (el poller que envía la cola de sistema vía EmailJS desde el navegador), el flujo era: 1) `emailjs.send(...)` (el correo YA se envía de verdad aquí) y 2) `POST /marcar-enviado` para que el backend no lo vuelva a ofrecer. Si el paso 2 fallaba por cualquier motivo (red, sesión caducada, pestaña recargándose a media faena...) el `catch` solo registraba un aviso en consola y seguía — la fila se quedaba `enviado = FALSE` en la base de datos aunque el correo SÍ se hubiera entregado. Pasados los 2 minutos de reserva, esa misma fila volvía a ofrecerse al siguiente sondeo (el propio, u otra pestaña abierta) y se reenviaba DE VERDAD por EmailJS — un duplicado real al destinatario, no un simple 413 fallido, descontando cupo con éxito en cada reenvío. Esto encaja exactamente con los 3 correos de resumen idénticos que Víctor encontró antes en su bandeja de "Enviados" a distintas horas, y explica por qué el cupo seguía bajando incluso con la cola de "atascados" ya completamente vacía tras v12.30.22 — el problema no estaba en filas atascadas sin enviar, sino en filas que SÍ se enviaban pero no lograban confirmarse.
+
+**Cambio en `templates/index.html`**: la confirmación (`marcar-enviado`) se reintenta ahora hasta 3 veces con una breve espera entre intentos antes de darse por vencida, para que un fallo puntual de red no deje la fila "viva" para un reenvío real. Si aun así las 3 confirmaciones fallan, se registra un error claro en consola indicando que ese correo concreto puede reenviarse duplicado en el próximo sondeo — visibilidad que antes no existía (antes era un simple `console.warn` genérico e indistinguible de un fallo de envío real).
+
+**Verificación**: `node --check` sobre el JS extraído de `templates/index.html`, sin errores.
+
 # v12.30.22 — 20 agosto 2026
 
 🐛 Cola de emails de sistema: bajar el margen de reintentos y ampliar el panel de admin a toda la cola pendiente — filas atascadas desde antes de v12.30.21 seguían descontando cupo de EmailJS tras desplegar el freno

@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.22
+          V 12.30.24
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -10111,7 +10111,29 @@ async function _enviarEmailsSistemaPendientes() {
           reply_to: p.destinatario,
           bcc:      p.cc_emails || '',
         });
-        await api(`/api/emails-sistema-pendientes/${p.id}/marcar-enviado`, 'POST');
+        // (2026-08-20) El correo YA se ha enviado DE VERDAD por EmailJS en
+        // este punto. Antes, si esta llamada de confirmación fallaba (red,
+        // sesión caducada, pestaña recargándose...), la fila se quedaba
+        // enviado=FALSE sin que EmailJS se enterase de nada — la reserva
+        // caduca sola a los 2 minutos y el siguiente sondeo (o el de otra
+        // pestaña) vuelve a reclamarla y la reenvía DE VERDAD por EmailJS
+        // otra vez: no es un simple 413 fallido, es un envío real duplicado
+        // al destinatario, cada uno descontando cupo con éxito. Esto explica
+        // los 3 correos de resumen idénticos que Víctor encontró en su
+        // bandeja de enviados. Para reducir el riesgo, se reintenta esta
+        // confirmación varias veces antes de rendirse.
+        let confirmado = false;
+        for (let intento = 0; intento < 3 && !confirmado; intento++) {
+          try {
+            await api(`/api/emails-sistema-pendientes/${p.id}/marcar-enviado`, 'POST');
+            confirmado = true;
+          } catch (confirmErr) {
+            if (intento < 2) await new Promise(res => setTimeout(res, 1000));
+          }
+        }
+        if (!confirmado) {
+          console.error(`[EmailJS] correo "${p.evento_codigo}" a ${p.destinatario} SÍ se envió pero no se pudo confirmar como enviado tras 3 intentos — puede reenviarse duplicado en el próximo sondeo`);
+        }
       } catch (ejsErr) {
         console.warn(`[EmailJS] fallo email de sistema "${p.evento_codigo}" a ${p.destinatario}:`, ejsErr);
       }

@@ -25,6 +25,44 @@
 
 ---
 
+## 2026-08-20 — [Control Pedidos] Recordatorio de "correos de sistema en cola": seguía avisando de filas descartadas/paradas, con título de popup engañoso (v12.30.24)
+
+- Víctor, justo tras descartar a mano 4 correos atascados: le llegó un
+  popup titulado "📋 Nueva solicitud de acceso" avisando de esas mismas
+  4 filas ya descartadas — título sin relación con el contenido real.
+- **Causa**: `_job_recordar_emails_sistema_pendientes()` nunca excluía
+  de su consulta las filas ya descartadas (`descartado_en`) ni las ya
+  paradas por el freno de reintentos (`intentos >= MAX_INTENTOS...`) —
+  las seguía contando como "pendientes" y avisando cada 30 min, aunque
+  abrir la app no fuera a hacer nada por ellas. Además reutilizaba
+  `_notify_solicitud_telegram()`, con el título fijo "Nueva solicitud
+  de acceso" pensado para otro tipo de aviso completamente distinto.
+- **Cambio en `app.py`**: consulta del job ahora excluye descartadas y
+  ya-agotadas. El job llama a `_notificar_evento()` directamente, mismos
+  destinatarios configurados de siempre, pero con título correcto:
+  "⏰ Correos de sistema en cola".
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+
+## 2026-08-20 — [Control Pedidos] Envíos automáticos por EmailJS: correo real duplicado cuando fallaba la confirmación tras un envío exitoso (v12.30.23)
+
+- Víctor, tras desplegar v12.30.22: el panel de cola mostraba solo 4
+  filas antiguas ya descartadas/agotadas (0 activas) y aun así "ya paso
+  a 116 emailjs" — el cupo seguía bajando con la cola visible limpia.
+- **Causa**: en el poller `_enviarEmailsSistemaPendientes()`, si el
+  correo se enviaba con éxito por EmailJS pero la llamada posterior de
+  confirmación (`marcar-enviado`) fallaba (red, sesión caducada...), la
+  fila quedaba `enviado = FALSE` aunque ya se hubiera entregado de
+  verdad. Al caducar la reserva de 2 minutos, la misma fila se
+  reenviaba DE VERDAD por EmailJS de nuevo — duplicado real, no un 413
+  fallido, descontando cupo con éxito cada vez. Encaja con los 3
+  correos de resumen idénticos que Víctor había encontrado antes en su
+  bandeja de enviados.
+- **Cambio en `templates/index.html`**: la confirmación se reintenta
+  ahora hasta 3 veces con una breve espera entre intentos antes de
+  rendirse; si aun así falla, se deja un error claro en consola en vez
+  de un aviso genérico indistinguible de un fallo de envío real.
+- **Verificación**: `node --check` sobre el JS extraído, sin errores.
+
 ## 2026-08-20 — [Control Pedidos] Cola de emails de sistema: bajar el margen de reintentos y ampliar el panel de admin a toda la cola pendiente (v12.30.22)
 
 - Víctor, tras desplegar v12.30.21: "de 76 emailjs paso a 91 y un solo

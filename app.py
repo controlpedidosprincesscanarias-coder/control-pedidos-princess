@@ -13781,6 +13781,17 @@ def _job_recordar_emails_sistema_pendientes():
     sin repetirlo cada minuto (solo si no se recordó en los últimos 30').
     Corre cada 10 minutos, 07:00–21:00 — no tiene sentido despertar a nadie
     de madrugada por esto, ya lo verán al abrir la app en horario normal.
+
+    (2026-08-20) Excluye las filas descartadas a mano (`descartado_en`) y
+    las que ya agotaron sus reintentos (`intentos >= MAX_INTENTOS_EMAIL_SISTEMA`,
+    ver /api/admin/emails-sistema-atascados): antes esta consulta las seguía
+    contando como "pendientes" para siempre, así que abrir la app y descartar
+    una fila NO hacía que este recordatorio dejara de avisar por ella —
+    reportado por Víctor, le llegó este aviso justo después de descartar los
+    4 correos atascados desde el panel de admin. Ninguna de las dos deja de
+    reportarse solo con "abrir la aplicación" (una está descartada a
+    propósito, la otra ya no se reintenta sola), así que tampoco tiene
+    sentido seguir avisando con ese texto para ellas.
     """
     with app.app_context():
         try:
@@ -13788,20 +13799,35 @@ def _job_recordar_emails_sistema_pendientes():
                 SELECT id, evento_codigo, creado_en
                 FROM emails_sistema_pendientes
                 WHERE enviado = FALSE
+                  AND descartado_en IS NULL
+                  AND intentos < %s
                   AND creado_en < NOW() - INTERVAL '10 minutes'
                   AND (recordado_en IS NULL OR recordado_en < NOW() - INTERVAL '30 minutes')
-            """)
+            """, (MAX_INTENTOS_EMAIL_SISTEMA,))
             if not pendientes:
                 return
             n = len(pendientes)
             eventos = ", ".join(sorted({p["evento_codigo"] for p in pendientes}))
             plural = "es" if n != 1 else ""
-            _notify_solicitud_telegram(
+            # (2026-08-20) Antes se usaba _notify_solicitud_telegram(), que lleva
+            # el t\u00edtulo de popup "\ud83d\udccb Nueva solicitud de acceso" fijo \u2014 confuso
+            # para este aviso, que no tiene nada que ver con solicitudes de
+            # acceso (reportado por V\u00edctor: le lleg\u00f3 ese t\u00edtulo justo tras
+            # descartar unos correos atascados, sin relaci\u00f3n aparente con el
+            # texto del aviso). Se llama a _notificar_evento() directamente,
+            # con el mismo evento_codigo "solicitud_acceso" (mismos
+            # destinatarios configurados, sin cambios) pero un t\u00edtulo de
+            # popup correcto para este caso.
+            _notificar_evento(
+                "solicitud_acceso",
                 f"\u23F0 *Recordatorio*\n\n"
                 f"Hay *{n}* email{plural} de sistema en cola sin enviar "
                 f"({eventos}), esperando a que alguien abra la aplicaci\u00f3n "
                 f"para despacharlos autom\u00e1ticamente.\n\n"
-                f"\U0001F449 Abre Control de Pedidos para completarlo."
+                f"\U0001F449 Abre Control de Pedidos para completarlo.",
+                titulo_bridge="\u23F0 Correos de sistema en cola",
+                nivel_bridge="aviso",
+                tipo_bridge="solicitud_acceso",
             )
             ids = [p["id"] for p in pendientes]
             execute(
