@@ -1075,6 +1075,30 @@ def _auto_migrate():
                 "ALTER TABLE emails_sistema_pendientes "
                 "ADD COLUMN IF NOT EXISTS visible_en TIMESTAMPTZ NOT NULL DEFAULT NOW()"
             )
+            # Migración (2026-08-19): freno de reintentos infinitos — hasta
+            # ahora, si un correo encolado fallaba SIEMPRE al enviarse (p.
+            # ej. porque EmailJS lo rechazaba por tamaño con 413, algo que
+            # de hecho pasó con correos de "Comparar Pedidos + Albaranes"
+            # generados ANTES de acotar su tamaño, ver v12.30.15/20), la
+            # reserva de la fila caducaba cada 2 minutos y CUALQUIER sesión
+            # abierta la reintentaba sin límite — cada intento, fallase o
+            # no, descontaba cupo de EmailJS igualmente (reportado por
+            # Víctor: el contador subió de 54 a 71 sin que llegara ningún
+            # correo nuevo, porque una fila ya encolada de antes seguía
+            # reintentándose sola). `intentos` cuenta los intentos de envío
+            # de cada fila; a partir de MAX_INTENTOS_EMAIL_SISTEMA
+            # (constante más abajo) deja de recogerse — se para sola, en
+            # vez de sangrar cupo para siempre. `descartado_en` permite
+            # además descartar una fila a mano desde el panel de admin
+            # (ver /api/admin/emails-sistema-atascados).
+            cur.execute(
+                "ALTER TABLE emails_sistema_pendientes "
+                "ADD COLUMN IF NOT EXISTS intentos INTEGER NOT NULL DEFAULT 0"
+            )
+            cur.execute(
+                "ALTER TABLE emails_sistema_pendientes "
+                "ADD COLUMN IF NOT EXISTS descartado_en TIMESTAMPTZ"
+            )
             cur.execute("SELECT COUNT(*) as n FROM eventos_aviso")
             _row_ev = cur.fetchone()
             _n_ev = _row_ev[0] if isinstance(_row_ev, tuple) else _row_ev['n']
@@ -14488,6 +14512,12 @@ def api_resolver_config_avisos():
     return jsonify({"ok": True, "evento": evento_codigo, "canal": canal, "hotel_id": hotel_id, "destinatarios": destinatarios})
 
 
+# (2026-08-19) Nº máximo de intentos de envío de una fila de
+# emails_sistema_pendientes antes de dejar de reintentarse sola — ver
+# api_emails_sistema_pendientes() y api_emails_sistema_atascados().
+MAX_INTENTOS_EMAIL_SISTEMA = 8
+
+
 @app.route("/api/emails-sistema-pendientes", methods=["GET"])
 @login_required
 def api_emails_sistema_pendientes():
@@ -14524,17 +14554,32 @@ def api_emails_sistema_pendientes():
     aplicado al popup del bridge. El resto de eventos de esta cola
     (techo urgente, familias repetidas...) tienen visible_en = NOW() por
     defecto, así que siguen recogiéndose de inmediato, sin cambio.
+
+    (2026-08-19) Freno de reintentos infinitos: cada vez que se reclama una
+    fila se incrementa `intentos`; a partir de MAX_INTENTOS_EMAIL_SISTEMA
+    ya no se vuelve a devolver — deja de reintentarse sola (antes, un
+    correo que fallase SIEMPRE al enviarse, p. ej. por tamaño, reintentaba
+    sin límite cada vez que caducaba la reserva de 2 minutos, descontando
+    cupo de EmailJS en cada intento aunque nunca llegase a entregarse:
+    reportado por Víctor, el contador de EmailJS subió de 54 a 71 sin que
+    llegara ningún correo nuevo). También se excluyen las filas marcadas
+    `descartado_en` (descarte manual, ver
+    /api/admin/emails-sistema-atascados). Las filas que llegan al máximo
+    de intentos sin descartar manualmente quedan visibles en ese mismo
+    panel, no se pierden ni se borran solas.
     GET /api/emails-sistema-pendientes
     """
     try:
         cur = execute(
             """
             UPDATE emails_sistema_pendientes
-               SET en_proceso_desde = NOW()
+               SET en_proceso_desde = NOW(), intentos = intentos + 1
              WHERE id IN (
                  SELECT id FROM emails_sistema_pendientes
                   WHERE enviado = FALSE
                     AND visible_en <= NOW()
+                    AND descartado_en IS NULL
+                    AND intentos < %s
                     AND (en_proceso_desde IS NULL OR en_proceso_desde < NOW() - INTERVAL '2 minutes')
                   ORDER BY id
                   LIMIT 20
@@ -14542,7 +14587,8 @@ def api_emails_sistema_pendientes():
              )
             RETURNING id, evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
                       cc_emails, pedido_id
-            """
+            """,
+            (MAX_INTENTOS_EMAIL_SISTEMA,)
         )
         pendientes = rows_to_list(cur.fetchall()) or []
         pendientes.sort(key=lambda p: p["id"])
@@ -14550,6 +14596,55 @@ def api_emails_sistema_pendientes():
         return jsonify({"ok": True, "pendientes": pendientes})
     except Exception as exc:
         log.error("[EMAILS-SISTEMA] Error listando/reservando pendientes: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/emails-sistema-atascados", methods=["GET"])
+@admin_required
+def api_emails_sistema_atascados():
+    """
+    (2026-08-19) Lista los correos de la cola de sistema que han agotado
+    sus reintentos (intentos >= MAX_INTENTOS_EMAIL_SISTEMA) sin llegar a
+    enviarse, o que ya fueron descartados a mano — para que un admin pueda
+    ver qué se ha quedado atascado (típicamente por tamaño, EmailJS 413) y
+    descartarlo si corresponde, en vez de que quede invisible drenando
+    cupo de EmailJS en segundo plano para siempre.
+    GET /api/admin/emails-sistema-atascados
+    """
+    try:
+        rows = rows_to_list(query(
+            """SELECT id, evento_codigo, destinatario, asunto, LENGTH(cuerpo_html) as tam_html,
+                      intentos, creado_en, descartado_en
+                 FROM emails_sistema_pendientes
+                WHERE enviado = FALSE AND (intentos >= %s OR descartado_en IS NOT NULL)
+                ORDER BY creado_en DESC
+                LIMIT 100""",
+            (MAX_INTENTOS_EMAIL_SISTEMA,)
+        )) or []
+        return jsonify({"ok": True, "atascados": rows})
+    except Exception as exc:
+        log.error("[EMAILS-SISTEMA] Error listando atascados: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/emails-sistema-pendientes/<int:email_id>/descartar", methods=["POST"])
+@admin_required
+def api_descartar_email_sistema(email_id):
+    """
+    (2026-08-19) Descarta a mano una fila de la cola de emails de sistema
+    (marca descartado_en=NOW()) — dejará de reintentarse. No se envía ni
+    se borra el registro, queda como constancia de que se descartó.
+    POST /api/admin/emails-sistema-pendientes/<id>/descartar
+    """
+    try:
+        execute(
+            "UPDATE emails_sistema_pendientes SET descartado_en = NOW() WHERE id=%s AND enviado = FALSE",
+            (email_id,)
+        )
+        get_db().commit()
+        return jsonify({"ok": True})
+    except Exception as exc:
+        log.error("[EMAILS-SISTEMA] Error descartando id=%s: %s", email_id, exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 

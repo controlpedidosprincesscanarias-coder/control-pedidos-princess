@@ -1,3 +1,19 @@
+# v12.30.21 — 19 agosto 2026
+
+🐛 Cola de emails de sistema: freno de reintentos infinitos — un correo que fallaba SIEMPRE al enviarse descontaba cupo de EmailJS sin límite, sin llegar nunca a entregarse
+
+**Petición/reporte de Víctor**: tras desplegar v12.30.20 (límite de tamaño conjunto del correo de resumen), probó de nuevo y "estaba en 54 emailjs y pasó a 71" — 17 peticiones descontadas sin que llegara ningún correo nuevo.
+
+**Causa**: el fix de tamaño de v12.30.20 solo cambia cómo se CONSTRUYE un correo nuevo al encolarlo — no toca el contenido de una fila que ya llevaba encolada desde ANTES del despliegue, con el HTML antiguo (más grande, generado con el código previo). Esa fila, generada en las pruebas anteriores a hoy, seguía fallando siempre (413 — el motivo original de todo este hilo) y, como `emails_sistema_pendientes` no tenía ningún límite de reintentos, la reserva de la fila caducaba sola cada 2 minutos y volvía a reintentarse indefinidamente desde cualquier sesión abierta — descontando cupo de EmailJS en cada intento, con o sin éxito, para siempre, sin que nadie lo viera.
+
+**Cambio en `app.py`**: nuevas columnas `intentos` (contador, se incrementa en cada reclamo atómico de la fila) y `descartado_en` (descarte manual) en `emails_sistema_pendientes`. `GET /api/emails-sistema-pendientes` deja de devolver/reintentar una fila al llegar a `MAX_INTENTOS_EMAIL_SISTEMA` (8) intentos sin éxito, o si se descartó a mano — se para sola en vez de sangrar cupo indefinidamente. Nuevos endpoints de admin: `GET /api/admin/emails-sistema-atascados` (lista las filas que agotaron intentos o se descartaron) y `POST /api/admin/emails-sistema-pendientes/<id>/descartar` (descarte manual).
+
+**Cambio en `templates/index.html`**: Admin → Config alertas → EmailJS muestra ahora, cuando hay alguno, un aviso "⚠️ Correos atascados — agotaron los reintentos sin enviarse" con asunto, destinatario, nº de intentos, tamaño y un botón "Descartar" por fila — visibilidad que antes no existía en absoluto (el drenaje de cupo era completamente invisible desde la aplicación).
+
+**Nota importante**: con este cambio, la fila que llevaba fallando desde antes de hoy dejará de reintentarse sola en cuanto acumule 8 intentos (puede que ya los tenga, en cuyo caso se para en el propio despliegue) — no hace falta ninguna intervención manual en la base de datos. Aparecerá en el nuevo panel de "Correos atascados" para poder revisarla/descartarla.
+
+**Verificación**: `python3 -m py_compile app.py` y `node --check` sobre el JS de `templates/index.html`, sin errores. Migración (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`) idempotente, vía `_auto_migrate()`, como el resto de columnas de esta tabla.
+
 # v12.30.20 — 19 agosto 2026
 
 🐛 Correo de resumen de "Comparar Pedidos + Albaranes": recorte de tamaño definitivo — límite conjunto en vez de tres límites independientes

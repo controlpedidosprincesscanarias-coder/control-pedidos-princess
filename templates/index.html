@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.20
+          V 12.30.21
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -7582,6 +7582,21 @@ async function loadConfigAlertas() {
             credenciales completas, prueba con la de después, recorriendo las 3 antes de rendirse. Se avisará en
             🔍 Integridad.
           </div>
+
+          <!-- (2026-08-19) Correos de la cola de sistema que agotaron sus reintentos sin
+               enviarse (típicamente por tamaño, EmailJS 413) — ver MAX_INTENTOS_EMAIL_SISTEMA
+               en app.py. Antes de esto, una fila así reintentaba sola sin límite, descontando
+               cupo de EmailJS en cada intento aunque nunca llegase a entregarse. -->
+          <div id="emailjs-atascados-wrap" style="display:none;margin-top:14px;padding:10px 12px;background:#fff8f0;border:1px solid #ffd9a8;border-radius:8px">
+            <div style="font-weight:700;font-size:12px;color:#a15c00;margin-bottom:6px">
+              ⚠️ Correos atascados — agotaron los reintentos sin enviarse
+            </div>
+            <div style="font-size:10.5px;color:#888;margin-bottom:8px">
+              Normalmente por tamaño (EmailJS los rechaza con 413). Ya no siguen reintentándose
+              solos ni descontando cupo — puedes descartarlos aquí, o dejarlos como constancia.
+            </div>
+            <div id="emailjs-atascados-list"></div>
+          </div>
         </div>`;
         continue;
       }
@@ -7624,9 +7639,39 @@ async function loadConfigAlertas() {
       html += `</div></div>`;
     }
     body.innerHTML = html;
+    _cargarEmailsAtascados();
   } catch(e) {
     body.innerHTML = `<div style="color:red;padding:24px">Error cargando configuración: ${e.message}</div>`;
   }
+}
+
+// (2026-08-19) Carga y pinta los correos de la cola de sistema que agotaron
+// sus reintentos sin enviarse — ver MAX_INTENTOS_EMAIL_SISTEMA en app.py.
+async function _cargarEmailsAtascados() {
+  const wrap = document.getElementById('emailjs-atascados-wrap');
+  const list = document.getElementById('emailjs-atascados-list');
+  if (!wrap || !list) return;
+  try {
+    const r = await api('/api/admin/emails-sistema-atascados');
+    if (!r || !r.ok || !r.atascados || !r.atascados.length) { wrap.style.display = 'none'; return; }
+    wrap.style.display = '';
+    list.innerHTML = r.atascados.map(a => `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 0;border-top:1px solid #ffe6c2;font-size:11px;color:#555">
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:600;color:#333">${esc(a.asunto || a.evento_codigo)}</div>
+          <div style="color:#888">${esc(a.destinatario || '')} · ${a.intentos} intento(s) · ${(a.tam_html || 0).toLocaleString('es-ES')} caracteres
+            ${a.descartado_en ? ' · <span style="color:#a15c00">descartado</span>' : ''}</div>
+        </div>
+        ${!a.descartado_en ? `<button class="btn btn-ghost btn-sm" onclick="_descartarEmailAtascado(${a.id})">Descartar</button>` : ''}
+      </div>`).join('');
+  } catch (_) { wrap.style.display = 'none'; }
+}
+
+async function _descartarEmailAtascado(id) {
+  try {
+    const r = await api(`/api/admin/emails-sistema-pendientes/${id}/descartar`, 'POST');
+    if (r && r.ok) _cargarEmailsAtascados();
+  } catch (_) {}
 }
 
 async function saveConfigAlertas() {

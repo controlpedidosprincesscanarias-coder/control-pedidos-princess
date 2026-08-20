@@ -25,6 +25,31 @@
 
 ---
 
+## 2026-08-19 — [Control Pedidos] Cola de emails de sistema: freno de reintentos infinitos — descontaba cupo de EmailJS sin límite sin llegar a entregarse (v12.30.21)
+
+- Víctor, tras desplegar v12.30.20: "estaba en 54 emailjs y pasó a 71" —
+  17 peticiones descontadas sin que llegara ningún correo nuevo.
+- **Causa**: el fix de tamaño de v12.30.20 solo afecta a correos
+  NUEVOS al encolarse — no cambia el contenido de una fila que ya
+  llevaba encolada desde antes del despliegue, con el HTML antiguo
+  (más grande). Esa fila seguía fallando siempre (413) y, como la cola
+  no tenía límite de reintentos, se reintentaba sola indefinidamente
+  cada vez que caducaba su reserva de 2 minutos — descontando cupo en
+  cada intento, con o sin éxito, sin que nadie lo viera.
+- **Cambio en `app.py`**: nuevas columnas `intentos` y `descartado_en`
+  en `emails_sistema_pendientes`. La cola deja de reintentar una fila
+  al llegar a 8 intentos sin éxito, o si se descarta a mano. Nuevos
+  endpoints de admin para listar y descartar correos atascados.
+- **Cambio en `templates/index.html`**: Admin → Config alertas →
+  EmailJS muestra ahora un aviso de "Correos atascados" (asunto,
+  destinatario, intentos, tamaño, botón Descartar) cuando los hay —
+  antes este drenaje de cupo era invisible desde la aplicación.
+- **Nota**: la fila que llevaba fallando desde antes de hoy dejará de
+  reintentarse sola al acumular 8 intentos (puede que ya los tenga) —
+  no hace falta tocar la base de datos a mano.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`
+  sin errores. Migración idempotente vía `_auto_migrate()`.
+
 ## 2026-08-19 — [Control Pedidos] Correo de resumen de "Comparar Pedidos + Albaranes": límite de tamaño conjunto en vez de tres límites independientes (v12.30.20)
 
 - Víctor: "llego un correo con el resumen pero descontó casi 10 correos
