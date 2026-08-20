@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.21
+          V 12.30.22
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -7583,17 +7583,26 @@ async function loadConfigAlertas() {
             🔍 Integridad.
           </div>
 
-          <!-- (2026-08-19) Correos de la cola de sistema que agotaron sus reintentos sin
-               enviarse (típicamente por tamaño, EmailJS 413) — ver MAX_INTENTOS_EMAIL_SISTEMA
-               en app.py. Antes de esto, una fila así reintentaba sola sin límite, descontando
-               cupo de EmailJS en cada intento aunque nunca llegase a entregarse. -->
+          <!-- (2026-08-19) Cola de correos de sistema pendientes de enviar — ver
+               MAX_INTENTOS_EMAIL_SISTEMA en app.py. Antes de esto, una fila que fallaba
+               siempre al enviarse (típicamente por tamaño, EmailJS 413) reintentaba sola
+               sin límite, descontando cupo de EmailJS en cada intento aunque nunca llegase
+               a entregarse.
+               (2026-08-20) Ampliado a TODA la cola pendiente, no solo las ya "atascadas"
+               (que agotaron los reintentos): las filas grandes que llevaban en cola desde
+               antes de v12.30.20 arrancan con intentos=0 tras la migración, así que hasta
+               que no fallaban varias veces más no aparecían aquí — se puede descartar
+               cualquier fila a mano sin esperar a que se pare sola. Ordenadas por tamaño
+               (las más grandes, más sospechosas de fallar por 413, arriba). -->
           <div id="emailjs-atascados-wrap" style="display:none;margin-top:14px;padding:10px 12px;background:#fff8f0;border:1px solid #ffd9a8;border-radius:8px">
             <div style="font-weight:700;font-size:12px;color:#a15c00;margin-bottom:6px">
-              ⚠️ Correos atascados — agotaron los reintentos sin enviarse
+              ⚠️ Cola de correos de sistema pendientes
             </div>
             <div style="font-size:10.5px;color:#888;margin-bottom:8px">
-              Normalmente por tamaño (EmailJS los rechaza con 413). Ya no siguen reintentándose
-              solos ni descontando cupo — puedes descartarlos aquí, o dejarlos como constancia.
+              Ordenados por tamaño (los más grandes, arriba — normalmente son los que EmailJS
+              rechaza con 413). Las filas marcadas "parado" ya agotaron los reintentos y no
+              siguen descontando cupo solas; las demás siguen reintentándose cada pocos
+              minutos. Puedes descartar cualquiera a mano ahora mismo, sin esperar.
             </div>
             <div id="emailjs-atascados-list"></div>
           </div>
@@ -7645,8 +7654,11 @@ async function loadConfigAlertas() {
   }
 }
 
-// (2026-08-19) Carga y pinta los correos de la cola de sistema que agotaron
-// sus reintentos sin enviarse — ver MAX_INTENTOS_EMAIL_SISTEMA en app.py.
+// (2026-08-19) Carga y pinta la cola de correos de sistema pendientes de enviar —
+// ver MAX_INTENTOS_EMAIL_SISTEMA en app.py.
+// (2026-08-20) Ahora incluye TODA la cola pendiente (no solo las ya "atascadas"),
+// con una etiqueta de estado por fila (a.atascado) para distinguir "parado" de
+// "aún reintentando" — ver comentario junto al wrap en el HTML.
 async function _cargarEmailsAtascados() {
   const wrap = document.getElementById('emailjs-atascados-wrap');
   const list = document.getElementById('emailjs-atascados-list');
@@ -7660,7 +7672,11 @@ async function _cargarEmailsAtascados() {
         <div style="flex:1;min-width:0">
           <div style="font-weight:600;color:#333">${esc(a.asunto || a.evento_codigo)}</div>
           <div style="color:#888">${esc(a.destinatario || '')} · ${a.intentos} intento(s) · ${(a.tam_html || 0).toLocaleString('es-ES')} caracteres
-            ${a.descartado_en ? ' · <span style="color:#a15c00">descartado</span>' : ''}</div>
+            ${a.descartado_en
+              ? ' · <span style="color:#a15c00">descartado</span>'
+              : a.atascado
+              ? ' · <span style="color:#dc3545">parado (agotó reintentos)</span>'
+              : ' · <span style="color:#0d6efd">reintentando</span>'}</div>
         </div>
         ${!a.descartado_en ? `<button class="btn btn-ghost btn-sm" onclick="_descartarEmailAtascado(${a.id})">Descartar</button>` : ''}
       </div>`).join('');

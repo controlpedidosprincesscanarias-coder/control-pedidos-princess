@@ -1,3 +1,17 @@
+# v12.30.22 — 20 agosto 2026
+
+🐛 Cola de emails de sistema: bajar el margen de reintentos y ampliar el panel de admin a toda la cola pendiente — filas atascadas desde antes de v12.30.21 seguían descontando cupo de EmailJS tras desplegar el freno
+
+**Petición/reporte de Víctor**: tras desplegar v12.30.21 (freno de reintentos infinitos), volvió a probar y "de 76 emailjs paso a 91 y un solo correo enviado" — 15 peticiones descontadas de golpe, con un único correo (el resumen de esta prueba) realmente enviado. Preguntó si podía ser cola acumulada de antes.
+
+**Causa**: confirmado — sí es cola acumulada de antes de hoy. El freno de v12.30.21 añadió la columna `intentos` con `ALTER TABLE ... ADD COLUMN IF NOT EXISTS intentos INTEGER NOT NULL DEFAULT 0`: esto rellena a **0** el contador en las filas que YA estaban en la cola (las oversized de pruebas anteriores a v12.30.20, con el HTML grande de antes del recorte adaptativo). Es decir, esas filas arrancaron con el cupo de reintentos completo por delante en vez de con los intentos que ya llevaban acumulados — así que, tras el propio despliegue del freno, cada una pudo fallar y descontar cupo hasta 8 veces más (el límite de v12.30.21) antes de pararse sola, sin que nada de eso fuera visible en el panel de "Correos atascados" (que solo mostraba filas que ya hubieran agotado esos intentos). La captura de red del último intento de Víctor confirma este diagnóstico: los 4 fallos 413 ocurren en la PRIMERA llamada a `emails-sistema-pendientes` (280 kB de respuesta), antes incluso de invocarse "Enviar resumen" para esta prueba — son filas viejas, no el correo nuevo (que se envió bien a la primera).
+
+**Cambio en `app.py`**: `MAX_INTENTOS_EMAIL_SISTEMA` bajado de 8 a 3 — acorta el margen de "cupo regalado" que las filas ya atascadas desde antes de hoy pueden seguir gastando tras cada despliegue del freno, sin penalizar reintentos legítimos por fallos puntuales de red. `GET /api/admin/emails-sistema-atascados` ampliado para listar TODA la cola pendiente (`enviado = FALSE`), no solo las filas que ya agotaron los intentos — ordenadas por tamaño de HTML descendente (las más grandes, más sospechosas de fallar por 413, arriba del todo) y con un nuevo campo `atascado` para distinguir "parado" de "aún reintentando".
+
+**Cambio en `templates/index.html`**: el panel Admin → Config alertas → EmailJS ("Cola de correos de sistema pendientes") ahora muestra la cola completa, con una etiqueta de estado por fila ("reintentando" / "parado (agotó reintentos)" / "descartado") — el botón "Descartar" sigue disponible en cualquier fila, sin esperar a que se pare sola: Víctor puede entrar ahora mismo y descartar a mano las filas grandes que sigan drenando cupo, en vez de esperar a que agoten sus 3 intentos.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores.
+
 # v12.30.21 — 19 agosto 2026
 
 🐛 Cola de emails de sistema: freno de reintentos infinitos — un correo que fallaba SIEMPRE al enviarse descontaba cupo de EmailJS sin límite, sin llegar nunca a entregarse

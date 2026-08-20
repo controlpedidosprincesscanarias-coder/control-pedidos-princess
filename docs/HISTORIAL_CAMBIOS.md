@@ -25,6 +25,40 @@
 
 ---
 
+## 2026-08-20 — [Control Pedidos] Cola de emails de sistema: bajar el margen de reintentos y ampliar el panel de admin a toda la cola pendiente (v12.30.22)
+
+- Víctor, tras desplegar v12.30.21: "de 76 emailjs paso a 91 y un solo
+  correo enviado" — 15 peticiones descontadas de golpe, con un único
+  correo (el de esta prueba) realmente enviado. Preguntó si podía ser
+  cola acumulada de antes.
+- **Causa**: confirmado, sí es cola acumulada de antes. El freno de
+  v12.30.21 añadió la columna `intentos` con `DEFAULT 0`, que rellena a
+  0 el contador en las filas YA existentes en la cola (las oversized de
+  pruebas anteriores a v12.30.20) — arrancan con el cupo de reintentos
+  completo por delante en vez de con lo ya acumulado, así que tras el
+  propio despliegue del freno cada una pudo fallar y descontar cupo
+  hasta 8 veces más antes de pararse sola, sin aparecer aún en el panel
+  de "Correos atascados" (que solo mostraba filas ya agotadas). La
+  captura de red de Víctor lo confirma: los 4 fallos 413 ocurren en la
+  PRIMERA llamada a `emails-sistema-pendientes` (280 kB), antes de
+  invocarse "Enviar resumen" — son filas viejas, no el correo nuevo
+  (que se envió bien a la primera).
+- **Cambio en `app.py`**: `MAX_INTENTOS_EMAIL_SISTEMA` bajado de 8 a 3
+  — acorta el margen de cupo que las filas ya atascadas desde antes
+  pueden seguir gastando tras cada despliegue del freno, sin penalizar
+  reintentos legítimos por fallos puntuales de red. `GET
+  /api/admin/emails-sistema-atascados` ampliado para listar TODA la
+  cola pendiente (no solo las ya agotadas), ordenada por tamaño de HTML
+  descendente, con un campo `atascado` para distinguir "parado" de
+  "aún reintentando".
+- **Cambio en `templates/index.html`**: el panel Admin → Config
+  alertas → EmailJS ("Cola de correos de sistema pendientes") muestra
+  ahora la cola completa con una etiqueta de estado por fila — el botón
+  "Descartar" sigue disponible en cualquier fila, sin esperar a que se
+  pare sola.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`
+  sin errores.
+
 ## 2026-08-19 — [Control Pedidos] Cola de emails de sistema: freno de reintentos infinitos — descontaba cupo de EmailJS sin límite sin llegar a entregarse (v12.30.21)
 
 - Víctor, tras desplegar v12.30.20: "estaba en 54 emailjs y pasó a 71" —

@@ -14515,7 +14515,17 @@ def api_resolver_config_avisos():
 # (2026-08-19) Nº máximo de intentos de envío de una fila de
 # emails_sistema_pendientes antes de dejar de reintentarse sola — ver
 # api_emails_sistema_pendientes() y api_emails_sistema_atascados().
-MAX_INTENTOS_EMAIL_SISTEMA = 8
+# (2026-08-20) Bajado de 8 a 3: la migración que añade la columna
+# `intentos` la rellena a 0 en las filas YA existentes (no puede saber
+# cuántas veces se habían reintentado antes de esta versión) — así que
+# las filas que ya llevaban atascadas desde antes del despliegue de este
+# freno arrancan de nuevo con el cupo completo de intentos. Con 8 de
+# margen, cada una de esas filas podía seguir descontando cupo de EmailJS
+# unas cuantas veces más tras el propio despliegue del fix (reportado por
+# Víctor: siguió bajando cupo justo después de desplegar el freno). Con
+# 3 ese margen se acorta bastante sin cargarse los reintentos legítimos
+# por fallos puntuales de red.
+MAX_INTENTOS_EMAIL_SISTEMA = 3
 
 
 @app.route("/api/emails-sistema-pendientes", methods=["GET"])
@@ -14603,22 +14613,39 @@ def api_emails_sistema_pendientes():
 @admin_required
 def api_emails_sistema_atascados():
     """
-    (2026-08-19) Lista los correos de la cola de sistema que han agotado
-    sus reintentos (intentos >= MAX_INTENTOS_EMAIL_SISTEMA) sin llegar a
-    enviarse, o que ya fueron descartados a mano — para que un admin pueda
-    ver qué se ha quedado atascado (típicamente por tamaño, EmailJS 413) y
-    descartarlo si corresponde, en vez de que quede invisible drenando
-    cupo de EmailJS en segundo plano para siempre.
+    (2026-08-19) Lista los correos de la cola de sistema pendientes de
+    enviar, para que un admin pueda ver qué se ha quedado atascado
+    (típicamente por tamaño, EmailJS 413) y descartarlo si corresponde, en
+    vez de que quede invisible drenando cupo de EmailJS en segundo plano.
+
+    (2026-08-20) Ampliado para devolver TODA la cola pendiente (enviado =
+    FALSE), no solo las filas que ya agotaron MAX_INTENTOS_EMAIL_SISTEMA.
+    Motivo: al añadir la columna `intentos` (ADD COLUMN ... DEFAULT 0), las
+    filas YA existentes en la cola (p. ej. correos de resumen de
+    comparativas de antes de v12.30.20, con el HTML grande de antes del
+    ajuste de recorte adaptativo) arrancan con `intentos = 0` — es decir,
+    con cupo entero de reintentos por delante, y hasta que no lo agotan no
+    aparecían en este panel. Resultado (reportado por Víctor): el contador
+    de EmailJS seguía bajando tras desplegar el freno de reintentos, sin
+    que el admin tuviera forma de ver ni descartar esas filas a mano hasta
+    que fallaban varias veces más. Ahora se listan TODAS las pendientes,
+    ordenadas por tamaño de HTML descendente (las más grandes — más
+    sospechosas de ser las que fallan por 413 — arriba del todo) con un
+    campo `atascado` (true si ya alcanzó MAX_INTENTOS_EMAIL_SISTEMA o fue
+    descartada) para que el frontend distinga "aún reintentando" de
+    "parada", pero el botón de descarte manual sigue disponible en ambos
+    casos: no hace falta esperar a que se pare sola.
     GET /api/admin/emails-sistema-atascados
     """
     try:
         rows = rows_to_list(query(
             """SELECT id, evento_codigo, destinatario, asunto, LENGTH(cuerpo_html) as tam_html,
-                      intentos, creado_en, descartado_en
+                      intentos, creado_en, descartado_en,
+                      (intentos >= %s OR descartado_en IS NOT NULL) AS atascado
                  FROM emails_sistema_pendientes
-                WHERE enviado = FALSE AND (intentos >= %s OR descartado_en IS NOT NULL)
-                ORDER BY creado_en DESC
-                LIMIT 100""",
+                WHERE enviado = FALSE
+                ORDER BY tam_html DESC
+                LIMIT 200""",
             (MAX_INTENTOS_EMAIL_SISTEMA,)
         )) or []
         return jsonify({"ok": True, "atascados": rows})
