@@ -1,3 +1,13 @@
+# v12.30.25 — 22 agosto 2026
+
+🔧 SSO hacia DALI: el token de acceso automático subía de 60s a 100s de duración — evita que caduque durante un cold-start normal del backend de DALI (plan gratuito de Render)
+
+**Petición/reporte de Víctor**: en el catálogo DALI, el primer acceso del día tardaba mucho y se quedaba en "Comprobando sesión…", y entrando por el enlace "Catálogo DALI" desde aquí a veces caía al login manual con un aviso de acceso fallido, aunque las credenciales fueran correctas. Diagnosticado en el propio repo de DALI (ver su `HISTORIAL.md`, v0.60): el backend de DALI vive en el plan gratuito de Render, que duerme tras 15 min sin tráfico y tarda ~60s (a veces más) en despertar — y el token de SSO que genera este backend (`_generar_token_sso_dali`) solo duraba 60s (70s contando el margen de reloj del lado de DALI), una ventana casi calcada al propio cold-start, sin margen real. Como primer parche (mismo día, solo en DALI) se amplió el margen de aceptación en ese lado a 90s; este cambio es el arreglo de raíz en el origen del token, con el visto bueno explícito de Víctor para tocar este repo.
+
+**Cambio en `app.py`**: `_generar_token_sso_dali`, el parámetro `ttl_segundos` sube de 60 a 100 — cubre un cold-start normal de Render con margen de sobra por sí solo. Coordinado con DALI: su margen de aceptación (`SSO_MARGEN_RELOJ_SEGUNDOS` en `authController.js`) baja de 90s a 20s en el mismo cambio, volviendo a ser solo margen real de reloj/latencia en vez de sustituto del TTL. Ventana total efectiva: ~120s (antes ~150s, pero repartidos de forma menos correcta: 60s de TTL + 90s de parche).
+
+**Verificación**: `python3 -m py_compile app.py` sin errores.
+
 # v12.30.24 — 20 agosto 2026
 
 🐛 Recordatorio de "correos de sistema en cola": seguía avisando de filas ya descartadas o ya paradas por el freno de reintentos, con un título de popup engañoso ("Nueva solicitud de acceso")

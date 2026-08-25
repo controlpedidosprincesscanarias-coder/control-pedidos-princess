@@ -25,6 +25,35 @@
 
 ---
 
+## 2026-08-22 — [Control Pedidos + DALI] SSO hacia DALI: token subido de 60s a 100s, margen de DALI reajustado de 90s a 20s (v12.30.25 / DALI v1.18.2)
+
+- Víctor, en DALI: primer acceso del día muy lento, "Comprobando
+  sesión…" congelada, y a veces caída al login manual entrando desde el
+  menú "Catálogo DALI" de aquí, aunque las credenciales fueran
+  correctas.
+- **Causa (diagnosticada en el repo de DALI, ver su `HISTORIAL.md`
+  v0.60)**: el backend de DALI (plan gratuito de Render) duerme tras 15
+  min sin tráfico y tarda ~60s (a veces más) en despertar. El token de
+  SSO que genera este backend (`_generar_token_sso_dali`) solo duraba
+  60s (70s con el margen de reloj del lado de DALI) — una ventana casi
+  calcada al propio cold-start, sin margen real. El mismo día se aplicó
+  primero un parche solo en DALI (margen de aceptación ampliado a 90s,
+  DALI v1.18.0) para no bloquear en tocar este repo sin permiso; este
+  cambio es el arreglo de raíz, con el visto bueno explícito de Víctor.
+- **Cambio en `app.py`** (Control Pedidos): `_generar_token_sso_dali`,
+  `ttl_segundos` sube de 60 a 100 — cubre un cold-start normal de Render
+  por sí solo, con margen de sobra.
+- **Cambio en `backend/src/controllers/authController.js`** (DALI, repo
+  aparte `dali-sap-articulos-app`): `SSO_MARGEN_RELOJ_SEGUNDOS` baja de
+  90 a 20 — con el TTL ya arreglado arriba, el margen vuelve a ser solo
+  margen real de reloj/latencia, no un sustituto del TTL. `backend/` y
+  `frontend/package.json` de DALI suben a 1.18.2.
+- Ventana total efectiva del token: ~120s (100s + 20s) — antes ~150s
+  (60s + 90s), pero repartidos de forma menos correcta (todo el peso en
+  el margen "parche" de DALI en vez de en el TTL de origen).
+- **Verificación**: `python3 -m py_compile app.py` (Control Pedidos) y
+  `node --check` sobre `authController.js` (DALI), ambos sin errores.
+
 ## 2026-08-20 — [Control Pedidos] Recordatorio de "correos de sistema en cola": seguía avisando de filas descartadas/paradas, con título de popup engañoso (v12.30.24)
 
 - Víctor, justo tras descartar a mano 4 correos atascados: le llegó un

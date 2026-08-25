@@ -5878,7 +5878,7 @@ def _completar_login(user):
                     "nombre": user["nombre"], "rol": user["rol"], "hoteles_ids": hoteles_ids})
 
 
-def _generar_token_sso_dali(payload: dict, ttl_segundos: int = 60) -> str:
+def _generar_token_sso_dali(payload: dict, ttl_segundos: int = 100) -> str:
     """
     Token de un solo uso para el acceso automático a la app DALI:
     `<payload-b64url>.<hmac-sha256-hex>`, firmado con el secreto compartido
@@ -5887,6 +5887,20 @@ def _generar_token_sso_dali(payload: dict, ttl_segundos: int = 60) -> str:
     el contenido (no lleva nada más sensible que email/nombre/rol), solo
     garantiza que lo emitió este backend, que no ha caducado y que no se
     ha reutilizado (jti, comprobado en el lado de DALI).
+
+    (2026-08-22) Antes eran 60s. DALI vive en el plan gratuito de Render,
+    que duerme tras 15 min sin tráfico y tarda ~60s (a veces más) en
+    despertar — con 60s de TTL, un acceso a DALI justo tras un rato sin
+    uso caducaba el token casi siempre antes de que DALI llegara a
+    verificarlo, cayendo al login manual con un aviso de "enlace
+    caducado" (ver HISTORIAL_CAMBIOS.md). Subido a 100s para cubrir un
+    cold-start normal con margen de sobra, coordinado con el margen de
+    aceptación del lado de DALI (SSO_MARGEN_RELOJ_SEGUNDOS en
+    authController.js, bajado de 90s a 20s en el mismo cambio — ese 90s
+    era un parche temporal mientras este TTL seguía en 60s; con el TTL
+    ya arreglado aquí, el margen de DALI vuelve a ser solo margen real
+    de reloj/latencia, no un sustituto del TTL). Ventana total efectiva:
+    ~120s (100s aquí + 20s en DALI).
     """
     if not DALI_SSO_SECRET:
         raise RuntimeError("DALI_SSO_SECRET no está configurada.")
