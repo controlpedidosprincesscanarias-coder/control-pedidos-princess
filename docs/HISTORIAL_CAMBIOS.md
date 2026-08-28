@@ -25,6 +25,14 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] Auditoría completa: "Necesita atención" del Dashboard (y 2 sitios más) mostraban el Nº interno en vez del Nº Pedido DALI/SAP (v12.30.48)
+
+- Víctor, con capturas del Dashboard ("Pedido 702 lleva 46 días..."): sigue viendo el Nº lineal interno en avisos/comunicaciones en vez del Nº Pedido DALI/SAP — pide revisar TODOS los apartados (Pedidos, Alertas, Dashboard, Techo de Gastos, etc.) para zanjarlo.
+- Barrido completo de las 57 apariciones de `norden` en `app.py` y 18 en `templates/index.html`: 3 sitios con el problema real, el resto ya correcto (columnas de tabla con ambos números claramente etiquetados por separado, o ya usaban `pedido_num` con `norden` solo como reserva).
+- **Cambio en `app.py` (`necesita_atencion`)**: el diccionario que alimenta el aviso del Dashboard omitía `pedido_num` pese a tenerlo disponible en la consulta de origen — se añade.
+- **Cambio en `templates/index.html`**: widget "Necesita atención" y "Resumen de la semana" del Dashboard pasan a mostrar `pedido_num` con `norden` como reserva (mismo patrón ya usado desde v12.30.41 en la Línea temporal). El modal de confirmación al eliminar un pedido, que nunca consultaba `pedido_num`, también se corrige.
+- **Verificación**: `python3 -m py_compile app.py models.py` y `node --check` sin errores. Revisión manual uno por uno de los 75 puntos localizados.
+
 ## 2026-08-28 — [Control Pedidos] Nuevo apartado "Notificaciones adicionales" (solo admin): contactos sueltos en copia según departamento del pedido + estado nuevo (v12.30.47)
 
 - Víctor: quiere registrar contactos que no son usuarios de la app (Administrativo A&B, Director de Compras, Chef Ejecutivo) y decidir, por departamento del pedido + estado nuevo, a cuáles poner en copia en el correo interno de cambio de estado — ejemplo: Cocina + ENVIADO AL PROVEEDOR → copia al Chef Ejecutivo.

@@ -12720,6 +12720,7 @@ def get_dashboard_resumen():
         top = alertas[0]
         necesita_atencion = {
             "id": top.get("id"), "norden": top.get("norden"),
+            "pedido_num": top.get("pedido_num"),
             "hotel_codigo": top.get("hotel_codigo"),
             "proveedor_nombre": top.get("proveedor_nombre"),
             "estado": top.get("estado"),

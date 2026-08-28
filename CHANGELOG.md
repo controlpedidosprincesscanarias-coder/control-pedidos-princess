@@ -1,3 +1,19 @@
+# v12.30.48 — 28 agosto 2026
+
+🐛 Auditoría completa: el widget "Necesita atención" del Dashboard (y otros dos sitios puntuales) mostraban el Nº interno en vez del Nº Pedido (DALI/SAP)
+
+**Petición de Víctor**, a partir de dos capturas del Dashboard con el aviso "Pedido 702 (MT, CASA DELFIN,SA) lleva 46 días en «ENVIADO AL PROVEEDOR» sin avanzar.": "siguen apareciendo avisos y o comunicaciones haciendo referencia el pedido lineal # y no al Nº pedido Dali/Sap, puedes revisar todos los apartados para zanjar este asunto? Pedidos, Alertas, Dasboard, Techo Gasto, etc?"
+
+**Alcance de la revisión**: barrido completo de las 57 apariciones de `norden` en `app.py` y las 18 de `templates/index.html`, apartado por apartado (Pedidos, Alertas, Dashboard, Techo de Gastos, Pedidos eliminados, correos internos y al proveedor, Telegram/WhatsApp, exportaciones a Excel e informes imprimibles). Se han encontrado y corregido 3 sitios con el problema real; el resto de apariciones de `norden` ya eran correctas: o bien columnas de tabla claramente etiquetadas por separado ("Nº" / "Pedido DALI / SAP") pensadas para poder consultar ambos números a la vez (tablas de Pedidos, Alertas, Pedidos eliminados, exportaciones de Techo de Gastos y Alertas, backups Excel), o bien ya usaban el patrón correcto de mostrar primero `pedido_num` y recurrir a `norden` solo como reserva para el caso raro de un pedido que aún no tenga Nº Pedido (DALI/SAP) asignado (Telegram de cambio de estado, avisos de techo, WhatsApp/Telegram de alertas, tarjetas y expedientes de Techo de Gastos, "Comparar listado PDF").
+
+**Cambio en `app.py` (`dashboard_stats`, construcción de `necesita_atencion`)**: el diccionario que alimenta el aviso "Necesita atención" del Dashboard (y el resumen semanal) incluía `id` y `norden` pero omitía `pedido_num`, aunque la consulta de la que sale (`alertas`, vía `PEDIDO_SELECT_STATS`) ya lo trae — se añade `"pedido_num": top.get("pedido_num")` al diccionario.
+
+**Cambio en `templates/index.html` (widget "Necesita atención" del Dashboard y "Resumen de la semana")**: `Pedido ${na.norden || na.id}` pasa a `Pedido ${na.pedido_num || ('#' + (na.norden || na.id))}` en los dos sitios que consumen ese mismo dato — mismo patrón de prioridad ya usado en el resto de la app desde v12.30.41 (Línea temporal del Dashboard).
+
+**Cambio en `templates/index.html` (modal de confirmación al eliminar un pedido)**: la frase "Vas a eliminar el pedido Nº {norden}" nunca consultaba `pedido_num` — pasa a mostrar el Nº Pedido (DALI/SAP) cuando existe, con el mismo `Nº {norden}` de antes como reserva.
+
+**Verificación**: `python3 -m py_compile app.py models.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Revisión manual, uno por uno, de los 75 puntos localizados por el barrido (con su contexto de tabla/cabecera o de función) para clasificar cada uno como correcto o pendiente de arreglo antes de tocar nada.
+
 # v12.30.47 — 28 agosto 2026
 
 ✨ Nuevo apartado "Notificaciones adicionales" (solo admin): contactos sueltos en copia según departamento del pedido + estado nuevo

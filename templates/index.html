@@ -1312,7 +1312,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.47
+          V 12.30.48
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -4078,7 +4078,7 @@ function _buildInsights(d) {
   const na = d.necesita_atencion;
   if (na && na.nivel_alerta === 'urgente') {
     out.push({ icon: '🔴', tone: 'negative', prio: 0, html:
-      `El pedido <b>${na.norden || na.id}</b> (${na.hotel_codigo || '—'}, ${na.proveedor_nombre || 'sin proveedor'}) lleva
+      `El pedido <b>${na.pedido_num || ('#' + (na.norden || na.id))}</b> (${na.hotel_codigo || '—'}, ${na.proveedor_nombre || 'sin proveedor'}) lleva
        <b>${na.dias_tramitacion ?? '?'} días</b> en «${(na.estado || '').toLowerCase()}» y necesita atención urgente.` });
   }
 
@@ -4276,7 +4276,7 @@ async function loadDashboardResumen() {
     naEl.innerHTML = `
       <span class="na-icon">${esUrgente ? '🔴' : '🟡'}</span>
       <span class="na-body">
-        <strong>Pedido ${na.norden || na.id}</strong> (${na.hotel_codigo || '—'}, ${na.proveedor_nombre || 'sin proveedor'})
+        <strong>Pedido ${na.pedido_num || ('#' + (na.norden || na.id))}</strong> (${na.hotel_codigo || '—'}, ${na.proveedor_nombre || 'sin proveedor'})
         lleva <strong>${na.dias_tramitacion} día${na.dias_tramitacion!==1?'s':''}</strong> en «${na.estado}» sin avanzar.
       </span>
       <button class="na-btn" onclick="openPedidoModal(${na.id})">Abrir pedido</button>`;
@@ -5620,8 +5620,8 @@ async function deletePedido() {
   // Abrir modal de confirmación con resumen del pedido
   const p = G.currentPedidoData;
   if (!p) return;
-  const norden = p.norden ? `Nº ${p.norden}` : `ID ${G.editingPedidoId}`;
-  document.getElementById('del-confirm-norden').textContent = norden;
+  const refPedido = p.pedido_num || (p.norden ? `Nº ${p.norden}` : `ID ${G.editingPedidoId}`);
+  document.getElementById('del-confirm-norden').textContent = refPedido;
   document.getElementById('del-confirm-admin').textContent = G.nombre || G.username || 'Administrador';
   document.getElementById('del-motivo').value = '';
 
