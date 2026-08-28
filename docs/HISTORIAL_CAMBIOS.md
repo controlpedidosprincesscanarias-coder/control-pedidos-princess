@@ -25,6 +25,14 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] "Fecha tramitación": solo correo electrónico (ya no PDF) — se comprueba/auto-rellena con Fecha Pedido y Fecha Entrega del PDF oficial (v12.30.45)
+
+- Víctor, a partir de dos capturas: el adjunto de «Fecha tramitación» debe ser solo correo electrónico (eliminar PDF, mismo estilo de instrucciones que «Nº Pedido DALI/SAP»); al cargar el PDF de «Nº Pedido» comprobar también su «Fecha Pedido» — si falta la Fecha tramitación, rellenarla sola; si ya hay una y difiere, preguntar cuál es la correcta; y si faltan Fecha de entrega específica y Plazo entrega (días), preguntar si registrar la «Fecha Entrega» del PDF.
+- Confirmado con Víctor: se mantiene un único correo en este apartado (ya era así); el correo sigue sin ser obligatorio para pasar a ENVIADO AL PROVEEDOR.
+- **Cambio en `app.py`**: `upload_adjunto` separa `tramit_eml` (solo `.eml`/`.msg`) de `vb_eml` (sin cambios, correo o PDF). `_parsear_pdf_pedido_oficial` reconoce también «Fecha Pedido»/«Fecha Entrega» (opcionales, no rechazan el PDF si faltan) y las devuelve en la respuesta de la subida sin escribirlas en la base de datos.
+- **Cambio en `templates/index.html`**: nueva `_procesarFechasPdfPedidoOficial()` — auto-rellena o pregunta (con `confirm()`) según los casos de arriba; botón de «Fecha tramitación» ahora solo acepta `.eml`/`.msg`, con texto explicativo al estilo de «Nº Pedido».
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Prueba con el PDF real (pedido 16287): reconoce Fecha Pedido 21/08/2026 y Fecha Entrega 21/09/2026.
+
 ## 2026-08-28 — [Control Pedidos] "Comparar listado PDF (SAP)" + Albaranes: rellena sola la Base imp. (€) de CUALQUIER entrada ya registrada a la que le faltaba, no solo la última (v12.30.44)
 
 - Víctor, a partir de dos capturas del modal "Comparar listado PDF (SAP)": "cuando realizamos la comparativa de listados y se localizan pedidos introducidos y entradas parciales o totales, el sistema modifica el estado automáticamente e introduce los totales sin igic, cuando estas entradas parciales o totales ya estan registradas pero no se rellenó la celda total sin igic, la aplicacion deberia comprobar si tiene o no valor esta celda y rellenarla en caso de que este vacia".

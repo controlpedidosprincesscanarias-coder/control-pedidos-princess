@@ -1,3 +1,19 @@
+# v12.30.45 — 28 agosto 2026
+
+✨ "Fecha tramitación": solo admite correo electrónico (ya no PDF) — y se comprueba/auto-rellena con la Fecha Pedido y Fecha Entrega del PDF oficial
+
+**Petición de Víctor**, a partir de dos capturas del formulario (sección "Fechas del flujo" y el PDF oficial con "Fecha Pedido"/"Fecha Entrega" en cabecera): "el archivo adjunto de FECHA TRAMITACION deberá ser ahora solo y exclusivamente un enlace de correo electrónico del pedido enviado al proveedor, así que eliminamos poder introducir cualquier otro tipo de archivo y dejamos las instrucciones al estilo que ya tenemos en el apartado Nº PEDIDO DALI/SAP, cuando se cargue el PDF del Nº PEDIDO se deberá también verificar la fecha de tramitación incluida en el PDF «Fecha Pedido» si no se ha introducido fecha tramitacion, ponemos esta automáticamente y si la hemos introducido y difiere, entonces preguntar al usuario cual de las 2 es la correcta para dejar en este apartado. En caso de no haber introducido en el pedido fecha de entrega o plazo de entrega días, preguntar al usuario si registramos la fecha de entrega indicada en el pedido (PDF) y en caso afirmativo la incluimos en el apartado FECHA DE ENTREGA ESPECÍFICA".
+
+**Decisiones confirmadas con Víctor** antes de implementar: se mantiene el límite de un único correo en «Fecha tramitación» (ya se aplicaba antes de este cambio a los correos de este apartado, aunque hasta ahora convivía con hasta 3 PDF); el correo sigue siendo opcional — no se exige para poder pasar a ENVIADO AL PROVEEDOR (a diferencia del PDF oficial de «Nº Pedido», que sí es obligatorio desde v12.30.42).
+
+**Cambio en `app.py` (`upload_adjunto`, tipo `tramit_eml`)**: separado del tipo `vb_eml` (que sigue admitiendo correo o PDF, sin cambios — la petición de Víctor solo afectaba a «Fecha tramitación»); ahora solo admite `.eml`/`.msg`, se rechaza cualquier PDF u otro tipo de archivo.
+
+**Cambio en `app.py` (`_parsear_pdf_pedido_oficial`)**: además de Nº de Pedido y Total Pedido, reconoce (con dos expresiones regulares nuevas) "Fecha Pedido" y "Fecha Entrega" del PDF oficial y las devuelve en formato ISO — a diferencia del Nº de Pedido y el Total, estos dos campos son opcionales: si no se reconocen, no se rechaza el PDF, simplemente no hay fecha que proponer. `upload_adjunto` (tipo `pedido_doc`) las incluye en la respuesta de la subida (`fecha_pedido_iso`, `fecha_entrega_iso`) — sin escribir nada en la base de datos por esa vía, a diferencia de `pedido_num`/`total_pedido`, porque «Fecha tramitación» y «Fecha de entrega específica» siguen siendo campos normales, editables a mano.
+
+**Cambio en `templates/index.html`**: nueva `_procesarFechasPdfPedidoOficial()`, llamada tras leer con éxito el PDF de «Nº Pedido (DALI/SAP)» — si «Fecha tramitación» está vacía, se rellena sola con la «Fecha Pedido» del PDF; si ya tiene un valor distinto, se pregunta (con `confirm()`, mismo patrón ya usado en toda la app) cuál de las dos dejar; si «Fecha de entrega específica» y «Plazo entrega (días)» están AMBOS vacíos, se pregunta si registrar la «Fecha Entrega» del PDF como «Fecha de entrega específica». Los valores rellenados aquí quedan pendientes de guardar como el resto del formulario (no se escriben solos en la base de datos). El botón de «Fecha tramitación» pasa a aceptar solo `.eml`/`.msg`, con el mismo estilo de texto explicativo que ya tiene «Nº Pedido (DALI/SAP)».
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Prueba con el PDF real de ejemplo (pedido 16287, `pypdf`): reconoce Fecha Pedido 21/08/2026 y Fecha Entrega 21/09/2026, además de los campos ya verificados en v12.30.42 (Nº Pedido 16287, Total 4.614,60 €).
+
 # v12.30.44 — 28 agosto 2026
 
 ✨ "Comparar listado PDF (SAP)" + Albaranes: rellena sola la Base imp. (€) de CUALQUIER entrada ya registrada a la que le faltaba, no solo la última

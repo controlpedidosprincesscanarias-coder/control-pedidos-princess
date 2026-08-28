@@ -1309,7 +1309,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.44
+          V 12.30.45
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2150,11 +2150,14 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-group">
           <label class="form-label">Fecha tramitación</label>
           <input type="date" class="form-control" id="p-f-tramit" onchange="actualizarFechaEntregaPrevista()">
-          <label class="adj-fecha-btn" id="lbl-tramit-eml" title="Adjuntar correo (.eml/.msg) o PDF de tramitación" style="margin-top:6px">
-            <input type="file" accept=".eml,.msg,.pdf" multiple style="display:none"
+          <label class="adj-fecha-btn" id="lbl-tramit-eml" title="Adjuntar el correo electrónico de envío del pedido al proveedor" style="margin-top:6px">
+            <input type="file" accept=".eml,.msg" style="display:none"
                    onchange="subirAdjuntos(this,'tramit_eml')">
-            📎 Adjuntar correo / PDF
+            📎 Adjuntar correo electrónico
           </label>
+          <div style="font-size:10.5px;color:#888;margin-top:4px">
+            Solo se admite el correo electrónico (.eml/.msg) de envío del pedido al proveedor — ya no se admite PDF en este apartado (el PDF del pedido oficial se adjunta más abajo, en «Nº Pedido (DALI/SAP)», y desde ahí se comprueba solo la fecha de tramitación).
+          </div>
           <div id="adj-tramit-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group">
@@ -4740,6 +4743,7 @@ async function subirAdjuntos(input, tipo) {
           setVal('p-pedido-num', data.pedido_num);
           setVal('p-total-pedido', data.total_pedido != null ? Number(data.total_pedido).toFixed(2) : '');
           toast(`PDF leído — Nº Pedido ${data.pedido_num}, Total ${Number(data.total_pedido).toFixed(2)} €`, 'success');
+          _procesarFechasPdfPedidoOficial(data);
         }
       } else {
         toast(`Error subiendo "${archivo.name}": ${data.error}`, 'error');
@@ -4757,6 +4761,70 @@ async function subirAdjuntos(input, tipo) {
     // el Nº de Pedido y el Total leídos) — evita duplicar aviso aquí.
     if (tipo !== 'pedido_doc') toast(`${subidos} archivo${subidos>1?'s':''} subido${subidos>1?'s':''}`, 'success');
     cargarAdjuntos(pedidoId);
+  }
+}
+
+// (2026-08-28) A petición de Víctor, a partir de dos capturas del PDF
+// oficial (que trae "Fecha Pedido" y "Fecha Entrega" en cabecera): al leer
+// el PDF de "Nº Pedido (DALI/SAP)" se comprueban esas dos fechas contra
+// "Fecha tramitación" y "Fecha de entrega específica" del formulario — a
+// diferencia de Nº Pedido/Total Pedido (que pasan a ser de solo lectura,
+// v12.30.42), estos dos campos SIGUEN siendo editables a mano en
+// cualquier momento, así que aquí solo se propone/pregunta, nunca se
+// sobrescribe en silencio:
+//  - Fecha tramitación: si está vacía, se rellena sola con la "Fecha
+//    Pedido" del PDF (petición literal: "si no se ha introducido fecha
+//    tramitacion, ponemos esta automáticamente"). Si ya tiene un valor y
+//    coincide con el PDF, no se toca. Si ya tiene un valor y DIFIERE, se
+//    pregunta cuál de las dos dejar ("preguntar al usuario cual de las 2
+//    es la correcta").
+//  - Fecha de entrega específica: solo se pregunta si el pedido no tiene
+//    NI Fecha de entrega específica NI Plazo entrega (días) — si falta
+//    cualquiera de las dos, se pregunta si se quiere registrar la "Fecha
+//    Entrega" del PDF; en caso afirmativo se rellena "Fecha de entrega
+//    específica" (nunca el plazo en días, que es un dato distinto).
+// Los valores que se rellenan aquí quedan pendientes de guardar, igual
+// que si el usuario los hubiera escrito a mano — no se escriben en la
+// base de datos hasta pulsar "Guardar" (a diferencia de Nº Pedido/Total,
+// que sí se guardan al momento por ser de solo lectura).
+function _procesarFechasPdfPedidoOficial(data) {
+  const fechaPedidoPdf  = data.fecha_pedido_iso  || null;
+  const fechaEntregaPdf = data.fecha_entrega_iso || null;
+
+  if (fechaPedidoPdf) {
+    const actual = val('p-f-tramit');
+    if (!actual) {
+      setVal('p-f-tramit', fechaPedidoPdf);
+      actualizarFechaEntregaPrevista();
+      toast(`Fecha tramitación rellenada con la Fecha Pedido del PDF (${fmtDate(fechaPedidoPdf)})`, 'success');
+    } else if (actual !== fechaPedidoPdf) {
+      const usarPdf = confirm(
+        `La Fecha tramitación introducida (${fmtDate(actual)}) no coincide con la "Fecha Pedido" del PDF oficial `
+        + `(${fmtDate(fechaPedidoPdf)}).\n\nAceptar → usar la fecha del PDF (${fmtDate(fechaPedidoPdf)})\n`
+        + `Cancelar → mantener la fecha ya introducida (${fmtDate(actual)})`
+      );
+      if (usarPdf) {
+        setVal('p-f-tramit', fechaPedidoPdf);
+        actualizarFechaEntregaPrevista();
+        toast(`Fecha tramitación actualizada con la del PDF (${fmtDate(fechaPedidoPdf)})`, 'success');
+      }
+    }
+  }
+
+  if (fechaEntregaPdf) {
+    const plazo           = val('p-plazo-entrega');
+    const fechaEspecifica = val('p-fecha-entrega-especifica');
+    if (!plazo && !fechaEspecifica) {
+      const registrar = confirm(
+        `El PDF oficial indica una Fecha Entrega de ${fmtDate(fechaEntregaPdf)} y el pedido no tiene fecha de `
+        + `entrega específica ni plazo de entrega registrados.\n\n¿Registrar esa fecha como "Fecha de entrega específica"?`
+      );
+      if (registrar) {
+        setVal('p-fecha-entrega-especifica', fechaEntregaPdf);
+        actualizarFechaEntregaPrevista();
+        toast(`Fecha de entrega específica rellenada con la del PDF (${fmtDate(fechaEntregaPdf)})`, 'success');
+      }
+    }
   }
 }
 

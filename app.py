@@ -13666,11 +13666,28 @@ _PATRON_IMPORTE_LINEA_OFICIAL = re.compile(
     r'(-?\d{1,3}(?:\.\d{3})*,\d{2})\s+'   # Precio
     r'(-?\d{1,3}(?:\.\d{3})*,\d{2})'      # Importe (el que nos interesa sumar)
 )
+# (2026-08-28) A petición de Víctor: además de Nº de Pedido y Total, se lee
+# también "Fecha Pedido" y "Fecha Entrega" del mismo PDF oficial — ver
+# _parsear_pdf_pedido_oficial() y el uso que hace de estos dos campos
+# upload_adjunto() (comprobación/auto-relleno de Fecha tramitación y Fecha
+# de entrega específica). Ambas etiquetas van seguidas directamente de la
+# fecha en el texto extraído ("Fecha Pedido 21/08/2026", "Fecha Entrega
+# 21/09/2026" — confirmado con el PDF real de ejemplo), así que un patrón
+# simple basta; a diferencia del Nº de Pedido y el Total, estos dos campos
+# son opcionales — si no se reconocen, no se rechaza el PDF (solo no hay
+# fecha que proponer).
+_PATRON_FECHA_PEDIDO_OFICIAL = re.compile(r'\bFecha\s+Pedido\s+(\d{2}/\d{2}/\d{4})\b')
+_PATRON_FECHA_ENTREGA_OFICIAL = re.compile(r'\bFecha\s+Entrega\s+(\d{2}/\d{2}/\d{4})\b')
 
 def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
     """
     Lee un PDF de pedido oficial PRINCESS (SAP/DALI) y devuelve
-    {"pedido_num": "16287", "total_pedido": 4614.60}.
+    {"pedido_num": "16287", "total_pedido": 4614.60,
+    "fecha_pedido_iso": "2026-08-21"|None, "fecha_entrega_iso": "2026-09-21"|None}.
+
+    Las dos fechas son opcionales (ver comentario junto a los patrones de
+    arriba) — el Nº de Pedido y el Total siguen siendo los únicos campos
+    que, si faltan, hacen rechazar el PDF entero.
 
     Lanza ValueError con un mensaje pensado para mostrarse tal cual al
     usuario (ver upload_adjunto) si el PDF no se puede leer o no tiene la
@@ -13703,7 +13720,18 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
 
     pedido_num = _normalizar_pedido_num(m_pedido.group(1))
     total_pedido = round(sum(_parse_importe_es(l[2]) for l in lineas_importe), 2)
-    return {"pedido_num": pedido_num, "total_pedido": total_pedido}
+
+    m_fecha_pedido  = _PATRON_FECHA_PEDIDO_OFICIAL.search(texto)
+    m_fecha_entrega = _PATRON_FECHA_ENTREGA_OFICIAL.search(texto)
+    fecha_pedido_iso  = _parsear_fecha_es_a_iso(m_fecha_pedido.group(1))  if m_fecha_pedido  else None
+    fecha_entrega_iso = _parsear_fecha_es_a_iso(m_fecha_entrega.group(1)) if m_fecha_entrega else None
+
+    return {
+        "pedido_num": pedido_num,
+        "total_pedido": total_pedido,
+        "fecha_pedido_iso": fecha_pedido_iso,
+        "fecha_entrega_iso": fecha_entrega_iso,
+    }
 
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
 @login_required
@@ -13812,7 +13840,7 @@ def upload_adjunto(pid):
             if n_docs and n_docs["n"] >= MAX_DOCUMENTOS_POR_APARTADO:
                 return jsonify({"ok": False, "error": f"Máximo {MAX_DOCUMENTOS_POR_APARTADO} documentos en este apartado. Elimine alguno antes de subir uno nuevo."}), 400
 
-    elif tipo in ("vb_eml", "tramit_eml"):
+    elif tipo == "vb_eml":
         # v12.15.0: además del correo .eml/.msg, se acepta un PDF — cubre el
         # caso de que el correo se adjunte impreso/escaneado en PDF en vez
         # del archivo de correo original. Documento y correo son slots
@@ -13841,6 +13869,28 @@ def upload_adjunto(pid):
             )
             if existentes and existentes["n"] >= MAX_CORREOS_POR_APARTADO:
                 return jsonify({"ok": False, "error": f"Ya existe un correo adjunto en este apartado. Máximo {MAX_CORREOS_POR_APARTADO}. Elimínelo antes de subir uno nuevo."}), 400
+
+    elif tipo == "tramit_eml":
+        # (2026-08-28) A petición de Víctor, a partir de dos capturas de
+        # este apartado: deja de admitir PDF — SOLO se admite el correo
+        # electrónico (.eml/.msg) de envío del pedido al proveedor, para no
+        # confundirlo con el PDF del pedido oficial (que tiene su propio
+        # apartado obligatorio, «Nº Pedido (DALI/SAP)», con lectura
+        # automática, ver _parsear_pdf_pedido_oficial). Se mantiene el
+        # límite de un único correo por apartado (MAX_CORREOS_POR_APARTADO)
+        # — ya se aplicaba antes de este cambio, no es nuevo.
+        if mime not in MIME_CORREO:
+            return jsonify({"ok": False, "error": "Solo se acepta el correo electrónico (.eml, .msg) de envío del pedido al proveedor en este apartado"}), 400
+        if mime == "application/octet-stream" and ext not in EXT_CORREO:
+            return jsonify({"ok": False, "error": "Solo se aceptan archivos .eml o .msg"}), 400
+        if len(datos) > MAX_BYTES_CORREO:
+            return jsonify({"ok": False, "error": f"El correo supera el límite de {MAX_BYTES_CORREO // (1024*1024)} MB para este apartado"}), 400
+        existentes = query(
+            "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo=%s AND es_correo",
+            (pid, tipo), one=True
+        )
+        if existentes and existentes["n"] >= MAX_CORREOS_POR_APARTADO:
+            return jsonify({"ok": False, "error": f"Ya existe un correo adjunto en este apartado. Máximo {MAX_CORREOS_POR_APARTADO}. Elimínelo antes de subir uno nuevo."}), 400
 
     else:
         if mime not in MIME_PERMITIDOS:
@@ -13876,6 +13926,16 @@ def upload_adjunto(pid):
         db.commit()
         respuesta["pedido_num"] = _datos_pedido_pdf["pedido_num"]
         respuesta["total_pedido"] = _datos_pedido_pdf["total_pedido"]
+        # (2026-08-28) A petición de Víctor: "Fecha Pedido" y "Fecha
+        # Entrega" del PDF oficial NO se escriben aquí en la base de datos
+        # — a diferencia de pedido_num/total_pedido, «Fecha tramitación» y
+        # «Fecha de entrega específica» siguen siendo campos normales,
+        # editables a mano en cualquier momento, así que la decisión de
+        # usarlas o no (y, si hay conflicto, cuál de las dos fechas dejar)
+        # se hace en el frontend nada más recibir esta respuesta — ver
+        # subirAdjuntos() en templates/index.html (rama 'pedido_doc').
+        respuesta["fecha_pedido_iso"] = _datos_pedido_pdf.get("fecha_pedido_iso")
+        respuesta["fecha_entrega_iso"] = _datos_pedido_pdf.get("fecha_entrega_iso")
     return jsonify(respuesta), 201
 
 
