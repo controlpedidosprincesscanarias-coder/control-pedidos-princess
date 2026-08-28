@@ -22,6 +22,23 @@ SQL_STATEMENTS = [
         activo INTEGER NOT NULL DEFAULT 1
     )
     """,
+    # ── Correo de departamento por hotel (2026-08-28) ───────────────────────────
+    # `departamentos` es un catálogo único y global (mismo nombre en todos los
+    # hoteles) — esta tabla es la única forma de dar a cada hotel un correo
+    # distinto para el mismo departamento (p.ej. RESTAURANTE de JN != RESTAURANTE
+    # de GY). Se usa para poner en copia al departamento solicitante en el
+    # correo interno de cambio de estado de sus pedidos — ver PENDIENTES.md /
+    # enviar_emails_estado() en app.py.
+    """
+    CREATE TABLE IF NOT EXISTS departamento_hotel_email (
+        id              SERIAL PRIMARY KEY,
+        hotel_id        INTEGER NOT NULL REFERENCES hoteles(id) ON DELETE CASCADE,
+        departamento_id INTEGER NOT NULL REFERENCES departamentos(id) ON DELETE CASCADE,
+        email           TEXT,
+        email2          TEXT,
+        UNIQUE (hotel_id, departamento_id)
+    )
+    """,
     # ── Proveedores ───────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS proveedores (
@@ -131,6 +148,23 @@ SQL_STATEMENTS = [
     """,
     "CREATE INDEX IF NOT EXISTS idx_adjuntos_pedido ON pedido_adjuntos(pedido_id)",
     "CREATE INDEX IF NOT EXISTS idx_adjuntos_tipo_correo ON pedido_adjuntos(pedido_id, tipo, es_correo)",
+    # ── Tokens de descarga pública de adjuntos (2026-08-28) ─────────────────────
+    # A petición de Víctor: en vez de adjuntar el PDF del pedido al correo al
+    # proveedor (EmailJS en el plan actual, Free, no admite adjuntos), se
+    # incluye un enlace de descarga temporal — el proveedor no tiene cuenta
+    # en la app, así que hace falta un acceso sin login, protegido por un
+    # token en vez de por sesión. Ver /descargas/adjunto/<token> y
+    # _obtener_o_crear_token_adjunto() en app.py.
+    """
+    CREATE TABLE IF NOT EXISTS adjunto_descarga_tokens (
+        id         SERIAL PRIMARY KEY,
+        adjunto_id INTEGER NOT NULL REFERENCES pedido_adjuntos(id) ON DELETE CASCADE,
+        token      TEXT NOT NULL UNIQUE,
+        expira_en  TIMESTAMPTZ NOT NULL,
+        creado_en  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_adjunto_token ON adjunto_descarga_tokens(token)",
     # ── Historial de estados ──────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS historial_estados (

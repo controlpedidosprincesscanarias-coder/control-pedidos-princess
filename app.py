@@ -214,6 +214,46 @@ def _auto_migrate():
                 )
             except Exception as e:
                 log.warning(f"No se pudo añadir la columna pedidos.total_pedido: {e}")
+            # ── Correo de departamento por hotel (2026-08-28) ────────────────
+            # A petición de Víctor: cada hotel tiene un correo distinto para
+            # el mismo departamento (RESTAURANTE de JN != RESTAURANTE de GY),
+            # así que hace falta esta tabla nueva de relación — ver también
+            # models.py (SQL_STATEMENTS, para instalaciones nuevas desde
+            # cero) y la nota de arriba sobre por qué toda sentencia de
+            # esquema nueva se pone aquí, en el bloque protegido, con su
+            # propio try/except.
+            try:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS departamento_hotel_email (
+                        id              SERIAL PRIMARY KEY,
+                        hotel_id        INTEGER NOT NULL REFERENCES hoteles(id) ON DELETE CASCADE,
+                        departamento_id INTEGER NOT NULL REFERENCES departamentos(id) ON DELETE CASCADE,
+                        email           TEXT,
+                        email2          TEXT,
+                        UNIQUE (hotel_id, departamento_id)
+                    )
+                """)
+            except Exception as e:
+                log.warning(f"No se pudo crear la tabla departamento_hotel_email: {e}")
+            # ── Tokens de descarga pública de adjuntos (2026-08-28) ──────────
+            # A petición de Víctor: enlace de descarga del PDF del pedido en
+            # el correo al proveedor, en vez de adjuntarlo directamente
+            # (EmailJS en el plan Free no admite adjuntos) — ver también
+            # models.py, _obtener_o_crear_token_adjunto() y
+            # /descargas/adjunto/<token> más abajo en este mismo archivo.
+            try:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS adjunto_descarga_tokens (
+                        id         SERIAL PRIMARY KEY,
+                        adjunto_id INTEGER NOT NULL REFERENCES pedido_adjuntos(id) ON DELETE CASCADE,
+                        token      TEXT NOT NULL UNIQUE,
+                        expira_en  TIMESTAMPTZ NOT NULL,
+                        creado_en  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_adjunto_token ON adjunto_descarga_tokens(token)")
+            except Exception as e:
+                log.warning(f"No se pudo crear la tabla adjunto_descarga_tokens: {e}")
             # ══════════════════════════════════════════════════════════════
             # Columnas legacy de proveedores (para DBs antiguas)
             for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT"),
@@ -2028,6 +2068,84 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
         log.warning("emails_pedido_retrasado: no se pudo encolar (%s, pedido %s) — %s",
                     evento_codigo, pedido_id, exc)
 
+
+def _obtener_o_crear_token_adjunto(adjunto_id: int, dias_validez: int = 180) -> str:
+    """
+    (2026-08-28) Devuelve un token de descarga pública para este adjunto
+    (ver /descargas/adjunto/<token> y la tabla adjunto_descarga_tokens),
+    reutilizando uno todavía vigente si ya existe, o creando uno nuevo si
+    no hay ninguno o el último ya caducó. Pensado para el enlace de
+    descarga del PDF del pedido en el correo al proveedor — ver
+    _enlaces_descarga_pedido_doc().
+
+    No hay invalidación manual desde la app: un enlace ya enviado sigue
+    funcionando hasta expira_en (180 días por defecto) aunque se genere
+    uno nuevo después para otro envío del mismo adjunto.
+    """
+    fila = row_to_dict(query(
+        "SELECT token FROM adjunto_descarga_tokens WHERE adjunto_id=%s AND expira_en > NOW() "
+        "ORDER BY creado_en DESC LIMIT 1",
+        (adjunto_id,), one=True
+    ))
+    if fila:
+        return fila["token"]
+    token = secrets.token_urlsafe(32)
+    expira = datetime.now(timezone.utc) + timedelta(days=dias_validez)
+    try:
+        db = get_db()
+        db.cursor().execute(
+            "INSERT INTO adjunto_descarga_tokens (adjunto_id, token, expira_en) VALUES (%s,%s,%s)",
+            (adjunto_id, token, expira)
+        )
+        db.commit()
+    except Exception as e:
+        log.warning(f"No se pudo crear token de descarga para adjunto {adjunto_id}: {e}")
+        return None
+    return token
+
+
+def _enlaces_descarga_pedido_doc(pedido_id: int) -> list:
+    """
+    (2026-08-28) A petición de Víctor: en el correo "ENVIADO AL
+    PROVEEDOR", en vez de adjuntar directamente el PDF del pedido (el que
+    se sube en "Nº Pedido (DALI/SAP)" → "Adjuntar doc. / correo" —
+    EmailJS en el plan actual, Free, no admite adjuntos, ver conversación
+    del 28/08), se incluye un enlace de descarga temporal (ver
+    /descargas/adjunto/<token>).
+
+    Solo se enlazan los documentos realmente PDF (tipo 'pedido_doc' o el
+    legacy 'pedido_pdf') que NO sean copias de correo (es_correo=TRUE son
+    los .eml/.msg subidos como evidencia interna, no documentos a
+    reenviar al proveedor). Si el pedido no tiene ningún PDF subido ahí,
+    devuelve una lista vacía — el correo se sigue enviando igual, sin
+    ningún enlace, nunca se bloquea por esto.
+
+    El filtro de mime_type acepta tanto 'application/pdf' como
+    'application/octet-stream' con nombre terminado en «.pdf»: en el
+    apartado «pedido_doc» se admite subir un PDF cuyo navegador informe el
+    mime genérico application/octet-stream (ver validación en
+    upload_adjunto/MIME_SOLICITUD_DOC), y ese mismo valor es el que queda
+    guardado tal cual en mime_type — sin este segundo caso se perderían
+    enlaces de PDF genuinos subidos así.
+    """
+    filas = rows_to_list(query(
+        """SELECT id, nombre FROM pedido_adjuntos
+           WHERE pedido_id=%s AND tipo IN ('pedido_doc','pedido_pdf')
+             AND NOT es_correo
+             AND (mime_type='application/pdf'
+                  OR (mime_type='application/octet-stream' AND nombre ILIKE '%%.pdf'))
+           ORDER BY creado_en""",
+        (pedido_id,)
+    )) or []
+    app_url = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
+    enlaces = []
+    for f in filas:
+        token = _obtener_o_crear_token_adjunto(f["id"])
+        if token:
+            enlaces.append({"nombre": f["nombre"], "url": f"{app_url}/descargas/adjunto/{token}"})
+    return enlaces
+
+
 def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str = None,
                           usuario_nombre: str = "", usuario_id: int = None,
                           es_automatico: bool = False):
@@ -2139,6 +2257,26 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     if _emails_actor:
         _todos_internos = [e for e in _todos_internos if e not in _emails_actor]
 
+    # (2026-08-28) Copia al departamento solicitante del pedido — a petición
+    # de Víctor (ver PENDIENTES.md): cada hotel puede tener registrado un
+    # correo distinto para el mismo departamento (Administrador →
+    # Departamentos, tabla departamento_hotel_email). Se añade en el mismo
+    # correo con copia a todos, nunca aparte — y se omite en silencio, sin
+    # avisos, si ese departamento de ese hotel todavía no tiene correo
+    # configurado (comportamiento seguro por defecto, igual que el resto de
+    # esta función cuando falta algún destinatario). No se excluye aunque
+    # coincida con quien hizo el cambio: es el buzón de un departamento, no
+    # una persona concreta a la que no haga falta avisar de lo que acaba de
+    # hacer.
+    if pedido.get("hotel_id") and pedido.get("departamento_id"):
+        _depto_email_row = row_to_dict(query(
+            "SELECT email, email2 FROM departamento_hotel_email WHERE hotel_id=%s AND departamento_id=%s",
+            (pedido["hotel_id"], pedido["departamento_id"]), one=True
+        ))
+        for _e in _emails_usuario(_depto_email_row):
+            if _e not in _todos_internos:
+                _todos_internos.append(_e)
+
     # ── Correo al proveedor (solo ENVIADO AL PROVEEDOR) ───────────────────────
     # Para:  todos los contactos principales del proveedor
     # BCC:   ninguno — el correo interno de más abajo (ESTADOS_EMAIL_INTERNO)
@@ -2170,6 +2308,29 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             )
             _nota_igic_prov_html = _nota_base_imponible_html() if _total_pedido_prov is not None else ''
             _nota_igic_prov_text = ("\n" + _nota_base_imponible_text() + "\n") if _total_pedido_prov is not None else ''
+            # (2026-08-28) A petición de Víctor: en vez de adjuntar el PDF del
+            # pedido al correo (EmailJS, plan Free, no admite adjuntos — ver
+            # conversación del 28/08), se incluye un enlace de descarga
+            # temporal del documento (ver _enlaces_descarga_pedido_doc /
+            # /descargas/adjunto/<token>). Si el pedido no tiene ningún PDF
+            # subido en "Nº Pedido (DALI/SAP)" todavía, no se añade nada — el
+            # correo se envía igual, sin bloquear por esto.
+            _enlaces_doc_prov = _enlaces_descarga_pedido_doc(pedido_id)
+            _bloque_doc_html = ""
+            if _enlaces_doc_prov:
+                _botones_doc = "".join(
+                    f'<p style="margin:6px 0"><a href="{e["url"]}" '
+                    f'style="display:inline-block;background:#1a3c6e;color:#fff;text-decoration:none;'
+                    f'padding:9px 18px;border-radius:5px;font-size:13px;font-weight:700">'
+                    f'📄 Descargar {e["nombre"]}</a></p>'
+                    for e in _enlaces_doc_prov
+                )
+                _bloque_doc_html = f'<div style="margin:18px 0">{_botones_doc}</div>'
+            _bloque_doc_text = ""
+            if _enlaces_doc_prov:
+                _bloque_doc_text = "\n" + "\n".join(
+                    f"Documento del pedido ({e['nombre']}): {e['url']}" for e in _enlaces_doc_prov
+                ) + "\n"
             body_html = f"""
             <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
               {_email_header_html("Princess Hotels &amp; Resorts", "Dpto. Central de Compras Princess en Canarias",
@@ -2190,6 +2351,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                   <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}{_fila_total_pedido_html}
                 </p>
                 {_nota_igic_prov_html}
+                {_bloque_doc_html}
                 <p>
                   Para confirmar la recepción del pedido y facilitar la fecha estimada de entrega, por favor responda
                   a la dirección de correo que figura en la firma de este mensaje:
@@ -2214,7 +2376,8 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 f"Hotel: {pedido.get('hotel_nombre','—')}\n"
                 f"Departamento: {pedido.get('departamento_nombre','—')}\n"
                 f"{_linea_total_pedido_text}"
-                f"{_nota_igic_prov_text}\n"
+                f"{_nota_igic_prov_text}"
+                f"{_bloque_doc_text}\n"
                 f"Para confirmar la recepción del pedido y facilitar la fecha estimada de entrega, por favor responda\n"
                 f"a la dirección de correo que figura en la firma de este mensaje: {_email_comprador_firma}\n\n"
                 f"Quedamos a su disposición para cualquier consulta.\n\n"
@@ -13538,9 +13701,22 @@ def upload_adjunto(pid):
     return jsonify({"ok": True, "id": adjunto_id}), 201
 
 
-@app.route("/api/adjuntos/<int:aid>", methods=["GET"])
-@login_required
-def download_adjunto(aid):
+def _servir_adjunto_response(aid: int):
+    """
+    Construye la respuesta Flask que sirve el contenido de un adjunto de
+    pedido — misma lógica de ETag/caché y de origen transparente (base de
+    datos o Supabase Storage, ver _storage_descargar) que usaba
+    exclusivamente download_adjunto() hasta ahora. Extraída a helper
+    (2026-08-28) para poder reutilizarla también desde el enlace público
+    de descarga por token (ver descargar_adjunto_publico más abajo), que
+    no requiere sesión — el resto del comportamiento es idéntico.
+
+    Devuelve la Response (o el tuple (jsonify(...), 404/502) de error) tal
+    cual debe devolverla la vista Flask que llama a esta función. Devuelve
+    None solo cuando el adjunto no existe — cada caller decide cómo
+    responder ese caso (404 JSON para la vista con sesión, texto plano
+    para el enlace público).
+    """
     from flask import Response
 
     # ── Fix egress (Jul 2026, parte 2) ──────────────────────────────────
@@ -13565,7 +13741,7 @@ def download_adjunto(aid):
 
     row = query("SELECT nombre, mime_type, datos, es_correo, storage_path FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
     if not row:
-        return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
+        return None
     # Los correos (.eml/.msg) se sirven como attachment para que el SO
     # los abra con el gestor de correo predeterminado.
     # El resto (PDF, imagenes, Word) se sirven inline para previsualizacion.
@@ -13589,6 +13765,48 @@ def download_adjunto(aid):
     )
     resp.headers["Cache-Control"] = "private, max-age=31536000, immutable"
     resp.headers["ETag"] = etag
+    return resp
+
+
+@app.route("/api/adjuntos/<int:aid>", methods=["GET"])
+@login_required
+def download_adjunto(aid):
+    resp = _servir_adjunto_response(aid)
+    if resp is None:
+        return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
+    return resp
+
+
+@app.route("/descargas/adjunto/<token>", methods=["GET"])
+def descargar_adjunto_publico(token):
+    """
+    Descarga pública (SIN login) de un único adjunto de pedido, mediante
+    un token temporal — ver adjunto_descarga_tokens / _obtener_o_crear_
+    token_adjunto(). Pensado para el enlace que se incluye en el correo
+    "ENVIADO AL PROVEEDOR" (ver enviar_emails_estado) con el PDF del
+    pedido, ya que el proveedor no tiene cuenta en la app y EmailJS (plan
+    Free actual) no admite adjuntar el archivo directamente al correo —
+    a petición de Víctor, 2026-08-28: "se me ocurre si en vez de adjuntar
+    el archivo se ponga un enlace para descargar de Supabase pulsando en
+    él".
+
+    El token da acceso ÚNICAMENTE al archivo con el que se generó — nunca
+    a ningún otro adjunto ni a ninguna otra parte de la app — y deja de
+    funcionar solo al caducar (por defecto 180 días desde que se generó,
+    ver _obtener_o_crear_token_adjunto). No hay revocación manual: si
+    hiciera falta invalidar un enlace ya enviado, basta con borrar la fila
+    correspondiente de adjunto_descarga_tokens en Supabase.
+    """
+    fila = row_to_dict(query(
+        "SELECT adjunto_id FROM adjunto_descarga_tokens WHERE token=%s AND expira_en > NOW()",
+        (token,), one=True
+    ))
+    if not fila:
+        return ("Este enlace de descarga no es válido o ha caducado. "
+                "Póngase en contacto con Princess Hotels & Resorts para solicitar el documento de nuevo."), 404
+    resp = _servir_adjunto_response(fila["adjunto_id"])
+    if resp is None:
+        return "El documento ya no está disponible.", 404
     return resp
 
 
@@ -15032,6 +15250,112 @@ def api_resolver_config_avisos():
             return jsonify({"ok": False, "error": "hotel_id debe ser numérico"}), 400
     destinatarios = _resolver_notificacion(evento_codigo, canal, hotel_id=hotel_id)
     return jsonify({"ok": True, "evento": evento_codigo, "canal": canal, "hotel_id": hotel_id, "destinatarios": destinatarios})
+
+
+# ── API Admin: correo de departamento por hotel (2026-08-28) ────────────────
+# Ver PENDIENTES.md / _auto_migrate() (tabla departamento_hotel_email) /
+# enviar_emails_estado() (uso real, correo interno de cambio de estado).
+# `departamentos` es un catálogo único y global — esta pantalla es la
+# primera administración que tiene ("Departamentos" no existía como vista
+# hasta ahora), así que el GET también sirve para listar el catálogo en sí.
+
+@app.route("/api/admin/departamentos-email", methods=["GET"])
+@admin_required
+def api_get_departamentos_email():
+    """
+    GET /api/admin/departamentos-email?hotel_id=<id>
+    Devuelve el catálogo de departamentos y, para el hotel indicado (o el
+    primer hotel activo si no se indica), el correo (o dos) ya registrado
+    para cada uno — igual patrón que GET /api/admin/config-avisos.
+    """
+    try:
+        departamentos = rows_to_list(query(
+            "SELECT id, nombre FROM departamentos WHERE activo=1 ORDER BY nombre"
+        )) or []
+        hoteles = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
+        )) or []
+
+        hotel_id = None
+        hotel_param = (request.args.get("hotel_id") or "").strip()
+        if hotel_param:
+            try:
+                hotel_id = int(hotel_param)
+            except ValueError:
+                hotel_id = None
+        if hotel_id is None and hoteles:
+            hotel_id = hoteles[0]["id"]  # selección por defecto: el primer hotel activo
+
+        config = {}
+        if hotel_id is not None:
+            filas = rows_to_list(query(
+                "SELECT departamento_id, email, email2 FROM departamento_hotel_email WHERE hotel_id=%s",
+                (hotel_id,)
+            )) or []
+            for f in filas:
+                config[str(f["departamento_id"])] = {"email": f["email"] or "", "email2": f["email2"] or ""}
+
+        return jsonify({
+            "ok": True, "departamentos": departamentos, "hoteles": hoteles,
+            "config": config, "hotel_id": hotel_id,
+        })
+    except Exception as exc:
+        log.error("[DEPTO-EMAIL] Error GET: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/departamentos-email", methods=["PUT"])
+@admin_required
+def api_save_departamentos_email():
+    """
+    Guarda los correos de departamento de UN hotel de una vez (toda la
+    tabla de esa pantalla, igual que el resto de pantallas de
+    administración de esta app).
+    Body: {"hotel_id": 9, "filas": [{"departamento_id": 3, "email": "...",
+                                      "email2": "..."}, ...]}
+    Una fila con email y email2 vacíos borra el registro (vuelve a "sin
+    correo configurado" para ese departamento en ese hotel) en vez de
+    dejar una fila vacía.
+    """
+    data = request.get_json() or {}
+    hotel_id = data.get("hotel_id")
+    filas    = data.get("filas") or []
+    if not hotel_id:
+        return jsonify({"ok": False, "error": "Falta hotel_id"}), 400
+    try:
+        hotel_id = int(hotel_id)
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "hotel_id debe ser numérico"}), 400
+    try:
+        db  = get_db()
+        cur = db.cursor()
+        actualizados = 0
+        for f in filas:
+            depto_id = f.get("departamento_id")
+            if not depto_id:
+                continue
+            email  = (f.get("email") or "").strip()
+            email2 = (f.get("email2") or "").strip()
+            if not email and not email2:
+                cur.execute(
+                    "DELETE FROM departamento_hotel_email WHERE hotel_id=%s AND departamento_id=%s",
+                    (hotel_id, depto_id)
+                )
+            else:
+                cur.execute(
+                    """INSERT INTO departamento_hotel_email (hotel_id, departamento_id, email, email2)
+                       VALUES (%s,%s,%s,%s)
+                       ON CONFLICT (hotel_id, departamento_id)
+                       DO UPDATE SET email=EXCLUDED.email, email2=EXCLUDED.email2""",
+                    (hotel_id, depto_id, email or None, email2 or None)
+                )
+            actualizados += 1
+        db.commit()
+        log.info("[DEPTO-EMAIL] Hotel %s — %d departamento(s) actualizados por admin", hotel_id, actualizados)
+        return jsonify({"ok": True, "actualizados": actualizados})
+    except Exception as exc:
+        log.error("[DEPTO-EMAIL] Error PUT: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
 
 # ─────────────────────────────────────────────────────────────────────────

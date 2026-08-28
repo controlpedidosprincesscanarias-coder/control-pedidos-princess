@@ -1,3 +1,43 @@
+# v12.30.40 — 28 agosto 2026
+
+✨ Correo "ENVIADO AL PROVEEDOR": enlace de descarga del PDF del pedido en vez de adjuntarlo (EmailJS en el plan Free no admite adjuntos)
+
+**Contexto — petición previa de Víctor** (a partir de dos capturas del campo "Nº Pedido (DALI/SAP)" con un PDF adjunto): "es posible adjuntar PDF en el envío de correos con emailjs? la idea es que cuando el cambio de estado sea a ENVIADO AL PROVEEDOR, se adjunte el PDF del pedido que tenemos en el apartado Nº PEDIDO (DALI/SAP)". Se investigó la vía de adjuntar el archivo con EmailJS: es técnicamente posible, pero solo en los planes de pago (Personal 9€/mes hasta 500KB, Professional 15€/mes hasta 2MB, Business 40€/mes hasta 30MB) — la cuenta actual está en el plan Free, que no admite adjuntos en absoluto, y el propio límite de subida de la app (20MB) podría superar incluso el tope del plan Business.
+
+**Petición de Víctor** (alternativa, tras conocer esas limitaciones): "se me ocurre si en vez de adjuntar el archivo se ponga un enlace para descargar de Supabase pulsando en él".
+
+**Cambio en `models.py` / `app.py` (`_auto_migrate`)**: nueva tabla `adjunto_descarga_tokens` (`adjunto_id` → `pedido_adjuntos.id`, `token` único, `expira_en`, `creado_en`) — un token por archivo, válido 180 días, reutilizable (no de un solo uso) hasta que caduque. Añadida en el bloque protegido de `_auto_migrate()`, con su propio `try/except`, y en `models.py` justo después de `pedido_adjuntos` (de la que depende por clave foránea).
+
+**Cambio en `app.py` (nuevas funciones)**: `_obtener_o_crear_token_adjunto(adjunto_id)` genera (o reutiliza si sigue vigente) el token de un adjunto. `_enlaces_descarga_pedido_doc(pedido_id)` localiza el/los PDF subidos en "Nº Pedido (DALI/SAP)" (tipo `pedido_doc` o el legacy `pedido_pdf`, excluyendo los `.eml/.msg` de evidencia interna) y devuelve sus enlaces de descarga; si no hay ningún PDF en ese apartado, devuelve una lista vacía y el correo se envía igual, sin enlace — nunca se bloquea el envío por esto. El filtro de PDF acepta tanto `mime_type='application/pdf'` como `application/octet-stream` con nombre terminado en ".pdf", porque la validación de subida de "pedido_doc" permite ese mime genérico para un PDF real cuando el navegador no lo identifica correctamente, y ese es el valor que queda grabado tal cual.
+
+**Cambio en `app.py` (`enviar_emails_estado`)**: en el correo "Correo al proveedor" (el que se envía al cambiar el estado a ENVIADO AL PROVEEDOR), se añade un botón de descarga por cada PDF encontrado en "Nº Pedido (DALI/SAP)", justo después de la nota de IGIC. Sin PDF, el correo sale exactamente igual que hasta ahora, sin ninguna sección de más.
+
+**Cambio en `app.py` (descarga pública sin login)**: la lógica de servir un adjunto (ETag/caché, origen transparente en base de datos o Supabase Storage) se extrae del endpoint existente `/api/adjuntos/<id>` a un helper compartido, `_servir_adjunto_response()`. Nuevo endpoint público `GET /descargas/adjunto/<token>` (sin `@login_required`, pensado para que lo abra el proveedor desde el correo) que valida el token contra `adjunto_descarga_tokens` y, si es válido y no ha caducado, sirve exactamente el mismo archivo con el mismo helper. El token da acceso únicamente al archivo con el que se generó, nunca a ningún otro adjunto ni a ninguna otra parte de la app. No hay revocación manual desde la app: si hiciera falta invalidar un enlace ya enviado, basta con borrar la fila correspondiente en Supabase.
+
+**Sin coste adicional ni cambio de plan de EmailJS** — esta vía sustituye por completo a la idea de adjuntar el archivo directamente.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. No se ha tocado `templates/index.html` (cambio íntegramente de backend), por lo que no aplica `node --check` más allá de la comprobación habitual del badge.
+
+# v12.30.39 — 28 agosto 2026
+
+✨ Nuevo apartado "Departamentos" (solo admin): correo por hotel para cada departamento, en copia en el correo interno de cambio de estado de sus pedidos
+
+**Petición de Víctor** (registrada primero en `PENDIENTES.md` el 28/08, implementada hoy tras confirmar el diseño): "apartado para registrar los correos electrónicos de los diferentes departamentos que tenemos registrados al uso en el apartado departamento de pedidos; tener en cuenta que cada hotel tiene sus correos diferenciados entre departamentos y hoteles; la idea es que los correos internos de cambio de estado de los pedidos que ahora se envían al rol hotel y compradores, se envíen con copia al departamento solicitante del pedido, ejemplo, pedido JN restaurante, se debe enviar el correo interno al comprador JN al rol hotel JN y al correo del departamento restaurante del JN, mismo correo con copia a todos."
+
+**Decisiones de diseño confirmadas con Víctor** antes de implementar: la nueva pantalla es un apartado propio en el sidebar ("Departamentos", solo admin — `departamentos` no tenía ninguna pantalla de administración hasta ahora); la copia solo se añade al correo electrónico (Telegram y popup, sin cambios); si un departamento de un hotel concreto no tiene correo registrado, el correo se envía igual a rol hotel y compradores, simplemente sin copia — sin ningún aviso adicional.
+
+**Cambio en `models.py` / `app.py` (`_auto_migrate`)**: nueva tabla `departamento_hotel_email` (`hotel_id`, `departamento_id`, `email`, `email2`, único por hotel+departamento) — necesaria porque `departamentos` es un catálogo único y global (mismo "RESTAURANTE" en todos los hoteles); esta tabla es la que permite que cada hotel tenga su propio correo para el mismo departamento. Añadida en el bloque protegido de `_auto_migrate()`, con su propio `try/except`, siguiendo la misma regla que ya obligó a mover `total_pedido` y `sujeto_seguimiento` ahí.
+
+**Cambio en `app.py` (endpoints)**: `GET /api/admin/departamentos-email?hotel_id=<id>` (catálogo de departamentos + correos ya registrados para ese hotel) y `PUT /api/admin/departamentos-email` (guarda de una vez todos los departamentos de un hotel; una fila con los dos correos vacíos borra el registro). Ambos `@admin_required`, mismo patrón que `/api/admin/config-avisos`.
+
+**Cambio en `app.py` (`enviar_emails_estado`)**: tras construir la lista de destinatarios internos (comprador + rol hotel, con la exclusión de quien hizo el cambio si no es automático), se añade el correo del departamento del pedido para su hotel, si existe — en el mismo correo, con copia a todos, nunca aparte. No se excluye aunque coincida con el email de quien hizo el cambio (es un buzón de departamento, no una persona). Se omite en silencio si no hay correo registrado.
+
+**Cambio en `templates/index.html`**: nuevo apartado "📧 Departamentos" en el sidebar (solo admin, junto a "Familias artículos") con selector de hotel y una tabla editable (Departamento / Correo / Correo 2) que se guarda de una vez con "💾 Guardar cambios" — mismo patrón visual que "Config. Avisos".
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Prueba aislada en Python de `_emails_usuario()` con los casos relevantes (sin fila, con los dos correos, con uno solo, con ambos vacíos) — todos correctos.
+
+**Retirado de `PENDIENTES.md`** al quedar implementado — ver esta entrada y `docs/HISTORIAL_CAMBIOS.md` para el detalle.
+
 # v12.30.38 — 28 agosto 2026
 
 🐛 El popup de "familia de artículos repetida" (y el de techo mensual) podía llegar cada pocos minutos, sin parar, en vez de una vez al día

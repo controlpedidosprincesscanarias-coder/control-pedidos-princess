@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.38** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.40** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -78,6 +78,11 @@ Vistas disponibles en el sidebar (algunas restringidas por rol):
   General) cuando un pedido supera el límite.
 - **Familias de artículos** — categorías usadas para agrupar pedidos y
   aplicar límites de techo por familia.
+- **Departamentos** — solo admin (2026-08-28): correo de contacto por
+  hotel para cada departamento (el mismo departamento puede tener un
+  correo distinto en cada hotel). El correo interno de cambio de estado
+  de un pedido se envía con copia al correo del departamento que lo
+  solicitó, si está registrado aquí.
 - **Usuarios** — alta/edición de usuarios, roles y asignación de
   hoteles.
 - **Integridad** — comprobaciones de consistencia de datos.

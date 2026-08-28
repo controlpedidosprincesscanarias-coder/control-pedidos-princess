@@ -25,6 +25,25 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] Correo "ENVIADO AL PROVEEDOR": enlace de descarga del PDF del pedido en vez de adjuntarlo (v12.30.40)
+
+- Víctor preguntó primero si se podía adjuntar el PDF del pedido (el de "Nº Pedido DALI/SAP") con EmailJS al pasar a ENVIADO AL PROVEEDOR — se investigó y se confirmó que solo es posible en planes de pago de EmailJS (la cuenta actual está en el plan Free, sin adjuntos) y que el propio límite de subida de la app (20MB) podría superar incluso el tope del plan más caro.
+- Víctor, alternativa: "se me ocurre si en vez de adjuntar el archivo se ponga un enlace para descargar de Supabase pulsando en él".
+- **Cambio en `models.py`/`app.py`**: nueva tabla `adjunto_descarga_tokens` (token por adjunto, 180 días de validez, reutilizable), en el bloque protegido de `_auto_migrate()`.
+- **Cambio en `app.py`**: `_obtener_o_crear_token_adjunto()`/`_enlaces_descarga_pedido_doc()` generan el/los enlaces del PDF de "Nº Pedido (DALI/SAP)"; `enviar_emails_estado()` los añade como botón en el correo al proveedor (sin PDF subido, el correo sale igual, sin enlace). Lógica de servir un adjunto extraída a `_servir_adjunto_response()`, reutilizada por el endpoint existente (`/api/adjuntos/<id>`, con sesión) y por el nuevo endpoint público `GET /descargas/adjunto/<token>` (sin login, para el proveedor).
+- Sin coste adicional ni cambio de plan de EmailJS — sustituye por completo la idea de adjuntar el archivo.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Cambio íntegramente de backend, `templates/index.html` no tocado salvo el badge de versión.
+
+## 2026-08-28 — [Control Pedidos] Nuevo apartado "Departamentos" (solo admin): correo por hotel, en copia en el correo interno de cambio de estado (v12.30.39)
+
+- Víctor (registrado antes en `PENDIENTES.md`): correos internos de cambio de estado con copia también al departamento solicitante del pedido — cada hotel tiene su propio correo para el mismo departamento (ej. RESTAURANTE de JN ≠ RESTAURANTE de GY).
+- Confirmado con Víctor: pantalla propia en el sidebar (solo admin), solo correo (sin Telegram/popup), y sin correo registrado = se omite en silencio.
+- **Cambio en `models.py`/`app.py`**: nueva tabla `departamento_hotel_email` (hotel+departamento → email/email2), en el bloque protegido de `_auto_migrate()`.
+- **Cambio en `app.py`**: `GET`/`PUT /api/admin/departamentos-email` (admin); `enviar_emails_estado()` añade el correo del departamento del pedido a la lista de copia, si existe.
+- **Cambio en `templates/index.html`**: apartado "📧 Departamentos" — selector de hotel + tabla editable, guardado en bloque.
+- Retirado de `PENDIENTES.md`.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Prueba aislada de `_emails_usuario()`.
+
 ## 2026-08-28 — [Control Pedidos] El popup de "familia repetida"/techo mensual podía repetirse cada pocos minutos sin parar (v12.30.38)
 
 - Víctor: "la alerta en popup al comprador cuando se tiene duplicada la familia en techo de gastos ¿por qué se recibe cada pocos minutos continuamente?"
