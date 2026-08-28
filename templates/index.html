@@ -1309,7 +1309,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.42
+          V 12.30.43
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2248,7 +2248,7 @@ tbody tr:last-child{border-bottom:none}
           <div id="albaran-col-headers" style="display:none;padding:0 4px 4px 26px;display:flex;gap:6px;align-items:center">
             <span style="flex:1;min-width:120px;font-size:11px;font-weight:600;color:#888">Nº Entrada DALI / SAP</span>
             <span style="width:140px;flex-shrink:0;font-size:11px;font-weight:600;color:#888">Fecha de entrada</span>
-            <span style="width:110px;flex-shrink:0;font-size:11px;font-weight:600;color:#888" title="Base imponible del albarán — siempre la del albarán, opcional, se rellena sola al comparar el listado PDF de SAP">Base imp. (€)</span>
+            <span style="width:110px;flex-shrink:0;font-size:11px;font-weight:600;color:#888" title="Base imponible del albarán — siempre la del albarán, obligatoria (parcial o final); se rellena sola al comparar el listado PDF de SAP, o puedes escribirla a mano">Base imp. (€) *</span>
           </div>
           <!-- Lista dinámica de entradas DALI / SAP -->
           <div id="albaran-list" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -4830,6 +4830,42 @@ function getAlbaranCombined() {
   return getAlbaranValues().join(' | ');
 }
 
+// (2026-08-28) A petición de Víctor: la Base imp. (€) de cada entrada de
+// «Nº Entrada DALI / SAP» deja de ser opcional — obligatoria tanto en una
+// entrada parcial como en la entrada marcada como final (total), para
+// poder continuar. Recorre las filas con Nº de entrada relleno (las vacías
+// no cuentan, se descartan igual que en getAlbaranValues) y comprueba que
+// todas tengan una base imponible > 0. Si falta alguna, muestra el aviso,
+// resalta y enfoca la primera casilla que falta, y devuelve false — el
+// caller (savePedido, tanto en modo Hotel como el resto de roles) debe
+// abortar el guardado en ese caso.
+function _validarBaseImponibleAlbaran() {
+  const filasIncompletas = [];
+  document.querySelectorAll('#albaran-list .albaran-row').forEach(row => {
+    const numInput = row.querySelector('.albaran-input');
+    const impInput = row.querySelector('.albaran-base-imponible');
+    const num = numInput ? numInput.value.trim() : '';
+    if (!num) return; // fila vacía sin Nº de entrada, no es una entrada real
+    const imp = impInput ? parseFloat(impInput.value) : NaN;
+    if (!imp || imp <= 0) filasIncompletas.push(impInput);
+  });
+  if (filasIncompletas.length) {
+    showFormAlert(
+      'La Base imp. (€) es obligatoria en cada entrada de «Nº Entrada DALI / SAP» — tanto en una entrada '
+      + 'parcial como en la entrada final (total) — para poder continuar.',
+      { title: '⚠️ Falta la base imponible', duracion: 8000 }
+    );
+    const primero = filasIncompletas[0];
+    if (primero) {
+      primero.style.borderColor = '#dc3545';
+      primero.focus();
+      primero.addEventListener('input', () => primero.style.borderColor = '', { once: true });
+    }
+    return false;
+  }
+  return true;
+}
+
 // Renderiza la lista desde un array de strings "NUM::FECHA" o "NUM"
 function renderAlbaranList(valores, editable) {
   const list    = document.getElementById('albaran-list');
@@ -4877,15 +4913,17 @@ function _makeAlbaranRow(num, fecha, editable, idx, baseImponible) {
   inputFecha.style.cssText = 'width:140px;flex-shrink:0;' + (!editable ? 'background:var(--surface2,#f4f5f7);' : '');
   if (!editable) inputFecha.disabled = true;
 
-  // Input base imponible del albarán — opcional, se puede escribir a mano
-  // o se rellena sola al comparar el listado PDF de SAP (ver
-  // "Comparar listado PDF (SAP)" y _comparar_listado_pdf_logica en app.py).
+  // Input base imponible del albarán — (2026-08-28) obligatoria, tanto en
+  // una entrada parcial como en la final (ver _validarBaseImponibleAlbaran
+  // más abajo); se puede escribir a mano o se rellena sola al comparar el
+  // listado PDF de SAP (ver "Comparar listado PDF (SAP)" y
+  // _comparar_listado_pdf_logica en app.py).
   const inputBaseImp = document.createElement('input');
   inputBaseImp.type = 'number';
   inputBaseImp.min = '0';
   inputBaseImp.step = '0.01';
-  inputBaseImp.placeholder = 'Base imp. (€)';
-  inputBaseImp.title = 'Base imponible de este albarán (opcional) — se rellena sola al comparar el listado PDF de SAP si no la escribes a mano';
+  inputBaseImp.placeholder = 'Base imp. (€) *';
+  inputBaseImp.title = 'Base imponible de este albarán — obligatoria (parcial o final); se rellena sola al comparar el listado PDF de SAP, o puedes escribirla a mano';
   inputBaseImp.className = 'form-control albaran-base-imponible';
   inputBaseImp.value = (baseImponible !== undefined && baseImponible !== null) ? baseImponible : '';
   inputBaseImp.readOnly = !editable;
@@ -5263,6 +5301,7 @@ async function savePedido() {
     if (estadoNuevo === 'CANCELADO') {
       showFormAlert('No tienes permiso para cancelar pedidos', { title: '🚫 Acción no permitida' }); return;
     }
+    if ((estadoNuevo === 'ENTREGA PARCIAL' || estadoNuevo === 'ENTREGADO') && !_validarBaseImponibleAlbaran()) return;
     const body = {
       entrada_albaran_num: getAlbaranCombined(),
       estado: estadoNuevo,
@@ -5355,6 +5394,11 @@ async function savePedido() {
     }
   }
   // ── Fin validación ENVIADO AL PROVEEDOR ──────────────────────────────────────
+
+  // ── Validación: Base imp. (€) obligatoria en cada entrada de «Nº Entrada
+  //    DALI / SAP» (parcial o final) — ver _validarBaseImponibleAlbaran() ──
+  if ((_estadoNuevoValidar === 'ENTREGA PARCIAL' || _estadoNuevoValidar === 'ENTREGADO')
+      && !_validarBaseImponibleAlbaran()) return;
 
   const sujetoTecho = document.getElementById('p-sujeto-techo').checked;
   const familiaId   = sujetoTecho ? (val('p-familia') || null) : null;

@@ -25,6 +25,13 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] "Nº Entrada DALI/SAP": la Base imp. (€) de cada entrada pasa a ser obligatoria (parcial o final) (v12.30.43)
+
+- Víctor: "vamos a poner que el total sin igic sea obligatorio para continuar, tanto en parcial como en total" (a partir de una captura de una entrada sin base imponible rellena).
+- **Cambio en `app.py`**: nueva `_validar_base_imponible_entradas()` — exige base imponible > 0 en TODAS las entradas (también las antiguas ya guardadas, no solo la nueva). Aplicada en `update_pedido()` al guardar en ENTREGA PARCIAL o ENTREGADO, tanto en la rama de rol Hotel como en la general — 422 con mensaje claro si falta alguna.
+- **Cambio en `templates/index.html`**: `_validarBaseImponibleAlbaran()` valida antes de guardar (ambos flujos), resalta la primera casilla vacía; placeholder/título del campo actualizados a obligatorio.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Prueba aislada de `_validar_base_imponible_entradas()` con 7 casos (sin entradas, con/sin importe, importe 0, varias entradas mixtas) — todos correctos.
+
 ## 2026-08-28 — [Control Pedidos] "Nº Pedido (DALI/SAP)" solo admite el PDF oficial PRINCESS — Nº Pedido y Total Pedido se leen solos, ya no editables (v12.30.42)
 
 - Víctor: solo se debe poder cargar el PDF de pedido oficial PRINCESS (SAP/DALI, formato fijo) en ese apartado; al subirlo, rellenar solo "Nº Pedido" (del "PEDIDO 00016287" del PDF) y "Total Pedido" (suma de la columna Importe, NO el "Total Pedido..." del PDF, que no incluye descuentos); ambas celdas dejan de ser editables a mano; bloquear el paso a ENVIADO AL PROVEEDOR sin el PDF correcto, con mensaje didáctico; quitar la anotación "opcional" del Total Pedido.

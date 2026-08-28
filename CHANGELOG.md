@@ -1,3 +1,17 @@
+# v12.30.43 — 28 agosto 2026
+
+🐛 "Nº Entrada DALI/SAP": la Base imp. (€) de cada entrada pasa a ser obligatoria (parcial o final)
+
+**Petición de Víctor**, a partir de una captura de una entrada de "Nº Entrada DALI / SAP" sin base imponible rellena: "vamos a poner que el total sin igic sea obligatorio para continuar, tanto en parcial como en total".
+
+**Cambio en `app.py` (`_validar_base_imponible_entradas`, nueva)**: comprueba que TODAS las entradas de la lista (no solo la que se acaba de añadir) tengan una base imponible > 0 — se aplica sobre toda la lista para que un pedido con alguna entrada antigua sin rellenar (de antes de este cambio) no se pueda seguir editando sin completarla también.
+
+**Cambio en `app.py` (`update_pedido`)**: la validación se aplica cada vez que se guarda un pedido con estado ENTREGA PARCIAL o ENTREGADO, tanto en la rama de rol Hotel (que es la que gestiona normalmente esta sección) como en la rama general — si falta alguna base imponible, se rechaza con 422 y el mensaje "La Base imp. (€) es obligatoria en cada entrada de «Nº Entrada DALI / SAP» — tanto en una entrada parcial como en la entrada final (total) — para poder continuar."
+
+**Cambio en `templates/index.html`**: nueva función `_validarBaseImponibleAlbaran()`, llamada antes de guardar (en ambos flujos de guardado, Hotel y el resto de roles) cuando el estado es ENTREGA PARCIAL o ENTREGADO — si falta alguna, muestra el aviso y resalta la primera casilla vacía, sin llegar a enviar la petición. Placeholder y título del campo actualizados ("Base imp. (€) *") para reflejar que ya no es opcional.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Prueba aislada en Python de `_validar_base_imponible_entradas()`: sin entradas (válido), una entrada con importe (válido), entrada sin importe / solo número / importe 0 (inválidas), dos entradas con una sin rellenar (inválido) — todos los casos correctos.
+
 # v12.30.42 — 28 agosto 2026
 
 ✨ "Nº Pedido (DALI/SAP)": solo admite el PDF del pedido oficial PRINCESS — Nº de Pedido y Total Pedido se leen solos y dejan de ser editables

@@ -1832,6 +1832,24 @@ def _construir_entrada_albaran_num(entradas):
     return ' | '.join(partes)
 
 
+def _validar_base_imponible_entradas(entradas: list) -> bool:
+    """
+    (2026-08-28) A petición de Víctor: la Base imp. (€) de cada entrada de
+    "Nº Entrada DALI / SAP" deja de ser opcional — obligatoria tanto en una
+    entrada parcial como en la entrada marcada como final (total), para
+    poder continuar. Se aplica sobre TODA la lista de entradas cada vez que
+    se guarda un pedido en ENTREGA PARCIAL o ENTREGADO (ver update_pedido,
+    tanto en la rama de rol Hotel como en la general) — no solo a la
+    entrada nueva —, para que un pedido con alguna entrada antigua sin base
+    imponible (de antes de este cambio) no se pueda seguir editando sin
+    completarla también. Lista vacía = válida (nada que exigir todavía).
+    """
+    return all(
+        (e.get("base_imponible") is not None and e["base_imponible"] > 0)
+        for e in entradas
+    )
+
+
 def _fecha_es(fecha_val):
     """Convierte una fecha 'YYYY-MM-DD' (o similar) en 'DD/MM/YYYY'. None si no hay valor."""
     if not fecha_val:
@@ -11707,6 +11725,14 @@ def update_pedido(pid):
         estado_solicitado = data.get("estado", pedido_actual["estado"])
         if estado_solicitado == "CANCELADO":
             return jsonify({"error": "El usuario Hotel no puede cancelar pedidos"}), 403
+        # (2026-08-28) Base imp. (€) obligatoria en cada entrada — ver
+        # _validar_base_imponible_entradas().
+        if estado_solicitado in ("ENTREGA PARCIAL", "ENTREGADO") and not _validar_base_imponible_entradas(_parse_albaran_entries(albaran_val)):
+            return jsonify({
+                "ok": False,
+                "error": "La Base imp. (€) es obligatoria en cada entrada de «Nº Entrada DALI / SAP» — tanto "
+                         "en una entrada parcial como en la entrada final (total) — para poder continuar."
+            }), 422
         execute("""
             UPDATE pedidos SET
                 entrada_albaran_num=%s, estado=%s,
@@ -11905,6 +11931,17 @@ def update_pedido(pid):
                         (_nota_usuario_techo + " — " if _nota_usuario_techo else "") + _nota_sistema_techo
                     )
     # ── Fin validación ENVIADO AL PROVEEDOR ──────────────────────────────────
+
+    # ── Validación: Base imp. (€) obligatoria en cada entrada de «Nº Entrada
+    #    DALI / SAP» (parcial o final) — ver _validar_base_imponible_entradas() ──
+    if estado_nuevo in ("ENTREGA PARCIAL", "ENTREGADO"):
+        _albaran_val_validar = data.get("entrada_albaran_num", pedido_actual["entrada_albaran_num"])
+        if not _validar_base_imponible_entradas(_parse_albaran_entries(_albaran_val_validar)):
+            return jsonify({
+                "ok": False,
+                "error": "La Base imp. (€) es obligatoria en cada entrada de «Nº Entrada DALI / SAP» — tanto "
+                         "en una entrada parcial como en la entrada final (total) — para poder continuar."
+            }), 422
 
     ESTADOS_SIN_TRAMITAR = {
         "PENDIENTE FIRMA DIRECCION COMPRAS",
