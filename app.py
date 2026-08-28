@@ -2263,7 +2263,23 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _total_pedido_txt = f"{_fmt_importe_es(pedido.get('total_pedido'))} €" if pedido.get('total_pedido') is not None else '—'
         _fecha_tram_txt = _fecha_es(pedido.get('fecha_tramitacion')) or '—'
         _dias_txt       = f" ({_dias_transcurridos} día(s) desde tramitación)" if _dias_transcurridos is not None else ''
-        _usuario_txt    = (usuario_nombre or '').strip()
+        # (2026-08-28) A petición de Víctor: cuando el cambio es automático
+        # (es_automatico=True — decidido por _aplicar_coincidencia_albaran()
+        # al confirmar una coincidencia de "Comparar Pedidos + Albaranes",
+        # nunca por una persona en ese momento concreto), "Realizado por" NO
+        # debe mostrar el nombre de quien tenía la sesión abierta cuando se
+        # disparó la comparación/confirmación — induce a pensar que esa
+        # persona ha tramitado el pedido a mano, cuando en realidad lo ha
+        # decidido el cruce automático de listados. Se sustituye por una
+        # etiqueta de sistema con fecha y hora del cierre.
+        if es_automatico:
+            import pytz
+            _usuario_txt = (
+                "Cierre automático — comparación de listados "
+                f"({datetime.now(pytz.timezone('Atlantic/Canary')).strftime('%d/%m/%Y %H:%M')})"
+            )
+        else:
+            _usuario_txt = (usuario_nombre or '').strip()
 
         _ICONO_ESTADO = {
             "ENVIADO AL PROVEEDOR":            "📤",
@@ -3001,7 +3017,8 @@ def _calcular_info_alerta(pedido: dict, estado_nuevo: str,
 
 def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str,
                              usuario_nombre: str = "",
-                             es_cambio_manual: bool = True) -> None:
+                             es_cambio_manual: bool = True,
+                             es_automatico: bool = False) -> None:
     """
     Envía Telegram inmediato en cambio de estado (PUT /api/pedidos/<pid>),
     alineado con la misma lógica que el correo interno (enviar_emails_estado):
@@ -3073,7 +3090,17 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
         if pedido.get("importe") is not None:
             lineas.append(f"Importe: {pedido.get('importe'):.2f} €")
         lineas.append(f"Estado: {estado_antes or '—'}  →  *{estado_nuevo}*")
-        if usuario_nombre:
+        # (2026-08-28) Mismo criterio que "Realizado por" en el correo
+        # interno (enviar_emails_estado) — si el cambio lo ha decidido el
+        # cruce automático de listados, no mostrar el nombre de quien tenía
+        # la sesión abierta en ese momento.
+        if es_automatico:
+            import pytz
+            lineas.append(
+                "Modificado por: Cierre automático — comparación de listados "
+                f"({datetime.now(pytz.timezone('Atlantic/Canary')).strftime('%d/%m/%Y %H:%M')})"
+            )
+        elif usuario_nombre:
             lineas.append(f"Modificado por: {usuario_nombre}")
         _intro_tg = _ICONO_ESTADO.get(estado_nuevo)
         if _intro_tg:
@@ -3208,7 +3235,8 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
                                        es_automatico=es_automatico)
     _telegram_cambio_estado(db, pedido_id, estado_nuevo, estado_antes,
                              usuario_nombre=usuario_nombre,
-                             es_cambio_manual=True)
+                             es_cambio_manual=True,
+                             es_automatico=es_automatico)
     return pendientes
 
 

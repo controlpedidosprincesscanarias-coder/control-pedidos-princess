@@ -25,6 +25,14 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] El correo/Telegram de cambio de estado automático ya no muestra el nombre de quien tenía la sesión abierta (v12.30.37)
+
+- Víctor, a partir de dos correos reales: "Si es automático no indicar el nombre del administrador, se indica cierre automático comparación listados fecha hora" — y de paso preguntó por qué una entrega no tenía base imponible.
+- **Causa**: `enviar_emails_estado()` / `_telegram_cambio_estado()` mostraban siempre `usuario_nombre` (quien tenía la sesión abierta) en "Realizado por"/"Modificado por", sin distinguir un cambio manual de uno decidido por el cruce automático (`_aplicar_coincidencia_albaran()`, `es_automatico=True`) — y ese flag ni siquiera llegaba hasta Telegram.
+- **Cambio en `app.py`**: con `es_automatico=True`, ambos canales muestran "Cierre automático — comparación de listados (fecha hora)" en vez del nombre. Cambios manuales, sin cambios.
+- **Sobre la base imponible que faltaba**: no era un bug — esos correos son de entradas registradas antes del 27/08 (antes de que existiera la celda "Base imp."). Se autocompletará en la próxima comparación tras desplegar v12.30.36 (entregada justo antes, ver abajo).
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+
 ## 2026-08-28 — [Control Pedidos] "Comparar Pedidos + Albaranes": la base imponible de coincidencias ya al día se rellena sola, sin esperar a "Aplicar" (v12.30.36)
 
 - Víctor: "vale si esta información ya está cruzada y es correcta ¿porqué no la automatizamos también junto a la que ya tenemos automatizada?" — tras explicarle en v12.30.35 qué hace "Aplicar todas las seleccionadas" y qué queda pendiente cuando una fila ya está en el estado correcto.

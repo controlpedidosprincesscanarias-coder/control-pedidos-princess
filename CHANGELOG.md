@@ -1,3 +1,17 @@
+# v12.30.37 — 28 agosto 2026
+
+🐛 El correo (y Telegram) de cambio de estado automático mostraba el nombre de quien tenía la sesión abierta en "Realizado por", como si hubiera tramitado el pedido a mano
+
+**Petición/reporte de Víctor**, a partir de dos correos reales de "Aviso interno" (ENTREGA PARCIAL pedido 41025 y ENTREGADO pedido 27812): "Si es automático no indicar el nombre del administrador, se indica cierre automático comparación listados fecha hora, o algo por el estilo".
+
+**Causa**: `enviar_emails_estado()` construye la fila "Realizado por" siempre a partir de `usuario_nombre` — el nombre de quien tenía la sesión abierta cuando se disparó el cambio —, sin distinguir si el cambio lo decidió una persona en ese momento (cambio manual desde la ficha del pedido) o si lo decidió el cruce automático de "Comparar Pedidos + Albaranes" (`_aplicar_coincidencia_albaran()`, que llama con `es_automatico=True`, pero hasta ahora ese parámetro solo se usaba para decidir a quién EXCLUIR de los destinatarios, no para cambiar el contenido de esa fila). El mismo problema existía en el aviso de Telegram/popup (`_telegram_cambio_estado()`, fila "Modificado por"), que ni siquiera recibía `es_automatico`.
+
+**Cambio en `app.py`**: cuando `es_automatico=True`, tanto el correo interno ("Realizado por") como Telegram/popup ("Modificado por") muestran ahora "Cierre automático — comparación de listados (DD/MM/AAAA HH:MM)" (hora Atlantic/Canary, momento del envío) en vez del nombre de la persona. `_notificar_cambio_estado()` propaga `es_automatico` también a `_telegram_cambio_estado()` (antes se perdía en ese punto). Sin cambios en cambios manuales: se sigue mostrando el nombre de quien lo ha hecho, como siempre.
+
+**Sobre "ENTREGA PARCIAL no tiene la base imponible" (mismo mensaje de Víctor)**: revisado — no es un fallo del código actual. Las fechas de tramitación de esos dos correos (19/08 y 04/08/2026) son anteriores al 27 de agosto, cuando se introdujo la celda "Base imp. (€)" (v12.30.31) — esas entradas de albarán se registraron antes de que existiera ese campo, así que nunca se guardó. Es exactamente el hueco que ya cierra v12.30.36 (entregado hoy mismo, un poco antes): en cuanto Víctor despliegue esa versión y vuelva a ejecutar "Comparar listado PDF (SAP)" con esos mismos pedidos todavía presentes en el PDF de SAP, sus bases imponibles se rellenarán solas, sin ninguna acción manual. No se ha reenviado ni se puede reenviar el correo ya entregado — pero el registro del pedido en la app sí quedará correcto para cualquier consulta o aviso posterior.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Prueba manual del fragmento nuevo con `pytz` instalado (rama automática y rama manual) — ambas devuelven el texto esperado. No se ha tocado `templates/index.html` en este cambio (es íntegramente de backend), por lo que no aplica `node --check` más allá de la comprobación habitual del badge.
+
 # v12.30.36 — 28 agosto 2026
 
 ✨ "Comparar Pedidos + Albaranes": la base imponible de coincidencias ya al día (sin nada más pendiente) se rellena sola, sin esperar a que se pulse "Aplicar"
