@@ -9143,21 +9143,32 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
     qué coincidencias aplicar — decisión de diseño explícita: revisar y
     confirmar antes de aplicar, nunca automático al comparar.
 
-    ÚNICA EXCEPCIÓN (2026-08-28, a petición de Víctor, mismo criterio que
-    ya se aplica en _comparar_listado_pdf_logica() con total_pedido/base
-    imponible de la última entrada): cuando una coincidencia ya está
-    completamente al día (sin_cambios_pendientes=True — el pedido ya
-    tiene ese albarán registrado, ya está en el estado objetivo y ya
-    tiene fecha de tramitación), esa fila queda excluida tanto de la
-    tabla visible como de "Aplicar todas las seleccionadas" y del
-    auto-aplicar de confirmación, así que _aplicar_coincidencia_albaran()
-    nunca llega a ejecutarse para ella — y si a esa entrada de albarán ya
-    registrada le faltaba la base imponible, nunca se habría rellenado.
-    Por eso, solo para esas filas y solo el campo base imponible (nunca
-    fecha_tramitacion, nunca entrada nueva, nunca estado — esos siempre
-    requieren confirmación explícita), se rellena aquí de forma
-    silenciosa e idempotente, igual que el resto de excepciones de solo
-    información.
+    RELLENO AUTOMÁTICO DE BASE IMPONIBLE EN ENTRADAS YA REGISTRADAS
+    (2026-08-28, a petición de Víctor, ampliado el mismo día — ver
+    CHANGELOG v12.30.44): igual que _comparar_listado_pdf_logica() rellena
+    sola la base imponible de la ÚLTIMA entrada de un pedido a partir del
+    importe acumulado de SAP, aquí se hace un barrido de TODAS las
+    entradas (parciales o totales) de TODOS los pedidos dados de alta de
+    este hotel — no solo las que forman parte de alguna "coincidencia"
+    propuesta arriba — buscando las que ya tienen un número de entrada
+    (Nº Entrada DALI/SAP) pero les falta la base imponible. Petición
+    literal: "cuando estas entradas parciales o totales ya estan
+    registradas pero no se relleno la celda total sin igic, la
+    aplicacion deberia comprobar si tiene o no valor esta celda y
+    rellenarla en caso de que este vacia". Para cada una de esas
+    entradas, si su número normalizado coincide con el de un albarán del
+    "Listado de Albaranes" (PDF 2) recién subido, se rellena con el
+    importe de ese albarán — solo ese campo (nunca el número de entrada,
+    la fecha ni el estado, que siempre requieren confirmación explícita
+    vía _aplicar_coincidencia_albaran()) y solo si estaba vacío, nunca se
+    sobrescribe un valor ya introducido. Si el número de registro
+    aparece más de una vez en el PDF 2 (caso raro, duplicado), esa fila
+    se salta por seguridad — ante la duda, no se inventa. Esto sustituye
+    y amplía la excepción anterior (limitada a las coincidencias ya "sin
+    cambios pendientes"), que quedaba corta: una entrada antigua de un
+    pedido que no aparece entre las coincidencias del PDF 1 recién
+    subido (p. ej. porque SAP ya no lo lista como pendiente, o es de una
+    entrega parcial anterior) tampoco se tocaba antes, y ahora sí.
 
     Devuelve dict con: coincidencias, pendientes_ambiguos,
     pendientes_sin_albaran (pedido Entregado/Parcial en SAP sin albarán
@@ -9312,13 +9323,6 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
     pendientes_sin_albaran = []
     pendientes_sin_pedido  = []
 
-    # (2026-08-28) Ver nota "ÚNICA EXCEPCIÓN" en el docstring de esta
-    # función — base imponible que se rellena sola solo para
-    # coincidencias sin_cambios_pendientes=True (nunca alcanzables por
-    # _aplicar_coincidencia_albaran(), porque esas filas están excluidas
-    # de toda vía de aplicación, manual o automática).
-    _base_imponible_albaranes_actualizados = []
-
     for clave in set(grupo1) | set(grupo2):
         lado1 = grupo1.get(clave, [])
         lado2 = grupo2.get(clave, [])
@@ -9376,26 +9380,6 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
                 "sin_cambios_pendientes":     ya_registrado and _sin_cambio_estado
                                                and p1["fecha_tramitacion_actual"],
             })
-
-            # (2026-08-28) Ver nota "ÚNICA EXCEPCIÓN" en el docstring —
-            # mismo criterio que sin_cambios_pendientes de arriba: si ya
-            # no queda NADA por aplicar en esta coincidencia (registrado,
-            # mismo estado, con fecha de tramitación), pero la entrada de
-            # albarán ya registrada no tiene base imponible guardada, se
-            # rellena aquí sola porque _aplicar_coincidencia_albaran()
-            # nunca se va a llamar para esta fila.
-            if (ya_registrado and _sin_cambio_estado and p1["fecha_tramitacion_actual"]
-                    and clave[1] is not None):
-                _cambiado_base_imponible = False
-                for _e in _entradas_p1:
-                    if (_normalizar_num_albaran(_e["num"]) == _reg_dali_norm
-                            and _e.get("base_imponible") is None):
-                        _e["base_imponible"] = round(float(clave[1]), 2)
-                        _cambiado_base_imponible = True
-                if _cambiado_base_imponible:
-                    _base_imponible_albaranes_actualizados.append((
-                        p1["pedido_id"], _construir_entrada_albaran_num(_entradas_p1)
-                    ))
         elif len(lado1) == 1 and len(lado2) == 0:
             pendientes_sin_albaran.append(lado1[0])
         elif len(lado1) == 0 and len(lado2) == 1:
@@ -9408,6 +9392,44 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
                 "pedidos":          lado1,
                 "albaranes":        lado2,
             })
+
+    # ── Relleno automático de Base imp. (€) en entradas ya registradas ──────
+    # (2026-08-28) Ver nota en el docstring de esta función ("RELLENO
+    # AUTOMÁTICO DE BASE IMPONIBLE EN ENTRADAS YA REGISTRADAS"). Barrido
+    # de TODAS las entradas de TODOS los pedidos de este hotel (no solo
+    # los que aparecen en `coincidencias` de arriba): si una entrada ya
+    # tiene número (Nº Entrada DALI/SAP) pero le falta la base imponible,
+    # y ese número coincide con un albarán del PDF 2 recién subido, se
+    # rellena con el importe de ese albarán. Un número de registro
+    # duplicado en el PDF 2 se descarta por seguridad (no se puede saber
+    # cuál de los dos importes es el correcto).
+    _pdf2_por_registro = {}
+    _pdf2_registro_ambiguo = set()
+    for _c2 in candidatos_pdf2:
+        _rn2 = _normalizar_num_albaran(_c2["registro_dali"])
+        if _rn2 in _pdf2_por_registro:
+            _pdf2_registro_ambiguo.add(_rn2)
+        else:
+            _pdf2_por_registro[_rn2] = _c2
+
+    _base_imponible_albaranes_actualizados = []
+    for _p in pedidos_app:
+        _entradas_pedido = _parse_albaran_entries(_p.get("entrada_albaran_num"))
+        if not _entradas_pedido:
+            continue
+        _cambiado_base_imponible = False
+        for _e in _entradas_pedido:
+            if _e.get("base_imponible") is not None or not _e.get("num"):
+                continue
+            _rn = _normalizar_num_albaran(_e["num"])
+            if _rn in _pdf2_registro_ambiguo or _rn not in _pdf2_por_registro:
+                continue
+            _e["base_imponible"] = round(float(_pdf2_por_registro[_rn]["importe"]), 2)
+            _cambiado_base_imponible = True
+        if _cambiado_base_imponible:
+            _base_imponible_albaranes_actualizados.append((
+                _p["id"], _construir_entrada_albaran_num(_entradas_pedido)
+            ))
 
     # (2026-08-19) NOTA sobre "pendientes_sin_pedido" y su
     # "posible_pedido_hint" — dos intentos:
@@ -9483,8 +9505,9 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
     # _comparar_listado_pdf_logica() sobre el mismo PDF 1 (relee y
     # reanaliza el mismo texto ya leído arriba — coste asumible, es un
     # job en segundo plano) para no duplicar esa lógica.
-    # Escritura de la base imponible silenciosa — ver nota "ÚNICA
-    # EXCEPCIÓN" en el docstring. Importante: esto se escribe ANTES de
+    # Escritura de la base imponible silenciosa — ver nota "RELLENO
+    # AUTOMÁTICO DE BASE IMPONIBLE EN ENTRADAS YA REGISTRADAS" en el
+    # docstring. Importante: esto se escribe ANTES de
     # llamar a _comparar_listado_pdf_logica() (justo debajo), porque esa
     # función vuelve a leer los pedidos de la BD desde cero — así, si
     # ambos mecanismos tocan la base imponible de la MISMA entrada (la

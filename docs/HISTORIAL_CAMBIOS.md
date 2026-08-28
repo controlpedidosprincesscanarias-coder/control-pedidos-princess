@@ -25,6 +25,14 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] "Comparar listado PDF (SAP)" + Albaranes: rellena sola la Base imp. (€) de CUALQUIER entrada ya registrada a la que le faltaba, no solo la última (v12.30.44)
+
+- Víctor, a partir de dos capturas del modal "Comparar listado PDF (SAP)": "cuando realizamos la comparativa de listados y se localizan pedidos introducidos y entradas parciales o totales, el sistema modifica el estado automáticamente e introduce los totales sin igic, cuando estas entradas parciales o totales ya estan registradas pero no se rellenó la celda total sin igic, la aplicacion deberia comprobar si tiene o no valor esta celda y rellenarla en caso de que este vacia".
+- **Hueco detectado**: los dos mecanismos de auto-relleno existentes eran demasiado estrechos — `_comparar_listado_pdf_logica()` solo recalcula la ÚLTIMA entrada de cada pedido, y la excepción de `_comparar_listado_albaranes_logica()` (v12.30.36) solo rellenaba la entrada del ÚNICO albarán emparejado en esa comparación. Una entrada antigua no-última, fuera de las coincidencias propuestas, nunca se tocaba aunque su número SÍ apareciera en el "Listado de Albaranes" recién subido.
+- **Cambio en `app.py` (`_comparar_listado_albaranes_logica`)**: la excepción anterior se sustituye por un barrido general — recorre TODAS las entradas de TODOS los pedidos ya dados de alta de este hotel y rellena la Base imp. (€) de cualquiera que tenga número de entrada pero le falte el importe, si ese número coincide (normalizado) con un albarán del PDF 2 recién subido. Nunca sobrescribe un valor ya introducido ni toca número/fecha/estado. Un número duplicado en el PDF 2 se descarta por seguridad. Solo aplica cuando se compara CON el listado de Albaranes (PDF 2) — la comparación de un solo PDF sigue igual (sin ese detalle por albarán no se puede resolver).
+- **Cambio en `templates/index.html`**: texto del aviso "💾 N base imponible actualizada(s) sola(s)" actualizado ("entradas ya registradas") para reflejar el alcance ampliado.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Prueba aislada del barrido con varios casos (entrada no-última rellenada, entrada ya rellena intacta, sin coincidencia, registro duplicado descartado, varios pedidos a la vez, entrada legacy sin fecha) — todos correctos.
+
 ## 2026-08-28 — [Control Pedidos] "Nº Entrada DALI/SAP": la Base imp. (€) de cada entrada pasa a ser obligatoria (parcial o final) (v12.30.43)
 
 - Víctor: "vamos a poner que el total sin igic sea obligatorio para continuar, tanto en parcial como en total" (a partir de una captura de una entrada sin base imponible rellena).
