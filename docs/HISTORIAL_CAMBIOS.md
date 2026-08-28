@@ -25,6 +25,20 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] Correo interno "ENVIADO AL PROVEEDOR": explica la superación del techo de gastos y la autorización de Dirección General cuando aplica (v12.30.50)
+
+- Víctor: quiere que, cuando el pedido enviado había pasado por autorización de Dirección General (exceso de techo), el propio correo interno de cambio de estado lo explique — totales, familia, motivo de la superación, quién y cuándo lo autorizó — y llegue igual a todos los destinatarios ya definidos.
+- **Cambio en `app.py` (`enviar_emails_estado`)**: reutiliza la detección de v12.30.49 (`ENVIADO AL PROVEEDOR` desde `PENDIENTE Vº Bº DIRECCIÓN GENERAL`) para consultar el expediente de exceso aprobado y construir un aviso destacado con familia, motivo, disponible/importe/exceso en el momento de la solicitud, y quién/cuándo lo autorizó — insertado al principio del mismo correo interno de siempre, sin cambiar la lista de destinatarios.
+- **Verificación**: `python3 -m py_compile app.py models.py` sin errores. Prueba aislada de la construcción del bloque (4 casos) — todos correctos.
+
+## 2026-08-28 — [Control Pedidos] "Notificaciones adicionales": nueva columna para poner en copia solo en envíos que superaron el techo de gastos y pasaron por autorización DG (v12.30.49)
+
+- Víctor: quiere que sea opcional (como las otras columnas) poner un contacto en copia específicamente cuando el pedido enviado había superado el techo de gastos y tuvo que pasar por autorización de Dirección General.
+- **Cambio en `app.py`**: nuevo pseudo-estado `ESTADO_NOTIF_EXCESO_TECHO_DG` (no es un estado real de pedido), sexta columna independiente de las 5 de `ESTADOS_EMAIL_INTERNO` — compatible con "ENVIADO AL PROVEEDOR" (las dos reglas se pueden marcar a la vez, sin excluirse).
+- **Cambio en `app.py` (`enviar_emails_estado`)**: se detecta el envío tras exceso autorizado comprobando `estado_nuevo="ENVIADO AL PROVEEDOR"` + `estado_antes="PENDIENTE Vº Bº DIRECCIÓN GENERAL"` — la única transición que produce `aprobar_expediente()`.
+- **Cambio en `templates/index.html`**: sexta columna en la matriz, con fondo amarillo y tooltip explicativo para distinguirla de las columnas de estado real.
+- **Verificación**: `python3 -m py_compile app.py models.py` y `node --check` sin errores. Prueba aislada de la lógica de selección de reglas (7 casos) y de la validación de estados aceptados (6 casos) — todos correctos.
+
 ## 2026-08-28 — [Control Pedidos] Auditoría completa: "Necesita atención" del Dashboard (y 2 sitios más) mostraban el Nº interno en vez del Nº Pedido DALI/SAP (v12.30.48)
 
 - Víctor, con capturas del Dashboard ("Pedido 702 lleva 46 días..."): sigue viendo el Nº lineal interno en avisos/comunicaciones en vez del Nº Pedido DALI/SAP — pide revisar TODOS los apartados (Pedidos, Alertas, Dashboard, Techo de Gastos, etc.) para zanjarlo.

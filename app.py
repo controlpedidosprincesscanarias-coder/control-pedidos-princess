@@ -2351,13 +2351,27 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     # silencio si no hay ninguna regla que aplique — nunca bloquea el
     # envío. No se excluye aunque coincida con quien hizo el cambio (son
     # buzones/roles, no la persona concreta que acaba de actuar).
+    #
+    # (2026-08-28, ampliado el mismo día) A petición de Víctor: además de
+    # la regla normal por `estado_nuevo`, si este envío en concreto viene
+    # de superar el techo de gastos del mes y pasar por autorización de
+    # Dirección General, también se consulta la regla especial
+    # ESTADO_NOTIF_EXCESO_TECHO_DG — independiente de si ese mismo
+    # contacto también está marcado para "ENVIADO AL PROVEEDOR" (el envío
+    # normal, sin exceso): ambas reglas son compatibles y se acumulan, sin
+    # duplicar destinatarios. Ver aprobar_expediente(), único sitio que
+    # produce exactamente esta transición de estado.
     if pedido.get("departamento_id"):
+        _estados_regla_buscar = [estado_nuevo]
+        if estado_nuevo == "ENVIADO AL PROVEEDOR" and estado_antes == "PENDIENTE Vº Bº DIRECCIÓN GENERAL":
+            _estados_regla_buscar.append(ESTADO_NOTIF_EXCESO_TECHO_DG)
+        _ph_estados = ",".join(["%s"] * len(_estados_regla_buscar))
         _contactos_regla = rows_to_list(query(
-            """SELECT DISTINCT nc.email, nc.email2
+            f"""SELECT DISTINCT nc.email, nc.email2
                FROM notificacion_contacto_reglas ncr
                JOIN notificacion_contactos nc ON nc.id = ncr.contacto_id
-               WHERE ncr.departamento_id=%s AND ncr.estado=%s AND nc.activo=1""",
-            (pedido["departamento_id"], estado_nuevo)
+               WHERE ncr.departamento_id=%s AND ncr.estado IN ({_ph_estados}) AND nc.activo=1""",
+            (pedido["departamento_id"], *_estados_regla_buscar)
         )) or []
         for _c in _contactos_regla:
             for _e in _emails_usuario(_c):
@@ -2513,6 +2527,73 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _total_pedido_txt = f"{_fmt_importe_es(pedido.get('total_pedido'))} €" if pedido.get('total_pedido') is not None else '—'
         _fecha_tram_txt = _fecha_es(pedido.get('fecha_tramitacion')) or '—'
         _dias_txt       = f" ({_dias_transcurridos} día(s) desde tramitación)" if _dias_transcurridos is not None else ''
+
+        # (2026-08-28, ampliado el mismo día) A petición de Víctor: cuando
+        # este envío al proveedor viene de superar el techo de gastos del
+        # mes y pasar por autorización de Dirección General (misma
+        # transición exacta que detecta ESTADO_NOTIF_EXCESO_TECHO_DG más
+        # abajo: estado_nuevo="ENVIADO AL PROVEEDOR" con
+        # estado_antes="PENDIENTE Vº Bº DIRECCIÓN GENERAL"), el propio
+        # correo interno de cambio de estado debe explicarlo con claridad
+        # — familia, importe, disponible y exceso en el momento de la
+        # solicitud, motivo concreto de la superación y quién/cuándo lo
+        # autorizó — a TODOS los destinatarios ya definidos de este correo
+        # (_todos_internos), sin excepción: es información relevante para
+        # todos ellos, no solo para quien lo solicitó.
+        _aviso_exceso_html = ""
+        _aviso_exceso_text = ""
+        if estado_nuevo == "ENVIADO AL PROVEEDOR" and estado_antes == "PENDIENTE Vº Bº DIRECCIÓN GENERAL":
+            _exp = row_to_dict(query(
+                """SELECT e.*, f.nombre AS familia_nombre, ur.nombre AS usuario_resuelve_nombre
+                   FROM expediente_exceso e
+                   LEFT JOIN familias f  ON e.familia_id         = f.id
+                   LEFT JOIN usuarios ur ON e.usuario_resuelve_id = ur.id
+                   WHERE e.pedido_id=%s AND e.resultado='aprobado'
+                   ORDER BY e.fecha_resolucion DESC NULLS LAST, e.creado_en DESC LIMIT 1""",
+                (pedido_id,), one=True
+            ))
+            if _exp:
+                _fam_exceso_txt   = _exp.get("familia_nombre") or "sin especificar"
+                _motivo_exceso_txt = (_exp.get("motivo_solicitud") or "").strip() or "Supera el techo de gastos configurado."
+                _disponible_txt  = f"{_fmt_importe_es(_exp.get('disponible_en_solicitud'))} €" if _exp.get('disponible_en_solicitud') is not None else '—'
+                _importe_exp_txt = f"{_fmt_importe_es(_exp.get('importe_pedido'))} €" if _exp.get('importe_pedido') is not None else '—'
+                _exceso_txt      = f"{_fmt_importe_es(_exp.get('exceso'))} €" if _exp.get('exceso') is not None else '—'
+                _resuelve_txt    = _exp.get("usuario_resuelve_nombre") or "Dirección General"
+                _fecha_resol_txt = _fecha_es(_exp.get("fecha_resolucion")) or '—'
+                _obs_dg          = (_exp.get("observaciones_direccion_general") or "").strip()
+
+                _fila_obs_dg_html = f'<tr><td style="padding:3px 6px;color:#7a5b00"><b>Nota de Dirección General</b></td><td style="padding:3px 6px;color:#7a5b00">{_obs_dg}</td></tr>' if _obs_dg else ''
+                _aviso_exceso_html = f"""
+                <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:14px 16px;margin:16px 0">
+                  <p style="margin:0 0 8px;color:#7a5b00;font-size:13px">
+                    📉 <strong>Este pedido superó el techo de gastos mensual del hotel</strong> y ha tenido que pasar
+                    por autorización de Dirección General antes de poder tramitarse y enviarse al proveedor.
+                  </p>
+                  <table style="width:100%;border-collapse:collapse;font-size:12.5px">
+                    <tr><td style="padding:3px 6px;color:#7a5b00"><b>Familia</b></td><td style="padding:3px 6px;color:#7a5b00">{_fam_exceso_txt}</td></tr>
+                    <tr><td style="padding:3px 6px;color:#7a5b00"><b>Motivo de la superación</b></td><td style="padding:3px 6px;color:#7a5b00">{_motivo_exceso_txt}</td></tr>
+                    <tr><td style="padding:3px 6px;color:#7a5b00"><b>Disponible en el momento de la solicitud</b></td><td style="padding:3px 6px;color:#7a5b00">{_disponible_txt}</td></tr>
+                    <tr><td style="padding:3px 6px;color:#7a5b00"><b>Importe de este pedido</b></td><td style="padding:3px 6px;color:#7a5b00">{_importe_exp_txt}</td></tr>
+                    <tr><td style="padding:3px 6px;color:#7a5b00"><b>Exceso sobre el techo</b></td><td style="padding:3px 6px;color:#b91c1c;font-weight:700">{_exceso_txt}</td></tr>
+                    <tr><td style="padding:3px 6px;color:#7a5b00"><b>Autorizado por</b></td><td style="padding:3px 6px;color:#7a5b00">{_resuelve_txt} — {_fecha_resol_txt}</td></tr>
+                    {_fila_obs_dg_html}
+                  </table>
+                </div>"""
+
+                _linea_obs_dg_text = f"\n   Nota de Dirección General: {_obs_dg}" if _obs_dg else ""
+                _aviso_exceso_text = (
+                    "\n\n⚠️  EXCESO DE TECHO DE GASTOS — AUTORIZADO POR DIRECCIÓN GENERAL\n"
+                    "   Este pedido superó el techo de gastos mensual del hotel y ha tenido que pasar\n"
+                    "   por autorización de Dirección General antes de poder tramitarse y enviarse al proveedor.\n"
+                    f"   Familia:                        {_fam_exceso_txt}\n"
+                    f"   Motivo de la superación:        {_motivo_exceso_txt}\n"
+                    f"   Disponible en la solicitud:     {_disponible_txt}\n"
+                    f"   Importe de este pedido:         {_importe_exp_txt}\n"
+                    f"   Exceso sobre el techo:          {_exceso_txt}\n"
+                    f"   Autorizado por:                 {_resuelve_txt} — {_fecha_resol_txt}"
+                    f"{_linea_obs_dg_text}"
+                )
+
         # (2026-08-28) A petición de Víctor: cuando el cambio es automático
         # (es_automatico=True — decidido por _aplicar_coincidencia_albaran()
         # al confirmar una coincidencia de "Comparar Pedidos + Albaranes",
@@ -2564,6 +2645,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
           <div style="padding:24px">
         <p style="font-size:15px"><strong>{_icono} {estado_nuevo}</strong> — Pedido {pedido.get('pedido_num','—')} · {pedido.get('hotel_codigo','')}</p>
         {_intro_html_block}
+        {_aviso_exceso_html}
         <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">
           <tr><td><b>Hotel</b></td><td>{pedido.get('hotel_nombre','')} ({pedido.get('hotel_codigo','')})</td></tr>
           <tr><td><b>Departamento</b></td><td>{pedido.get('departamento_nombre','')}</td></tr>
@@ -2616,6 +2698,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             f"{_icono} {estado_nuevo} — Pedido {pedido.get('pedido_num','—')} · {pedido.get('hotel_codigo','')}\n"
             f"{_SEP}\n\n"
             + (f"{_intro_text}\n\n" if _intro_text else "")
+            + (f"{_aviso_exceso_text.strip()}\n\n" if _aviso_exceso_text else "")
             + "📋 Datos del pedido\n"
             + "\n".join(_datos_lineas)
         )
@@ -15723,6 +15806,27 @@ def api_save_departamentos_email():
 # alguno configurar una regla para un estado fuera de esa lista.
 _ESTADOS_EMAIL_INTERNO_ORDENADOS = [e for e in ESTADOS_VALIDOS if e in ESTADOS_EMAIL_INTERNO]
 
+# (2026-08-28) Pseudo-estado EXCLUSIVO de "Notificaciones adicionales" — a
+# petición de Víctor: además de las 5 combinaciones reales de
+# ESTADOS_EMAIL_INTERNO, permite poner un contacto en copia
+# ESPECÍFICAMENTE cuando el pedido que se acaba de enviar al proveedor
+# había superado el techo de gastos del mes y tuvo que pasar por
+# autorización de Dirección General (aprobar_expediente()) —
+# independiente de si ese mismo contacto también está marcado para
+# "ENVIADO AL PROVEEDOR" (el envío normal, sin exceso): las dos reglas
+# son compatibles y no se excluyen entre sí. NUNCA es un estado real de
+# un pedido — no está en ESTADOS_VALIDOS ni en ESTADOS_EMAIL_INTERNO, solo
+# tiene sentido dentro de notificacion_contacto_reglas.estado. Se detecta
+# en enviar_emails_estado() comprobando que el estado ANTERIOR del pedido
+# era "PENDIENTE Vº Bº DIRECCIÓN GENERAL": ese estado solo lo pone
+# create_pedido()/update_pedido() al superar el techo, y desde ahí el
+# único destino posible es aprobar_expediente() (ver su propio
+# docstring), así que esa combinación (estado_nuevo=ENVIADO AL PROVEEDOR,
+# estado_antes=PENDIENTE Vº Bº DIRECCIÓN GENERAL) identifica sin
+# ambigüedad un envío tras exceso de techo autorizado.
+ESTADO_NOTIF_EXCESO_TECHO_DG = "EXCESO TECHO AUTORIZADO (DIRECCIÓN GENERAL)"
+_ESTADOS_NOTIF_ADICIONAL_VALIDOS = set(ESTADOS_EMAIL_INTERNO) | {ESTADO_NOTIF_EXCESO_TECHO_DG}
+
 @app.route("/api/admin/notificaciones-contactos", methods=["GET"])
 @admin_required
 def api_get_notificaciones_contactos():
@@ -15731,7 +15835,11 @@ def api_get_notificaciones_contactos():
     estado) ya configuradas, el catálogo de departamentos y la lista de
     estados que tiene sentido ofrecer (ESTADOS_EMAIL_INTERNO) — todo lo que
     necesita el frontend para pintar, por cada contacto, una matriz de
-    checkboxes Departamento × Estado.
+    checkboxes Departamento × Estado. Se devuelve aparte, en
+    "estado_exceso_techo", el pseudo-estado de "exceso de techo autorizado"
+    (ver ESTADO_NOTIF_EXCESO_TECHO_DG más arriba) para que el frontend lo
+    pinte como una columna extra, distinguida visualmente de las 5
+    columnas de estado real.
     """
     try:
         contactos = rows_to_list(query(
@@ -15755,6 +15863,7 @@ def api_get_notificaciones_contactos():
         return jsonify({
             "ok": True, "contactos": contactos, "departamentos": departamentos,
             "estados": _ESTADOS_EMAIL_INTERNO_ORDENADOS,
+            "estado_exceso_techo": ESTADO_NOTIF_EXCESO_TECHO_DG,
         })
     except Exception as exc:
         log.error("[NOTIF-CONTACTOS] Error GET: %s", exc)
@@ -15796,8 +15905,10 @@ def api_actualizar_notificacion_contacto(cid):
     pantallas de administración de esta app. Body:
     {"nombre": "...", "email": "...", "email2": "...", "activo": true,
      "reglas": [{"departamento_id": 3, "estado": "ENVIADO AL PROVEEDOR"}, ...]}
-    Una regla con un estado fuera de ESTADOS_EMAIL_INTERNO se descarta en
-    silencio (no tendría ningún efecto — ver comentario de arriba).
+    Una regla con un estado fuera de _ESTADOS_NOTIF_ADICIONAL_VALIDOS (los 5
+    de ESTADOS_EMAIL_INTERNO + el pseudo-estado ESTADO_NOTIF_EXCESO_TECHO_DG)
+    se descarta en silencio (no tendría ningún efecto — ver comentario de
+    arriba).
     """
     data   = request.get_json(silent=True) or {}
     nombre = (data.get("nombre") or "").strip()
@@ -15823,7 +15934,7 @@ def api_actualizar_notificacion_contacto(cid):
         for r in reglas:
             depto_id = r.get("departamento_id")
             estado   = (r.get("estado") or "").strip()
-            if not depto_id or estado not in ESTADOS_EMAIL_INTERNO:
+            if not depto_id or estado not in _ESTADOS_NOTIF_ADICIONAL_VALIDOS:
                 continue
             cur.execute(
                 "INSERT INTO notificacion_contacto_reglas (contacto_id, departamento_id, estado) "

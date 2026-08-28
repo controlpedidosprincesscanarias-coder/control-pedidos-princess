@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.48** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.50** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -88,7 +88,15 @@ Vistas disponibles en el sidebar (algunas restringidas por rol):
   de Compras, Administrativo A&B), globales para toda la cadena, a los
   que se pone en copia en el correo interno de cambio de estado según el
   departamento del pedido y el estado nuevo concreto (p. ej. Cocina +
-  ENVIADO AL PROVEEDOR → copia al Chef Ejecutivo).
+  ENVIADO AL PROVEEDOR → copia al Chef Ejecutivo). Incluye también una
+  columna extra, independiente de las de estado real, para poner en copia
+  a un contacto específicamente cuando el pedido enviado había superado
+  el techo de gastos del mes y tuvo que pasar por autorización de
+  Dirección General — en ese caso, además, el propio correo interno de
+  cambio de estado explica el motivo de la superación, la familia, los
+  importes y quién y cuándo lo autorizó, y llega igual a todos los
+  destinatarios internos ya configurados (comprador, rol hotel,
+  departamento y contactos adicionales).
 - **Usuarios** — alta/edición de usuarios, roles y asignación de
   hoteles.
 - **Integridad** — comprobaciones de consistencia de datos.

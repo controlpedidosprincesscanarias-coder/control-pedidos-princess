@@ -1,3 +1,29 @@
+# v12.30.50 — 28 agosto 2026
+
+✨ Correo interno "ENVIADO AL PROVEEDOR": cuando el pedido superó el techo de gastos y pasó por autorización de Dirección General, el propio correo lo explica (familia, importes, motivo, quién y cuándo lo autorizó)
+
+**Petición de Víctor**: "este envío interno de cambio de estado ENVIADO AL PROVEEDOR cuando haya pasado previamente por autorización de Dirección General, deberá estar explicado en el texto del correo, totales, familia, comunicado de la superación del techo de gasto y aprobación posterior del la dirección general para su tramitación, todo bien explicado de una forma clara y profesional. Se enviará igual a todos los correos que estén definidos, es un correo interno y la información es relevante".
+
+**Cambio en `app.py` (`enviar_emails_estado`)**: se reutiliza la misma detección ya introducida en v12.30.49 (`estado_nuevo="ENVIADO AL PROVEEDOR"` con `estado_antes="PENDIENTE Vº Bº DIRECCIÓN GENERAL"`, la única transición que produce `aprobar_expediente()`) para consultar el expediente de exceso aprobado de ese pedido (familia, motivo de la superación, disponible/importe/exceso en el momento de la solicitud, quién lo autorizó y cuándo, y su nota si la hubo) y construir un aviso destacado (fondo amarillo, mismo estilo ya usado en otros avisos de techo de la app) que se inserta al principio del correo, justo debajo de la introducción del estado. Se manda a **todos** los destinatarios ya definidos del correo interno (comprador, rol hotel, departamento y, si aplica, los contactos adicionales de v12.30.47/v12.30.49) — no es una lista aparte, es el mismo correo de siempre con este bloque añadido cuando corresponde. Si no hay expediente aprobado para ese pedido (no debería ocurrir dado que la transición solo la produce `aprobar_expediente()`, pero por seguridad ante datos inconsistentes) el aviso simplemente no se añade, sin romper el resto del correo.
+
+**Verificación**: `python3 -m py_compile app.py models.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores (esta entrega no toca el frontend). Prueba aislada en Python de la construcción del bloque con 4 casos (expediente completo con nota de Dirección General, expediente sin nota, expediente sin quien lo resolvió, y valores numéricos ausentes) — todos correctos, formato de importes y fechas en español consistente con el resto de la app.
+
+# v12.30.49 — 28 agosto 2026
+
+✨ "Notificaciones adicionales": nueva columna para poner en copia solo cuando el pedido enviado superó el techo de gastos y pasó por autorización de Dirección General
+
+**Petición de Víctor**, a partir de dos capturas del apartado "Notificaciones adicionales" (matriz Departamento × Estado): "necesito que también sea opcional el envío de correos cuando el pedido enviado haya superado el techo de gastos y haya tenido que pasar autorización de dirección general".
+
+**Cambio en `app.py` (constante nueva `ESTADO_NOTIF_EXCESO_TECHO_DG`)**: pseudo-estado exclusivo de este apartado (nunca es un estado real de un pedido, no está en `ESTADOS_VALIDOS`) que se añade como sexta columna, independiente de las 5 combinaciones reales de `ESTADOS_EMAIL_INTERNO` — un contacto puede marcarse para "ENVIADO AL PROVEEDOR" (todos los envíos), para esta columna nueva (solo los envíos que vinieron de superar el techo), o para las dos a la vez, sin que se excluyan entre sí.
+
+**Cambio en `app.py` (`enviar_emails_estado`)**: al construir los destinatarios en copia, si el envío en curso es exactamente `estado_nuevo="ENVIADO AL PROVEEDOR"` con `estado_antes="PENDIENTE Vº Bº DIRECCIÓN GENERAL"`, se consulta también la regla especial además de la normal — esa combinación identifica sin ambigüedad un pedido que se envía justo tras ser aprobado en `aprobar_expediente()` (único sitio de todo el código que produce esa transición exacta), es decir, un pedido que superó el techo de gastos del mes y tuvo que pasar por autorización de Dirección General.
+
+**Cambio en `app.py` (endpoints `/api/admin/notificaciones-contactos`)**: el `GET` devuelve el nuevo pseudo-estado aparte, en `estado_exceso_techo`, para que el frontend lo pinte como columna extra; el `PUT` acepta reglas con ese valor además de los 5 estados reales (antes se descartaba en silencio por no estar en `ESTADOS_EMAIL_INTERNO`).
+
+**Cambio en `templates/index.html`**: la matriz de cada contacto añade esa sexta columna al final, con fondo amarillo suave y un tooltip explicando exactamente cuándo se activa, para que quede claro a simple vista que no es un estado real del pedido como las otras cinco.
+
+**Verificación**: `python3 -m py_compile app.py models.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Prueba aislada en Python de la lógica de selección de reglas a consultar (7 casos: envío tras exceso autorizado → busca las dos reglas; envío normal desde otros 2 estados de origen distintos y sin estado anterior conocido → solo la normal; ENTREGADO/CANCELADO/DENEGADO no arrastran la regla de exceso aunque el estado anterior fuera "PENDIENTE Vº Bº DIRECCIÓN GENERAL", porque el estado nuevo no es "ENVIADO AL PROVEEDOR") y de la validación de estados aceptados en el `PUT` (6 casos) — todos correctos.
+
 # v12.30.48 — 28 agosto 2026
 
 🐛 Auditoría completa: el widget "Necesita atención" del Dashboard (y otros dos sitios puntuales) mostraban el Nº interno en vez del Nº Pedido (DALI/SAP)

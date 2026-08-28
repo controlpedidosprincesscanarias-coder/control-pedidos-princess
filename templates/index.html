@@ -1312,7 +1312,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.48
+          V 12.30.50
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -8368,6 +8368,16 @@ function _renderNotificacionesContactos() {
       Todavía no hay ningún contacto adicional — añade el primero arriba.</div>`;
     return;
   }
+  // (2026-08-28) A petición de Víctor: columna extra, aparte de las 5
+  // combinaciones reales de estado, para poner en copia a un contacto
+  // ESPECÍFICAMENTE cuando el pedido enviado había superado el techo de
+  // gastos del mes y tuvo que pasar por autorización de Dirección General
+  // — independiente de si ese mismo contacto también está marcado para
+  // "ENVIADO AL PROVEEDOR" (el envío normal, sin exceso): las dos reglas
+  // son compatibles. Se distingue visualmente (fondo amarillo + tooltip)
+  // porque, a diferencia de las demás columnas, no es un estado real del
+  // pedido — ver ESTADO_NOTIF_EXCESO_TECHO_DG en app.py.
+  const estadosTodos = d.estado_exceso_techo ? [...d.estados, d.estado_exceso_techo] : d.estados;
   cont.innerHTML = d.contactos.map(c => {
     const reglasSet = new Set((c.reglas || []).map(r => `${r.departamento_id}|${r.estado}`));
     return `
@@ -8395,11 +8405,16 @@ function _renderNotificacionesContactos() {
       </div>
       <div class="table-wrap">
         <table style="font-size:11.5px">
-          <thead><tr><th>Departamento</th>${d.estados.map(e => `<th style="text-align:center;padding:4px 6px">${e}</th>`).join('')}</tr></thead>
+          <thead><tr><th>Departamento</th>${estadosTodos.map(e => {
+            const esExceso = e === d.estado_exceso_techo;
+            const thStyle = `text-align:center;padding:4px 6px${esExceso ? ';background:#fff3cd;color:#856404' : ''}`;
+            const thTitle = esExceso ? ' title="Se pone en copia SOLO cuando este pedido superó el techo de gastos del mes y tuvo que pasar por autorización de Dirección General antes de enviarse al proveedor — independiente de la columna «ENVIADO AL PROVEEDOR» (las dos reglas son compatibles)"' : '';
+            return `<th style="${thStyle}"${thTitle}>${esExceso ? '⚠️ ' : ''}${e}</th>`;
+          }).join('')}</tr></thead>
           <tbody>
             ${d.departamentos.map(dep => `<tr>
               <td style="font-weight:600;white-space:nowrap">${dep.nombre}</td>
-              ${d.estados.map(e => `<td style="text-align:center">
+              ${estadosTodos.map(e => `<td style="text-align:center${e === d.estado_exceso_techo ? ';background:#fffdf5' : ''}">
                 <input type="checkbox" class="notif-c-regla" data-depto="${dep.id}" data-estado="${esc(e)}"
                   ${reglasSet.has(dep.id + '|' + e) ? 'checked' : ''}>
               </td>`).join('')}
