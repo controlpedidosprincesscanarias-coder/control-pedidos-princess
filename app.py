@@ -9255,6 +9255,8 @@ def _aplicar_coincidencia_albaran(db, coincidencia: dict, usuario_id: int, usuar
 
     nuevo_albaran = pedido_actual["entrada_albaran_num"]
     registro_dali = coincidencia.get("registro_dali")
+    _importe_coincidencia = coincidencia.get("importe")
+    _entradas_actuales = _parse_albaran_entries(nuevo_albaran)
     # (2026-08-19) Comparación por número normalizado (ignora ceros a la
     # izquierda), no por texto exacto — antes, si el pedido ya tenía
     # registrado p.ej. "81970" y el PDF de DALI traía "00081970", el "in"
@@ -9262,12 +9264,34 @@ def _aplicar_coincidencia_albaran(db, coincidencia: dict, usuario_id: int, usuar
     # entrada duplicada. Ver _normalizar_num_albaran().
     ya_presente = bool(registro_dali) and any(
         _normalizar_num_albaran(_e["num"]) == _normalizar_num_albaran(registro_dali)
-        for _e in _parse_albaran_entries(nuevo_albaran)
+        for _e in _entradas_actuales
     )
     if registro_dali and not ya_presente:
-        entrada_nueva = _serializar_entrada_albaran(registro_dali, coincidencia.get("fecha_registro_dali_iso"))
+        # (2026-08-28) A petición de Víctor: la entrada nueva se guarda ya
+        # con su base imponible (columna "Importe" de la tabla de
+        # coincidencias, el mismo importe recibido con el que se emparejó
+        # el albarán) — antes solo se guardaba número + fecha, y la celda
+        # "Base imp. (€)" se quedaba vacía aunque el dato ya estaba
+        # disponible en ese mismo momento.
+        entrada_nueva = _serializar_entrada_albaran(
+            registro_dali, coincidencia.get("fecha_registro_dali_iso"), _importe_coincidencia
+        )
         nuevo_albaran = f"{nuevo_albaran} | {entrada_nueva}" if nuevo_albaran else entrada_nueva
         cambios.append(f"nueva entrada de albarán {registro_dali}")
+    elif registro_dali and ya_presente and _importe_coincidencia is not None:
+        # (2026-08-28) La entrada ya estaba registrada (de antes de este
+        # cambio, o registrada a mano) pero sin base imponible — se
+        # rellena ahora la celda vacía con el importe del albarán, sin
+        # tocar el resto de la entrada (número, fecha) ni duplicar nada.
+        _cambiado_importe = False
+        for _e in _entradas_actuales:
+            if (_normalizar_num_albaran(_e["num"]) == _normalizar_num_albaran(registro_dali)
+                    and _e.get("base_imponible") is None):
+                _e["base_imponible"] = round(float(_importe_coincidencia), 2)
+                _cambiado_importe = True
+        if _cambiado_importe:
+            nuevo_albaran = _construir_entrada_albaran_num(_entradas_actuales)
+            cambios.append(f"base imponible del albarán {registro_dali} → {_fmt_importe_es(_importe_coincidencia)} €")
 
     estado_nuevo = coincidencia["estado_objetivo"]
     if estado_antes == estado_nuevo:
@@ -9315,11 +9339,14 @@ def _aplicar_coincidencia_albaran(db, coincidencia: dict, usuario_id: int, usuar
 
     return {"aplicado": True, "cambios": cambios, "motivo_sin_cambios": None}
 
-def _serializar_entrada_albaran(num: str, fecha_iso: str = None) -> str:
-    """Igual formato que _serializeAlbaranEntry() del frontend: 'NUM::FECHA' o 'NUM'."""
+def _serializar_entrada_albaran(num: str, fecha_iso: str = None, base_imponible=None) -> str:
+    """Igual formato que _serializeAlbaranEntry() del frontend: 'NUM::FECHA::IMPORTE',
+    'NUM::FECHA' o 'NUM' — el 3er segmento (base imponible) es opcional (2026-08-28)."""
     num = (num or "").strip()
     if not num:
         return ""
+    if base_imponible is not None:
+        return f"{num}::{fecha_iso or ''}::{float(base_imponible):.2f}"
     return f"{num}::{fecha_iso}" if fecha_iso else num
 
 def _ejecutar_comparacion_albaranes_bg(job_id, hotel_id, pdf1_bytes, pdf2_bytes):

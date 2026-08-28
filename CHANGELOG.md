@@ -1,3 +1,17 @@
+# v12.30.35 — 28 agosto 2026
+
+✨ "Aplicar todas las seleccionadas" (Comparar Pedidos + Albaranes) ya rellena también la base imponible de la entrada, no solo el número y la fecha
+
+**Petición de Víctor**: "los totales de las entregas aun estando en el estado correcto se copian si las celdas están vacías?" — tras confirmarle que no, pidió que se conectara.
+
+**Causa**: `_aplicar_coincidencia_albaran()` (la función detrás del botón "Aplicar todas las seleccionadas" de "Comparar listado PDF" → "Coincidencias con el listado de Albaranes") es de v12.30.15, anterior a la celda "Base imp. (€)" por entrada (v12.30.31) — nunca se conectó con ella. Al registrar una entrada de albarán, solo guardaba número + fecha; el importe (la columna "Importe" que ya se ve en la propia tabla de coincidencias, el mismo con el que se emparejó pedido y albarán) estaba disponible en ese momento pero nunca se guardaba.
+
+**Cambio en `app.py`**: `_serializar_entrada_albaran()` gana un 3er parámetro opcional `base_imponible` (retrocompatible, formato `NUM::FECHA::IMPORTE`). `_aplicar_coincidencia_albaran()` ahora:
+- Al crear una entrada **nueva**, la guarda ya con su base imponible.
+- Si la entrada **ya existía** (registrada antes de este cambio, o a mano) pero sin base imponible, la rellena sin tocar el número ni la fecha ya guardados, ni duplicar nada — solo si la celda estaba vacía.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Prueba aislada en Python: entrada nueva con importe, entrada nueva sin importe (retrocompatibilidad), relleno de una entrada existente vacía, reparseo del resultado final, y el caso sin fecha con importe — todos correctos.
+
 # v12.30.34 — 28 agosto 2026
 
 🐛 "Comparar listado PDF (SAP)" fallaba con `column "total_pedido" does not exist` pese a llevar desplegado desde v12.30.30 — la columna nunca llegó a crearse en Supabase

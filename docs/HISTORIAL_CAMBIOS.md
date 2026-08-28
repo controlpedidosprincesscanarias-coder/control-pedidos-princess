@@ -25,6 +25,13 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] "Aplicar todas las seleccionadas" ya rellena también la base imponible de la entrada de albarán (v12.30.35)
+
+- Víctor: "los totales de las entregas aun estando en el estado correcto se copian si las celdas están vacías?" — confirmé que no y pidió conectarlo.
+- **Causa**: `_aplicar_coincidencia_albaran()` (botón "Aplicar todas las seleccionadas") es anterior a la celda "Base imp. (€)" por entrada (v12.30.31) y nunca se conectó con ella — solo guardaba número + fecha del albarán, aunque el importe ya estaba disponible en ese momento (es la misma columna "Importe" que se ve en la tabla de coincidencias).
+- **Cambio en `app.py`**: `_serializar_entrada_albaran()` gana un 3er parámetro opcional `base_imponible`. Al crear una entrada nueva se guarda ya con su importe; si la entrada ya existía sin importe, se rellena la celda vacía sin tocar número/fecha ni duplicar nada.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Prueba aislada en Python de los 5 casos (nueva con/sin importe, relleno de existente, reparseo, caso sin fecha) — todos correctos.
+
 ## 2026-08-28 — [Control Pedidos] "Comparar listado PDF (SAP)" fallaba con `column "total_pedido" does not exist` — la columna nunca se creó en Supabase (v12.30.34)
 
 - Víctor: al usar "Comparar listado PDF (SAP)" en Pedidos, error `column "total_pedido" does not exist LINE 1: SELECT id, norden, pedido_num, estado, total_pedido, entrada...` — con capturas del modal y del aviso.
