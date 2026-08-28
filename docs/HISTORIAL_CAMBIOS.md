@@ -25,6 +25,14 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] El popup de "familia repetida"/techo mensual podía repetirse cada pocos minutos sin parar (v12.30.38)
+
+- Víctor: "la alerta en popup al comprador cuando se tiene duplicada la familia en techo de gastos ¿por qué se recibe cada pocos minutos continuamente?"
+- **Causa**: el dedup diario de `_job_familia_repetida_inner()` y `_job_alertas_techo_mensual()` solo se registraba dentro del bucle de Telegram — si un comprador solo tenía el popup activado (sin Telegram para ese evento, o con Telegram activado pero sin `chat_id`), esa fila de control nunca se escribía y el job volvía a encolar el popup en cada pasada.
+- **Cambio en `app.py`**: en ambos jobs, el dedup se registra ahora una sola vez por hotel en cuanto hay al menos un destinatario, sin depender de que el envío por Telegram se complete.
+- **Pendiente de confirmar**: patrón similar, más estrecho, detectado en `_job_techo_urgente_admins_inner()` (avisos a admins) — no tocado, a la espera de que Víctor confirme si también le ocurre ahí.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+
 ## 2026-08-28 — [Control Pedidos] El correo/Telegram de cambio de estado automático ya no muestra el nombre de quien tenía la sesión abierta (v12.30.37)
 
 - Víctor, a partir de dos correos reales: "Si es automático no indicar el nombre del administrador, se indica cierre automático comparación listados fecha hora" — y de paso preguntó por qué una entrega no tenía base imponible.

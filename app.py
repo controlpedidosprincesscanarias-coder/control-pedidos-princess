@@ -4182,6 +4182,27 @@ def _job_familia_repetida_inner() -> None:
             if not destinatarios_tg and not destinatarios_popup:
                 log.warning("[FAM-REP] Sin destinatarios configurados para hotel %s (evento familia_repetida_comprador)", hotel_codigo)
             else:
+                # (2026-08-28) FIX — Víctor reportó que el popup de familia
+                # repetida le llegaba "cada pocos minutos, continuamente".
+                # Causa: el registro de dedup (_log_familia_repetida_hotel,
+                # de quien depende _ya_notificado_familia_repetida_hotel_hoy
+                # más arriba) solo se escribía DENTRO del bucle de Telegram
+                # — si un hotel tiene comprador(es) con el popup activado
+                # pero sin Telegram configurado (destinatarios_tg vacío,
+                # caso real de este hotel), esa escritura nunca llegaba a
+                # ejecutarse, así que "ya notificado hoy" nunca se cumplía:
+                # el job (cada 60s, 07:00-16:59 laborables) volvía a encolar
+                # un popup nuevo en cada pasada, sin fin. Se registra aquí
+                # el dedup a nivel hotel ANTES de enviar, específicamente
+                # para cubrir el caso sin destinatarios de Telegram — si sí
+                # los hay, el bucle de abajo ya lo registra por su cuenta.
+                if not destinatarios_tg:
+                    _log_familia_repetida_hotel(
+                        hotel_codigo, "familia_repetida_comprador",
+                        "solo-popup",
+                        f"Familia repetida x{len(familias_repetidas)} — {mes_txt}",
+                        True
+                    )
                 for dest in destinatarios_tg:
                     username = dest.get("username", "?")
                     chat_id  = dest.get("telegram_chat_id")
@@ -4751,6 +4772,24 @@ def _job_alertas_techo_mensual_inner() -> None:
         if not destinatarios_tg and not destinatarios_popup:
             log.warning("[TECHO-MES] Sin destinatarios configurados para hotel %s (evento techo_mensual_comprador)", hotel_codigo)
             continue
+
+        # (2026-08-28) FIX — mismo bug que en _job_familia_repetida_inner
+        # (ver esa función para el diagnóstico completo): el dedup diario
+        # (_ya_notificado_techo_mes_hoy) dependía por completo de que
+        # _log_whatsapp_techo_mes() se ejecutara dentro del bucle de
+        # Telegram, y ahí solo se escribía cuando el destinatario tenía
+        # chat_id configurado — si NINGÚN comprador de este hotel tiene
+        # Telegram (o tiene el evento activado pero sin chat_id), el dedup
+        # nunca se registraba y el job (diario, pero re-evaluado en cada
+        # arranque/ejecución) podía volver a encolar el popup una y otra
+        # vez. Se registra aquí, una sola vez por hotel, en cuanto se sabe
+        # que hay al menos un destinatario (Telegram o popup) — antes de
+        # depender de si el envío por Telegram llega a completarse.
+        _log_whatsapp_techo_mes(
+            hotel_codigo, semaforo, f"solo-popup|{hotel_codigo}",
+            f"Techo mensual {semaforo} — {acumulado:,.2f} € — {hoy.strftime('%B %Y')}",
+            True
+        )
 
         # ── Construir mensaje ─────────────────────────────────────────────────
         mes_txt      = hoy.strftime("%B %Y")

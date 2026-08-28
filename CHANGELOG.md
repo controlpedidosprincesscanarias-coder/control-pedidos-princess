@@ -1,3 +1,17 @@
+# v12.30.38 — 28 agosto 2026
+
+🐛 El popup de "familia de artículos repetida" (y el de techo mensual) podía llegar cada pocos minutos, sin parar, en vez de una vez al día
+
+**Petición/reporte de Víctor**: "la alerta en popup al comprador cuando se tiene duplicada la familia en techo de gastos ¿por qué se recibe cada pocos minutos continuamente?"
+
+**Causa**: tanto `_job_familia_repetida_inner()` como `_job_alertas_techo_mensual()` calculan cada día si ya se avisó a un hotel ("dedup diario") consultando `whatsapp_log` — pero esa fila de control solo se escribía **dentro del bucle de envío por Telegram** (`familia_repetida`: solo si había al menos un destinatario de Telegram configurado para ese evento; `techo_mes`: solo si además ese destinatario tenía `telegram_chat_id` guardado). El popup, en cambio, se encola en un bucle aparte, totalmente independiente — así que si un comprador tiene el popup activado pero NO tiene Telegram configurado para ese evento concreto (o lo tiene activado pero sin `chat_id` registrado, caso de `techo_mes`), la fila de dedup nunca se llegaba a escribir. Resultado: el job (que se reevalúa periódicamente) volvía a considerar "no notificado hoy" en cada pasada y encolaba un popup nuevo cada vez — de ahí los avisos cada pocos minutos sin parar que reportó Víctor.
+
+**Cambio en `app.py`**: en ambos jobs, se registra ahora el dedup diario **una sola vez por hotel**, en cuanto se sabe que hay al menos un destinatario (por cualquier canal), antes de intentar el envío — en vez de depender de que el envío por Telegram llegue a completarse con éxito. El envío real (Telegram + popup) sigue funcionando exactamente igual que antes; lo único que cambia es que a partir de ahora sí queda constancia de que el hotel ya fue avisado hoy, incluso cuando ese comprador solo tiene activado el popup.
+
+**Nota — no tocado en este cambio**: se ha detectado un patrón parecido, más estrecho, en `_job_techo_urgente_admins_inner()` (avisos de techo URGENTE a administradores): si un admin tiene el evento activado en Telegram pero sin `telegram_chat_id` guardado, el popup podría repetirse igual que aquí. Se deja anotado para revisar si Víctor confirma que también le está ocurriendo ahí — no se ha tocado porque no es el caso reportado y requeriría confirmar antes el escenario exacto.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. No se ha tocado `templates/index.html` en la parte de JS (solo el badge de versión).
+
 # v12.30.37 — 28 agosto 2026
 
 🐛 El correo (y Telegram) de cambio de estado automático mostraba el nombre de quien tenía la sesión abierta en "Realizado por", como si hubiera tramitado el pedido a mano
