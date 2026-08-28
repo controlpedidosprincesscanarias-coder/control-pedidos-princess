@@ -1,3 +1,21 @@
+# v12.30.34 — 28 agosto 2026
+
+🐛 "Comparar listado PDF (SAP)" fallaba con `column "total_pedido" does not exist` pese a llevar desplegado desde v12.30.30 — la columna nunca llegó a crearse en Supabase
+
+**Petición/reporte de Víctor**: al usar "Comparar listado PDF (SAP)" en Pedidos, la aplicación devolvía el error `column "total_pedido" does not exist LINE 1: SELECT id, norden, pedido_num, estado, total_pedido, entrada...` — con capturas de pantalla del modal y el aviso de error.
+
+**Causa**: la sentencia `ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS total_pedido NUMERIC(10,2)` (añadida en v12.30.30) vivía casi al final de `_auto_migrate()`, justo antes de `db.close()` — y esa función tiene más de 100 sentencias SQL seguidas dentro de un único `try/except` sin protección individual. Si CUALQUIERA de esas otras sentencias fallaba por el motivo que fuera (sin relación con `total_pedido`), la excepción genérica paraba la ejecución ahí mismo y esta columna, al estar casi la última, nunca llegaba a crearse — sin ningún aviso visible salvo un `log.warning` genérico en los logs de Render, fácil de pasar por alto. Es exactamente el mismo patrón de fallo, ya documentado en el propio código, que en su día dejó sin aplicar la columna `sujeto_seguimiento` (bug real confirmado entonces en producción).
+
+**Cambio en `app.py`**: la sentencia se traslada al bloque protegido que ya existe al principio de `_auto_migrate()` (el mismo que se creó para `sujeto_seguimiento` y el hotel de pruebas "PR"), con su propio `try/except` individual — así se garantiza que se intenta aplicar en cada arranque pase lo que pase con el resto de la función esa misma ejecución, y si por algún motivo fallara, quedaría un aviso específico (`No se pudo añadir la columna pedidos.total_pedido: ...`) en vez de uno genérico indistinguible de cualquier otro fallo.
+
+**Arreglo inmediato para desbloquear ahora mismo, sin esperar al redeploy**: ejecutar directamente en el editor SQL de Supabase:
+```sql
+ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS total_pedido NUMERIC(10,2);
+```
+Es la misma sentencia, exactamente igual de segura e idempotente que la que ya corre sola en cada arranque — no hace nada si la columna ya existiera.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. No se ha tocado `templates/index.html` en la parte de JS (solo el badge de versión), por lo que no aplica `node --check` más allá de la comprobación habitual.
+
 # v12.30.33 — 27 agosto 2026
 
 ✨ Las coincidencias detectadas pero no aplicadas automáticamente ya no desaparecen del correo de resumen — y todos los correos de pedidos (internos y a proveedores) muestran ahora los importes (Total Pedido, entregas parciales/totales) etiquetados siempre como base imponible, sin IGIC

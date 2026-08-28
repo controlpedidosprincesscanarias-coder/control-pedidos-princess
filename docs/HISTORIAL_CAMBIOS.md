@@ -25,6 +25,14 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] "Comparar listado PDF (SAP)" fallaba con `column "total_pedido" does not exist` — la columna nunca se creó en Supabase (v12.30.34)
+
+- Víctor: al usar "Comparar listado PDF (SAP)" en Pedidos, error `column "total_pedido" does not exist LINE 1: SELECT id, norden, pedido_num, estado, total_pedido, entrada...` — con capturas del modal y del aviso.
+- **Causa**: el `ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS total_pedido NUMERIC(10,2)` de v12.30.30 vivía casi al final de `_auto_migrate()`, dentro del tramo de 100+ sentencias sin `try/except` individual — si cualquier sentencia anterior fallaba por cualquier motivo, la función entera se abortaba ahí y esta columna, al ir casi la última, nunca se creaba. Mismo patrón de fallo ya documentado en el código y sufrido antes con `sujeto_seguimiento`.
+- **Cambio en `app.py`**: la sentencia se traslada al bloque protegido del principio de `_auto_migrate()` (el mismo que ya usan `sujeto_seguimiento` y el hotel "PR"), con su propio `try/except`, para que se intente en cada arranque sin depender de que el resto de la función no falle antes de llegar a ella.
+- **Arreglo inmediato dado a Víctor** para desbloquear sin esperar al redeploy: ejecutar a mano en el editor SQL de Supabase `ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS total_pedido NUMERIC(10,2);` (misma sentencia, idempotente y segura).
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+
 ## 2026-08-27 — [Control Pedidos] Comparación Pedidos+Albaranes: pendientes sin aplicar ya no desaparecen del correo, y todos los correos de pedidos muestran los importes como base imponible sin IGIC (v12.30.33)
 
 - Víctor: "la información de lo pendiente en caso de no hacerlo automáticamente se registra también en el correo, por otro lado, las comunicaciones tanto internas como a los proveedores, deberán llevar también los valores de entregas parciales, totales, total pedido etc, indicando siempre que se tratan de bases imponibles (totales sin IGIC)".

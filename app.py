@@ -184,6 +184,36 @@ def _auto_migrate():
                     log.info("[MIGRACION] Hotel de pruebas 'PR' insertado")
             except Exception as e:
                 log.warning(f"No se pudo insertar el hotel de pruebas 'PR': {e}")
+            # ── Total Pedido real (v12.30.30) ────────────────────────────────
+            # (2026-08-28) Movido aquí, al bloque protegido del principio —
+            # vivía casi al final de la función (justo antes de db.close()),
+            # y una sentencia anterior cualquiera de las 100+ sin try/except
+            # propio bastaba para abortar la función entera antes de llegar
+            # aquí, dejando la columna sin crear en Supabase sin ningún aviso
+            # visible salvo un log.warning genérico — bug real confirmado en
+            # producción (Víctor: "Comparar listado PDF (SAP)" fallaba con
+            # 'column "total_pedido" does not exist' pese a llevar desplegado
+            # desde v12.30.30). Mismo motivo exacto que ya obligó a mover
+            # aquí el bloque de sujeto_seguimiento (ver comentario de arriba
+            # del todo de esta función).
+            #
+            # Nuevo campo "TOTAL PEDIDO" en la ficha del pedido — el comprador
+            # puede rellenarlo a mano si quiere, pero la idea (petición de
+            # Víctor) es que no haga falta: al comparar el "Listado de Pedidos"
+            # PDF de SAP, el importe base (6ª columna del PDF, ya extraído como
+            # `importe_base` en _comparar_listado_pdf_logica) se guarda aquí
+            # automáticamente para cada pedido localizado, como el valor real
+            # del pedido — sin ningún paso manual de confirmación, a
+            # diferencia del resto de "Comparar listado PDF" (que solo
+            # propone, nunca escribe solo): este campo es puramente
+            # informativo, no dispara notificaciones ni cambia estado, así
+            # que no hay nada que confirmar.
+            try:
+                cur.execute(
+                    "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS total_pedido NUMERIC(10,2)"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo añadir la columna pedidos.total_pedido: {e}")
             # ══════════════════════════════════════════════════════════════
             # Columnas legacy de proveedores (para DBs antiguas)
             for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT"),
@@ -1311,22 +1341,6 @@ def _auto_migrate():
             # usuario.
             cur.execute(
                 "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS dashboard_prefs TEXT"
-            )
-
-            # ── Total Pedido real (v12.30.30) ────────────────────────────────
-            # Nuevo campo "TOTAL PEDIDO" en la ficha del pedido — el comprador
-            # puede rellenarlo a mano si quiere, pero la idea (petición de
-            # Víctor) es que no haga falta: al comparar el "Listado de Pedidos"
-            # PDF de SAP, el importe base (6ª columna del PDF, ya extraído como
-            # `importe_base` en _comparar_listado_pdf_logica) se guarda aquí
-            # automáticamente para cada pedido localizado, como el valor real
-            # del pedido — sin ningún paso manual de confirmación, a
-            # diferencia del resto de "Comparar listado PDF" (que solo
-            # propone, nunca escribe solo): este campo es puramente
-            # informativo, no dispara notificaciones ni cambia estado, así
-            # que no hay nada que confirmar.
-            cur.execute(
-                "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS total_pedido NUMERIC(10,2)"
             )
         db.close()
         log.info("Auto-migración OK")
