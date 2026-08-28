@@ -11629,7 +11629,12 @@ def create_pedido():
         data.get("hotel_id"), data.get("departamento_id"),
         data.get("fecha_solicitud"), data.get("fecha_envio_visto_bueno"),
         data.get("fecha_tramitacion"),
-        data.get("pedido_num"), data.get("presupuesto_num"),
+        # (2026-08-28) pedido_num y total_pedido NUNCA se aceptan del
+        # cliente al crear: solo se rellenan al subir el PDF de pedido
+        # oficial (ver upload_adjunto/_parsear_pdf_pedido_oficial), y eso
+        # requiere un pedido_id que todavía no existe en este punto — por
+        # eso siempre nacen a NULL, sea lo que sea lo que mande el formulario.
+        None, data.get("presupuesto_num"),
         data.get("entrada_albaran_num"),
         bool(data.get("tarifa_acordada")),
         estado,
@@ -11641,7 +11646,7 @@ def create_pedido():
         familia_id, importe, sujeto_techo,
         data.get("plazo_entrega_dias") or None,
         data.get("fecha_entrega_especifica") or None,
-        data.get("total_pedido") or None,
+        None,
         uid, uid,
         session.get("nombre"), session.get("nombre"),
     ))
@@ -11769,25 +11774,34 @@ def update_pedido(pid):
         if errores_envio:
             return jsonify({"ok": False, "error": " | ".join(errores_envio), "errores": errores_envio}), 422
 
-        # 1. Nº Pedido (DALI/SAP) obligatorio
-        pedido_num_val = data.get("pedido_num", pedido_actual.get("pedido_num") or "")
-        if not (pedido_num_val or "").strip():
-            errores_envio.append("El campo «Nº Pedido (DALI/SAP)» es obligatorio para pasar a ENVIADO AL PROVEEDOR.")
+        # 1. Nº Pedido (DALI/SAP) y Total Pedido obligatorios — (2026-08-28)
+        #    ya no se pueden escribir a mano: solo llegan a tener valor si
+        #    se ha subido y leído correctamente el PDF de pedido oficial
+        #    PRINCESS (ver punto 2 y _parsear_pdf_pedido_oficial). Se leen
+        #    de pedido_actual, nunca de `data`: un envío manual de estos
+        #    campos en el JSON no tiene ningún efecto (ver update_pedido()
+        #    más abajo, donde el UPDATE tampoco los toma de `data`).
+        pedido_num_val = pedido_actual.get("pedido_num") or ""
+        if not pedido_num_val.strip() or pedido_actual.get("total_pedido") is None:
+            errores_envio.append(
+                "Debe adjuntar el PDF del pedido oficial PRINCESS en la sección «Nº Pedido (DALI/SAP)» "
+                "para pasar a ENVIADO AL PROVEEDOR — la aplicación rellena sola el Nº de Pedido y el Total "
+                "Pedido al leerlo."
+            )
 
-        # 2. Adjunto pedido_doc: máximo 1 documento (PDF/Word, obligatorio)
-        #    y máximo 1 correo electrónico (opcional) — pueden coexistir ambos.
+        # 2. Adjunto pedido_doc: exactamente 1 documento (el PDF de pedido
+        #    oficial, obligatorio — ya no admite correo .eml/.msg en este
+        #    apartado, ver upload_adjunto()).
         adjuntos_pedido = rows_to_list(query(
-            "SELECT id, nombre, es_correo FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
+            "SELECT id, nombre FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
             (pid,)
         ))
-        docs_pedido    = [a for a in adjuntos_pedido if not a["es_correo"]]
-        correos_pedido = [a for a in adjuntos_pedido if a["es_correo"]]
-        if len(docs_pedido) == 0:
-            errores_envio.append("Debe adjuntar un documento (PDF/Word) en la sección «Nº Pedido (DALI/SAP)».")
-        elif len(docs_pedido) > 1:
-            errores_envio.append("Solo se permite un documento (PDF/Word) en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(docs_pedido))
-        if len(correos_pedido) > 1:
-            errores_envio.append("Solo se permite un correo electrónico en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(correos_pedido))
+        if len(adjuntos_pedido) == 0:
+            errores_envio.append(
+                "Debe adjuntar el PDF del pedido oficial PRINCESS en la sección «Nº Pedido (DALI/SAP)»."
+            )
+        elif len(adjuntos_pedido) > 1:
+            errores_envio.append("Solo se permite un documento en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(adjuntos_pedido))
 
         # 3. Nº Presupuesto obligatorio (salvo pedidos con tarifa acordada,
         #    que por definición no requieren presupuesto)
@@ -11953,7 +11967,10 @@ def update_pedido(pid):
         data.get("fecha_solicitud",      pedido_actual["fecha_solicitud"]),
         data.get("fecha_envio_visto_bueno", pedido_actual["fecha_envio_visto_bueno"]),
         data.get("fecha_tramitacion",    pedido_actual["fecha_tramitacion"]),
-        data.get("pedido_num",           pedido_actual["pedido_num"]),
+        # (2026-08-28) pedido_num NUNCA se toma de `data`: solo cambia vía
+        # el UPDATE dedicado de upload_adjunto() al leer el PDF de pedido
+        # oficial (ver validación más arriba y _parsear_pdf_pedido_oficial).
+        pedido_actual["pedido_num"],
         data.get("presupuesto_num",      pedido_actual["presupuesto_num"]),
         data.get("entrada_albaran_num",  pedido_actual["entrada_albaran_num"]),
         bool(data.get("tarifa_acordada", pedido_actual.get("tarifa_acordada", False))),
@@ -11967,7 +11984,11 @@ def update_pedido(pid):
         familia_id, importe, sujeto_techo, _mes_consumo_techo_val,
         data.get("plazo_entrega_dias", pedido_actual.get("plazo_entrega_dias")) or None,
         data.get("fecha_entrega_especifica", pedido_actual.get("fecha_entrega_especifica")) or None,
-        data.get("total_pedido", pedido_actual.get("total_pedido")) or None,
+        # (2026-08-28) total_pedido tampoco se toma de `data`, mismo motivo
+        # que pedido_num justo arriba — salvo que "Comparar listado PDF
+        # (SAP)" lo actualice después por su propia vía (_comparar_listado_
+        # pdf_logica), que sigue funcionando igual.
+        pedido_actual.get("total_pedido"),
         uid, session.get("nombre"), pid,
     ))
 
@@ -12534,9 +12555,15 @@ def get_dashboard_resumen():
         }
 
     # ── Línea temporal: últimos eventos de historial_estados ───────────────
+    # (2026-08-28) A petición de Víctor: mostrar el Nº Pedido (DALI/SAP,
+    # `pedido_num`) en vez del "Nº" lineal interno de la app (`norden`) —
+    # mismo criterio ya aplicado en otros sitios (ver comentario de
+    # _texto_pedido_candidato_...() más arriba, línea ~9924). Se sigue
+    # pidiendo `norden` como reserva para el pedido raro que aún no tenga
+    # Nº Pedido (DALI/SAP) asignado (ver render en templates/index.html).
     timeline = rows_to_list(query(f"""
         SELECT he.estado_antes, he.estado_nuevo, he.usuario_nombre, he.creado_en,
-               p.id AS pedido_id, p.norden, h.codigo AS hotel_codigo
+               p.id AS pedido_id, p.norden, p.pedido_num, h.codigo AS hotel_codigo
         FROM historial_estados he
         JOIN pedidos p ON p.id = he.pedido_id
         LEFT JOIN hoteles h ON p.hotel_id = h.id
@@ -13552,6 +13579,72 @@ def _generar_thumbnail(datos_originales, mime_type):
         log.warning(f"No se pudo generar thumbnail: {e}")
         return None, None
 
+# ── Lectura del PDF de pedido oficial PRINCESS (2026-08-28) ────────────────────
+# A petición de Víctor: el apartado "Nº Pedido (DALI/SAP)" del formulario pasa
+# a admitir ÚNICAMENTE el PDF de pedido oficial que genera SAP/DALI (siempre
+# el mismo formato, con nombre de archivo libre) — y, al subirlo, la app debe
+# leer y rellenar sola dos celdas que dejan de ser editables a mano:
+#   - "Nº Pedido (DALI/SAP)"   ← la línea "PEDIDO 00016287" del PDF (sin ceros
+#                                 a la izquierda, igual que _normalizar_pedido_num).
+#   - "Total Pedido (€)"       ← la SUMA de la columna "Importe" de cada línea
+#                                 de artículo — NUNCA el "Total Pedido..." que
+#                                 el propio PDF trae al pie, porque ese valor no
+#                                 incluye los descuentos aplicados y no es fiable
+#                                 (ver petición de Víctor, 28/08).
+# Mismo enfoque que _comparar_listado_pdf_logica() (pypdf.extract_text() +
+# regex tolerante, ver comentario junto a _PATRON_LISTADO_SIMPLIFICADO): el
+# orden del texto que devuelve pypdf NO seguía el orden visual de las columnas
+# (comprobado con este mismo PDF de ejemplo — "Cantidad Precio Importe" salen
+# como tres números seguidos, pero intercalados con cabeceras y pies de página
+# en otro orden), así que en vez de intentar reconstruir la tabla completa,
+# se buscan directamente los tríos "Cantidad(,dddd) Precio(,dd) Importe(,dd)"
+# consecutivos — el único sitio del documento donde aparecen tres importes
+# seguidos con ese patrón de decimales es una línea de artículo real.
+_PATRON_PEDIDO_NUM_OFICIAL = re.compile(r'\bPEDIDO\s+(\d+)\b')
+_PATRON_IMPORTE_LINEA_OFICIAL = re.compile(
+    r'(\d{1,3}(?:\.\d{3})*,\d{2,4})\s+'   # Cantidad
+    r'(-?\d{1,3}(?:\.\d{3})*,\d{2})\s+'   # Precio
+    r'(-?\d{1,3}(?:\.\d{3})*,\d{2})'      # Importe (el que nos interesa sumar)
+)
+
+def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
+    """
+    Lee un PDF de pedido oficial PRINCESS (SAP/DALI) y devuelve
+    {"pedido_num": "16287", "total_pedido": 4614.60}.
+
+    Lanza ValueError con un mensaje pensado para mostrarse tal cual al
+    usuario (ver upload_adjunto) si el PDF no se puede leer o no tiene la
+    estructura esperada — nunca devuelve un resultado parcial o adivinado:
+    o se reconoce el documento con garantías, o se rechaza con un mensaje
+    claro pidiendo el PDF oficial correcto.
+    """
+    try:
+        from pypdf import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(pdf_bytes))
+        texto = ""
+        for pagina in reader.pages:
+            texto += (pagina.extract_text() or "") + "\n"
+    except Exception as exc:
+        log.warning(f"[PEDIDO-DOC] Error leyendo el PDF adjuntado: {exc}")
+        raise ValueError(
+            "No se ha podido leer el PDF adjuntado. Adjunte únicamente el PDF del pedido "
+            "oficial PRINCESS (el que genera SAP/DALI) en este apartado."
+        )
+
+    m_pedido = _PATRON_PEDIDO_NUM_OFICIAL.search(texto)
+    lineas_importe = _PATRON_IMPORTE_LINEA_OFICIAL.findall(texto)
+    if not m_pedido or not lineas_importe:
+        raise ValueError(
+            "El PDF adjuntado no tiene el formato del pedido oficial PRINCESS — "
+            "adjunte únicamente el PDF del pedido oficial (el que genera SAP/DALI, "
+            "con el Nº de Pedido y las líneas de artículos con su importe) en este apartado."
+        )
+
+    pedido_num = _normalizar_pedido_num(m_pedido.group(1))
+    total_pedido = round(sum(_parse_importe_es(l[2]) for l in lineas_importe), 2)
+    return {"pedido_num": pedido_num, "total_pedido": total_pedido}
+
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
 @login_required
 def get_adjuntos(pid):
@@ -13600,28 +13693,38 @@ def upload_adjunto(pid):
             return jsonify({"ok": False, "error": f"La imagen supera el límite de {MAX_BYTES_IMAGEN // (1024*1024)} MB para este apartado"}), 400
 
     elif tipo == "pedido_doc":
-        if mime not in MIME_SOLICITUD_DOC:
-            return jsonify({"ok": False, "error": "Formato no permitido. Use PDF, Word o correo (.eml/.msg)"}), 400
-        if mime == "application/octet-stream" and ext not in EXT_CORREO | EXT_DOC:
-            return jsonify({"ok": False, "error": "Extensión de archivo no reconocida. Use PDF, Word o correo (.eml/.msg)"}), 400
+        # (2026-08-28) A petición de Víctor: este apartado deja de admitir
+        # Word y correo .eml/.msg — SOLO se admite el PDF del pedido oficial
+        # PRINCESS (SAP/DALI), con el mismo formato siempre. Se comprueba
+        # tanto el formato del archivo como, más abajo, que su CONTENIDO
+        # sea realmente ese pedido oficial (ver _parsear_pdf_pedido_oficial):
+        # nunca se guarda un archivo que no se haya podido leer como tal.
+        es_pdf_pedido_doc = mime == "application/pdf" or (mime == "application/octet-stream" and ext == ".pdf")
+        if not es_pdf_pedido_doc:
+            return jsonify({
+                "ok": False,
+                "error": "Este apartado solo admite el PDF del pedido oficial PRINCESS (el que genera SAP/DALI) — "
+                         "adjunte únicamente ese documento en este punto."
+            }), 400
         if len(datos) > MAX_BYTES_DOCUMENTO:
-            return jsonify({"ok": False, "error": f"El documento supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB para este apartado"}), 400
+            return jsonify({"ok": False, "error": f"El PDF supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB para este apartado"}), 400
 
-        # Máximo 1 documento (PDF/Word) y máximo 1 correo en esta sección;
-        # pueden coexistir un documento y un correo a la vez.
-        existentes = rows_to_list(query(
-            "SELECT es_correo FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
-            (pid,)
-        ))
-        n_docs_existentes    = sum(1 for a in existentes if not a["es_correo"])
-        n_correos_existentes = sum(1 for a in existentes if a["es_correo"])
+        # Máximo 1 documento en esta sección — para sustituirlo hay que
+        # eliminar antes el que ya está.
+        n_docs_existentes = query(
+            "SELECT COUNT(*) AS n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
+            (pid,), one=True
+        )["n"]
+        if n_docs_existentes >= 1:
+            return jsonify({"ok": False, "error": "Ya existe un documento adjunto en «Nº Pedido (DALI/SAP)». Elimínelo antes de subir uno nuevo."}), 400
 
-        if es_correo:
-            if n_correos_existentes >= 1:
-                return jsonify({"ok": False, "error": "Ya existe un correo adjunto en «Nº Pedido (DALI/SAP)». Elimínelo antes de subir uno nuevo."}), 400
-        else:
-            if n_docs_existentes >= 1:
-                return jsonify({"ok": False, "error": "Ya existe un documento adjunto en «Nº Pedido (DALI/SAP)». Elimínelo antes de subir uno nuevo."}), 400
+        # Lectura obligatoria del PDF — si no se reconoce como pedido
+        # oficial, se rechaza el archivo entero (no se llega a guardar ni
+        # el adjunto ni ningún dato a medias).
+        try:
+            _datos_pedido_pdf = _parsear_pdf_pedido_oficial(datos)
+        except ValueError as _exc_pdf:
+            return jsonify({"ok": False, "error": str(_exc_pdf)}), 400
 
     elif tipo in ("presupuesto_doc", "solicitud_doc", "firma_techo_doc"):
         etiqueta = "PDF, Word o correo (.eml/.msg)" if tipo == "presupuesto_doc" else "Excel, Word, PDF o correo (.eml/.msg)"
@@ -13698,7 +13801,22 @@ def upload_adjunto(pid):
     )
     adjunto_id = cur.fetchone()["id"]
     db.commit()
-    return jsonify({"ok": True, "id": adjunto_id}), 201
+
+    # (2026-08-28) Al subir el PDF de pedido oficial, se rellenan solas
+    # "Nº Pedido (DALI/SAP)" y "Total Pedido (€)" con lo leído del PDF —
+    # ver _parsear_pdf_pedido_oficial más arriba. Estas dos celdas ya no
+    # se pueden escribir a mano (ver create_pedido/update_pedido): esta es
+    # la ÚNICA vía por la que cambian de valor.
+    respuesta = {"ok": True, "id": adjunto_id}
+    if tipo == "pedido_doc":
+        execute(
+            "UPDATE pedidos SET pedido_num=%s, total_pedido=%s WHERE id=%s",
+            (_datos_pedido_pdf["pedido_num"], _datos_pedido_pdf["total_pedido"], pid)
+        )
+        db.commit()
+        respuesta["pedido_num"] = _datos_pedido_pdf["pedido_num"]
+        respuesta["total_pedido"] = _datos_pedido_pdf["total_pedido"]
+    return jsonify(respuesta), 201
 
 
 def _servir_adjunto_response(aid: int):

@@ -1,3 +1,37 @@
+# v12.30.42 — 28 agosto 2026
+
+✨ "Nº Pedido (DALI/SAP)": solo admite el PDF del pedido oficial PRINCESS — Nº de Pedido y Total Pedido se leen solos y dejan de ser editables
+
+**Petición de Víctor**, a partir de una captura del formulario de pedido y del PDF oficial de un pedido tramitado (16287): "me gustaría que solo se pudiera cargar un PDF y del formato que también adjunto, este PDF puede tener el nombre que sea pero la estructura siempre la misma, es nuestro formato de pedido oficial, una vez cargado obligatoriamente, la aplicación debe leer y rellenar dos celdas automáticamente del pedido CELDA «Nº Pedido (DALI/SAP)» y CELDA «Total Pedido (€) (SAP, opcional)» la primera con el valor del PDF «PEDIDO» en el ejemplo «16287» y la segunda con el valor de la suma de los importes, en el ejemplo 4314,60 + 300 = 4614,60 € ; no indicar el indicado en el PDF como «TOTAL PEDIDO» ya que este valor no es correcto porque no aparecen los descuentos aplicados. Estas dos celdas no se podrán rellenar manualmente y únicamente se podrá cambiar el estado a ENVIADO si se adjunta el PDF correcto, lanzar mensaje didáctico al usuario en caso de faltar indicando que se debe adjuntar en este punto únicamente el PDF del pedido oficial PRINCESS ; eliminar la anotación de opcional en el campo total".
+
+**Decisiones confirmadas con Víctor** antes de implementar: se elimina la opción de adjuntar correo .eml/.msg en este apartado (solo PDF oficial); si se elimina el PDF ya adjuntado, el Nº de Pedido y el Total Pedido conservan su último valor leído (no se vacían) hasta que se suba un PDF nuevo, que los sobrescribe — evita perder datos de pedidos ya avanzados si alguien borra el adjunto por error.
+
+**Cambio en `app.py` (`_parsear_pdf_pedido_oficial`, nueva)**: lee el PDF con `pypdf` (mismo enfoque que `_comparar_listado_pdf_logica`, ver comentario sobre el orden real del texto extraído) y reconoce, con dos expresiones regulares tolerantes al formato: el Nº de Pedido (línea "PEDIDO 00016287" → "16287", sin ceros a la izquierda, vía `_normalizar_pedido_num`) y todas las líneas de artículo con su Cantidad/Precio/Importe, sumando la columna Importe — nunca el "Total Pedido..." que trae el propio PDF al pie, que no incluye los descuentos. Si el PDF no se puede leer o no se reconoce esa estructura, se rechaza el archivo entero con un mensaje claro pidiendo el PDF oficial correcto — nunca se guarda un resultado a medias o adivinado.
+
+**Cambio en `app.py` (`upload_adjunto`, tipo `pedido_doc`)**: deja de admitir Word y correo .eml/.msg — solo PDF; se rechaza cualquier archivo cuyo contenido no se reconozca como el pedido oficial (ver arriba); al guardarse con éxito, la app actualiza sola `pedido_num` y `total_pedido` del pedido y los devuelve en la respuesta.
+
+**Cambio en `app.py` (`create_pedido`/`update_pedido`)**: `pedido_num` y `total_pedido` dejan de aceptarse desde el formulario — se ignoran aunque se envíen, y sus valores solo cambian a través de la subida del PDF oficial (o, para `total_pedido`, también vía "Comparar listado PDF (SAP)", que sigue funcionando igual). La validación de paso a ENVIADO AL PROVEEDOR ahora exige el PDF oficial adjunto (Nº de Pedido y Total Pedido ya rellenos), con el mensaje: "Debe adjuntar el PDF del pedido oficial PRINCESS en la sección «Nº Pedido (DALI/SAP)»...".
+
+**Cambio en `templates/index.html`**: los campos "Nº Pedido (DALI/SAP)" y "Total Pedido (€)" pasan a ser de solo lectura para todos los roles (antes solo lo era para el rol Hotel), con la anotación "(automático)" en vez de "(SAP, opcional)"; el botón de adjuntar solo acepta `.pdf`; tras subir el PDF, los dos campos se rellenan al momento con la respuesta del servidor; la comprobación previa a pasar a ENVIADO AL PROVEEDOR (y su aviso) se actualiza al nuevo mensaje. El atajo "Crear pedido desde comparación" (que prellenaba el Nº de Pedido con el Nº de SAP encontrado en el listado) ya no escribe ese campo — ahora solo avisa del Nº de SAP a buscar, ya que escribirlo no tendría efecto al guardar.
+
+**Aviso para pedidos ya en curso**: los pedidos creados antes de este cambio que todavía no hayan pasado a ENVIADO AL PROVEEDOR necesitarán el PDF oficial adjunto para poder avanzar, aunque ya tuvieran un Nº de Pedido escrito a mano — es el comportamiento pedido explícitamente por Víctor. Los pedidos que ya pasaron ese estado no se ven afectados.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Prueba con el PDF real de ejemplo (pedido 16287, `pypdf` 3.17.4): reconoce Nº Pedido "16287" y Total Pedido 4.614,60 € (4.314,60 + 300,00), ignorando el "Total Pedido..." incorrecto (7.491,00 €) que trae el PDF. Prueba con un PDF no oficial: se rechaza con el mensaje didáctico, sin guardar nada.
+
+# v12.30.41 — 28 agosto 2026
+
+🐛 "Línea temporal" (panel principal): mostraba el Nº interno del pedido en vez del Nº Pedido (DALI/SAP)
+
+**Petición/reporte de Víctor**, a partir de dos capturas del widget "Línea temporal": "en estos avisos no se está utilizando el número de pedido DA/SAP que sería lo correcto, creo que es el número de apunte #".
+
+**Confirmado**: el widget mostraba `p.norden` — el "Nº" lineal interno de la app (autoincremental, sin relación con SAP/DALI) — en vez de `p.pedido_num`, el campo "Nº Pedido (DALI/SAP)" que el usuario introduce a mano y que sí aparece en los listados de SAP/DALI que maneja. Es exactamente el mismo criterio que ya se aplicó en el resumen de comparación de albaranes (v12.19, ver comentario en `app.py` junto a `pedido_num_sap`) y que ya se usa en otros paneles de la app (p. ej. la vista de detalle de alertas) — aquí simplemente no se había aplicado en este widget en concreto.
+
+**Cambio en `app.py`**: la consulta de `/api/dashboard` (`timeline`) añade `p.pedido_num` al `SELECT` junto al `norden` que ya traía.
+
+**Cambio en `templates/index.html`**: el renderizado de "Línea temporal" muestra ahora `pedido_num` como número principal; si un pedido todavía no tiene Nº Pedido (DALI/SAP) asignado, se sigue mostrando el Nº interno con el prefijo "#" como reserva (`#123`) — mismo patrón ya usado en el panel de alertas (`p.pedido_num||('#'+p.norden)`), para que nunca falte una referencia aunque sea la interna.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores.
+
 # v12.30.40 — 28 agosto 2026
 
 ✨ Correo "ENVIADO AL PROVEEDOR": enlace de descarga del PDF del pedido en vez de adjuntarlo (EmailJS en el plan Free no admite adjuntos)

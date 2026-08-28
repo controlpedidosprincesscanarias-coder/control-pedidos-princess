@@ -25,6 +25,23 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] "Nº Pedido (DALI/SAP)" solo admite el PDF oficial PRINCESS — Nº Pedido y Total Pedido se leen solos, ya no editables (v12.30.42)
+
+- Víctor: solo se debe poder cargar el PDF de pedido oficial PRINCESS (SAP/DALI, formato fijo) en ese apartado; al subirlo, rellenar solo "Nº Pedido" (del "PEDIDO 00016287" del PDF) y "Total Pedido" (suma de la columna Importe, NO el "Total Pedido..." del PDF, que no incluye descuentos); ambas celdas dejan de ser editables a mano; bloquear el paso a ENVIADO AL PROVEEDOR sin el PDF correcto, con mensaje didáctico; quitar la anotación "opcional" del Total Pedido.
+- Confirmado con Víctor: se elimina la opción de correo .eml/.msg en este apartado (solo PDF oficial); al borrar el PDF, los valores ya leídos se conservan hasta subir uno nuevo.
+- **Cambio en `app.py`**: nueva `_parsear_pdf_pedido_oficial()` (lee con `pypdf`, regex sobre Nº de Pedido y líneas Cantidad/Precio/Importe, suma Importe) — PDF no reconocido = rechazado con mensaje claro, nunca se guarda a medias. `upload_adjunto` (tipo `pedido_doc`): solo PDF, exige lectura correcta, actualiza `pedido_num`/`total_pedido` del pedido al guardar. `create_pedido`/`update_pedido`: ignoran esos dos campos si llegan del formulario — solo cambian vía el PDF (o, `total_pedido`, también vía "Comparar listado PDF (SAP)"). Validación de ENVIADO AL PROVEEDOR actualizada al nuevo mensaje.
+- **Cambio en `templates/index.html`**: ambos campos de solo lectura para todos los roles, "(automático)" en vez de "(SAP, opcional)", adjuntar solo admite `.pdf`, autorelleno inmediato tras subir, aviso previo a ENVIADO AL PROVEEDOR actualizado, atajo "Crear pedido desde comparación" ya no escribe el campo (solo avisa del Nº SAP).
+- **Aviso**: pedidos ya en curso (no enviados aún al proveedor) necesitarán el PDF oficial para poder avanzar, aunque ya tuvieran Nº de Pedido a mano — comportamiento pedido explícitamente por Víctor.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Prueba con el PDF real (pedido 16287): reconoce "16287" y 4.614,60 € correctamente, ignorando el 7.491,00 € incorrecto del PDF. Prueba con PDF no oficial: rechazado con mensaje didáctico.
+
+## 2026-08-28 — [Control Pedidos] "Línea temporal": mostraba el Nº interno del pedido en vez del Nº Pedido (DALI/SAP) (v12.30.41)
+
+- Víctor, a partir de dos capturas del panel principal: "en estos avisos no se está utilizando el número de pedido DA/SAP que sería lo correcto, creo que es el número de apunte #".
+- **Confirmado**: el widget usaba `p.norden` (Nº interno autoincremental de la app) en vez de `p.pedido_num` (Nº Pedido DALI/SAP) — mismo criterio ya aplicado en otros paneles (v12.19), no aplicado hasta ahora en este widget.
+- **Cambio en `app.py`**: la consulta de `timeline` en `/api/dashboard` añade `p.pedido_num`.
+- **Cambio en `templates/index.html`**: se muestra `pedido_num`, con reserva al Nº interno (`#123`) solo si el pedido aún no tiene Nº Pedido (DALI/SAP) asignado.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores.
+
 ## 2026-08-28 — [Control Pedidos] Correo "ENVIADO AL PROVEEDOR": enlace de descarga del PDF del pedido en vez de adjuntarlo (v12.30.40)
 
 - Víctor preguntó primero si se podía adjuntar el PDF del pedido (el de "Nº Pedido DALI/SAP") con EmailJS al pasar a ENVIADO AL PROVEEDOR — se investigó y se confirmó que solo es posible en planes de pago de EmailJS (la cuenta actual está en el plan Free, sin adjuntos) y que el propio límite de subida de la app (20MB) podría superar incluso el tope del plan más caro.

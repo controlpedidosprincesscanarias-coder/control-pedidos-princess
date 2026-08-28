@@ -1309,7 +1309,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.40
+          V 12.30.42
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2189,13 +2189,19 @@ tbody tr:last-child{border-bottom:none}
         <!-- Referencias DALI / SAP -->
         <div class="form-section">Referencias DALI / SAP</div>
         <div class="form-group">
-          <label class="form-label">Nº Pedido (DALI / SAP)</label>
-          <input class="form-control monospace" id="p-pedido-num" placeholder="Alfanumérico">
-          <label class="adj-fecha-btn" id="lbl-pedido-doc" title="Adjuntar documento o correo al pedido DALI/SAP" style="margin-top:6px">
-            <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
-                   onchange="subirAdjuntos(this,'pedido_doc')">
-            📎 Adjuntar doc. / correo
+          <label class="form-label" title="Se rellena solo al adjuntar el PDF del pedido oficial PRINCESS (SAP/DALI) — no se puede escribir a mano.">
+            Nº Pedido (DALI / SAP)
+            <span style="font-size:10px;color:#888;font-weight:400"> (automático)</span>
           </label>
+          <input class="form-control monospace" id="p-pedido-num" placeholder="Se rellena al adjuntar el PDF" readonly style="background:#f5f5f5;color:#555">
+          <label class="adj-fecha-btn" id="lbl-pedido-doc" title="Adjuntar el PDF del pedido oficial PRINCESS (SAP/DALI)" style="margin-top:6px">
+            <input type="file" accept=".pdf" style="display:none"
+                   onchange="subirAdjuntos(this,'pedido_doc')">
+            📎 Adjuntar PDF del pedido oficial
+          </label>
+          <div style="font-size:10.5px;color:#888;margin-top:4px">
+            Solo se admite el PDF de pedido oficial PRINCESS (el que genera SAP/DALI, con el mismo formato siempre) — al adjuntarlo, la app lee sola el Nº de Pedido y el Total Pedido.
+          </div>
           <div id="adj-pedido-list" class="adj-fecha-list"></div>
         </div>
         <div class="form-group" id="presupuesto-section">
@@ -2215,13 +2221,13 @@ tbody tr:last-child{border-bottom:none}
           </div>
         </div>
         <div class="form-group" id="total-pedido-section">
-          <label class="form-label" title="Importe real del pedido en SAP (base imponible). Puedes rellenarlo a mano, pero normalmente no hace falta: al usar 'Comparar listado PDF (SAP)' con este pedido dado de alta, la aplicación lo rellena aquí sola con el valor real de SAP.">
+          <label class="form-label" title="Importe real del pedido en SAP (base imponible). Se rellena solo — no se puede escribir a mano: al adjuntar el PDF del pedido oficial PRINCESS (arriba) se calcula sumando el importe de sus líneas, y más adelante 'Comparar listado PDF (SAP)' lo corrige si hiciera falta con el valor real de SAP.">
             Total Pedido (€)
-            <span style="font-size:10px;color:#888;font-weight:400"> (SAP, opcional)</span>
+            <span style="font-size:10px;color:#888;font-weight:400"> (automático)</span>
           </label>
-          <input class="form-control" type="number" id="p-total-pedido" min="0" step="0.01" placeholder="0.00">
+          <input class="form-control" type="number" id="p-total-pedido" min="0" step="0.01" placeholder="Se rellena al adjuntar el PDF" readonly style="background:#f5f5f5;color:#555">
           <div style="font-size:10.5px;color:#888;margin-top:4px">
-            Se rellena solo al comparar el "Listado de Pedidos" PDF de SAP para este hotel — puedes escribirlo a mano si lo necesitas antes.
+            Se rellena al adjuntar el PDF del pedido oficial (suma de las líneas de importe) y se corrige solo, si hiciera falta, al comparar el "Listado de Pedidos" PDF de SAP.
           </div>
         </div>
 
@@ -4251,7 +4257,7 @@ async function loadDashboardResumen() {
       <div class="dash-timeline-item">
         <span class="dash-timeline-time">${_fmtTimelineTime(t.creado_en)}</span>
         <span class="dash-timeline-text">
-          Pedido <b>${t.norden || t.pedido_id}</b> (${t.hotel_codigo || '—'}) → <b>${t.estado_nuevo}</b>
+          Pedido <b>${t.pedido_num || ('#' + (t.norden || t.pedido_id))}</b> (${t.hotel_codigo || '—'}) → <b>${t.estado_nuevo}</b>
           ${t.usuario_nombre ? ` · ${t.usuario_nombre}` : ''}
         </span>
       </div>`).join('')
@@ -4606,13 +4612,10 @@ function _applyHotelRolePedidoModal(isEdit) {
     const modal = document.getElementById('modal-pedido');
     modal.querySelectorAll('.form-group').forEach(el => el.style.display = '');
     modal.querySelectorAll('.form-section').forEach(el => el.style.display = '');
-    // Restaurar p-pedido-num
-    const pedidoNumInput = document.getElementById('p-pedido-num');
-    if (pedidoNumInput) {
-      pedidoNumInput.readOnly = false;
-      pedidoNumInput.style.background = '';
-      pedidoNumInput.style.color = '';
-    }
+    // (2026-08-28) p-pedido-num ya NO se restaura a editable aquí: se
+    // queda siempre en solo lectura (atributo `readonly` puesto en el
+    // propio HTML) para todos los roles — solo se rellena al adjuntar el
+    // PDF del pedido oficial PRINCESS (ver subirAdjuntos/onPedidoDocSubido).
     const chkCancelado = document.getElementById('chk-cancelado');
     if (chkCancelado) {
       chkCancelado.disabled = false;
@@ -4728,6 +4731,16 @@ async function subirAdjuntos(input, tipo) {
       const data = await resp.json();
       if (data.ok) {
         subidos++;
+        // (2026-08-28) Al subir el PDF de pedido oficial, el backend lee y
+        // devuelve el Nº de Pedido y el Total Pedido — se reflejan aquí
+        // mismo al momento, sin esperar a recargar el pedido entero (ver
+        // _parsear_pdf_pedido_oficial en app.py). Ambos campos son de solo
+        // lectura en el formulario: esta es la única vía por la que cambian.
+        if (tipo === 'pedido_doc' && data.pedido_num !== undefined) {
+          setVal('p-pedido-num', data.pedido_num);
+          setVal('p-total-pedido', data.total_pedido != null ? Number(data.total_pedido).toFixed(2) : '');
+          toast(`PDF leído — Nº Pedido ${data.pedido_num}, Total ${Number(data.total_pedido).toFixed(2)} €`, 'success');
+        }
       } else {
         toast(`Error subiendo "${archivo.name}": ${data.error}`, 'error');
       }
@@ -4740,7 +4753,9 @@ async function subirAdjuntos(input, tipo) {
   input.value = '';
 
   if (subidos > 0) {
-    toast(`${subidos} archivo${subidos>1?'s':''} subido${subidos>1?'s':''}`, 'success');
+    // El PDF de pedido oficial ya muestra su propio toast más arriba (con
+    // el Nº de Pedido y el Total leídos) — evita duplicar aviso aquí.
+    if (tipo !== 'pedido_doc') toast(`${subidos} archivo${subidos>1?'s':''} subido${subidos>1?'s':''}`, 'success');
     cargarAdjuntos(pedidoId);
   }
 }
@@ -5316,24 +5331,25 @@ async function savePedido() {
       );
       return;
     }
+    // (2026-08-28) Nº Pedido y Total Pedido ya no se escriben a mano: solo
+    // llegan a tener valor si se ha adjuntado y leído el PDF del pedido
+    // oficial PRINCESS (ver subirAdjuntos/pedido_doc) — por eso basta con
+    // comprobar que el PDF está adjunto (adj-pedido-list) para saber que
+    // ambos campos están rellenos; el backend vuelve a comprobarlo igual.
     const _pedidoNumVal = val('p-pedido-num').trim();
-    // Contar PDFs en adj-pedido-list (tipos: pedido_pdf, pedido_doc, pedido_word, pedido_eml)
     const _adjPedidoList = document.getElementById('adj-pedido-list');
     const _tienePdf = _adjPedidoList && _adjPedidoList.querySelectorAll('.adj-item').length > 0;
-    const _faltas = [];
-    if (!_pedidoNumVal)  _faltas.push('• Nº Pedido (DALI / SAP) — campo obligatorio');
-    if (!_tienePdf)      _faltas.push('• Documento PDF del pedido — adjunta al menos un archivo en "Adjuntar doc. / correo"');
-    if (_faltas.length) {
-      showFormAlert('Para pasar a ENVIADO AL PROVEEDOR falta:', {
-        title: '⚠️ No se puede continuar',
-        detail: _faltas.join('\n'),
-        duracion: 7000
-      });
-      const _numInput = document.getElementById('p-pedido-num');
-      if (!_pedidoNumVal) {
-        _numInput.style.borderColor = '#dc3545';
-        _numInput.focus();
-        _numInput.addEventListener('input', () => _numInput.style.borderColor = '', { once: true });
+    if (!_tienePdf || !_pedidoNumVal) {
+      showFormAlert(
+        'Para pasar a ENVIADO AL PROVEEDOR debe adjuntar el PDF del pedido oficial PRINCESS en la sección '
+        + '«Nº Pedido (DALI/SAP)» — la aplicación rellena sola el Nº de Pedido y el Total Pedido al leerlo.',
+        { title: '⚠️ No se puede continuar', duracion: 8000 }
+      );
+      const _lblPedidoDoc = document.getElementById('lbl-pedido-doc');
+      if (_lblPedidoDoc) {
+        _lblPedidoDoc.style.outline = '2px solid #dc3545';
+        setTimeout(() => { _lblPedidoDoc.style.outline = ''; }, 3000);
+        _lblPedidoDoc.scrollIntoView({ behavior: 'smooth', block: 'center' });
       }
       return;
     }
@@ -6571,12 +6587,16 @@ async function enviarResumenComparacionAlbaranes() {
 }
 
 function _crearPedidoDesdeComparacion(pedidoNumSap) {
+  // (2026-08-28) Ya NO se prellena p-pedido-num: ese campo es de solo
+  // lectura y solo se rellena al adjuntar el PDF del pedido oficial
+  // PRINCESS (ver subirAdjuntos) — escribirlo aquí no tendría efecto al
+  // guardar. Se sigue avisando del Nº de SAP encontrado, para que el
+  // usuario sepa qué PDF buscar y adjuntar.
   const hotelId = val('cmp-pdf-hotel');
   closeModal('modal-comparar-pdf');
   openNuevoPedidoModal();
   setVal('p-hotel', hotelId);
-  setVal('p-pedido-num', pedidoNumSap);
-  toast('Pedido prellenado con el hotel y el Nº de SAP — completa el resto de datos', 'success');
+  toast(`Pedido prellenado con el hotel — adjunta el PDF del pedido oficial (Nº SAP ${pedidoNumSap}) para completar el Nº de Pedido y el Total`, 'success');
 }
 
 async function borrarProveedor() {
