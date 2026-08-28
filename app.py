@@ -8886,8 +8886,8 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     (2026-08-27) ÚNICA excepción a la filosofía "solo lectura, nunca
     escribe sola" del resto de "Comparar listado PDF" (ver
     _comparar_listado_albaranes_logica): de paso, para cada pedido
-    localizado en la app, guarda dos cosas sin pedir confirmación, a
-    petición explícita de Víctor — ninguna de las dos dispara
+    localizado en la app, guarda tres cosas sin pedir confirmación, a
+    petición explícita de Víctor — ninguna de las tres dispara
     notificaciones ni cambia el estado del pedido, por eso no hay nada
     que el usuario tenga que revisar antes de aplicar (a diferencia de un
     cambio de estado o un nuevo albarán):
@@ -8897,6 +8897,26 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
          `entrada_albaran_num` — calculada como el importe recibido
          acumulado del PDF (7ª columna) menos la suma de las bases
          imponibles de las entradas anteriores del mismo pedido.
+      3. (2026-08-28) `pedidos.fecha_tramitacion`, con la "fecha de
+         pedido" del PDF (misma columna que ya se usa como
+         "fecha_pedido" más abajo) — SOLO si el pedido todavía no tiene
+         ninguna fecha de tramitación guardada. A diferencia de los dos
+         puntos anteriores (que se sobrescriben si el valor calculado
+         cambia), esta NUNCA se sobrescribe una vez tiene un valor,
+         porque a diferencia de Total Pedido/base imponible (que son
+         puramente automáticos desde que existe el PDF oficial, v12.30.42
+         y v12.30.44) la fecha de tramitación sigue siendo un campo
+         normal, editable a mano en cualquier momento — mismo criterio
+         que ya se usa al leer el PDF oficial individual de "Nº Pedido"
+         (ver _procesarFechasPdfPedidoOficial en templates/index.html):
+         solo se rellena si está vacía, nunca se pregunta ni se pisa un
+         valor ya introducido, porque aquí no hay ningún usuario delante
+         para preguntarle cuál de las dos fechas es la correcta — es una
+         comparación de listado, en background. Petición de Víctor:
+         extender a esta comparación masiva el mismo auto-relleno de
+         Fecha tramitación ya implementado para el PDF oficial individual
+         "para los pedidos antiguos que nunca tuvieron el PDF oficial
+         individual adjuntado".
     """
     try:
         from pypdf import PdfReader
@@ -8932,7 +8952,7 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
 
     # ── Pedidos ya registrados en la app para este hotel ──────────────────────
     pedidos_app = rows_to_list(query(
-        "SELECT id, norden, pedido_num, estado, total_pedido, entrada_albaran_num FROM pedidos "
+        "SELECT id, norden, pedido_num, estado, total_pedido, entrada_albaran_num, fecha_tramitacion FROM pedidos "
         "WHERE hotel_id=%s AND pedido_num IS NOT NULL AND pedido_num != ''",
         (hotel_id,)
     ))
@@ -8967,6 +8987,18 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     # pedido — no se inventa ninguna entrada nueva aquí, esto solo rellena
     # la base imponible de la que ya exista más reciente.
     _base_imponible_entrada_actualizados = []
+
+    # (2026-08-28) Fecha tramitación — tercera escritura silenciosa, a
+    # petición de Víctor: "para los pedidos antiguos que nunca tuvieron el
+    # PDF oficial individual adjuntado" (ver nota más arriba en el
+    # docstring). Se usa la "fecha de pedido" del PDF (misma columna que
+    # ya alimenta `fecha_pedido` más abajo, en el resultado por fila) —
+    # SOLO cuando el pedido no tiene AÚN ninguna fecha de tramitación
+    # guardada. Nunca se sobrescribe un valor ya existente (a diferencia
+    # de Total Pedido/base imponible arriba), porque este campo sigue
+    # siendo editable a mano y aquí no hay nadie a quien preguntar cuál de
+    # las dos fechas es la correcta si hubiera un conflicto.
+    _fecha_tramitacion_actualizados = []
 
     resultado = []
     vistos = set()
@@ -9014,6 +9046,11 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
                 # acumula ahora), no se escribe nada: mejor dejarlo en blanco
                 # para revisión manual que guardar un importe sin sentido.
 
+        if pedido_app and not pedido_app.get("fecha_tramitacion") and fecha_pedido:
+            _fecha_tramitacion_iso = _parsear_fecha_es_a_iso(fecha_pedido)
+            if _fecha_tramitacion_iso:
+                _fecha_tramitacion_actualizados.append((pedido_app["id"], _fecha_tramitacion_iso))
+
         resultado.append({
             "pedido_num_sap":         num_sap,
             "fecha":                  fecha_pedido,
@@ -9036,9 +9073,11 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
             "estado_app":             pedido_app["estado"] if pedido_app else None,
         })
 
-    # Escritura del Total Pedido y de la base imponible de la última
-    # entrada — ambas silenciosas (sin confirmación, ver notas arriba),
-    # pero solo de las filas cuyo valor realmente cambia.
+    # Escritura del Total Pedido, de la base imponible de la última
+    # entrada y de la fecha de tramitación — las tres silenciosas (sin
+    # confirmación, ver notas arriba), cada una solo de las filas cuyo
+    # valor realmente cambia (o, en el caso de fecha_tramitacion, solo de
+    # las que estaban vacías).
     if _total_pedido_actualizados:
         for _pid_tp, _importe_tp in _total_pedido_actualizados:
             execute("UPDATE pedidos SET total_pedido=%s WHERE id=%s", (_importe_tp, _pid_tp))
@@ -9046,6 +9085,10 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     if _base_imponible_entrada_actualizados:
         for _pid_be, _entrada_str in _base_imponible_entrada_actualizados:
             execute("UPDATE pedidos SET entrada_albaran_num=%s WHERE id=%s", (_entrada_str, _pid_be))
+        get_db().commit()
+    if _fecha_tramitacion_actualizados:
+        for _pid_ft, _fecha_ft in _fecha_tramitacion_actualizados:
+            execute("UPDATE pedidos SET fecha_tramitacion=%s WHERE id=%s", (_fecha_ft, _pid_ft))
         get_db().commit()
 
     total_evaluados = len(resultado)
@@ -9065,6 +9108,7 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
         "entregas_parciales":    parciales,
         "total_pedido_actualizados": len(_total_pedido_actualizados),
         "base_imponible_entrada_actualizados": len(_base_imponible_entrada_actualizados),
+        "fecha_tramitacion_actualizados": len(_fecha_tramitacion_actualizados),
         "pedidos":               resultado,
     }
 

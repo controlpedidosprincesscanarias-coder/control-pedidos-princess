@@ -1,3 +1,15 @@
+# v12.30.46 — 28 agosto 2026
+
+✨ "Comparar listado PDF (SAP)": rellena sola la Fecha tramitación de pedidos antiguos que nunca tuvieron el PDF oficial individual adjuntado
+
+**Petición de Víctor** (idea propuesta por Claude tras la entrega de v12.30.45 y aceptada por Víctor): "cuando comparas el «Listado de Pedidos» PDF de SAP, aplica la misma comprobación que ya hace el PDF oficial individual — rellenar sola la Fecha tramitación si falta, usando la fecha de pedido que también trae ese listado, para los pedidos antiguos que nunca tuvieron el PDF oficial individual adjuntado".
+
+**Cambio en `app.py` (`_comparar_listado_pdf_logica`)**: tercera escritura silenciosa (junto a Total Pedido y la base imponible de la última entrada, ya existentes desde v12.30.27/v12.30.44) — para cada pedido localizado en el listado de SAP, si `pedidos.fecha_tramitacion` está vacía, se rellena con la "fecha de pedido" de esa misma línea del PDF. A diferencia de Total Pedido y la base imponible (que se sobrescriben si el valor calculado cambia), esta NUNCA se sobrescribe una vez tiene un valor — no hay ningún usuario delante durante esta comparación en segundo plano a quien preguntarle cuál de las dos fechas es la correcta, así que ante la duda no se toca (mismo criterio de fondo que la comprobación interactiva del PDF oficial individual de v12.30.45, pero sin la parte de "preguntar", que en este caso masivo no aplica). Como `_comparar_listado_albaranes_logica()` reutiliza internamente esta función para su propia auditoría del PDF 1, este relleno queda disponible también desde "Comparar Pedidos + Albaranes", sin cambios adicionales.
+
+**Cambio en `templates/index.html`**: nuevo aviso "💾 N «Fecha tramitación» rellenada(s) sola(s)" en el resumen de "Comparar listado PDF (SAP)" (`_renderCompararPdfResultado`, reutilizado también por la comparación combinada con Albaranes) — mismo estilo que los avisos ya existentes de Total Pedido y base imponible.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Prueba aislada en Python de la lógica de relleno con 7 casos (fecha vacía → se rellena, fecha ya presente → intacta pase lo que pase el PDF, pedido no encontrado en la app, fecha del PDF vacía, fecha del PDF con formato inválido, fecha vacía representada como cadena vacía en vez de NULL, y una mezcla de varios pedidos a la vez) — todos correctos.
+
 # v12.30.45 — 28 agosto 2026
 
 ✨ "Fecha tramitación": solo admite correo electrónico (ya no PDF) — y se comprueba/auto-rellena con la Fecha Pedido y Fecha Entrega del PDF oficial

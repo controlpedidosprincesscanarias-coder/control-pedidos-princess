@@ -1309,7 +1309,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.45
+          V 12.30.46
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6297,7 +6297,14 @@ function _renderCompararPdfResultado() {
     (d.total_pedido_actualizados ? pill(`💾 ${d.total_pedido_actualizados} "Total Pedido" actualizado(s) en la ficha`, '#cfe2ff', '#084298') : '') +
     // (2026-08-27) Base imponible de la última entrada — misma idea que
     // Total Pedido, ver comentario en _comparar_listado_pdf_logica (app.py).
-    (d.base_imponible_entrada_actualizados ? pill(`💾 ${d.base_imponible_entrada_actualizados} base imponible de entrada actualizada(s)`, '#cfe2ff', '#084298') : '');
+    (d.base_imponible_entrada_actualizados ? pill(`💾 ${d.base_imponible_entrada_actualizados} base imponible de entrada actualizada(s)`, '#cfe2ff', '#084298') : '') +
+    // (2026-08-28) Fecha tramitación — a petición de Víctor, para pedidos
+    // antiguos que nunca tuvieron el PDF oficial individual adjuntado: se
+    // rellena sola con la "fecha de pedido" del listado SAP, pero SOLO
+    // cuando el pedido no tenía ninguna fecha de tramitación guardada
+    // (nunca se sobrescribe una ya existente) — ver comentario en
+    // _comparar_listado_pdf_logica (app.py).
+    (d.fecha_tramitacion_actualizados ? pill(`💾 ${d.fecha_tramitacion_actualizados} "Fecha tramitación" rellenada(s) sola(s)`, '#cfe2ff', '#084298') : '');
 
   // (2026-08-10) A petición del usuario: botón para avisar por correo al
   // comprador responsable del hotel (con copia al admin que consulta) —

@@ -25,6 +25,13 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] "Comparar listado PDF (SAP)": rellena sola la Fecha tramitación de pedidos antiguos sin el PDF oficial individual adjuntado (v12.30.46)
+
+- Víctor acepta la idea propuesta tras v12.30.45: extender a la comparación masiva del listado de SAP el mismo auto-relleno de Fecha tramitación ya implementado para el PDF oficial individual.
+- **Cambio en `app.py`**: `_comparar_listado_pdf_logica` añade una tercera escritura silenciosa — rellena `fecha_tramitacion` con la "fecha de pedido" del listado SAP, SOLO si el pedido no tenía ninguna guardada (nunca se sobrescribe un valor existente, a diferencia de Total Pedido/base imponible). Al reutilizarse desde `_comparar_listado_albaranes_logica`, también aplica a "Comparar Pedidos + Albaranes".
+- **Cambio en `templates/index.html`**: nuevo aviso "💾 N «Fecha tramitación» rellenada(s) sola(s)" en el resumen de la comparación.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Prueba aislada de la lógica de relleno con 7 casos (vacía/ya rellena/no encontrado/fecha PDF vacía o inválida/mezcla de varios pedidos) — todos correctos.
+
 ## 2026-08-28 — [Control Pedidos] "Fecha tramitación": solo correo electrónico (ya no PDF) — se comprueba/auto-rellena con Fecha Pedido y Fecha Entrega del PDF oficial (v12.30.45)
 
 - Víctor, a partir de dos capturas: el adjunto de «Fecha tramitación» debe ser solo correo electrónico (eliminar PDF, mismo estilo de instrucciones que «Nº Pedido DALI/SAP»); al cargar el PDF de «Nº Pedido» comprobar también su «Fecha Pedido» — si falta la Fecha tramitación, rellenarla sola; si ya hay una y difiere, preguntar cuál es la correcta; y si faltan Fecha de entrega específica y Plazo entrega (días), preguntar si registrar la «Fecha Entrega» del PDF.
