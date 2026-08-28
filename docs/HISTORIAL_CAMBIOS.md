@@ -25,6 +25,14 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] "Comparar Pedidos + Albaranes": la base imponible de coincidencias ya al día se rellena sola, sin esperar a "Aplicar" (v12.30.36)
+
+- Víctor: "vale si esta información ya está cruzada y es correcta ¿porqué no la automatizamos también junto a la que ya tenemos automatizada?" — tras explicarle en v12.30.35 qué hace "Aplicar todas las seleccionadas" y qué queda pendiente cuando una fila ya está en el estado correcto.
+- **Causa**: las filas `sin_cambios_pendientes=True` (albarán ya registrado, estado ya correcto, fecha ya guardada) están excluidas tanto de la tabla visible como del aviso de confirmación automática (v12.30.32) — `_aplicar_coincidencia_albaran()` nunca se llega a llamar para ellas, así que una base imponible que faltase nunca se rellenaba, pese a que el mecanismo de v12.30.35 ya sabe hacerlo.
+- **Cambio en `app.py`**: `_comparar_listado_albaranes_logica()` gana una única excepción a su contrato de "solo lectura" (mismo criterio que Total Pedido/base imponible en `_comparar_listado_pdf_logica()`, v12.30.30/31): si una coincidencia es `sin_cambios_pendientes=True` y le falta la base imponible, se rellena sola con el importe de esa coincidencia — nunca toca fecha, número de entrada nuevo ni estado, eso sigue requiriendo "Aplicar" explícito. Escritura antes de invocar internamente a `_comparar_listado_pdf_logica()`, para que su cálculo (más fiable) prevalezca si tocan la misma entrada. Nuevo contador `base_imponible_albaranes_actualizados`.
+- **Cambio en `templates/index.html`**: nuevo indicador en el resumen de "Comparar Pedidos + Albaranes" con el recuento de bases imponibles rellenadas así.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Prueba aislada en Python (6 casos: relleno, no sobrescritura, entrada correcta entre varias, normalización de ceros, sin albarán registrado, importe `None`) — todos correctos. `node --check` sobre el JS extraído de `templates/index.html`, sin errores.
+
 ## 2026-08-28 — [Control Pedidos] "Aplicar todas las seleccionadas" ya rellena también la base imponible de la entrada de albarán (v12.30.35)
 
 - Víctor: "los totales de las entregas aun estando en el estado correcto se copian si las celdas están vacías?" — confirmé que no y pidió conectarlo.

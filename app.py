@@ -8895,6 +8895,22 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
     qué coincidencias aplicar — decisión de diseño explícita: revisar y
     confirmar antes de aplicar, nunca automático al comparar.
 
+    ÚNICA EXCEPCIÓN (2026-08-28, a petición de Víctor, mismo criterio que
+    ya se aplica en _comparar_listado_pdf_logica() con total_pedido/base
+    imponible de la última entrada): cuando una coincidencia ya está
+    completamente al día (sin_cambios_pendientes=True — el pedido ya
+    tiene ese albarán registrado, ya está en el estado objetivo y ya
+    tiene fecha de tramitación), esa fila queda excluida tanto de la
+    tabla visible como de "Aplicar todas las seleccionadas" y del
+    auto-aplicar de confirmación, así que _aplicar_coincidencia_albaran()
+    nunca llega a ejecutarse para ella — y si a esa entrada de albarán ya
+    registrada le faltaba la base imponible, nunca se habría rellenado.
+    Por eso, solo para esas filas y solo el campo base imponible (nunca
+    fecha_tramitacion, nunca entrada nueva, nunca estado — esos siempre
+    requieren confirmación explícita), se rellena aquí de forma
+    silenciosa e idempotente, igual que el resto de excepciones de solo
+    información.
+
     Devuelve dict con: coincidencias, pendientes_ambiguos,
     pendientes_sin_albaran (pedido Entregado/Parcial en SAP sin albarán
     DALI con ese importe), pendientes_sin_pedido (albarán DALI sin
@@ -9048,6 +9064,13 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
     pendientes_sin_albaran = []
     pendientes_sin_pedido  = []
 
+    # (2026-08-28) Ver nota "ÚNICA EXCEPCIÓN" en el docstring de esta
+    # función — base imponible que se rellena sola solo para
+    # coincidencias sin_cambios_pendientes=True (nunca alcanzables por
+    # _aplicar_coincidencia_albaran(), porque esas filas están excluidas
+    # de toda vía de aplicación, manual o automática).
+    _base_imponible_albaranes_actualizados = []
+
     for clave in set(grupo1) | set(grupo2):
         lado1 = grupo1.get(clave, [])
         lado2 = grupo2.get(clave, [])
@@ -9059,11 +9082,12 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
             # la izquierda) en vez de un simple "in" de texto — ver
             # _normalizar_num_albaran() para el motivo del cambio.
             _reg_dali_norm = _normalizar_num_albaran(p2["registro_dali"])
+            _entradas_p1 = _parse_albaran_entries(p1["entrada_albaran_num_actual"])
             ya_registrado = bool(
                 p2["registro_dali"] and p1["entrada_albaran_num_actual"]
                 and any(
                     _normalizar_num_albaran(_e["num"]) == _reg_dali_norm
-                    for _e in _parse_albaran_entries(p1["entrada_albaran_num_actual"])
+                    for _e in _entradas_p1
                 )
             )
             # (2026-08-19) El pedido puede estar YA en un estado más avanzado
@@ -9104,6 +9128,26 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
                 "sin_cambios_pendientes":     ya_registrado and _sin_cambio_estado
                                                and p1["fecha_tramitacion_actual"],
             })
+
+            # (2026-08-28) Ver nota "ÚNICA EXCEPCIÓN" en el docstring —
+            # mismo criterio que sin_cambios_pendientes de arriba: si ya
+            # no queda NADA por aplicar en esta coincidencia (registrado,
+            # mismo estado, con fecha de tramitación), pero la entrada de
+            # albarán ya registrada no tiene base imponible guardada, se
+            # rellena aquí sola porque _aplicar_coincidencia_albaran()
+            # nunca se va a llamar para esta fila.
+            if (ya_registrado and _sin_cambio_estado and p1["fecha_tramitacion_actual"]
+                    and clave[1] is not None):
+                _cambiado_base_imponible = False
+                for _e in _entradas_p1:
+                    if (_normalizar_num_albaran(_e["num"]) == _reg_dali_norm
+                            and _e.get("base_imponible") is None):
+                        _e["base_imponible"] = round(float(clave[1]), 2)
+                        _cambiado_base_imponible = True
+                if _cambiado_base_imponible:
+                    _base_imponible_albaranes_actualizados.append((
+                        p1["pedido_id"], _construir_entrada_albaran_num(_entradas_p1)
+                    ))
         elif len(lado1) == 1 and len(lado2) == 0:
             pendientes_sin_albaran.append(lado1[0])
         elif len(lado1) == 0 and len(lado2) == 1:
@@ -9191,6 +9235,23 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
     # _comparar_listado_pdf_logica() sobre el mismo PDF 1 (relee y
     # reanaliza el mismo texto ya leído arriba — coste asumible, es un
     # job en segundo plano) para no duplicar esa lógica.
+    # Escritura de la base imponible silenciosa — ver nota "ÚNICA
+    # EXCEPCIÓN" en el docstring. Importante: esto se escribe ANTES de
+    # llamar a _comparar_listado_pdf_logica() (justo debajo), porque esa
+    # función vuelve a leer los pedidos de la BD desde cero — así, si
+    # ambos mecanismos tocan la base imponible de la MISMA entrada (la
+    # última del pedido), el cálculo de _comparar_listado_pdf_logica()
+    # (columna 7 de SAP menos entradas anteriores, más fiable al ser el
+    # importe realmente recibido acumulado) se ejecuta después, sobre el
+    # dato ya fresco, y prevalece sin perder ni pisar nada. Si escribiera
+    # aquí después de auditoria_pdf1, correría el riesgo de reconstruir la
+    # entrada a partir de una foto ya desactualizada y pisar ese valor más
+    # fiable.
+    if _base_imponible_albaranes_actualizados:
+        for _pid_ba, _entrada_str in _base_imponible_albaranes_actualizados:
+            execute("UPDATE pedidos SET entrada_albaran_num=%s WHERE id=%s", (_entrada_str, _pid_ba))
+        get_db().commit()
+
     auditoria_pdf1 = _comparar_listado_pdf_logica(hotel_id, pdf1_bytes)
 
     return {
@@ -9204,6 +9265,7 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
         "excluidos_pdf1":         excluidos_pdf1,
         "excluidos_pdf2":         excluidos_pdf2,
         "auditoria_pdf1":         auditoria_pdf1,
+        "base_imponible_albaranes_actualizados": len(_base_imponible_albaranes_actualizados),
     }
 
 def _aplicar_coincidencia_albaran(db, coincidencia: dict, usuario_id: int, usuario_nombre: str) -> dict:

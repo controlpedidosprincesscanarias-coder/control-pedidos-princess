@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.35
+          V 12.30.36
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6341,7 +6341,14 @@ function _renderCompararAlbaranesResultado(d) {
     pill(`✅ ${coincidencias.length} coincidencias propuestas`, coincidencias.length ? '#d4edda' : '#e9ecef', coincidencias.length ? '#155724' : '#495057') +
     pill(`⏳ ${totalPendientes} pendientes de revisión manual`, totalPendientes ? '#fff3cd' : '#d4edda', totalPendientes ? '#856404' : '#155724') +
     (d.excluidos_pdf1 ? pill(`➖ ${d.excluidos_pdf1} pedidos de proveedores no sujetos a seguimiento`, '#f1f3f5', '#495057') : '') +
-    (d.excluidos_pdf2 ? pill(`➖ ${d.excluidos_pdf2} albaranes de proveedores no sujetos a seguimiento`, '#f1f3f5', '#495057') : '');
+    (d.excluidos_pdf2 ? pill(`➖ ${d.excluidos_pdf2} albaranes de proveedores no sujetos a seguimiento`, '#f1f3f5', '#495057') : '') +
+    // (2026-08-28) Filas ya al día (sin_cambios_pendientes=True, ni
+    // visibles en la tabla ni alcanzables por "Aplicar") cuya base
+    // imponible faltaba y se ha rellenado sola — ver nota "ÚNICA
+    // EXCEPCIÓN" en el docstring de _comparar_listado_albaranes_logica()
+    // en app.py. Mismo estilo que el pill equivalente del otro modal
+    // (línea ~6140, "base imponible de entrada actualizada(s)").
+    (d.base_imponible_albaranes_actualizados ? pill(`💾 ${d.base_imponible_albaranes_actualizados} base imponible actualizada(s) sola(s) (ya al día)`, '#cfe2ff', '#084298') : '');
 
   const tbody = document.getElementById('cmp-alb-tbody');
   if (!coincidencias.length) {

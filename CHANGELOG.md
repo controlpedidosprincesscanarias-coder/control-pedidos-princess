@@ -1,3 +1,19 @@
+# v12.30.36 — 28 agosto 2026
+
+✨ "Comparar Pedidos + Albaranes": la base imponible de coincidencias ya al día (sin nada más pendiente) se rellena sola, sin esperar a que se pulse "Aplicar"
+
+**Petición de Víctor**: "vale si esta información ya está cruzada y es correcta ¿porqué no la automatizamos también junto a la que ya tenemos automatizada?" — tras la explicación de v12.30.35 sobre qué hace "Aplicar todas las seleccionadas" y qué queda por aplicar cuando una fila ya está en el estado correcto (`sin_cambios_pendientes`), Víctor pidió automatizar también ese caso.
+
+**Causa/motivo**: las filas con `sin_cambios_pendientes=True` (el pedido ya tiene ese albarán registrado, ya está en el estado objetivo y ya tiene fecha de tramitación) quedan excluidas tanto de la tabla visible de "Coincidencias propuestas" como del aviso de confirmación automática de v12.30.32 (que filtra explícitamente `!c.sin_cambios_pendientes`) — así que `_aplicar_coincidencia_albaran()` nunca llega a ejecutarse para ellas, ni siquiera para rellenar una base imponible que faltase, aunque el rellenado de v12.30.35 ya sabe hacerlo perfectamente en cuanto se le llama.
+
+**Cambio en `app.py`**: `_comparar_listado_albaranes_logica()` (documentada hasta ahora como estrictamente "de solo lectura, no escribe nada") gana una única excepción más, con el mismo criterio ya usado en `_comparar_listado_pdf_logica()` para Total Pedido y la base imponible de la última entrada (v12.30.30/31): durante el propio cruce, si una coincidencia resulta `sin_cambios_pendientes=True` y la entrada de albarán ya registrada no tiene base imponible guardada, se rellena directamente con el importe de esa misma coincidencia — de forma silenciosa e idempotente, sin disparar notificaciones ni tocar fecha_tramitación, número de entrada nuevo ni estado (esos tres siempre requieren "Aplicar" explícito, sin cambios respecto a antes). La escritura se hace ANTES de llamar internamente a `_comparar_listado_pdf_logica()` (para la auditoría combinada), para que si ambas tocan la base imponible de la misma última entrada, el cálculo de esa función (más fiable, basado en el acumulado real de SAP) sea el que prevalezca. Nuevo contador `base_imponible_albaranes_actualizados` en el resultado.
+
+**Cambio en `templates/index.html`**: nuevo indicador junto al resumen de "Comparar Pedidos + Albaranes" ("💾 N base imponible actualizada(s) sola(s) (ya al día)"), con el mismo estilo que el indicador equivalente de "Comparar listado PDF (SAP)".
+
+**Qué sigue exactamente igual (nada de esto se ha tocado)**: fecha de tramitación, alta de una entrada de albarán nueva y cambio de estado siguen requiriendo confirmación explícita — a mano fila a fila con "Aplicar", con "Aplicar todas las seleccionadas", o con el aviso de confirmación automática al terminar la comparación (v12.30.32). Lo único nuevo es que una base imponible que faltaba en una fila que ya no tenía NADA MÁS pendiente ya no se queda vacía para siempre por no tener ninguna vía de aplicación que la alcance.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Prueba aislada en Python (parseo/reconstrucción con las mismas funciones reales del archivo): relleno de una entrada sin base imponible, no sobrescritura de una que ya la tenía, relleno de la entrada correcta en un pedido con varias entradas sin tocar las demás, coincidencia con normalización de ceros a la izquierda, sin cambio si el albarán no está registrado, sin cambio si el importe de la coincidencia es `None` — las 6 correctas. `node --check` sobre el JS extraído de `templates/index.html`, sin errores.
+
 # v12.30.35 — 28 agosto 2026
 
 ✨ "Aplicar todas las seleccionadas" (Comparar Pedidos + Albaranes) ya rellena también la base imponible de la entrada, no solo el número y la fecha
