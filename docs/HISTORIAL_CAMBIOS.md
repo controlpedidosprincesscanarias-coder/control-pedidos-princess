@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-28 — [Control Pedidos] Nuevo apartado "Notificaciones adicionales" (solo admin): contactos sueltos en copia según departamento del pedido + estado nuevo (v12.30.47)
+
+- Víctor: quiere registrar contactos que no son usuarios de la app (Administrativo A&B, Director de Compras, Chef Ejecutivo) y decidir, por departamento del pedido + estado nuevo, a cuáles poner en copia en el correo interno de cambio de estado — ejemplo: Cocina + ENVIADO AL PROVEEDOR → copia al Chef Ejecutivo.
+- Confirmado con Víctor: contactos y reglas globales para toda la cadena (no varían por hotel, a diferencia del correo de Departamentos).
+- **Cambio en `app.py`/`models.py`**: dos tablas nuevas, `notificacion_contactos` y `notificacion_contacto_reglas` (contacto_id + departamento_id + estado, único). Solo tiene sentido un estado de `ESTADOS_EMAIL_INTERNO` — el resto se descarta al guardar.
+- **Cambio en `app.py` (`enviar_emails_estado`)**: añade los contactos con regla aplicable al mismo correo interno de cambio de estado, en copia, sin duplicar destinatarios.
+- **Cambio en `app.py`**: CRUD completo (`GET`/`POST`/`PUT`/`DELETE`) en `/api/admin/notificaciones-contactos`.
+- **Cambio en `templates/index.html`**: nuevo apartado "🔔 Notificaciones adicionales" — alta de contactos + tarjeta por contacto con matriz de checkboxes Departamento × Estado.
+- **Verificación**: `python3 -m py_compile app.py models.py` y `node --check` sin errores. Prueba aislada de la lógica de fusión de destinatarios (5 casos: nuevo, duplicado, dos correos, sin correo, sin reglas) — todos correctos.
+
 ## 2026-08-28 — [Control Pedidos] "Comparar listado PDF (SAP)": rellena sola la Fecha tramitación de pedidos antiguos sin el PDF oficial individual adjuntado (v12.30.46)
 
 - Víctor acepta la idea propuesta tras v12.30.45: extender a la comparación masiva del listado de SAP el mismo auto-relleno de Fecha tramitación ya implementado para el PDF oficial individual.

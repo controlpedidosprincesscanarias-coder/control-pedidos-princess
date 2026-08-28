@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.46** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.47** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -83,6 +83,12 @@ Vistas disponibles en el sidebar (algunas restringidas por rol):
   correo distinto en cada hotel). El correo interno de cambio de estado
   de un pedido se envía con copia al correo del departamento que lo
   solicitó, si está registrado aquí.
+- **Notificaciones adicionales** — solo admin (2026-08-28): contactos
+  sueltos que no son usuarios de la app (p. ej. Chef Ejecutivo, Director
+  de Compras, Administrativo A&B), globales para toda la cadena, a los
+  que se pone en copia en el correo interno de cambio de estado según el
+  departamento del pedido y el estado nuevo concreto (p. ej. Cocina +
+  ENVIADO AL PROVEEDOR → copia al Chef Ejecutivo).
 - **Usuarios** — alta/edición de usuarios, roles y asignación de
   hoteles.
 - **Integridad** — comprobaciones de consistencia de datos.

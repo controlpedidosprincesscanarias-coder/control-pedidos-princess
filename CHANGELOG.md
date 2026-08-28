@@ -1,3 +1,21 @@
+# v12.30.47 — 28 agosto 2026
+
+✨ Nuevo apartado "Notificaciones adicionales" (solo admin): contactos sueltos en copia según departamento del pedido + estado nuevo
+
+**Petición de Víctor**: "necesito un apartado donde registrar varios correos electrónicos más y también donde decidir que tipo de correos se envía a cada uno de ellos en copia, es decir, ahora mismo los correos internos de cambio de estado, tenemos configurado que se envíen automáticamente al comprador, rol hotel y departamento. Ahora quiero poder decidir que cambios de estado y que pedidos también enviar con copia a estos nuevos correos [...] La idea es poder decidir que pedidos según departamento también se envían a que otros correos, siempre en copia. Por ejemplo, los pedidos de cocina, quizás me pueda interesar que al cambiar el estado a ENVIADO AL PROVEEDOR se ponga en copia al Chef Ejecutivo por ejemplo". Ejemplos de contactos a crear: Administrativo A&B, Director de Compras, Chef Ejecutivo.
+
+**Decisión confirmada con Víctor** antes de implementar: los contactos y sus reglas son globales para toda la cadena (mismo correo y mismas reglas en los 4 hoteles) — a diferencia del correo de Departamentos por hotel (v12.30.39), que sí varía por hotel.
+
+**Cambio en `models.py` / `app.py` (`_auto_migrate`)**: dos tablas nuevas — `notificacion_contactos` (nombre, email, email2, activo) y `notificacion_contacto_reglas` (contacto_id, departamento_id, estado, único por combinación), en el bloque protegido de `_auto_migrate()` con su propio `try/except` cada una, y en `models.py` para instalaciones nuevas. Los "estados" con sentido son únicamente los de `ESTADOS_EMAIL_INTERNO` (los que de verdad disparan el correo interno de cambio de estado) — una regla con cualquier otro estado se descarta en silencio al guardar.
+
+**Cambio en `app.py` (`enviar_emails_estado`)**: tras la copia al departamento solicitante (v12.30.39), se añade una nueva consulta — para el departamento del pedido y el estado nuevo, busca los contactos activos con una regla que aplique y los añade al mismo correo interno, con copia a todos (nunca aparte), sin duplicar direcciones ya incluidas. Se omite en silencio si no hay ninguna regla — nunca bloquea el envío.
+
+**Cambio en `app.py` (endpoints nuevos)**: `GET /api/admin/notificaciones-contactos` (catálogo de contactos con sus reglas + catálogo de departamentos + lista de estados válidos), `POST /api/admin/notificaciones-contactos` (crear contacto), `PUT /api/admin/notificaciones-contactos/<id>` (actualizar nombre/email/email2/activo y reemplazar por completo el conjunto de reglas de ese contacto de una vez), `DELETE /api/admin/notificaciones-contactos/<id>` (eliminar, cascada a sus reglas). Todos `@admin_required`, mismo patrón que el resto de endpoints de administración.
+
+**Cambio en `templates/index.html`**: nuevo apartado "🔔 Notificaciones adicionales" en el sidebar (solo admin, junto a "Departamentos") — formulario para crear un contacto nuevo (nombre + correo + correo 2 opcional) y, por cada contacto ya creado, una tarjeta con sus datos editables y una matriz de checkboxes Departamento × Estado (los 5 estados de `ESTADOS_EMAIL_INTERNO`) para marcar en qué combinaciones recibe copia — cada tarjeta tiene su propio botón "💾 Guardar" y "🗑️ Eliminar" (la lista de contactos es dinámica, a diferencia de Departamentos, así que no hay un único botón para toda la pantalla).
+
+**Verificación**: `python3 -m py_compile app.py models.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Prueba aislada en Python de la lógica de fusión de destinatarios (contacto nuevo se añade, contacto ya presente no duplica, contacto con dos correos añade ambos, contacto sin correo se salta en silencio, sin reglas no cambia nada) — todos los casos correctos.
+
 # v12.30.46 — 28 agosto 2026
 
 ✨ "Comparar listado PDF (SAP)": rellena sola la Fecha tramitación de pedidos antiguos que nunca tuvieron el PDF oficial individual adjuntado

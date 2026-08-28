@@ -39,6 +39,32 @@ SQL_STATEMENTS = [
         UNIQUE (hotel_id, departamento_id)
     )
     """,
+    # ── Contactos adicionales de notificación (2026-08-28) ──────────────────────
+    # Contactos sueltos (no son usuarios de la app) que se ponen en copia en el
+    # correo interno de cambio de estado según el departamento del pedido y el
+    # estado nuevo concreto — global para toda la cadena (no varía por hotel, a
+    # diferencia de departamento_hotel_email). Ver enviar_emails_estado() y
+    # /api/admin/notificaciones-contactos en app.py.
+    """
+    CREATE TABLE IF NOT EXISTS notificacion_contactos (
+        id        SERIAL PRIMARY KEY,
+        nombre    TEXT NOT NULL,
+        email     TEXT,
+        email2    TEXT,
+        activo    INTEGER NOT NULL DEFAULT 1,
+        creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS notificacion_contacto_reglas (
+        id              SERIAL PRIMARY KEY,
+        contacto_id     INTEGER NOT NULL REFERENCES notificacion_contactos(id) ON DELETE CASCADE,
+        departamento_id INTEGER NOT NULL REFERENCES departamentos(id) ON DELETE CASCADE,
+        estado          TEXT NOT NULL,
+        UNIQUE (contacto_id, departamento_id, estado)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_notif_reglas_depto_estado ON notificacion_contacto_reglas(departamento_id, estado)",
     # ── Proveedores ───────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS proveedores (

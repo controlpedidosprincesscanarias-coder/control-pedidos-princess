@@ -1282,6 +1282,9 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item admin-only" data-view="departamentos-email" data-roles="admin" onclick="showViewGuarded('departamentos-email',this)">
       <span class="icon">📧</span> Departamentos
     </div>
+    <div class="sb-item admin-only" data-view="notificaciones-contactos" data-roles="admin" onclick="showViewGuarded('notificaciones-contactos',this)">
+      <span class="icon">🔔</span> Notificaciones adicionales
+    </div>
     <div class="sb-item admin-only" data-view="usuarios" data-roles="admin" onclick="showViewGuarded('usuarios',this)">
       <span class="icon">👥</span> Usuarios
     </div>
@@ -1309,7 +1312,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.46
+          V 12.30.47
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1678,6 +1681,40 @@ tbody tr:last-child{border-bottom:none}
               <tbody id="depto-email-tbody"></tbody>
             </table>
           </div>
+        </div>
+      </div>
+
+      <!-- ── Vista: Notificaciones adicionales — contactos + reglas (solo admin, 2026-08-28) ── -->
+      <div id="view-notificaciones-contactos" class="section-hidden">
+        <div class="card">
+          <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <span class="card-title">🔔 Notificaciones adicionales</span>
+            <button onclick="loadNotificacionesContactos()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Recargar</button>
+          </div>
+          <div style="margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:12.5px;background:#eef4ff;color:#1a4d8f;line-height:1.5">
+            Contactos que no son usuarios de la app (p. ej. Chef Ejecutivo, Director de Compras, Administrativo A&amp;B)
+            a los que se puede poner en copia en el correo interno de cambio de estado — marca, en la tabla de cada
+            contacto, en qué departamentos y para qué cambios de estado concretos debe recibir copia (por ejemplo,
+            Cocina + ENVIADO AL PROVEEDOR). Aplica igual a los 4 hoteles. Un contacto sin ninguna casilla marcada
+            nunca recibe nada — no hace falta eliminarlo si quieres desactivarlo temporalmente, basta con
+            desmarcar "Activo".
+          </div>
+          <div id="notif-contactos-nuevo" style="margin:0 16px 16px;padding:12px 14px;border:1.5px dashed var(--border);border-radius:8px;display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:3px">Nombre del contacto</label>
+              <input id="notif-nuevo-nombre" placeholder="ej. Chef Ejecutivo" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:200px">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:3px">Correo</label>
+              <input id="notif-nuevo-email" type="email" placeholder="correo@princess.com" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:220px">
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:3px">Correo 2 (opcional)</label>
+              <input id="notif-nuevo-email2" type="email" placeholder="(opcional)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:220px">
+            </div>
+            <button onclick="crearNotificacionContacto()" style="padding:7px 16px;font-size:12.5px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">＋ Añadir contacto</button>
+          </div>
+          <div id="notif-contactos-list"></div>
         </div>
       </div>
 
@@ -3818,7 +3855,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos','departamentos-email':'📧 Departamentos — correo por hotel',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Config Alertas','config-avisos':'🔔 Configuración de Avisos',restore:'🔄 Restaurar Backup'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos','departamentos-email':'📧 Departamentos — correo por hotel','notificaciones-contactos':'🔔 Notificaciones adicionales',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Config Alertas','config-avisos':'🔔 Configuración de Avisos',restore:'🔄 Restaurar Backup'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -3835,6 +3872,7 @@ function showView(view, el) {
   if (view==='techo')       loadTecho();
   if (view==='familias')    loadFamilias();
   if (view==='departamentos-email') loadDepartamentosEmail();
+  if (view==='notificaciones-contactos') loadNotificacionesContactos();
   if (view==='usuarios')    { loadUsuarios(); adminCargarSolicitudes(); }
   if (view==='integridad')     loadIntegridad();
   if (view==='config-alertas') loadConfigAlertas();
@@ -8294,6 +8332,160 @@ async function saveDepartamentosEmail() {
     msg.style.display = 'block';
     msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
     msg.textContent = '❌ Error de red: ' + e.message;
+  }
+}
+
+/* ── Notificaciones adicionales — contactos + reglas (2026-08-28) ──────────
+   A petición de Víctor: contactos sueltos que no son usuarios de la app
+   (Chef Ejecutivo, Director de Compras, Administrativo A&B...) a los que se
+   puede poner en copia en el correo interno de cambio de estado, según el
+   departamento del pedido y el estado nuevo — global para toda la cadena.
+   A diferencia de "Departamentos" (una fila fija por departamento, mismo
+   hotel), aquí la lista de contactos es dinámica — se crean y eliminan
+   libremente — así que cada contacto tiene su propia tarjeta con su propio
+   botón Guardar/Eliminar, en vez de un único "Guardar cambios" para toda
+   la pantalla. */
+let _notifContactosData = null;
+
+async function loadNotificacionesContactos() {
+  const cont = document.getElementById('notif-contactos-list');
+  try {
+    const d = await api('/api/admin/notificaciones-contactos');
+    if (!d.ok) throw new Error(d.error);
+    _notifContactosData = d;
+    _renderNotificacionesContactos();
+  } catch(e) {
+    cont.innerHTML = `<div style="color:red;padding:20px">Error cargando contactos: ${e.message}</div>`;
+  }
+}
+
+function _renderNotificacionesContactos() {
+  const d = _notifContactosData;
+  const cont = document.getElementById('notif-contactos-list');
+  if (!d) return;
+  if (!d.contactos.length) {
+    cont.innerHTML = `<div style="text-align:center;color:var(--text-secondary);padding:24px 16px">
+      Todavía no hay ningún contacto adicional — añade el primero arriba.</div>`;
+    return;
+  }
+  cont.innerHTML = d.contactos.map(c => {
+    const reglasSet = new Set((c.reglas || []).map(r => `${r.departamento_id}|${r.estado}`));
+    return `
+    <div class="notif-contacto-card" data-id="${c.id}" style="margin:0 16px 20px;border:1px solid var(--border);border-radius:10px;overflow:hidden">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:12px 14px;background:#f8f9fa">
+        <div>
+          <label style="display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:3px">Nombre</label>
+          <input class="notif-c-nombre" value="${esc(c.nombre)}" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-weight:700;min-width:180px">
+        </div>
+        <div>
+          <label style="display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:3px">Correo</label>
+          <input class="notif-c-email" type="email" value="${esc(c.email||'')}" placeholder="correo@princess.com" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:200px">
+        </div>
+        <div>
+          <label style="display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:3px">Correo 2 (opcional)</label>
+          <input class="notif-c-email2" type="email" value="${esc(c.email2||'')}" placeholder="(opcional)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:200px">
+        </div>
+        <label class="checkbox-item" style="font-size:12.5px;font-weight:600">
+          <input type="checkbox" class="notif-c-activo" ${c.activo ? 'checked' : ''}> Activo
+        </label>
+        <div style="margin-left:auto;display:flex;gap:8px">
+          <button onclick="guardarNotificacionContacto(${c.id})" style="padding:6px 14px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">💾 Guardar</button>
+          <button onclick="eliminarNotificacionContacto(${c.id})" style="padding:6px 14px;font-size:12px;border:1px solid #dc3545;border-radius:6px;cursor:pointer;background:#fff;color:#dc3545">🗑️ Eliminar</button>
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table style="font-size:11.5px">
+          <thead><tr><th>Departamento</th>${d.estados.map(e => `<th style="text-align:center;padding:4px 6px">${e}</th>`).join('')}</tr></thead>
+          <tbody>
+            ${d.departamentos.map(dep => `<tr>
+              <td style="font-weight:600;white-space:nowrap">${dep.nombre}</td>
+              ${d.estados.map(e => `<td style="text-align:center">
+                <input type="checkbox" class="notif-c-regla" data-depto="${dep.id}" data-estado="${esc(e)}"
+                  ${reglasSet.has(dep.id + '|' + e) ? 'checked' : ''}>
+              </td>`).join('')}
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>
+      <div id="notif-msg-${c.id}" style="display:none;margin:0 14px 12px;padding:8px 12px;border-radius:6px;font-size:12px"></div>
+    </div>`;
+  }).join('');
+}
+
+async function crearNotificacionContacto() {
+  const nombre = val('notif-nuevo-nombre').trim();
+  const email  = val('notif-nuevo-email').trim();
+  const email2 = val('notif-nuevo-email2').trim();
+  if (!nombre) { toast('Escribe un nombre para el contacto', 'error'); return; }
+  try {
+    const r = await fetch('/api/admin/notificaciones-contactos', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ nombre, email, email2 })
+    });
+    const d = await r.json();
+    if (!d.ok) { toast(d.error || 'Error al crear el contacto', 'error'); return; }
+    setVal('notif-nuevo-nombre', ''); setVal('notif-nuevo-email', ''); setVal('notif-nuevo-email2', '');
+    toast('Contacto creado — ahora marca sus departamentos y estados', 'success');
+    await loadNotificacionesContactos();
+  } catch(e) {
+    toast('Error de conexión: ' + e.message, 'error');
+  }
+}
+
+async function guardarNotificacionContacto(cid) {
+  const card = document.querySelector(`.notif-contacto-card[data-id="${cid}"]`);
+  if (!card) return;
+  const nombre = card.querySelector('.notif-c-nombre').value.trim();
+  const email  = card.querySelector('.notif-c-email').value.trim();
+  const email2 = card.querySelector('.notif-c-email2').value.trim();
+  const activo = card.querySelector('.notif-c-activo').checked;
+  if (!nombre) { toast('El nombre no puede quedar vacío', 'error'); return; }
+  const reglas = [];
+  card.querySelectorAll('.notif-c-regla:checked').forEach(chk => {
+    reglas.push({ departamento_id: parseInt(chk.dataset.depto), estado: chk.dataset.estado });
+  });
+  const msg = document.getElementById(`notif-msg-${cid}`);
+  try {
+    const r = await fetch(`/api/admin/notificaciones-contactos/${cid}`, {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ nombre, email, email2, activo, reglas })
+    });
+    const d = await r.json();
+    if (msg) {
+      msg.style.display = 'block';
+      if (d.ok) {
+        msg.style.background = '#d4edda'; msg.style.color = '#155724';
+        msg.textContent = `✅ Guardado (${d.reglas_guardadas} regla(s) activa(s)). Se aplica de inmediato a los próximos correos.`;
+      } else {
+        msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
+        msg.textContent = '❌ Error: ' + d.error;
+      }
+      setTimeout(() => { msg.style.display = 'none'; }, 5000);
+    }
+    if (d.ok) await loadNotificacionesContactos();
+  } catch(e) {
+    if (msg) {
+      msg.style.display = 'block';
+      msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
+      msg.textContent = '❌ Error de red: ' + e.message;
+    }
+  }
+}
+
+async function eliminarNotificacionContacto(cid) {
+  const c = ((_notifContactosData || {}).contactos || []).find(x => x.id === cid);
+  const nombre = c ? c.nombre : 'este contacto';
+  if (!confirm(`¿Eliminar el contacto "${nombre}"? Se eliminarán también todas sus reglas de copia. Esta acción no se puede deshacer.`)) return;
+  try {
+    const r = await fetch(`/api/admin/notificaciones-contactos/${cid}`, { method: 'DELETE' });
+    const d = await r.json();
+    if (!d.ok) { toast(d.error || 'Error al eliminar', 'error'); return; }
+    toast('Contacto eliminado', 'success');
+    await loadNotificacionesContactos();
+  } catch(e) {
+    toast('Error de conexión: ' + e.message, 'error');
   }
 }
 

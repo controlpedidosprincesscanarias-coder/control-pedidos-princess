@@ -254,6 +254,48 @@ def _auto_migrate():
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_adjunto_token ON adjunto_descarga_tokens(token)")
             except Exception as e:
                 log.warning(f"No se pudo crear la tabla adjunto_descarga_tokens: {e}")
+            # ── Contactos adicionales de notificación (2026-08-28) ───────────
+            # A petición de Víctor: además del comprador, rol hotel y correo
+            # de departamento (departamento_hotel_email, arriba), quiere
+            # poder registrar contactos sueltos que no son usuarios de la
+            # app (p. ej. "Chef Ejecutivo", "Director de Compras",
+            # "Administrativo A&B") y decidir, por CADA contacto, en qué
+            # departamentos y para qué cambios de estado concretos se les
+            # pone en copia en el correo interno de cambio de estado —
+            # global para toda la cadena (decisión confirmada con Víctor:
+            # no varía por hotel, a diferencia de departamento_hotel_email).
+            # Ver también models.py (SQL_STATEMENTS, instalaciones nuevas) y
+            # el uso real en enviar_emails_estado() y
+            # /api/admin/notificaciones-contactos más abajo en este archivo.
+            try:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS notificacion_contactos (
+                        id        SERIAL PRIMARY KEY,
+                        nombre    TEXT NOT NULL,
+                        email     TEXT,
+                        email2    TEXT,
+                        activo    INTEGER NOT NULL DEFAULT 1,
+                        creado_en TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """)
+            except Exception as e:
+                log.warning(f"No se pudo crear la tabla notificacion_contactos: {e}")
+            try:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS notificacion_contacto_reglas (
+                        id              SERIAL PRIMARY KEY,
+                        contacto_id     INTEGER NOT NULL REFERENCES notificacion_contactos(id) ON DELETE CASCADE,
+                        departamento_id INTEGER NOT NULL REFERENCES departamentos(id) ON DELETE CASCADE,
+                        estado          TEXT NOT NULL,
+                        UNIQUE (contacto_id, departamento_id, estado)
+                    )
+                """)
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_notif_reglas_depto_estado "
+                    "ON notificacion_contacto_reglas(departamento_id, estado)"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo crear la tabla notificacion_contacto_reglas: {e}")
             # ══════════════════════════════════════════════════════════════
             # Columnas legacy de proveedores (para DBs antiguas)
             for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT"),
@@ -2294,6 +2336,33 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         for _e in _emails_usuario(_depto_email_row):
             if _e not in _todos_internos:
                 _todos_internos.append(_e)
+
+    # (2026-08-28) Contactos adicionales de notificación — a petición de
+    # Víctor: además del comprador, rol hotel y correo de departamento
+    # (arriba), permite poner en copia a contactos sueltos que no son
+    # usuarios de la app (p. ej. "Chef Ejecutivo", "Director de Compras")
+    # solo para determinadas combinaciones de departamento del pedido +
+    # estado nuevo — configurado en Administrador → Notificaciones,
+    # global para toda la cadena (no varía por hotel, a diferencia del
+    # correo de departamento de arriba). Ver notificacion_contactos /
+    # notificacion_contacto_reglas y /api/admin/notificaciones-contactos
+    # más abajo en este archivo. Igual que el correo de departamento: se
+    # añade al mismo correo con copia a todos, nunca aparte, y se omite en
+    # silencio si no hay ninguna regla que aplique — nunca bloquea el
+    # envío. No se excluye aunque coincida con quien hizo el cambio (son
+    # buzones/roles, no la persona concreta que acaba de actuar).
+    if pedido.get("departamento_id"):
+        _contactos_regla = rows_to_list(query(
+            """SELECT DISTINCT nc.email, nc.email2
+               FROM notificacion_contacto_reglas ncr
+               JOIN notificacion_contactos nc ON nc.id = ncr.contacto_id
+               WHERE ncr.departamento_id=%s AND ncr.estado=%s AND nc.activo=1""",
+            (pedido["departamento_id"], estado_nuevo)
+        )) or []
+        for _c in _contactos_regla:
+            for _e in _emails_usuario(_c):
+                if _e not in _todos_internos:
+                    _todos_internos.append(_e)
 
     # ── Correo al proveedor (solo ENVIADO AL PROVEEDOR) ───────────────────────
     # Para:  todos los contactos principales del proveedor
@@ -15637,6 +15706,150 @@ def api_save_departamentos_email():
         return jsonify({"ok": True, "actualizados": actualizados})
     except Exception as exc:
         log.error("[DEPTO-EMAIL] Error PUT: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+# ── API Admin: contactos adicionales de notificación (2026-08-28) ──────────
+# A petición de Víctor: contactos sueltos (no son usuarios de la app, p. ej.
+# "Chef Ejecutivo", "Director de Compras", "Administrativo A&B") que se
+# ponen en copia en el correo interno de cambio de estado según el
+# departamento del pedido y el estado nuevo — global para toda la cadena
+# (decisión confirmada con Víctor, a diferencia del correo de departamento
+# por hotel de arriba). Ver notificacion_contactos / notificacion_contacto_
+# reglas (_auto_migrate/models.py) y el uso real en enviar_emails_estado().
+# Los "estados" ofrecidos son ESTADOS_EMAIL_INTERNO — los únicos que de
+# verdad disparan el correo interno de cambio de estado; no tendría efecto
+# alguno configurar una regla para un estado fuera de esa lista.
+_ESTADOS_EMAIL_INTERNO_ORDENADOS = [e for e in ESTADOS_VALIDOS if e in ESTADOS_EMAIL_INTERNO]
+
+@app.route("/api/admin/notificaciones-contactos", methods=["GET"])
+@admin_required
+def api_get_notificaciones_contactos():
+    """
+    Devuelve todos los contactos adicionales con sus reglas (departamento +
+    estado) ya configuradas, el catálogo de departamentos y la lista de
+    estados que tiene sentido ofrecer (ESTADOS_EMAIL_INTERNO) — todo lo que
+    necesita el frontend para pintar, por cada contacto, una matriz de
+    checkboxes Departamento × Estado.
+    """
+    try:
+        contactos = rows_to_list(query(
+            "SELECT id, nombre, email, email2, activo FROM notificacion_contactos ORDER BY nombre"
+        )) or []
+        reglas = rows_to_list(query(
+            "SELECT contacto_id, departamento_id, estado FROM notificacion_contacto_reglas"
+        )) or []
+        reglas_por_contacto = {}
+        for r in reglas:
+            reglas_por_contacto.setdefault(r["contacto_id"], []).append(
+                {"departamento_id": r["departamento_id"], "estado": r["estado"]}
+            )
+        for c in contactos:
+            c["reglas"] = reglas_por_contacto.get(c["id"], [])
+
+        departamentos = rows_to_list(query(
+            "SELECT id, nombre FROM departamentos WHERE activo=1 ORDER BY nombre"
+        )) or []
+
+        return jsonify({
+            "ok": True, "contactos": contactos, "departamentos": departamentos,
+            "estados": _ESTADOS_EMAIL_INTERNO_ORDENADOS,
+        })
+    except Exception as exc:
+        log.error("[NOTIF-CONTACTOS] Error GET: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/notificaciones-contactos", methods=["POST"])
+@admin_required
+def api_crear_notificacion_contacto():
+    """Crea un contacto nuevo, sin reglas todavía (se añaden con el PUT)."""
+    data   = request.get_json(silent=True) or {}
+    nombre = (data.get("nombre") or "").strip()
+    if not nombre:
+        return jsonify({"ok": False, "error": "El nombre es obligatorio"}), 400
+    email  = (data.get("email") or "").strip() or None
+    email2 = (data.get("email2") or "").strip() or None
+    try:
+        db  = get_db()
+        cur = execute(
+            "INSERT INTO notificacion_contactos (nombre, email, email2) VALUES (%s,%s,%s) RETURNING id",
+            (nombre, email, email2)
+        )
+        cid = cur.fetchone()["id"]
+        db.commit()
+        log.info("[NOTIF-CONTACTOS] Contacto creado: %s (id=%s)", nombre, cid)
+        return jsonify({"ok": True, "id": cid}), 201
+    except Exception as exc:
+        log.error("[NOTIF-CONTACTOS] Error POST: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/notificaciones-contactos/<int:cid>", methods=["PUT"])
+@admin_required
+def api_actualizar_notificacion_contacto(cid):
+    """
+    Actualiza nombre/email/email2/activo de un contacto Y reemplaza por
+    completo su conjunto de reglas (departamento + estado) de una sola vez
+    — mismo patrón "Guardar cambios" de una tabla entera que el resto de
+    pantallas de administración de esta app. Body:
+    {"nombre": "...", "email": "...", "email2": "...", "activo": true,
+     "reglas": [{"departamento_id": 3, "estado": "ENVIADO AL PROVEEDOR"}, ...]}
+    Una regla con un estado fuera de ESTADOS_EMAIL_INTERNO se descarta en
+    silencio (no tendría ningún efecto — ver comentario de arriba).
+    """
+    data   = request.get_json(silent=True) or {}
+    nombre = (data.get("nombre") or "").strip()
+    if not nombre:
+        return jsonify({"ok": False, "error": "El nombre es obligatorio"}), 400
+    email   = (data.get("email") or "").strip() or None
+    email2  = (data.get("email2") or "").strip() or None
+    activo  = 1 if data.get("activo", True) else 0
+    reglas  = data.get("reglas") or []
+    try:
+        db  = get_db()
+        cur = db.cursor()
+        existe = query("SELECT id FROM notificacion_contactos WHERE id=%s", (cid,), one=True)
+        if not existe:
+            return jsonify({"ok": False, "error": "Contacto no encontrado"}), 404
+
+        cur.execute(
+            "UPDATE notificacion_contactos SET nombre=%s, email=%s, email2=%s, activo=%s WHERE id=%s",
+            (nombre, email, email2, activo, cid)
+        )
+        cur.execute("DELETE FROM notificacion_contacto_reglas WHERE contacto_id=%s", (cid,))
+        n_reglas = 0
+        for r in reglas:
+            depto_id = r.get("departamento_id")
+            estado   = (r.get("estado") or "").strip()
+            if not depto_id or estado not in ESTADOS_EMAIL_INTERNO:
+                continue
+            cur.execute(
+                "INSERT INTO notificacion_contacto_reglas (contacto_id, departamento_id, estado) "
+                "VALUES (%s,%s,%s) ON CONFLICT DO NOTHING",
+                (cid, depto_id, estado)
+            )
+            n_reglas += 1
+        db.commit()
+        log.info("[NOTIF-CONTACTOS] Contacto %s actualizado — %d regla(s)", cid, n_reglas)
+        return jsonify({"ok": True, "reglas_guardadas": n_reglas})
+    except Exception as exc:
+        log.error("[NOTIF-CONTACTOS] Error PUT %s: %s", cid, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/notificaciones-contactos/<int:cid>", methods=["DELETE"])
+@admin_required
+def api_eliminar_notificacion_contacto(cid):
+    """Elimina un contacto y, en cascada (ON DELETE CASCADE), todas sus reglas."""
+    try:
+        db = get_db()
+        execute("DELETE FROM notificacion_contactos WHERE id=%s", (cid,))
+        db.commit()
+        log.info("[NOTIF-CONTACTOS] Contacto %s eliminado", cid)
+        return jsonify({"ok": True})
+    except Exception as exc:
+        log.error("[NOTIF-CONTACTOS] Error DELETE %s: %s", cid, exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
