@@ -1306,7 +1306,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.25
+          V 12.30.33
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2183,6 +2183,16 @@ tbody tr:last-child{border-bottom:none}
             <div id="adj-presupuesto-list" class="adj-fecha-list"></div>
           </div>
         </div>
+        <div class="form-group" id="total-pedido-section">
+          <label class="form-label" title="Importe real del pedido en SAP (base imponible). Puedes rellenarlo a mano, pero normalmente no hace falta: al usar 'Comparar listado PDF (SAP)' con este pedido dado de alta, la aplicación lo rellena aquí sola con el valor real de SAP.">
+            Total Pedido (€)
+            <span style="font-size:10px;color:#888;font-weight:400"> (SAP, opcional)</span>
+          </label>
+          <input class="form-control" type="number" id="p-total-pedido" min="0" step="0.01" placeholder="0.00">
+          <div style="font-size:10.5px;color:#888;margin-top:4px">
+            Se rellena solo al comparar el "Listado de Pedidos" PDF de SAP para este hotel — puedes escribirlo a mano si lo necesitas antes.
+          </div>
+        </div>
 
         <!-- Nº Entrada DALI / SAP con checkboxes y lista dinámica -->
         <div class="form-group full" id="albaran-section">
@@ -2201,6 +2211,7 @@ tbody tr:last-child{border-bottom:none}
           <div id="albaran-col-headers" style="display:none;padding:0 4px 4px 26px;display:flex;gap:6px;align-items:center">
             <span style="flex:1;min-width:120px;font-size:11px;font-weight:600;color:#888">Nº Entrada DALI / SAP</span>
             <span style="width:140px;flex-shrink:0;font-size:11px;font-weight:600;color:#888">Fecha de entrada</span>
+            <span style="width:110px;flex-shrink:0;font-size:11px;font-weight:600;color:#888" title="Base imponible del albarán — siempre la del albarán, opcional, se rellena sola al comparar el listado PDF de SAP">Base imp. (€)</span>
           </div>
           <!-- Lista dinámica de entradas DALI / SAP -->
           <div id="albaran-list" style="display:flex;flex-direction:column;gap:6px"></div>
@@ -2525,7 +2536,7 @@ tbody tr:last-child{border-bottom:none}
             <thead>
               <tr>
                 <th>Pedido SAP</th><th>F. pedido</th><th>F. entrega</th><th>Proveedor (SAP)</th>
-                <th>Importe</th><th>Recibido</th><th>Entrega</th><th>En la app</th><th></th>
+                <th title="Se guarda como Total Pedido en la ficha, si el pedido está dado de alta">Importe (Total Pedido)</th><th>Recibido</th><th>Entrega</th><th>En la app</th><th></th>
               </tr>
             </thead>
             <tbody id="cmp-pdf-tbody"></tbody>
@@ -2711,6 +2722,10 @@ let G = {
   currentPedidoData: null,
   currentView: 'dashboard',
   _appVersion: null,   // hash de la versión cargada; se compara al pulsar Actualizar
+  // (2026-08-27) id del expediente_exceso que provocó el último redirect
+  // automático de guardarPedido() a Techo de Gastos — ver comentario "FIX
+  // apertura de ficha" en resolverExpedienteTecho().
+  _techoOrigenPedidoExpId: null,
 };
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -4423,6 +4438,7 @@ async function openPedidoModal(id=null) {
     actualizarFechaEntregaPrevista();
     setVal('p-pedido-num', p.pedido_num);
     setVal('p-presup', p.presupuesto_num);
+    setVal('p-total-pedido', p.total_pedido != null ? Number(p.total_pedido).toFixed(2) : '');
     document.getElementById('chk-tarifa-acordada').checked = !!p.tarifa_acordada;
     onTarifaAcordadaChange();
     setVal('p-estado', p.estado);
@@ -4714,23 +4730,36 @@ async function borrarAdjunto(adjId) {
    parciales) / CANCELADO. Al marcar ENTREGADO se abre la lista editable de
    entradas; mientras ninguna esté marcada como "Entrada final" el estado
    real es ENTREGA PARCIAL — al marcar una como final pasa a ENTREGADO.
-   Formato de datos: "NUM::FECHA" por entrada, separadas por " | "
-   Retrocompatible con entradas antiguas sin fecha (solo "NUM")
+   Formato de datos: "NUM::FECHA::BASE_IMPONIBLE" por entrada, separadas
+   por " | ". Retrocompatible con entradas antiguas sin fecha (solo "NUM")
+   y sin base imponible (solo "NUM::FECHA") — ver _parse_albaran_entries()
+   en app.py para el mismo formato del lado del servidor.
 ═══════════════════════════════════════════════════════════════════════════ */
 
-// Parsea una entrada: "NUM::FECHA" → {num, fecha}  o  "NUM" → {num, fecha:''}
+// Parsea una entrada: "NUM::FECHA::IMPORTE" → {num, fecha, baseImponible}
+// Retrocompatible con "NUM::FECHA" → baseImponible='' y "NUM" → fecha:''
 function _parseAlbaranEntry(str) {
   const s = (str || '').trim();
-  const sep = s.indexOf('::');
-  if (sep === -1) return { num: s, fecha: '' };
-  return { num: s.slice(0, sep).trim(), fecha: s.slice(sep + 2).trim() };
+  if (s.indexOf('::') === -1) return { num: s, fecha: '', baseImponible: '' };
+  const campos = s.split('::');
+  const num   = (campos[0] || '').trim();
+  const fecha = (campos[1] || '').trim();
+  // El importe puede llevar '::' en su propio valor si nunca hubiera separador
+  // extra, pero como se serializa siempre con parseFloat, unir el resto por
+  // seguridad (nunca debería hacer falta, pero evita perder datos si algún
+  // campo antiguo tuviera un ':' suelto en el número de albarán).
+  const baseImponible = campos.length > 2 ? campos.slice(2).join('::').trim() : '';
+  return { num, fecha, baseImponible };
 }
 
-// Serializa una entrada: {num, fecha} → "NUM::FECHA" o "NUM" si sin fecha
-function _serializeAlbaranEntry(num, fecha) {
-  const n = (num || '').trim();
-  const f = (fecha || '').trim();
+// Serializa una entrada: {num, fecha, baseImponible} → "NUM::FECHA::IMPORTE",
+// recortando segmentos finales vacíos ("NUM::FECHA" o "NUM" si no hacen falta)
+function _serializeAlbaranEntry(num, fecha, baseImponible) {
+  const n  = (num || '').trim();
+  const f  = (fecha || '').trim();
+  const bi = (baseImponible || '').toString().trim();
   if (!n) return '';
+  if (bi) return `${n}::${f}::${bi}`;
   return f ? `${n}::${f}` : n;
 }
 
@@ -4740,9 +4769,11 @@ function getAlbaranValues() {
     .map(row => {
       const numInput   = row.querySelector('.albaran-input');
       const fechaInput = row.querySelector('.albaran-fecha');
+      const impInput    = row.querySelector('.albaran-base-imponible');
       const num   = numInput   ? numInput.value.trim()   : '';
       const fecha = fechaInput ? fechaInput.value.trim() : '';
-      return _serializeAlbaranEntry(num, fecha);
+      const baseImponible = impInput ? impInput.value.trim() : '';
+      return _serializeAlbaranEntry(num, fecha, baseImponible);
     })
     .filter(Boolean);
 }
@@ -4765,13 +4796,13 @@ function renderAlbaranList(valores, editable) {
   if (headers) headers.style.display = 'flex';
   valores.forEach((v, idx) => {
     const entry = _parseAlbaranEntry(v);
-    const row = _makeAlbaranRow(entry.num, entry.fecha, editable, idx);
+    const row = _makeAlbaranRow(entry.num, entry.fecha, editable, idx, entry.baseImponible);
     list.appendChild(row);
   });
 }
 
-// Crea una fila de albarán con campo número + campo fecha + (en parcial) checkbox total + botón borrar
-function _makeAlbaranRow(num, fecha, editable, idx) {
+// Crea una fila de albarán con campo número + campo fecha + base imponible + (en parcial) checkbox total + botón borrar
+function _makeAlbaranRow(num, fecha, editable, idx, baseImponible) {
   const row = document.createElement('div');
   row.className = 'albaran-row';
   row.style.cssText = 'display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:2px';
@@ -4799,9 +4830,25 @@ function _makeAlbaranRow(num, fecha, editable, idx) {
   inputFecha.style.cssText = 'width:140px;flex-shrink:0;' + (!editable ? 'background:var(--surface2,#f4f5f7);' : '');
   if (!editable) inputFecha.disabled = true;
 
+  // Input base imponible del albarán — opcional, se puede escribir a mano
+  // o se rellena sola al comparar el listado PDF de SAP (ver
+  // "Comparar listado PDF (SAP)" y _comparar_listado_pdf_logica en app.py).
+  const inputBaseImp = document.createElement('input');
+  inputBaseImp.type = 'number';
+  inputBaseImp.min = '0';
+  inputBaseImp.step = '0.01';
+  inputBaseImp.placeholder = 'Base imp. (€)';
+  inputBaseImp.title = 'Base imponible de este albarán (opcional) — se rellena sola al comparar el listado PDF de SAP si no la escribes a mano';
+  inputBaseImp.className = 'form-control albaran-base-imponible';
+  inputBaseImp.value = (baseImponible !== undefined && baseImponible !== null) ? baseImponible : '';
+  inputBaseImp.readOnly = !editable;
+  inputBaseImp.style.cssText = 'width:110px;flex-shrink:0;' + (!editable ? 'background:var(--surface2,#f4f5f7);' : '');
+  if (!editable) inputBaseImp.disabled = true;
+
   row.appendChild(prefix);
   row.appendChild(inputNum);
   row.appendChild(inputFecha);
+  row.appendChild(inputBaseImp);
 
   if (editable) {
     // Botón eliminar fila
@@ -5068,7 +5115,7 @@ function _setFormCanceladoSilent(bloqueado) {
 
 
 function clearPedidoForm() {
-  ['p-hotel','p-depto','p-pedido-num','p-presup','p-observaciones','p-nota','p-plazo-entrega','p-fecha-entrega-especifica'].forEach(id=>setVal(id,''));
+  ['p-hotel','p-depto','p-pedido-num','p-presup','p-total-pedido','p-observaciones','p-nota','p-plazo-entrega','p-fecha-entrega-especifica'].forEach(id=>setVal(id,''));
   ['p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
   document.getElementById('p-fecha-entrega-prevista-info').style.display = 'none';
   // Resetear checkbox "tarifa acordada" — siempre desmarcado por defecto
@@ -5283,6 +5330,7 @@ async function savePedido() {
     fecha_tramitacion:    val('p-f-tramit'),
     pedido_num:           val('p-pedido-num'),
     presupuesto_num:      val('p-presup'),
+    total_pedido:         val('p-total-pedido') ? parseFloat(val('p-total-pedido')) : null,
     tarifa_acordada:      document.getElementById('chk-tarifa-acordada').checked,
     entrada_albaran_num:  getAlbaranCombined(),
     estado:               val('p-estado'),
@@ -5308,6 +5356,29 @@ async function savePedido() {
       r = await api(`/api/pedidos/${G.editingPedidoId}`, 'PUT', body);
     } else {
       r = await api('/api/pedidos', 'POST', body);
+    }
+    // (2026-08-27) FIX duplicados en Techo de Gastos: si el backend avisa
+    // de que este pedido YA tiene un apunte pendiente de Vº Bº (ver
+    // comentario "FIX duplicados" en update_pedido(), app.py), en vez de
+    // dejar que el usuario reintente a ciegas y se pierda el mensaje de
+    // showFormAlert entre el resto de la ficha, se cierra el modal del
+    // pedido y se lleva directamente a Techo de Gastos, con la tarjeta del
+    // hotel ya resaltada — es donde de verdad hay que aceptar/rechazar
+    // ese apunte para que el pedido avance. Nunca se crea un segundo
+    // apunte por reintentar aquí.
+    if (r.expediente_pendiente_id) {
+      // (2026-08-27) Recuerda qué expediente es este, concretamente para
+      // distinguir en resolverExpedienteTecho() de dónde viene la
+      // aprobación: si el usuario aprueba ESTE MISMO expediente justo
+      // después de este redirect, ya sabe que viene de aquí (acaba de
+      // cerrar esta ficha) y no hace falta devolverle a ella otra vez —
+      // ver comentario "FIX apertura de ficha" en resolverExpedienteTecho.
+      G._techoOrigenPedidoExpId = r.expediente_pendiente_id;
+      closeModal('modal-pedido');
+      toast('⚠️ ' + r.error, 'warning', 8000);
+      if (r.hotel_codigo) irATechoHotel(r.hotel_codigo);
+      else showView('techo', document.querySelector('[data-view="techo"]'));
+      return;
     }
     if (r.error) { showFormAlert(r.error); return; }
     // (2026-08-01 — rediseño Techo de Gastos, Fase 6) Antes aquí se
@@ -6057,7 +6128,16 @@ function _renderCompararPdfResultado() {
     pill(`📦 ${d.entregados ?? 0} entregados`, '#d4edda', '#155724') +
     pill(`🚚 ${d.entregas_parciales ?? 0} entregas parciales`, '#fff3cd', '#856404') +
     pill(`⏳ ${d.no_entregados ?? 0} no entregados`, '#f8d7da', '#721c24') +
-    (d.excluidos_seguimiento ? pill(`➖ ${d.excluidos_seguimiento} pedidos de proveedores no sujetos a seguimiento`, '#fff3cd', '#856404') : '');
+    (d.excluidos_seguimiento ? pill(`➖ ${d.excluidos_seguimiento} pedidos de proveedores no sujetos a seguimiento`, '#fff3cd', '#856404') : '') +
+    // (2026-08-27) Total Pedido — petición de Víctor: el importe base de
+    // cada pedido localizado se guarda solo en su ficha (campo "Total
+    // Pedido"), sin ningún paso de confirmación. Este pill es solo
+    // informativo, para que quede claro que ha pasado algo en la BD y no
+    // sea una sorpresa si luego se revisa una ficha.
+    (d.total_pedido_actualizados ? pill(`💾 ${d.total_pedido_actualizados} "Total Pedido" actualizado(s) en la ficha`, '#cfe2ff', '#084298') : '') +
+    // (2026-08-27) Base imponible de la última entrada — misma idea que
+    // Total Pedido, ver comentario en _comparar_listado_pdf_logica (app.py).
+    (d.base_imponible_entrada_actualizados ? pill(`💾 ${d.base_imponible_entrada_actualizados} base imponible de entrada actualizada(s)`, '#cfe2ff', '#084298') : '');
 
   // (2026-08-10) A petición del usuario: botón para avisar por correo al
   // comprador responsable del hotel (con copia al admin que consulta) —
@@ -6212,6 +6292,39 @@ async function _pollCompararListadoAlbaranes(jobId, intentos) {
 
   document.getElementById('cmp-alb-resultado').style.display = '';
   _renderCompararAlbaranesResultado(d.resultado);
+
+  // (2026-08-27) A petición de Víctor: cuando la entrega parcial/total que
+  // propone esta comparación NO está aún registrada en Control de Pedidos,
+  // la aplicación debe registrarla sola (nueva entrada + cambio de estado a
+  // ENTREGA PARCIAL/ENTREGADO) — pero solo preguntando UNA VEZ, al terminar
+  // la comparación, y solo si el administrador acepta. Antes había que
+  // bajar hasta la tabla, revisar fila a fila y pulsar "Aplicar todas las
+  // seleccionadas" a mano — ahora, en cuanto termina la comparación, se
+  // pregunta directamente aquí; si acepta, se aplican TODAS las
+  // coincidencias detectadas de una vez (mismo mecanismo ya existente,
+  // POST .../aplicar con {todas:true}). Si cancela, no se toca nada — la
+  // tabla de abajo sigue disponible para aplicar manualmente fila a fila
+  // o más tarde. Las coincidencias que ya estaban al día
+  // (sin_cambios_pendientes) no cuentan, para no preguntar por algo que no
+  // va a cambiar nada.
+  const _coincidenciasAplicables = (d.resultado.coincidencias || []).filter(c => !c.sin_cambios_pendientes);
+  if (_coincidenciasAplicables.length) {
+    const _detalle = _coincidenciasAplicables.slice(0, 8)
+      .map(c => `• Pedido ${c.pedido_num_sap} (${c.proveedor_nombre || '—'}) → ${c.estado_objetivo}`)
+      .join('\n');
+    const _masTxt = _coincidenciasAplicables.length > 8
+      ? `\n… y ${_coincidenciasAplicables.length - 8} más (ver tabla)` : '';
+    const _aceptar = confirm(
+      `Se han detectado ${_coincidenciasAplicables.length} entrega(s) parcial(es)/total(es) sin registrar en Control de Pedidos:\n\n` +
+      `${_detalle}${_masTxt}\n\n` +
+      `¿Registrarlas automáticamente ahora? Se creará la entrada de albarán correspondiente y se actualizará el ` +
+      `estado del pedido a ENTREGA PARCIAL o ENTREGADO según corresponda.\n\n` +
+      `Si cancelas, no se aplica nada — puedes revisarlas y aplicarlas manualmente en la tabla de abajo.`
+    );
+    if (_aceptar) {
+      await aplicarCoincidenciasAlbaranes(false);   // false → {todas:true}, ver aplicarCoincidenciasAlbaranes()
+    }
+  }
 }
 
 function _renderCompararAlbaranesResultado(d) {
@@ -7096,6 +7209,37 @@ async function resolverExpedienteTecho(eid, accion) {
   try {
     const r = await api(`/api/expedientes/${eid}/${accion}`, 'POST', { nota_historial: nota });
     if (r.error) { toast(r.error, 'error'); return; }
+
+    // (2026-08-27) FIX apertura de ficha: si este expediente es justo el
+    // que provocó el redirect automático a Techo de Gastos (el usuario
+    // venía de intentar guardar ESTE pedido, ver guardarPedido()), ya
+    // sabe de sobra qué pedido es — el aviso normal (toast) es
+    // suficiente, como hasta ahora. Pero si llegó a Techo de Gastos por
+    // su cuenta (revisión normal de la sección, sin pasar por la ficha
+    // del pedido) y aprueba aquí, el backend ya ha completado el envío
+    // al proveedor automáticamente (aprobar_expediente() en app.py) —
+    // así que, en vez de dejarle solo un toast sin más contexto, se le
+    // devuelve directamente a la ficha de ese pedido con un aviso claro
+    // de que ya está en ENVIADO AL PROVEEDOR, sin nada más que hacer.
+    const veniaDeEstePedido = accion === 'aprobar' && G._techoOrigenPedidoExpId === eid;
+    if (accion === 'aprobar') G._techoOrigenPedidoExpId = null;
+
+    if (accion === 'aprobar' && !veniaDeEstePedido && r.pedido_id) {
+      await _enviarEmailsPendientesEstado(r.emails_pendientes);
+      _invalidarStats();
+      _invalidarTecho();
+      await Promise.all([_fetchStats(true), loadTechoAlertas()]);
+      if (G.currentView === 'techo')   loadTecho();
+      if (G.currentView === 'pedidos') loadPedidos();
+      updateAlertBadge();
+      await openPedidoModal(r.pedido_id);
+      showFormAlert(
+        'Techo de Gastos aprobado — este pedido ya se ha enviado automáticamente al proveedor (estado ENVIADO AL PROVEEDOR). No hace falta cambiar nada más.',
+        { title: '✅ Pedido enviado al proveedor', duracion: 10000 }
+      );
+      return;
+    }
+
     toast(accion === 'aprobar'
       ? '✅ Expediente aprobado — pedido enviado al proveedor'
       : '❌ Expediente denegado', 'success');

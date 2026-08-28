@@ -25,6 +25,67 @@
 
 ---
 
+## 2026-08-27 — [Control Pedidos] Comparación Pedidos+Albaranes: pendientes sin aplicar ya no desaparecen del correo, y todos los correos de pedidos muestran los importes como base imponible sin IGIC (v12.30.33)
+
+- Víctor: "la información de lo pendiente en caso de no hacerlo automáticamente se registra también en el correo, por otro lado, las comunicaciones tanto internas como a los proveedores, deberán llevar también los valores de entregas parciales, totales, total pedido etc, indicando siempre que se tratan de bases imponibles (totales sin IGIC)".
+- **Parte 1**: si el administrador cancelaba el aviso de confirmación automática de v12.30.32 (o esas coincidencias no llegaban a aplicarse por cualquier motivo), desaparecían del correo de resumen sin dejar rastro. `comparar_listado_albaranes_enviar_resumen()` calcula ahora `coincidencias_no_aplicadas` y `_email_resumen_comparacion_albaranes()` las añade a "⏳ Pendientes de realizar" con el motivo y el estado destino.
+- **Parte 2**: `_resumen_entregas()` incorpora la base imponible de cada entrada y `total_recibido`; `_html_bloque_entregas()` / `_text_bloque_entregas()` / `_telegram_bloque_entregas()` muestran importes por entrega y el aviso fijo de base imponible (sin IGIC). El correo interno de cambio de estado añade fila "Total Pedido (base imponible)" (distinta de "Importe (techo de gastos)"). El correo al proveedor de confirmar recepción, el recordatorio "enviado al proveedor sin confirmar", el recordatorio de "entrega parcial sin cerrar" (con detalle completo de entregas) y el aviso de "pendiente de firma" incluyen ahora el Total Pedido con el mismo aviso. El correo de la comparación Pedidos+Albaranes también incluye el aviso de base imponible. Nuevo helper `_nota_base_imponible_html()` / `_nota_base_imponible_text()` reutilizado en todos los puntos.
+- **Fuera de alcance, decisión comunicada a Víctor**: los correos de "cotización pendiente" no llevan Total Pedido — en esa fase del pedido normalmente aún no está cumplimentado.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. No se tocó `templates/index.html` (cambio íntegro de backend/plantillas de correo).
+
+## 2026-08-27 — [Control Pedidos] "Comparar Pedidos + Albaranes": registro automático de entregas con un único aviso de confirmación (v12.30.32)
+
+- Víctor: "en la comparación de pedidos, cuando las entregas parciales o totales no existen registradas en controlpedidos, la aplicación las registrará automáticamente cambiando también automáticamente los estados al que corresponda... solo preguntar al finalizar la comparación y con aceptar por parte del administrador se realizará automáticamente". Aclaró después que el registro automático solo debe activarse cuando se aportan los DOS listados (Pedidos + Albaranes).
+- **Hallazgo**: revisando `/api/pedidos/comparar-listado-albaranes/<job_id>/aplicar` (v12.30.15) ya existía todo el mecanismo — acepta `{"todas": true}` para aplicar de una vez todas las coincidencias, y el correo de resumen ya incluía la sección "✅ Registrados automáticamente". Solo faltaba el disparador.
+- **Cambio en `templates/index.html`**: al terminar la comparación de los dos PDF, si hay coincidencias con cambios reales pendientes, un único aviso pregunta si registrarlas automáticamente ahora (llama a `.../aplicar` con `{todas:true}`). Si se cancela, la tabla de revisión manual sigue disponible igual que antes.
+- **Cambio en `app.py`**: el correo de resumen conjunto añade el mismo aviso que el correo del listado de un solo PDF, pidiendo al comprador que dé de alta manualmente los pedidos no registrados (la creación automática de pedidos nuevos queda fuera de alcance).
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sobre el JS extraído de `templates/index.html`, sin errores.
+
+## 2026-08-27 — [Control Pedidos] Nueva celda "Base imp. (€)" por entrada DALI/SAP, rellenada automáticamente al comparar (v12.30.31)
+
+- Víctor: "añadir junto a las entradas también una celda donde introducir siempre la base imponible de las entradas... completando la misma con el listado de pedido en comparación, si la entrega es parcial se completa con la columna 7, si es total con la 7, restando las entradas parciales previas que pudieran existir".
+- **Diferencia clave con Total Pedido**: SAP solo da un importe recibido ACUMULADO por pedido (columna 7), no desglosado por albarán — hay que descontar lo que ya corresponde a entregas parciales anteriores del mismo pedido.
+- **Cambio en `app.py`**: el formato de `pedidos.entrada_albaran_num` gana un tercer segmento opcional "NUM::FECHA::BASE_IMPONIBLE", retrocompatible (`_parse_albaran_entries`, `format_albaran_display`, nueva `_construir_entrada_albaran_num`). `_comparar_listado_pdf_logica()` calcula la base imponible de la ÚLTIMA entrada de cada pedido localizado con al menos una entrada ya registrada = columna 7 menos la suma de bases imponibles ya registradas en entradas anteriores; si no hay ninguna anterior, es directamente la columna 7. Resultado negativo (datos inconsistentes) → no se escribe, se deja para revisión manual.
+- **Cambio en `templates/index.html`**: nueva celda "Base imp. (€)" editable en cada fila de entradas DALI/SAP. El resumen de "Comparar listado PDF" muestra cuántas se han actualizado.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Suite aislada en Python del parseo/reconstrucción del nuevo formato de 3 segmentos (retrocompatibilidad y round-trip), todas correctas. `node --check` sin errores.
+
+## 2026-08-27 — [Control Pedidos] Nuevo campo "Total Pedido", rellenado automáticamente al comparar el listado de SAP (v12.30.30)
+
+- Víctor: "podemos insertar el total del pedido localizado en un apartado TOTAL PEDIDO que aún no existe en la ventana creación edición pedido?... que al introducir el PDF y localizar el pedido la aplicación lo cumplimente como valor real del pedido. El valor será la columna sexta del PDF PEDIDOS" — adjuntó un PDF real del "Listado de Pedidos" de SAP para identificar la columna.
+- **Hallazgo**: la 6ª columna visual del PDF ya se extraía internamente como `importe_base` (base imponible del pedido en SAP) en `_PATRON_LISTADO_SIMPLIFICADO`, usada en "Comparar listado PDF" — no hacía falta tocar el parseo, solo guardarla.
+- **Cambio en `app.py`**: nueva columna `pedidos.total_pedido` (NUMERIC, opcional); `POST/PUT /api/pedidos` la aceptan y guardan igual que el resto de campos (editable a mano). `_comparar_listado_pdf_logica()` guarda `total_pedido = importe_base` sin pedir confirmación — única excepción a la filosofía de "solo propone, nunca escribe sola", justificada por ser un campo puramente informativo (no dispara emails ni cambia estado). Solo escribe si el valor cambia.
+- **Cambio en `templates/index.html`**: nuevo campo "Total Pedido (€)" en la ficha del pedido. El resumen de "Comparar listado PDF" muestra cuántos se han actualizado en esta pasada.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`, sin errores.
+
+## 2026-08-27 — [Control Pedidos] Techo de Gastos: al aprobar navegando directo a esa sección, vuelve a la ficha del pedido y avisa de que ya está ENVIADO AL PROVEEDOR (v12.30.29)
+
+- Víctor, continuando el fix de v12.30.28: "cuando se aprueba el techo de gasto se deberá devolver a la ventana de pedido y con un aviso en pantalla indicar que ya se puede cambiar el estado a ENVIADO AL PROVEEDOR". Al revisar `aprobar_expediente()`, el backend ya cambiaba el pedido a ENVIADO AL PROVEEDOR automáticamente al aprobar (incluye email al proveedor) — no había ningún cambio manual pendiente. Víctor matizó: comportamiento distinto según si se llega a Techo de Gastos desde un intento bloqueado en la ficha del pedido (dejar como está, solo toast) o navegando allí directamente (reabrir la ficha y avisar).
+- **Cambio en `templates/index.html`**: `guardarPedido()` anota en `G._techoOrigenPedidoExpId` el id del expediente que provoca su redirect automático. `resolverExpedienteTecho()` compara ese id contra el expediente aprobado: si coincide, comportamiento sin cambios (toast); si no coincide, abre `openPedidoModal()` de ese pedido y muestra un aviso confirmando que ya se envió al proveedor.
+- **Cambio en `app.py`**: la respuesta de `POST /api/expedientes/<id>/aprobar` incluye ahora `pedido_id`.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check`, sin errores.
+
+## 2026-08-27 — [Control Pedidos] Pedidos → ENVIADO AL PROVEEDOR: dejar de duplicar el apunte de Techo de Gastos en cada reintento (v12.30.28)
+
+- Víctor: cuando un pedido PENDIENTE FIRMA DIRECCION GENERAL intenta pasar a ENVIADO AL PROVEEDOR, se genera un apunte en Techo de Gastos que hay que aceptar allí — si el usuario insiste en reintentar sin darse cuenta, se generaban tantos apuntes duplicados como intentos.
+- **Causa**: en `update_pedido()`, antes de crear un nuevo `expediente_exceso` no se comprobaba si ya existía uno pendiente sin resolver para ese pedido.
+- **Cambio en `app.py`**: se busca primero si ya hay un `expediente_exceso` con `resultado='pendiente'`; si lo hay, se corta ahí (nunca se crea un segundo) y se devuelve 422 con `expediente_pendiente_id`/`hotel_codigo`.
+- **Cambio en `templates/index.html`**: `guardarPedido()` reconoce `r.expediente_pendiente_id`, cierra el modal, avisa, y lleva directamente a la tarjeta de Techo de Gastos correspondiente (`irATechoHotel()`).
+- **Nota**: no fusiona ni borra apuntes duplicados ya creados antes de este cambio — esos hay que resolverlos a mano.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` (8 bloques `<script>`, 178.889 caracteres), sin errores.
+
+## 2026-08-27 — [Control Pedidos] Nuevo endpoint `GET /api/externo/dali-sap/proveedores`: DALI puede reutilizar los contactos de "Proveedores" de esta app (v12.30.27)
+
+- Víctor, sobre el puente de correos de v12.30.26: "como vamos a utilizar el sistema de envíos de control_pedidos, podríamos utilizar también el apartado de proveedores con sus correos electrónicos etc? de esta manera los tenemos únicamente en un único punto y podemos incluir más correos para el envío, ahora en artículos es solo uno". Confirmado también que el contador de EmailJS se descuenta igual para estos correos encolados — no hay ningún camino que los salte.
+- **Cambio en `app.py`**: nuevo `GET /api/externo/dali-sap/proveedores`, misma autenticación por firma HMAC que `POST .../emails-pendientes` (v12.30.26), devuelve los proveedores activos con sus contactos (reutilizando `_prov_with_contactos`) — nombre, `email_principal` y lista completa de contactos con email. DALI cruza por NOMBRE exacto contra su propio catálogo (Víctor mantiene los nombres idénticos entre ambas apps a propósito) y usa el contacto principal como destinatario; si no hay contacto marcado como principal, usa el primero (mismo comportamiento que tenía antes con el email único).
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+
+## 2026-08-27 — [Control Pedidos + DALI] Puente de correos desde el catálogo DALI: sus avisos de "documentación faltante" pasan a usar la cola y el envío por EmailJS de esta app (v12.30.26)
+
+- Víctor: "podemos aprovechar la organización que tenemos actualmente en controlpedidos para el envío de correos y que los correos de dalisaparticulos utilicen la misma infraestructura?... la idea es que los correos para la solicitud de documentación faltante utilicen este método de EmailJS, se podría generar, dejar en cola y cuando alguien abra Control de Pedidos se lance, de esta manera podríamos reestructurar y hacer más atractivo y profesional los correos electrónicos, con logo, colores etc." La reclamación de documentación pendiente a un proveedor la generaba DALI como texto plano para copiar o abrir en el cliente de correo de Víctor — sin envío real ni diseño.
+- **Cambio en `app.py`**: nuevo `POST /api/externo/dali-sap/emails-pendientes`, sin sesión de usuario (llamada servidor a servidor desde el backend Node de DALI) protegido con firma HMAC-SHA256 usando el secreto ya compartido `DALI_SSO_SECRET` (hasta ahora solo usado para el SSO del menú "Catálogo DALI") — nada nuevo que configurar en Render. El correo se inserta en `emails_sistema_pendientes` (`evento_codigo='dali_documentacion_faltante'`) y lo despacha el poller que ya existía, sin cambios en el frontend de esta app. Comparte la cuenta EmailJS activa de esta app (entra en la rotación normal entre las 3 cuentas).
+- Ver el repo de DALI (`HISTORIAL.md`) para el lado que genera y envía estos correos.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+
 ## 2026-08-22 — [Control Pedidos + DALI] SSO hacia DALI: token subido de 60s a 100s, margen de DALI reajustado de 90s a 20s (v12.30.25 / DALI v1.18.2)
 
 - Víctor, en DALI: primer acceso del día muy lento, "Comprobando

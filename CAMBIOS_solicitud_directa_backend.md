@@ -1,80 +1,39 @@
-# ── Python ────────────────────────────────────────────────────────────────────
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-*.pyw
+# Backend — alta en un solo paso desde el Organizador
 
-# ── Entornos virtuales ────────────────────────────────────────────────────────
-venv/
-.venv/
-env/
-ENV/
+## Nuevo endpoint: `POST /api/solicitar-usuario/directo`
 
-# ── Variables de entorno / credenciales ───────────────────────────────────────
-.env
-.env.*
-!.env.example
-*.pem
-*.key
-secrets.json
-credentials.json
+Fusiona fase 1 + fase 2 en una sola llamada, para uso exclusivo del
+Organizador de escritorio (que ya conoce el usuario de Windows).
 
-# ── Base de datos local (restos SQLite si los hubiera) ────────────────────────
-*.db
-*.sqlite
-*.sqlite3
+**Body esperado (JSON):**
+```json
+{
+  "nombre": "...", "apellidos": "...", "email": "...",
+  "movil": "...", "hoteles": "Hotel A, Hotel B",
+  "usuario_windows": "DCOMPRAS"
+}
+```
 
-# ── Logs ──────────────────────────────────────────────────────────────────────
-*.log
-logs/
+**Qué hace:**
+1. Valida los 6 campos (mismas reglas que fase 1 + fase 2 web).
+2. Comprueba que `usuario_windows` no tenga ya cuenta activa
+   (mismo check que la fase 2 real) — devuelve 409 con `ya_existe`
+   si ya existe (activa o desactivada).
+3. Inserta la solicitud directamente con `estado='completada'`,
+   sin generar token ni depender de ningún email intermedio — cae
+   en la misma cola que ya usa el panel admin
+   (`GET /api/admin/solicitudes-acceso`), sin tocar ese panel.
+4. Notifica por Telegram (siempre) y encola un email a los admins
+   vía `_encolar_email_sistema` (mismo mecanismo fiable que ya usa
+   la fase 1 — lo despacha el primer admin que abra la app, no
+   depende de EmailJS en un navegador que no existe en este caso).
+5. El envío de la contraseña al usuario sigue pasando exactamente
+   igual que hoy: cuando el admin aprueba desde
+   `/api/admin/solicitudes-acceso/<id>/aprobar` — **este endpoint
+   nuevo no toca esa parte para nada.**
 
-# ── Exports generados localmente ─────────────────────────────────────────────
-*.xlsx
-*.xls
-*.csv
-
-# ── Tests y cobertura ─────────────────────────────────────────────────────────
-.pytest_cache/
-htmlcov/
-.coverage
-coverage.xml
-
-# ── Builds y distribución ─────────────────────────────────────────────────────
-dist/
-build/
-*.egg-info/
-
-# ── IDEs ──────────────────────────────────────────────────────────────────────
-.vscode/
-.idea/
-.cursor/
-*.swp
-*.swo
-
-# ── Cachés de linters/type-checkers ───────────────────────────────────────────
-.mypy_cache/
-.ruff_cache/
-
-# ── Sistema operativo ─────────────────────────────────────────────────────────
-.DS_Store
-Thumbs.db
-desktop.ini
-__MACOSX/
-
-# ── Miscelánea ────────────────────────────────────────────────────────────────
-*.bak
-*.tmp
-*.orig
-instance/
-
-# ── Releases y paquetes ───────────────────────────────────────────────────────
-releases/
-*.zip
-
-# ── Instaladores ──────────────────────────────────────────────────────────────
-*.exe
-*.msi
-
-# ── PyInstaller (por si se comparte tooling con OrganizadorPrincess) ─────────
-*.spec
+**No he podido ejecutarlo contra una base de datos real** — solo
+verificado que compila (`py_compile`) y que el `INSERT` usa
+exactamente las columnas de la tabla `solicitudes_acceso` tal como
+está definida en `init_db()`. Recomiendo probarlo en local o con una
+solicitud de prueba antes de darlo por bueno en producción.
