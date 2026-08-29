@@ -1,3 +1,23 @@
+# v12.30.51 — 29 agosto 2026
+
+✨ Reorganización del menú lateral: las 8 pantallas exclusivas de administración se agrupan por dominio, en vez de ir mezcladas entre las de uso diario
+
+**Petición de Víctor**: "Puedes revisar en control pedidos, todos los apartados exclusivos de admin? Ahora mismo creo que están todos regados sin organización, puedes reubicar mejor todo?"
+
+**Investigación previa**: inventario completo del sidebar y de cada pantalla admin-only (`templates/index.html` líneas 1242-1328 del menú, más las vistas correspondientes) y de sus rutas backend en `app.py`, para confirmar que el enfoque correcto era reorganizar el MENÚ, no mover funcionalidad entre pantallas. Hallazgo principal: las 8 pantallas admin-only (Familias, Departamentos, Notificaciones adicionales, Usuarios, Integridad, Config alertas, Config. Avisos, Restaurar backup) estaban todas dentro de una única sección "Gestión" del menú, intercaladas sin separación visual con 3 pantallas de uso diario compartidas con compras/hotel (Proveedores, Pedidos eliminados, Techo de gastos) — ninguna agrupación por función, solo el orden en que se fueron añadiendo con el tiempo. Se confirmó también que el control de acceso real está en el backend (decorador `admin_required` o comprobación equivalente en cada ruta) — el menú es solo navegación, así que reordenarlo no toca permisos.
+
+**Cambio en `templates/index.html` (sidebar)**: la sección "Gestión" se queda solo con las 3 pantallas compartidas (Proveedores, Pedidos eliminados, Techo de gastos). Las 8 pantallas admin-only pasan a 4 secciones nuevas, cada una con "· Admin" en el título para que se distinga de un vistazo:
+- **Datos maestros · Admin** — Familias artículos.
+- **Alertas y notificaciones · Admin** — Departamentos, Notificaciones adicionales, Parámetros de alertas, Avisos por usuario (agrupa las 4 pantallas que configuran "quién se entera de qué", antes repartidas sin relación aparente entre sí en el menú).
+- **Usuarios y accesos · Admin** — Usuarios.
+- **Sistema · Admin** — Integridad, Restaurar backup.
+
+Ninguna vista cambió de ruta (`data-view`), de permisos (`data-roles`) ni de contenido — es exclusivamente una reorganización del menú.
+
+**Renombradas dos pantallas que se confundían entre sí**: "Config alertas" → **Parámetros de alertas**, y "Config. Avisos" → **Avisos por usuario** (los nombres anteriores eran casi sinónimos en español — "alertas" y "avisos" — y era fácil pulsar una pensando en la otra). Se actualizó el nombre también dentro de cada vista (título de la tarjeta), en el aviso de "sin permiso" al pulsar un elemento bloqueado, en el título de la pestaña al entrar, y en dos mensajes que las mencionaban por nombre (el aviso de "Integridad" sobre credenciales EmailJS, y el texto que se envía por Telegram cuando el contador de envíos se acerca al umbral sin backup configurado). Se dejó igual el icono de "Notificaciones adicionales" (pasa de 🔔 a ✉️, ya que 🔔 se repetía con "Avisos por usuario" y podía confundir en el propio menú).
+
+**Verificación**: `python3 -m py_compile app.py models.py` sin errores. `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Comprobación programática de que los 14 `data-view` del menú siguen siendo únicos y cada uno tiene su `<div id="view-...">` correspondiente (sin huérfanos ni duplicados tras el reordenado).
+
 # v12.30.50 — 28 agosto 2026
 
 ✨ Correo interno "ENVIADO AL PROVEEDOR": cuando el pedido superó el techo de gastos y pasó por autorización de Dirección General, el propio correo lo explica (familia, importes, motivo, quién y cuándo lo autorizó)

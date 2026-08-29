@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.50** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.51** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -64,11 +64,20 @@ CAMBIOS_solicitud_directa_backend.md  Notas de un cambio concreto (solicitud
 
 ## Funcionalidades principales
 
-Vistas disponibles en el sidebar (algunas restringidas por rol):
+Vistas disponibles en el sidebar, agrupadas por bloques (2026-08-29:
+reordenado el menú a petición de Víctor — las vistas exclusivas de admin
+estaban todas mezcladas sin separación dentro de "Gestión"; ahora cada
+bloque agrupa un mismo dominio y lleva "· Admin" en el título cuando es
+exclusivo de administración. Es solo una reorganización del menú — ninguna
+vista cambió de función ni de ruta, dos se renombraron para dejar de
+confundirse entre sí, ver más abajo):
 
+**Principal** (todos los roles)
 - **Pedidos** — alta, edición, cambio de estado y seguimiento de pedidos
   por hotel y proveedor.
 - **Alertas** — avisos de plazos de entrega vencidos o próximos a vencer.
+
+**Gestión** (admin + compras, y Proveedores también hotel)
 - **Proveedores** — ficha de proveedores, contactos múltiples por
   proveedor, asignación a hoteles.
 - **Pedidos eliminados** — papelera / auditoría de pedidos borrados.
@@ -76,17 +85,21 @@ Vistas disponibles en el sidebar (algunas restringidas por rol):
   (semáforo verde/amarillo/rojo/azul), desglose por familia de
   artículos, y expedientes de autorización de exceso (Dirección
   General) cuando un pedido supera el límite.
+
+**Datos maestros · Admin**
 - **Familias de artículos** — categorías usadas para agrupar pedidos y
   aplicar límites de techo por familia.
-- **Departamentos** — solo admin (2026-08-28): correo de contacto por
-  hotel para cada departamento (el mismo departamento puede tener un
-  correo distinto en cada hotel). El correo interno de cambio de estado
-  de un pedido se envía con copia al correo del departamento que lo
-  solicitó, si está registrado aquí.
-- **Notificaciones adicionales** — solo admin (2026-08-28): contactos
-  sueltos que no son usuarios de la app (p. ej. Chef Ejecutivo, Director
-  de Compras, Administrativo A&B), globales para toda la cadena, a los
-  que se pone en copia en el correo interno de cambio de estado según el
+
+**Alertas y notificaciones · Admin**
+- **Departamentos** (2026-08-28): correo de contacto por hotel para cada
+  departamento (el mismo departamento puede tener un correo distinto en
+  cada hotel). El correo interno de cambio de estado de un pedido se
+  envía con copia al correo del departamento que lo solicitó, si está
+  registrado aquí.
+- **Notificaciones adicionales** (2026-08-28): contactos sueltos que no
+  son usuarios de la app (p. ej. Chef Ejecutivo, Director de Compras,
+  Administrativo A&B), globales para toda la cadena, a los que se pone
+  en copia en el correo interno de cambio de estado según el
   departamento del pedido y el estado nuevo concreto (p. ej. Cocina +
   ENVIADO AL PROVEEDOR → copia al Chef Ejecutivo). Incluye también una
   columna extra, independiente de las de estado real, para poner en copia
@@ -97,13 +110,23 @@ Vistas disponibles en el sidebar (algunas restringidas por rol):
   importes y quién y cuándo lo autorizó, y llega igual a todos los
   destinatarios internos ya configurados (comprador, rol hotel,
   departamento y contactos adicionales).
+- **Parámetros de alertas** (antes "Config alertas", renombrada
+  2026-08-29) — umbrales de plazo y techo, y configuración de las
+  cuentas EmailJS.
+- **Avisos por usuario** (antes "Config. Avisos", renombrada
+  2026-08-29) — quién recibe cada aviso automático (Telegram/popup/email)
+  por evento. Se renombraron estas dos porque sus nombres anteriores
+  ("Config alertas" / "Config. Avisos") eran casi sinónimos en español y
+  se confundían con facilidad; siguen siendo la misma pantalla y la misma
+  funcionalidad de siempre.
+
+**Usuarios y accesos · Admin**
 - **Usuarios** — alta/edición de usuarios, roles y asignación de
   hoteles.
+
+**Sistema · Admin**
 - **Integridad** — comprobaciones de consistencia de datos.
-- **Config alertas** / **Config avisos** — parámetros de alertas de
-  plazo y techo, y configuración de avisos automáticos.
-- **Restaurar backup** — solo admin, gestión de backups de la base de
-  datos.
+- **Restaurar backup** — gestión de backups de la base de datos.
 
 ### Roles de usuario
 

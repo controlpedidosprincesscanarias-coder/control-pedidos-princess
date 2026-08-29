@@ -14544,7 +14544,7 @@ def _validar_integridad_operativa() -> dict:
                     "mensaje": (f"Van {_contador} envíos contabilizados en la cuenta {_activa} (umbral: {_umbral}) "
                                 f"y ninguna de las otras cuentas ({', '.join(str(n) for n in _otras_cuentas)}) tiene "
                                 f"las 3 credenciales completas — el cambio automático no se pudo realizar. "
-                                f"Rellénalas en Admin → Config Alertas → EmailJS cuanto antes.")
+                                f"Rellénalas en Admin → Parámetros de alertas → EmailJS cuanto antes.")
                 })
             elif not _siguiente_completa and _contador >= max(_umbral - 20, 0):
                 problemas["emailjs"].append({

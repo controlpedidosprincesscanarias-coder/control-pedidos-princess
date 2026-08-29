@@ -1276,31 +1276,53 @@ tbody tr:last-child{border-bottom:none}
       <span class="icon">📉</span> Techo de gastos
       <span class="sb-badge" id="sb-techo-count" style="display:none;background:#dc3545">!</span>
     </div>
+
+    <!-- (2026-08-29) A partir de aquí, todo lo que sigue es admin-only.
+         Reagrupado a petición de Víctor: "siguen apareciendo... [las
+         secciones de admin] regadas sin organización, puedes reubicar
+         mejor todo?" — antes las 8 pantallas admin-only estaban
+         mezcladas sin separación dentro de "Gestión", entre pantallas de
+         uso diario compartidas con compras/hotel. Ahora cada bloque
+         agrupa pantallas del mismo dominio (datos maestros / alertas y
+         notificaciones / usuarios / sistema), con su propio
+         "· Admin" en el título para que se vea de un vistazo qué es
+         exclusivo de administración. No se ha movido ni cambiado
+         ninguna funcionalidad de sitio — solo el menú. -->
+
+    <div class="sb-section">Datos maestros · Admin</div>
     <div class="sb-item admin-only" data-view="familias" data-roles="admin" onclick="showViewGuarded('familias',this)">
       <span class="icon">🏷️</span> Familias artículos
     </div>
+
+    <div class="sb-section">Alertas y notificaciones · Admin</div>
     <div class="sb-item admin-only" data-view="departamentos-email" data-roles="admin" onclick="showViewGuarded('departamentos-email',this)">
       <span class="icon">📧</span> Departamentos
     </div>
     <div class="sb-item admin-only" data-view="notificaciones-contactos" data-roles="admin" onclick="showViewGuarded('notificaciones-contactos',this)">
-      <span class="icon">🔔</span> Notificaciones adicionales
+      <span class="icon">✉️</span> Notificaciones adicionales
     </div>
+    <!-- (2026-08-29) Renombradas para dejar de confundirse entre sí
+         ("Config alertas" vs "Config. Avisos" eran casi sinónimos en
+         español) — misma pantalla, misma funcionalidad, solo la
+         etiqueta del menú (y el título dentro de cada vista, para que
+         no cambie de nombre al entrar). -->
+    <div class="sb-item admin-only" data-view="config-alertas" data-roles="admin" onclick="showViewGuarded('config-alertas',this)">
+      <span class="icon">⚙️</span> Parámetros de alertas
+    </div>
+    <div class="sb-item admin-only" data-view="config-avisos" data-roles="admin" onclick="showViewGuarded('config-avisos',this)">
+      <span class="icon">🔔</span> Avisos por usuario
+    </div>
+
+    <div class="sb-section">Usuarios y accesos · Admin</div>
     <div class="sb-item admin-only" data-view="usuarios" data-roles="admin" onclick="showViewGuarded('usuarios',this)">
       <span class="icon">👥</span> Usuarios
     </div>
+
+    <div class="sb-section">Sistema · Admin</div>
     <div class="sb-item admin-only" data-view="integridad" data-roles="admin" onclick="showViewGuarded('integridad',this)">
       <span class="icon">🔍</span> Integridad
       <span class="sb-badge" id="sb-integridad-badge" style="display:none;background:#dc3545">!</span>
     </div>
-
-    <div class="sb-item admin-only" data-view="config-alertas" data-roles="admin" onclick="showViewGuarded('config-alertas',this)">
-      <span class="icon">⚙️</span> Config alertas
-    </div>
-
-    <div class="sb-item admin-only" data-view="config-avisos" data-roles="admin" onclick="showViewGuarded('config-avisos',this)">
-      <span class="icon">🔔</span> Config. Avisos
-    </div>
-
     <div class="sb-item admin-only" data-view="restore" data-roles="admin" onclick="showViewGuarded('restore',this)">
       <span class="icon">🔄</span> Restaurar backup
     </div>
@@ -1312,7 +1334,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.50
+          V 12.30.51
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1747,7 +1769,7 @@ tbody tr:last-child{border-bottom:none}
       <div id="view-config-alertas" class="section-hidden">
         <div class="card">
           <div class="card-header" style="display:flex;align-items:center;gap:12px">
-            <span class="card-title">⚙️ Configuración de Alertas</span>
+            <span class="card-title">⚙️ Parámetros de Alertas</span>
             <button onclick="loadConfigAlertas()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Recargar</button>
             <button onclick="saveConfigAlertas()" style="padding:5px 18px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">💾 Guardar cambios</button>
           </div>
@@ -1762,7 +1784,7 @@ tbody tr:last-child{border-bottom:none}
       <div id="view-config-avisos" class="section-hidden">
         <div class="card">
           <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-            <span class="card-title">🔔 Configuración de Avisos</span>
+            <span class="card-title">🔔 Avisos por Usuario</span>
             <button onclick="loadConfigAvisos()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Recargar</button>
             <button onclick="saveConfigAvisos()" style="padding:5px 18px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">💾 Guardar cambios</button>
           </div>
@@ -3655,8 +3677,8 @@ const _viewLabels = {
   familias:        'Familias artículos',
   usuarios:        'Usuarios',
   integridad:      'Integridad',
-  'config-alertas':'Config alertas',
-  'config-avisos': 'Config. Avisos',
+  'config-alertas':'Parámetros de alertas',
+  'config-avisos': 'Avisos por usuario',
 };
 
 const _rolLabels = { admin: '👑 Administrador', compras: '🛒 Compras', hotel: '🏨 Hotel' };
@@ -3855,7 +3877,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos','departamentos-email':'📧 Departamentos — correo por hotel','notificaciones-contactos':'🔔 Notificaciones adicionales',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Config Alertas','config-avisos':'🔔 Configuración de Avisos',restore:'🔄 Restaurar Backup'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos','departamentos-email':'📧 Departamentos — correo por hotel','notificaciones-contactos':'✉️ Notificaciones adicionales',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Parámetros de Alertas','config-avisos':'🔔 Avisos por Usuario',restore:'🔄 Restaurar Backup'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -8634,7 +8656,7 @@ async function loadIntegridad() {
       titulo: '📧 Cuenta EmailJS',
       // gravedad dinámica: umbral sin backup = crítico; cambio ya hecho o cerca del umbral = aviso
       gravedad: (probs.emailjs && probs.emailjs[0] && probs.emailjs[0].tipo === 'umbral_alcanzado_sin_backup') ? 'critico' : 'aviso',
-      desc: 'Estado del contador de envíos y del backup automático de cuenta (ver Config Alertas → EmailJS).',
+      desc: 'Estado del contador de envíos y del backup automático de cuenta (ver Parámetros de Alertas → EmailJS).',
       renderFila: u => `<tr><td style="padding:6px 10px">${u.mensaje}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Detalle</th></tr>',
     },

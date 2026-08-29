@@ -25,6 +25,14 @@
 
 ---
 
+## 2026-08-29 — [Control Pedidos] Reorganización del menú lateral: las pantallas admin-only se agrupan por dominio (v12.30.51)
+
+- Víctor: "¿puedes revisar en control pedidos todos los apartados exclusivos de admin? Ahora mismo creo que están todos regados sin organización, ¿puedes reubicar mejor todo?"
+- Investigación previa: las 8 pantallas admin-only (Familias, Departamentos, Notificaciones adicionales, Usuarios, Integridad, Config alertas, Config. Avisos, Restaurar backup) vivían todas dentro de una única sección "Gestión", mezcladas sin separación con 3 pantallas de uso diario compartidas con compras/hotel — solo el orden de cuándo se fueron añadiendo, sin ninguna agrupación funcional. El control de acceso real vive en el backend (`admin_required` u comprobación equivalente por ruta); reordenar el menú no toca permisos.
+- **Cambio en `templates/index.html` (sidebar)**: "Gestión" se queda solo con lo compartido (Proveedores, Pedidos eliminados, Techo de gastos). Las 8 pantallas admin-only pasan a 4 secciones nuevas con "· Admin" en el título: **Datos maestros** (Familias), **Alertas y notificaciones** (Departamentos, Notificaciones adicionales, Parámetros de alertas, Avisos por usuario), **Usuarios y accesos** (Usuarios), **Sistema** (Integridad, Restaurar backup). Ninguna ruta, permiso ni contenido cambió — solo el menú.
+- **Renombradas** "Config alertas" → **Parámetros de alertas** y "Config. Avisos" → **Avisos por usuario** (nombres antiguos casi sinónimos en español, fáciles de confundir) — actualizado también en el título de cada vista, el aviso de "sin permiso", el título de pestaña, y dos mensajes que las citaban por nombre (aviso de Integridad sobre EmailJS, Telegram de umbral de envíos).
+- **Verificación**: `python3 -m py_compile app.py models.py` y `node --check` sin errores. Comprobación programática de que los 14 `data-view` siguen únicos y con su vista correspondiente.
+
 ## 2026-08-28 — [Control Pedidos] Correo interno "ENVIADO AL PROVEEDOR": explica la superación del techo de gastos y la autorización de Dirección General cuando aplica (v12.30.50)
 
 - Víctor: quiere que, cuando el pedido enviado había pasado por autorización de Dirección General (exceso de techo), el propio correo interno de cambio de estado lo explique — totales, familia, motivo de la superación, quién y cuándo lo autorizó — y llegue igual a todos los destinatarios ya definidos.
