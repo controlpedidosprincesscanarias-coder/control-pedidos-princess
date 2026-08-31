@@ -1,3 +1,24 @@
+# v12.30.73 — 31 agosto 2026
+
+✨ Auditoría documental (Etapa 1): `GUIA_DESPLIEGUE.md` corregida — describía un despliegue que ya no existe
+
+**Contexto**: al revisar la app en busca de fallos e incongruencias que pudieran ralentizarla (petición del usuario), además de los 3 hallazgos de rendimiento ya cerrados en v12.30.70-72, se detectó que la documentación de despliegue llevaba desactualizada mucho tiempo — en algunos puntos, desde antes de v9. No es un problema de rendimiento en sí, pero sí un riesgo operativo real: seguir esta guía tal cual para una recuperación ante desastres habría reintroducido bugs ya resueltos y dejado pasos imposibles de completar.
+
+**Hallazgos y corrección, todos en `GUIA_DESPLIEGUE.md`**:
+- **Start Command peligroso**: la guía indicaba `gunicorn -w 2 app:app` (nota de v12.7.0). El real, desde v12.29.78, es `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 300` — sin `gthread`, el hilo en segundo plano de "Comparar listado PDF" puede hacer que Render considere el proceso colgado y lo reinicie a medias (bug ya documentado y corregido en v12.29.78, pero la guía nunca se actualizó). Corregido, con el porqué explicado igual que en `render.yaml`.
+- **Paso 2 (EmailJS) mezclaba dos proveedores distintos**: los pasos "API Keys → Create API Key" y una clave `re_xxxxxxxxxx` son de **Resend**, no de EmailJS — un cruce que llegó por error y nunca se corrigió. Además, desde v12.27.8 las credenciales EmailJS ya no se configuran como variables de entorno: se gestionan desde el propio panel de admin ("EmailJS y cola de correo"), con hasta 3 cuentas y failover automático al acercarse al límite gratuito de 200 envíos/mes. Reescrito con el flujo real.
+- **`RESEND_API_KEY`, `EMAIL_FROM`, `EMAILS_INTERNOS` sin uso real**: las tres están declaradas como variables opcionales en `render.yaml`, pero una búsqueda completa en `app.py` confirma que ninguna se lee en ningún punto del código (el comentario en `app.py` línea 84 ya deja constancia de que `EMAILS_INTERNOS` se eliminó — los destinatarios internos se leen siempre de la BD). Documentado como "sin uso" en la tabla de variables en vez de dejarlas sin explicar; **no se han tocado `render.yaml` ni el código** en esta entrega — limpiarlas de `render.yaml` queda para una etapa aparte, al ser un cambio de configuración de despliegue real, no solo documentación.
+- **Comando de inicialización de BD apuntaba a código muerto**: la guía decía `python -c "from app import init_db; init_db()"`. Esa función (`app.py`, línea ~1736) existe pero no la llama nadie en todo el proyecto — el proceso real, ya documentado correctamente en `README.md`, es el script independiente `python init_db.py`. Corregido para que ambos documentos coincidan. La función muerta en `app.py` se deja sin tocar en esta entrega (es documentación, no limpieza de código).
+- **Paso 4 (migración desde SQLite) obsoleto**: referenciaba `migrate_sqlite_to_pg.py`, un script de la migración puntual de los inicios del proyecto que no existe en este repositorio. Marcado explícitamente como "ya no aplica", con el motivo, en vez de dejar instrucciones que no se pueden seguir.
+- **Paso 6 (Supabase Storage) descrito como "preparación futura"** cuando en realidad se implementó en v12.8.0: adjuntos de pedidos cerrados migran a Storage automáticamente. Además la guía proponía instalar el paquete `supabase` y usar `create_client()` — la implementación real usa `requests` directo contra la API REST de Supabase Storage, sin esa dependencia. Reescrito para describir lo ya construido.
+- **Tabla de variables de entorno incompleta**: solo listaba `DATABASE_URL`, `SECRET_KEY` y `EMAILS_INTERNOS`. Ampliada para incluir todas las de `render.yaml` (`SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET`, `DALI_SSO_SECRET`, `DALI_FRONTEND_URL`), indicando cuáles son obligatorias.
+
+**Cambio en `templates/index.html`**: badge de versión del sidebar actualizado a "V 12.30.73".
+
+**Verificación**: cada afirmación de la guía nueva se contrastó contra el código real de `app.py`/`render.yaml` antes de escribirla (existencia de funciones, variables de entorno realmente leídas, endpoints reales). No hay cambios de código en esta entrega, solo documentación — no aplica `py_compile`.
+
+**Pendiente para una etapa futura** (fuera del alcance de esta entrega, por tocar configuración de despliegue real en vez de solo documentación): retirar `RESEND_API_KEY`/`EMAIL_FROM`/`EMAILS_INTERNOS` de `render.yaml` y la función muerta `init_db()` de `app.py`.
+
 # v12.30.72 — 31 agosto 2026
 
 ✨ Auditoría de rendimiento (Etapa 3 de 3, última): compresión gzip de las respuestas del servidor — index.html y el JSON de la API viajan hasta un 80-90% más ligeros

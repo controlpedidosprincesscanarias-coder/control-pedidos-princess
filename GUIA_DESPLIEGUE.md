@@ -24,9 +24,10 @@
    ```
    ⚠️ Sustituye `[TU-PASSWORD]` por la contraseña que pusiste.
 
-3. Ve a **SQL Editor** y ejecuta el schema inicial.
-   Puedes hacerlo pegando el contenido de `models.py` (las sentencias en `SQL_STATEMENTS`)
-   o dejando que Flask lo ejecute en el primer arranque con `init_db()`.
+3. El schema inicial (`models.py` → `SQL_STATEMENTS`) se ejecuta con el
+   script `init_db.py` en el **Paso 3.6**, una vez que `DATABASE_URL` ya
+   está configurada en Render — no hace falta pegarlo a mano en el SQL
+   Editor de Supabase.
 
 ### PASO 1b — Chat: ya NO se despliega aquí (desde v12.7.0)
 
@@ -41,15 +42,35 @@ servicio (pedidos) ya no necesita `CHAT_DATABASE_URL` ni el worker
 
 ## PASO 2 — EmailJS: envío de email desde el frontend
 
-1. El email se gestiona íntegramente desde el frontend vía EmailJS (sin configuración en el servidor).
-2. Ve a **API Keys → Create API Key**
-   - Nombre: `princess-pedidos`
-   - Permisos: Full access
-3. Copia la clave (`re_xxxxxxxxxx...`)
+> ⚠️ **Corregido (antes se mezclaba con Resend):** los pasos "API Keys →
+> Create API Key" y una clave con formato `re_xxxxxxxxxx` que aparecían
+> aquí son de **Resend**, no de EmailJS — un cruce de dos proveedores de
+> email que llegó a esta guía por error y nunca se corrigió. `RESEND_API_KEY`
+> existe como variable opcional en `render.yaml` pero **no la usa
+> ningún punto de `app.py` a día de hoy** (verificado por búsqueda
+> completa del fichero) — puedes dejarla sin rellenar.
 
-**Opcional — dominio propio:**
-Si quieres que los emails salgan desde `compras@princess.es` en lugar de
-Configura tu Service ID y Template ID en EmailJS y actualiza las constantes en el frontend.
+El email se gestiona íntegramente desde el frontend vía EmailJS, sin
+necesidad de ninguna variable de entorno en Render. Desde v12.27.8 las
+credenciales **no van hardcodeadas en el frontend**: se guardan en la
+tabla `config_alertas` y el navegador las pide en cada carga a
+`GET /api/emailjs/config`, así que un cambio de cuenta se aplica al
+momento, sin desplegar nada.
+
+1. Crea una cuenta en https://www.emailjs.com (plan gratuito: 200
+   envíos/mes) y dentro, un **Service** (conecta tu Gmail/Outlook) y una
+   **Template**.
+2. Copia estos 3 valores: **Public Key** (Account → General), **Service
+   ID** y **Template ID** (el de la plantilla que acabas de crear).
+3. En la propia app, entra como `admin` → menú lateral **"EmailJS y cola
+   de correo"** → pega los 3 valores en **Cuenta 1 (principal)**.
+4. **Opcional pero recomendado — failover automático:** repite el
+   proceso con una segunda (y una tercera) cuenta EmailJS gratuita y
+   rellena también **Cuenta 2** y **Cuenta 3** en ese mismo panel. El
+   sistema lleva la cuenta de envíos y, al acercarse al límite gratuito
+   de 200/mes (umbral configurable, 195 por defecto), cambia solo a la
+   siguiente cuenta sin cortar el envío de correos ni requerir ningún
+   despliegue.
 
 ---
 
@@ -60,49 +81,73 @@ Configura tu Service ID y Template ID en EmailJS y actualiza las constantes en e
 3. Configura el servicio:
    - **Runtime:** Python 3
    - **Build command:** `pip install -r requirements.txt`
-   - **Start command:** `gunicorn -w 2 app:app`
+   - **Start command:** `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 300`
    - **Plan:** Free
 
-   > ℹ️ **v12.7.0:** ya no hace falta `-k eventlet -w 1`. Ese Start Command
-   > era necesario mientras el chat (WebSocket) vivía en este mismo proceso;
-   > al haberse movido a su propio servicio (`control_pedidos_chat`), este
-   > servicio vuelve a gunicorn estándar y puede usar varios workers (`-w 2`
-   > como punto de partida — ajusta según la RAM de tu plan), más robusto
-   > que un único proceso. **Importante:** `SECRET_KEY` debe seguir siendo la
-   > misma que uses en `control_pedidos_chat` — el chat valida la sesión
-   > leyendo la misma cookie que crea el login de este servicio.
+   > ℹ️ **v12.29.78 (vigente):** este es el Start Command real, el mismo
+   > que usa `render.yaml`. **No uses `gunicorn -w 2 app:app`** (versión
+   > antigua de esta guía, hasta v12.29.77): con varios workers "sync",
+   > mientras el hilo en segundo plano de "Comparar listado PDF" procesa
+   > un PDF (~8s), el worker que lo atiende puede dejar de responder al
+   > *health check* (`/ping`) a tiempo — Render lo considera no saludable,
+   > **reinicia el contenedor** y el job en memoria se pierde a medias
+   > ("El job no existe o ha caducado"). `--worker-class gthread --threads 4`
+   > reparte las peticiones entrantes del mismo worker entre varios hilos,
+   > así que el health check y los sondeos del navegador se siguen
+   > atendiendo con normalidad mientras el hilo de fondo trabaja. No añade
+   > ninguna dependencia nueva (`gthread` es un tipo de worker propio de
+   > gunicorn). **Importante:** si tu servicio en Render tiene el "Start
+   > Command" fijado a mano en el panel (Settings → Start Command) en vez
+   > de leerlo de `render.yaml`, tendrás que pegar este comando ahí
+   > también — `render.yaml` solo no basta si el servicio no está
+   > gestionado como Blueprint desde este archivo. Ver `CHANGELOG.md`
+   > v12.29.78 para el detalle completo del incidente que motivó este
+   > cambio. (La nota histórica sobre `-k eventlet -w 1` y el chat en
+   > WebSocket, de v12.7.0, ya no aplica desde que el chat vive en su
+   > propio servicio `control_pedidos_chat` — sigue siendo cierto que
+   > `SECRET_KEY` debe coincidir entre ambos servicios, la sesión se
+   > valida con la misma cookie.)
 
-4. En **Environment → Add Environment Variable**, añade estas variables:
+4. En **Environment → Add Environment Variable**, añade estas variables
+   (lista sincronizada con `render.yaml` — si añades una variable nueva
+   ahí, añádela también aquí):
 
-   | Variable | Valor |
-   |---|---|
-   | `DATABASE_URL` | La URI de Supabase del Paso 1 |
-   | `SECRET_KEY` | Una cadena aleatoria larga (cópiala también en `control_pedidos_chat`) |
-   | *(sin variables de email)* | El email se gestiona en el frontend vía EmailJS |
-   | `EMAILS_INTERNOS` | `victor.martin@princess.es,jesus.curbelo@princess.es` |
+   | Variable | Obligatoria | Valor |
+   |---|---|---|
+   | `DATABASE_URL` | Sí | La URI de Supabase del Paso 1 |
+   | `SECRET_KEY` | Sí | Cadena aleatoria larga (Render la genera sola si usas `render.yaml` como Blueprint); cópiala también en `control_pedidos_chat` |
+   | `SUPABASE_URL` | Solo si usas Storage (Paso 6) | `https://xxxx.supabase.co` — la URL del **proyecto**, no la de la BD |
+   | `SUPABASE_SERVICE_ROLE_KEY` | Solo si usas Storage (Paso 6) | Settings → API → **service_role** (nunca la `anon`/pública) |
+   | `SUPABASE_STORAGE_BUCKET` | No | Por defecto `adjuntos-cerrados` si no se define |
+   | `DALI_SSO_SECRET` | Solo si integras con DALI | Debe ser idéntica a la del backend de DALI |
+   | `DALI_FRONTEND_URL` | No | Por defecto el proxy Cloudflare de DALI ya en producción |
+   | `RESEND_API_KEY`, `EMAIL_FROM`, `EMAILS_INTERNOS` | No — **actualmente sin uso** | Declaradas en `render.yaml` pero ningún punto de `app.py` las lee hoy (email va por EmailJS, Paso 2; destinatarios internos se leen de la BD). Puedes dejarlas vacías; no bloquean nada. |
 
 5. Haz clic en **Create Web Service** y espera el primer deploy (~2 min).
 
-6. **Inicializar la base de datos** (solo la primera vez):
-   En la consola Shell de Render, ejecuta:
+6. **Inicializar la base de datos** (solo la primera vez, sobre una BD
+   nueva y vacía — nunca sobre una ya en uso):
+   En la consola Shell de Render (o en local, con `DATABASE_URL`
+   exportada), ejecuta:
    ```bash
-   python -c "from app import init_db; init_db()"
+   python init_db.py
    ```
+   (Ver `README.md` → "Migraciones de base de datos" para el porqué:
+   este script solo se corre a mano una vez; los cambios de esquema
+   posteriores los aplica `_auto_migrate()` solo, en cada arranque.)
 
 ---
 
-## PASO 4 — Migrar datos del SQLite actual (si tienes pedidos existentes)
+## PASO 4 — Migrar datos del SQLite actual — ⚠️ YA NO APLICA
 
-En tu máquina local, con el `pedidos.db` descargado de Render:
-
-```bash
-pip install psycopg2-binary
-python migrate_sqlite_to_pg.py \
-  --sqlite pedidos.db \
-  --pg "postgresql://postgres:[PASSWORD]@db.xxxx.supabase.co:5432/postgres"
-```
-
-El script migra todas las tablas respetando los IDs existentes.
+Este paso documentaba la migración **puntual** de SQLite a PostgreSQL de
+los inicios del proyecto (antes de v9). `migrate_sqlite_to_pg.py` era un
+script de un solo uso para esa migración y **no existe en este
+repositorio** (ni falta: la app lleva muchísimas versiones sobre
+PostgreSQL/Supabase, sin ningún `pedidos.db` de por medio). Se deja esta
+sección solo para que quede constancia de por qué existió, sin instrucciones
+que seguir. Para restaurar datos de un backup ya en Postgres, usa
+`INSTRUCCIONES_RESTAURACION.md` en su lugar.
 
 ---
 
@@ -120,43 +165,35 @@ El endpoint `/ping` ya está incluido en `app.py` y devuelve `OK 200`.
 
 ---
 
-## PASO 6 — Supabase Storage: PDFs (preparación futura)
+## PASO 6 — Supabase Storage: adjuntos de pedidos cerrados (v12.8.0, ya implementado)
 
-Cuando necesites subir documentos PDF a los pedidos:
+Esto ya **no** es una preparación futura: está construido y en
+producción desde v12.8.0. Los adjuntos de pedidos ya cerrados
+(`ENTREGADO`/`CANCELADO`) se migran automáticamente de la columna
+`pedido_adjuntos.datos` (bytea, la mayor consumidora del tamaño de la
+BD) a Supabase Storage, para aligerar la base de datos — la consulta
+sigue siendo idéntica desde `/api/adjuntos/<id>`, solo cambia dónde vive
+el byte. **No** se usa el paquete `supabase` (no está en
+`requirements.txt`): la implementación real llama directamente a la API
+REST de Supabase Storage con `requests`, ya en `requirements.txt`. Si
+partes de cero:
 
 1. En Supabase → **Storage → New bucket**
-   - Nombre: `pedidos-docs`
+   - Nombre: `adjuntos-cerrados` (o el que pongas en
+     `SUPABASE_STORAGE_BUCKET`)
    - Public: No (privado)
 
-2. Instala el cliente:
-   ```
-   # Añadir a requirements.txt:
-   supabase>=2.0
-   ```
+2. Añade estas variables en Render (ver tabla completa en el Paso 3.4):
+   `SUPABASE_URL` (URL del **proyecto**, no de la BD) y
+   `SUPABASE_SERVICE_ROLE_KEY` (Settings → API → **service_role**, nunca
+   la `anon`/pública — esta clave no debe llegar nunca al navegador).
 
-3. Añade a las variables de entorno en Render:
-   ```
-   SUPABASE_URL = https://xxxx.supabase.co
-   SUPABASE_KEY = eyJ...  (Settings → API → service_role key)
-   ```
-
-4. Añade la columna en PostgreSQL (SQL Editor de Supabase):
-   ```sql
-   ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS documentos_pdf TEXT[];
-   ```
-
-5. Snippet de subida (añadir a `app.py` cuando lo necesites):
-   ```python
-   from supabase import create_client
-
-   _sb = create_client(os.environ["SUPABASE_URL"], os.environ["SUPABASE_KEY"])
-
-   def subir_pdf(pedido_id: int, archivo_bytes: bytes, nombre: str) -> str:
-       path = f"pedidos/{pedido_id}/{nombre}"
-       _sb.storage.from_("pedidos-docs").upload(path, archivo_bytes,
-           {"content-type": "application/pdf"})
-       return _sb.storage.from_("pedidos-docs").create_signed_url(path, 86400)["signedURL"]
-   ```
+3. No hace falta tocar el esquema a mano ni escribir código: la lógica
+   de subida/lectura ya está en `app.py` y se activa sola en cuanto
+   `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` están configuradas
+   (`STORAGE_CONFIGURADO`). Sin esas dos variables, la app sigue
+   funcionando normalmente — los adjuntos simplemente se quedan en la
+   BD en vez de migrarse a Storage.
 
 ---
 
@@ -179,4 +216,7 @@ Cuando necesites subir documentos PDF a los pedidos:
 | `app.py` | SQLite → psycopg2; `?` → `%s`; `datetime('now')` → `NOW()`; email via EmailJS (frontend); endpoint `/ping` |
 | `models.py` | `SQL_STATEMENTS` como lista; `AUTOINCREMENT` → `SERIAL`; `LIKE` → `ILIKE` disponible |
 | `requirements.txt` | Añadido `psycopg2-binary`, `gunicorn`; eliminado lo innecesario |
-| `migrate_sqlite_to_pg.py` | Nuevo — migración de datos existentes |
+
+> `migrate_sqlite_to_pg.py` — mencionado aquí en versiones antiguas de
+> esta tabla, era el script de la migración puntual de los inicios del
+> proyecto. No existe en este repositorio (ver Paso 4).

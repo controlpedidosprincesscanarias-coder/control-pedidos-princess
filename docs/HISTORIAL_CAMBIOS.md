@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Auditoría documental, Etapa 1: `GUIA_DESPLIEGUE.md` corregida (v12.30.73)
+
+- **Origen**: petición del usuario de auditar la app en busca de "fallos e incongruencias... archivos fuera de lugar, README, changelog, index, algo desactualizado". Se acordó abordarlo por etapas, documentando cada una.
+- **Hallazgo**: `GUIA_DESPLIEGUE.md` describía un despliegue que ya no existe en varios puntos: Start Command sin `gthread` (reintroduciría el bug de v12.29.78), Paso 2 de EmailJS mezclado por error con instrucciones de Resend, variables `RESEND_API_KEY`/`EMAIL_FROM`/`EMAILS_INTERNOS` declaradas en `render.yaml` pero sin ningún uso real en `app.py`, comando de inicialización de BD apuntando a una función muerta (`init_db()` en `app.py`, sin llamadas en todo el proyecto) en vez del script real `init_db.py`, Paso 4 (migración SQLite) obsoleto — el script referenciado no existe en el repo —, y Paso 6 (Supabase Storage) descrito como "preparación futura" cuando ya está implementado desde v12.8.0, con un enfoque técnico distinto al descrito (REST directo con `requests`, no el paquete `supabase`).
+- **Cambio**: `GUIA_DESPLIEGUE.md` reescrita sección por sección con el proceso real, contrastado contra el código antes de documentarlo. Tabla de variables de entorno ampliada para cubrir todas las de `render.yaml`. Badge de versión en `templates/index.html` actualizado.
+- **Fuera de alcance de esta entrega**: limpiar `render.yaml` (variables sin uso) y la función muerta `init_db()` de `app.py` — son cambios de configuración/código real, se dejan para una etapa aparte en vez de mezclarlos con una entrega puramente documental.
+- **Entrega**: `GUIA_DESPLIEGUE.md`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Auditoría de rendimiento, Etapa 3/3 (última): compresión gzip de las respuestas del servidor (v12.30.72)
 
 - **Origen**: continuación de las Etapas 1 y 2 — Víctor: "desplegada la dos continuamos con la 3".
