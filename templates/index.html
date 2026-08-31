@@ -382,6 +382,40 @@ tbody tr:last-child{border-bottom:none}
 .schip-prov{background:#E1F5EE;color:#085041;border-color:#5DCAA5}.schip-prov .schip-dot{background:#0F6E56}
 .schip-obs{background:#FAEEDA;color:#633806;border-color:#EF9F27}.schip-obs .schip-dot{background:#854F0B}
 
+/* (2026-08-31) Cabecera fija en Pedidos, Alertas, Familias de Artículos y
+   Usuarios — Víctor: "todas estas pantallas también bloquear esto en lo
+   alto de la ventana para scrol de las 4 opciones adjuntas", extendiendo
+   a estas 4 vistas el mismo patrón ya aplicado en Proveedores (ver
+   comentario de #prov-filters más arriba: por qué hace falta anular
+   overflow-x:auto de .table-wrap, y por qué los offsets se calculan en JS
+   en vez de hardcodearlos — _ajustarStickyApilado() y las 4 funciones que
+   la usan, más abajo en el <script>). En Pedidos y Alertas se apilan dos
+   bloques (filtros + chips / cabecera de tarjeta + filtros); en Familias
+   y Usuarios solo la cabecera de la tarjeta, al no tener buscador propio. */
+#pedidos-filters{
+  position:sticky;top:var(--ped-filtros-top,56px);z-index:20;
+  background:var(--bg);padding:8px 0;margin-bottom:0
+}
+#pedidos-chips{
+  position:sticky;top:var(--ped-chips-top,90px);z-index:19;
+  background:var(--bg);padding-bottom:8px;margin-bottom:0
+}
+#pedidos-table-wrap thead th{position:sticky;top:var(--ped-thead-top,130px);z-index:15}
+#pedidos-table-wrap{overflow:visible}
+
+#alertas-card-header{position:sticky;top:var(--al-header-top,56px);z-index:20;background:var(--white)}
+#alertas-filters{position:sticky;top:var(--al-filtros-top,113px);z-index:19;background:var(--white)}
+#alertas-table-wrap thead th{position:sticky;top:var(--al-thead-top,153px);z-index:15}
+#alertas-table-wrap{overflow:visible}
+
+#familias-card-header{position:sticky;top:56px;z-index:20;background:var(--white)}
+#familias-table-wrap thead th{position:sticky;top:var(--fam-thead-top,113px);z-index:15}
+#familias-table-wrap{overflow:visible}
+
+#usuarios-card-header{position:sticky;top:56px;z-index:20;background:var(--white)}
+#usuarios-table-wrap thead th{position:sticky;top:var(--usr-thead-top,113px);z-index:15}
+#usuarios-table-wrap{overflow:visible}
+
 /* ── Paginación ────────────────────────────────────────────────────────── */
 .pagination{display:flex;align-items:center;gap:4px;justify-content:flex-end;margin-top:16px}
 .page-btn{
@@ -1362,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.58
+          V 12.30.59
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1504,7 +1538,7 @@ tbody tr:last-child{border-bottom:none}
 
       <!-- VIEW: PEDIDOS ───────────────────────────────────────────────── -->
       <div id="view-pedidos" class="section-hidden">
-        <div class="filters">
+        <div class="filters" id="pedidos-filters">
           <input class="filter-input" id="f-q" placeholder="🔍 Buscar…" oninput="debouncedLoad()">
           <select class="filter-select" id="f-hotel" onchange="loadPedidos()">
             <option value="">Todos los hoteles</option>
@@ -1521,7 +1555,7 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
           <button class="btn btn-sm" id="btn-comparar-listado-pdf" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCompararListado()">📄 Comparar listado PDF</button>
         </div>
-        <div class="search-chips">
+        <div class="search-chips" id="pedidos-chips">
           <span class="search-chips-label">Busca por:</span>
           <span class="schip schip-pedido"><span class="schip-dot"></span>Nº pedido</span>
           <span class="schip schip-prov"><span class="schip-dot"></span>Proveedor</span>
@@ -1571,11 +1605,11 @@ tbody tr:last-child{border-bottom:none}
         </div>
 
         <div class="card">
-          <div class="card-header" style="gap:10px">
+          <div class="card-header" id="alertas-card-header" style="gap:10px">
             <span class="card-title">⚠️ Alertas de seguimiento de pedidos</span>
             <button onclick="abrirModalImpresion('alertas')" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:5px 14px;font-size:12px;font-weight:600;border:1px solid #e67e00;border-radius:6px;cursor:pointer;background:#fff;color:#e67e00" title="Imprimir informe de alertas">🖨️ Imprimir</button>
           </div>
-          <div class="filters" style="padding:0 16px 4px">
+          <div class="filters" id="alertas-filters" style="padding:0 16px 4px">
             <input class="filter-input" id="af-q" placeholder="🔍 Buscar proveedor, pedido, hotel…" oninput="aplicarFiltrosAlertas()" style="width:220px">
             <select class="filter-select" id="af-hotel" onchange="aplicarFiltrosAlertas()">
               <option value="">Todos los hoteles</option>
@@ -1601,7 +1635,7 @@ tbody tr:last-child{border-bottom:none}
             <button class="btn btn-ghost btn-sm" onclick="clearFiltrosAlertas()">✕ Limpiar</button>
             <span id="alertas-filtro-count" style="margin-left:auto;font-size:12px;color:var(--text-secondary)"></span>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap" id="alertas-table-wrap">
             <table>
               <thead>
                 <tr><th>Nº</th><th>Hotel</th><th>Pedido DALI / SAP</th><th>Estado</th><th>Proveedor</th><th>F. Tramitación</th><th>Días</th><th>Nivel</th><th>Notificación</th><th></th></tr>
@@ -1713,11 +1747,11 @@ tbody tr:last-child{border-bottom:none}
       <!-- ── Vista: Familias de Artículos (solo admin) ─────────────────── -->
       <div id="view-familias" class="section-hidden">
         <div class="card">
-          <div class="card-header">
+          <div class="card-header" id="familias-card-header">
             <span class="card-title">🏷️ Familias de Artículos</span>
             <button class="btn btn-gold btn-sm" onclick="openModalFamilia()">+ Nueva familia</button>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap" id="familias-table-wrap">
             <table>
               <thead><tr><th>#</th><th>Nombre</th><th style="width:120px">Acciones</th></tr></thead>
               <tbody id="familias-tbody"></tbody>
@@ -2025,11 +2059,11 @@ tbody tr:last-child{border-bottom:none}
       <!-- ── Vista: Usuarios (solo admin) ──────────────────────────────── -->
       <div id="view-usuarios" class="section-hidden">
         <div class="card">
-          <div class="card-header">
+          <div class="card-header" id="usuarios-card-header">
             <span class="card-title">👥 Gestión de Usuarios</span>
             <button class="btn btn-gold btn-sm" onclick="openModalUsuario()">+ Nuevo usuario</button>
           </div>
-          <div class="table-wrap">
+          <div class="table-wrap" id="usuarios-table-wrap">
             <table>
               <thead>
                 <tr>
@@ -3969,15 +4003,15 @@ function showView(view, el) {
   accionesProveedores.style.display = (view === 'proveedores') ? 'flex' : 'none';
 
   if (view==='dashboard')   { loadStats(); _loadAndApplyDashboardPrefs(); }
-  if (view==='pedidos')     loadPedidos();
-  if (view==='alertas')     { loadAlertas(); loadTechoAlertas(); }
+  if (view==='pedidos')     { loadPedidos(); _ajustarStickyPedidos(); }
+  if (view==='alertas')     { loadAlertas(); loadTechoAlertas(); _ajustarStickyAlertas(); }
   if (view==='proveedores') { loadProveedores(); _refreshProvAdminControls(); _ajustarStickyProveedores(); }
   if (view==='eliminados')  loadEliminados();
   if (view==='techo')       loadTecho();
-  if (view==='familias')    loadFamilias();
+  if (view==='familias')    { loadFamilias(); _ajustarStickyFamilias(); }
   if (view==='departamentos-email') loadDepartamentosEmail();
   if (view==='notificaciones-contactos') loadNotificacionesContactos();
-  if (view==='usuarios')    { loadUsuarios(); adminCargarSolicitudes(); }
+  if (view==='usuarios')    { loadUsuarios(); adminCargarSolicitudes(); _ajustarStickyUsuarios(); }
   if (view==='integridad')     loadIntegridad();
   if (view==='config-alertas') loadConfigAlertas();
   if (view==='config-avisos') loadConfigAvisos();
@@ -4494,6 +4528,8 @@ async function loadPedidos() {
     renderPedidosTable(d.pedidos);
     renderPagination(d.page, d.pages, d.total);
   }
+  // Reajustar la cabecera fija por si algún filtro cambió de altura.
+  requestAnimationFrame(_ajustarStickyPedidos);
 }
 
 function estadoBadge(estado) {
@@ -5827,6 +5863,8 @@ function aplicarFiltrosAlertas() {
       ? `${_alertasRaw.length} alerta${_alertasRaw.length !== 1 ? 's' : ''}`
       : `Mostrando ${filtradas.length} de ${_alertasRaw.length} alertas`;
   }
+  // Reajustar la cabecera fija por si el contador cambió de altura.
+  requestAnimationFrame(_ajustarStickyAlertas);
 }
 
 function clearFiltrosAlertas() {
@@ -5989,8 +6027,58 @@ function _ajustarStickyProveedores() {
   document.documentElement.style.setProperty('--prov-filtros-top', alturaTopbar + 'px');
   document.documentElement.style.setProperty('--prov-thead-top', (alturaTopbar + alturaFiltros) + 'px');
 }
+
+// (2026-08-31) Mismo patrón de cabecera fija, extendido a Pedidos,
+// Alertas, Familias de Artículos y Usuarios — Víctor: "todas estas
+// pantallas también bloquear esto en lo alto de la ventana para scrol de
+// las 4 opciones adjuntas". En vez de repetir cuatro veces la misma
+// cuenta de _ajustarStickyProveedores(), un helper genérico: dado un
+// array ordenado (de arriba a abajo) de {id, varName} — los bloques que
+// se van apilando pegados debajo del topbar — mide cada uno en tiempo
+// real y encadena los offsets; devuelve el offset final, que cada
+// función de vista usa para la cabecera de su tabla.
+function _ajustarStickyApilado(bloques) {
+  const topbar = document.getElementById('topbar');
+  let acc = topbar ? topbar.offsetHeight : 56;
+  for (const {id, varName} of bloques) {
+    document.documentElement.style.setProperty(varName, acc + 'px');
+    const el = document.getElementById(id);
+    if (el) acc += el.offsetHeight;
+  }
+  return acc;
+}
+function _ajustarStickyPedidos() {
+  const top = _ajustarStickyApilado([
+    {id: 'pedidos-filters', varName: '--ped-filtros-top'},
+    {id: 'pedidos-chips',   varName: '--ped-chips-top'},
+  ]);
+  document.documentElement.style.setProperty('--ped-thead-top', top + 'px');
+}
+function _ajustarStickyAlertas() {
+  const top = _ajustarStickyApilado([
+    {id: 'alertas-card-header', varName: '--al-header-top'},
+    {id: 'alertas-filters',     varName: '--al-filtros-top'},
+  ]);
+  document.documentElement.style.setProperty('--al-thead-top', top + 'px');
+}
+function _ajustarStickyFamilias() {
+  const top = _ajustarStickyApilado([
+    {id: 'familias-card-header', varName: '--fam-header-top'},
+  ]);
+  document.documentElement.style.setProperty('--fam-thead-top', top + 'px');
+}
+function _ajustarStickyUsuarios() {
+  const top = _ajustarStickyApilado([
+    {id: 'usuarios-card-header', varName: '--usr-header-top'},
+  ]);
+  document.documentElement.style.setProperty('--usr-thead-top', top + 'px');
+}
 window.addEventListener('resize', () => {
   if (G.currentView === 'proveedores') _ajustarStickyProveedores();
+  if (G.currentView === 'pedidos')     _ajustarStickyPedidos();
+  if (G.currentView === 'alertas')     _ajustarStickyAlertas();
+  if (G.currentView === 'familias')    _ajustarStickyFamilias();
+  if (G.currentView === 'usuarios')    _ajustarStickyUsuarios();
 });
 
 async function loadProveedores() {

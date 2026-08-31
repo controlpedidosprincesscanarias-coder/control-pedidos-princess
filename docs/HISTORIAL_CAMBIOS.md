@@ -25,6 +25,15 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Cabecera fija también en Pedidos, Alertas, Familias de Artículos y Usuarios (v12.30.59)
+
+- **Origen**: Víctor, con capturas de las 4 pantallas: "todas estas pantallas también bloquear esto en lo alto de la ventana para scrol de las 4 opciones adjuntas" — mismo comportamiento de v12.30.58 (Proveedores), extendido a estas 4 vistas.
+- **Cambio**: en Pedidos se pegan debajo de la barra superior el buscador+filtros y la fila "Busca por:"; en Alertas, el título de la tarjeta + Imprimir y su fila de filtros; en Familias de Artículos y Usuarios (sin buscador propio), solo el título de la tarjeta. En los 4 casos, además, la cabecera de columnas de la tabla. Mismo mecanismo que Proveedores: offsets calculados en JS con un helper genérico compartido (`_ajustarStickyApilado()`), y `overflow-x:auto` de `.table-wrap` anulado solo en estas 4 tablas (mismo motivo ya documentado en la entrada de Proveedores).
+- **Verificación**: carga en Chromium headless sin errores de JS; las 4 vistas probadas con datos de prueba y scroll simulado por Playwright, con capturas confirmando el resultado antes de entregar.
+- **Entrega**: `templates/index.html` (único archivo con cambios), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Buscador de proveedores por código SAP/DALI además de nombre + cabecera de tabla fija al hacer scroll (v12.30.58)
 
 - **Origen**: Víctor, sobre Proveedores (ya con 2151 registros): "debe dejar buscar por nombre, codigo sap y codigo dali, cuando se realiza scrol se debe quedar fijo la parte superior siempre visible".

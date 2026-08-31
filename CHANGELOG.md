@@ -1,3 +1,18 @@
+# v12.30.59 — 31 agosto 2026
+
+✨ Cabecera fija también en Pedidos, Alertas, Familias de Artículos y Usuarios
+
+**Petición de Víctor**, con capturas de las 4 pantallas: "todas estas pantallas también bloquear esto en lo alto de la ventana para scrol de las 4 opciones adjuntas" — extendiendo a estas vistas el mismo comportamiento entregado en v12.30.58 para Proveedores.
+
+**Cambio**: mismo patrón, aplicado a cada vista según lo que muestran sus propias capturas:
+- **Pedidos**: se quedan pegados debajo de la barra superior el buscador+filtros (hotel, estado, departamento, fechas, Limpiar, Imprimir, Comparar listado PDF) y la fila "Busca por: Nº pedido / Proveedor / Observaciones", además de la cabecera de la tabla.
+- **Alertas de seguimiento de pedidos**: se quedan pegados el título de la tarjeta (con el botón Imprimir) y su fila de filtros, además de la cabecera de la tabla.
+- **Familias de Artículos** y **Usuarios**: al no tener buscador propio, solo se queda pegado el título de la tarjeta (con su botón "+ Nueva…"), además de la cabecera de la tabla.
+
+Mismo mecanismo técnico que Proveedores: los offsets se calculan en JS en tiempo real (un único helper genérico, `_ajustarStickyApilado()`, reutilizado por las 4 vistas) en vez de hardcodearse, y se anula `overflow-x:auto` de `.table-wrap` solo en estas 4 tablas concretas (mismo motivo ya documentado: ese overflow convierte también `overflow-y` en `auto` por debajo y rompe el "pegado" contra la ventana).
+
+**Verificación**: página cargada en Chromium headless sin errores de JS; las 4 vistas probadas con datos de prueba y scroll simulado (Playwright) confirmando visualmente que cada cabecera se queda fija — capturas de las 4 revisadas antes de entregar.
+
 # v12.30.58 — 31 agosto 2026
 
 ✨ Buscador de proveedores por nombre, código SAP y código DALI + cabecera de la tabla siempre visible al hacer scroll
