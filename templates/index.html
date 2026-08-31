@@ -1323,6 +1323,9 @@ tbody tr:last-child{border-bottom:none}
       <span class="icon">🔍</span> Integridad
       <span class="sb-badge" id="sb-integridad-badge" style="display:none;background:#dc3545">!</span>
     </div>
+    <div class="sb-item admin-only" data-view="config-emailjs" data-roles="admin" onclick="showViewGuarded('config-emailjs',this)">
+      <span class="icon">📤</span> EmailJS y cola de correo
+    </div>
     <div class="sb-item admin-only" data-view="restore" data-roles="admin" onclick="showViewGuarded('restore',this)">
       <span class="icon">🔄</span> Restaurar backup
     </div>
@@ -1334,7 +1337,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.51
+          V 12.30.52
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1657,6 +1660,29 @@ tbody tr:last-child{border-bottom:none}
             <div class="icon">✅</div><div>No hay datos de techo este mes</div>
           </div>
         </div>
+
+        <!-- (2026-08-29) Límites en € que controlan este mismo techo — antes
+             vivían en "Parámetros de alertas" (grupo "techo" de
+             config_alertas), en una pantalla sin relación visible con esta.
+             Movidos aquí, junto a lo que configuran, a petición de Víctor de
+             reorganizar las pantallas de admin. Esta vista la ven admin Y
+             compras (data-roles="admin,compras" en el sidebar), así que este
+             bloque se mantiene oculto salvo para admin — ver el chequeo
+             G.rol==='admin' en loadTecho(). Mismo endpoint de siempre
+             (GET/PUT /api/admin/config-alertas), sin cambios en el backend. -->
+        <div id="techo-config-admin-wrap" style="display:none;margin-top:16px">
+          <div class="card">
+            <div class="card-header" style="display:flex;align-items:center;gap:12px">
+              <span class="card-title">⚙️ Límites de Techo de Gastos</span>
+              <button onclick="loadTechoConfigAdmin()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Recargar</button>
+              <button onclick="saveTechoConfigAdmin()" style="padding:5px 18px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">💾 Guardar cambios</button>
+            </div>
+            <div id="techo-config-msg" style="display:none;margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600"></div>
+            <div id="techo-config-body" style="padding:0 16px 24px">
+              <div style="text-align:center;padding:32px;color:var(--text-secondary)">Cargando configuración…</div>
+            </div>
+          </div>
+        </div>
       </div>
 
       <!-- ── Vista: Familias de Artículos (solo admin) ─────────────────── -->
@@ -1820,6 +1846,30 @@ tbody tr:last-child{border-bottom:none}
           </div>
           <div id="config-avisos-msg" style="display:none;margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600"></div>
           <div id="config-avisos-body" style="padding:0 16px 24px;overflow-x:auto">
+            <div style="text-align:center;padding:32px;color:var(--text-secondary)">Cargando configuración…</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ── Vista: EmailJS y cola de correo (solo admin) ──────────────────
+           (2026-08-29) Antes vivía dentro de "Parámetros de alertas" (grupo
+           "emailjs" de config_alertas), mezclada con umbrales de plazo/techo
+           sin relación real — esto es infraestructura de envío (credenciales
+           de las 3 cuentas EmailJS, rotación automática, cola de correos de
+           sistema atascados), no un umbral de alerta. Movida a petición de
+           Víctor de reorganizar las pantallas de admin. Usa el mismo
+           endpoint de siempre (GET/PUT /api/admin/config-alertas, que ya
+           era agnóstico de a qué grupo pertenece cada clave) — ningún
+           cambio en el backend. -->
+      <div id="view-config-emailjs" class="section-hidden">
+        <div class="card">
+          <div class="card-header" style="display:flex;align-items:center;gap:12px">
+            <span class="card-title">📤 EmailJS y Cola de Correo</span>
+            <button onclick="loadEmailjsConfig()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:1px solid var(--border);border-radius:6px;cursor:pointer;background:var(--surface)">↻ Recargar</button>
+            <button onclick="saveEmailjsConfig()" style="padding:5px 18px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#1a73e8;color:#fff;font-weight:700">💾 Guardar cambios</button>
+          </div>
+          <div id="config-emailjs-msg" style="display:none;margin:12px 16px;padding:10px 16px;border-radius:8px;font-size:13px;font-weight:600"></div>
+          <div id="config-emailjs-body" style="padding:0 16px 24px">
             <div style="text-align:center;padding:32px;color:var(--text-secondary)">Cargando configuración…</div>
           </div>
         </div>
@@ -3679,6 +3729,7 @@ const _viewLabels = {
   integridad:      'Integridad',
   'config-alertas':'Parámetros de alertas',
   'config-avisos': 'Avisos por usuario',
+  'config-emailjs':'EmailJS y cola de correo',
 };
 
 const _rolLabels = { admin: '👑 Administrador', compras: '🛒 Compras', hotel: '🏨 Hotel' };
@@ -3877,7 +3928,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos','departamentos-email':'📧 Departamentos — correo por hotel','notificaciones-contactos':'✉️ Notificaciones adicionales',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Parámetros de Alertas','config-avisos':'🔔 Avisos por Usuario',restore:'🔄 Restaurar Backup'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos','departamentos-email':'📧 Departamentos — correo por hotel','notificaciones-contactos':'✉️ Notificaciones adicionales',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Parámetros de Alertas','config-avisos':'🔔 Avisos por Usuario','config-emailjs':'📤 EmailJS y Cola de Correo',restore:'🔄 Restaurar Backup'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -3899,6 +3950,7 @@ function showView(view, el) {
   if (view==='integridad')     loadIntegridad();
   if (view==='config-alertas') loadConfigAlertas();
   if (view==='config-avisos') loadConfigAvisos();
+  if (view==='config-emailjs') loadEmailjsConfig();
   if (view==='restore') { restoreCargarLista(); restoreComprobarAlEntrar(); }
 }
 
@@ -7497,6 +7549,16 @@ async function resolverExpedienteTecho(eid, accion) {
 
 async function loadTecho() {
   if (G.rol === 'hotel') return;   // sin acceso para rol hotel
+
+  // (2026-08-29) El bloque de límites (€) es solo para admin — esta vista
+  // la comparte con compras (data-roles="admin,compras" en el sidebar),
+  // así que se oculta/muestra aquí en vez de en el sidebar.
+  const techoConfigWrap = document.getElementById('techo-config-admin-wrap');
+  if (techoConfigWrap) {
+    techoConfigWrap.style.display = (G.rol === 'admin') ? '' : 'none';
+    if (G.rol === 'admin') loadTechoConfigAdmin();
+  }
+
   const grid  = document.getElementById('techo-resumen-grid');
   const empty = document.getElementById('techo-empty');
   grid.innerHTML = '<div style="padding:20px;color:#999;text-align:center">Cargando…</div>';
@@ -7712,6 +7774,73 @@ function _invalidarTecho() {
   _techoCacheTs = 0;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════════
+   Límites de Techo de Gastos — solo admin (2026-08-29). Antes era el grupo
+   "techo" de "Parámetros de alertas" (ver comentario junto a esta vista y
+   junto a loadConfigAlertas() en el HTML) — mismas claves de siempre
+   (techo_max_pedido, techo_max_mes, techo_max_pedidos,
+   techo_max_pedidos_familia, techo_max_mes_familia, techo_pct_amarillo),
+   mismo endpoint GET/PUT /api/admin/config-alertas, solo cambia dónde se
+   editan: junto al propio resumen de techo que controlan, no en una
+   pantalla de umbrales de alerta sin relación con esto.
+═══════════════════════════════════════════════════════════════════════════ */
+async function loadTechoConfigAdmin() {
+  const body = document.getElementById('techo-config-body');
+  if (!body) return;
+  try {
+    const d = await api('/api/admin/config-alertas');
+    if (!d.ok) throw new Error(d.error);
+    const items = d.grupos.techo || [];
+    const unidad = clave => (clave.includes('techo_max_pedido') || clave.includes('techo_max_mes'))
+      ? '€' : clave.includes('pct') ? '%' : 'pedidos/mes';
+    body.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;padding-top:12px">
+      ${items.map(item => `
+        <div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:8px 10px;display:flex;align-items:center;justify-content:space-between;gap:8px">
+          <div style="font-size:11px;color:#555;line-height:1.3;flex:1;min-width:0">💳 ${item.label}</div>
+          <div style="display:flex;align-items:center;gap:4px;flex-shrink:0">
+            <input type="number" min="0" step="1" id="cfg_${item.clave}" value="${item.valor}"
+                   style="width:72px;height:32px;padding:3px 6px;border:2px solid #1a73e8;border-radius:6px;font-size:14px;font-weight:700;text-align:center">
+            <span style="font-size:11px;color:#666;font-weight:600;min-width:18px">${unidad(item.clave)}</span>
+          </div>
+        </div>`).join('')}
+    </div>`;
+  } catch(e) {
+    body.innerHTML = `<div style="color:red;padding:24px">Error cargando configuración: ${e.message}</div>`;
+  }
+}
+
+async function saveTechoConfigAdmin() {
+  const inputs = document.querySelectorAll('#techo-config-body input[id^="cfg_"]');
+  const data = {};
+  inputs.forEach(inp => { data[inp.id.replace('cfg_', '')] = inp.value; });
+  const msg = document.getElementById('techo-config-msg');
+  try {
+    const r = await fetch('/api/admin/config-alertas', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    const d = await r.json();
+    msg.style.display = 'block';
+    if (d.ok) {
+      msg.style.background = '#d4edda'; msg.style.color = '#155724';
+      msg.textContent = `✅ ${d.actualizadas} parámetros guardados.`;
+      // Los límites cambiaron — refresca también el resumen de arriba
+      // (semáforos, %, avisos), no solo este bloque de configuración.
+      _invalidarTecho();
+      loadTecho();
+    } else {
+      msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
+      msg.textContent = '❌ Error: ' + d.error;
+    }
+    setTimeout(() => { msg.style.display = 'none'; }, 5000);
+  } catch(e) {
+    msg.style.display = 'block';
+    msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
+    msg.textContent = '❌ Error de red: ' + e.message;
+  }
+}
+
 async function loadTechoAlertas() {
   if (G.rol === 'hotel') return;
   try {
@@ -7900,99 +8029,15 @@ async function loadConfigAlertas() {
     const grupos = d.grupos;
     let html = '';
     for (const [grupo, items] of Object.entries(grupos)) {
+      // (2026-08-29) "techo" y "emailjs" tienen ahora su propia pantalla —
+      // ver loadTechoConfigAdmin() en la vista Techo de gastos y
+      // loadEmailjsConfig() en la nueva vista "EmailJS y cola de correo".
+      // Antes vivían aquí mezclados con el resto de umbrales de alerta,
+      // sin relación real con ellos (uno es €/pedido del techo de gastos,
+      // el otro es infraestructura de envío de correo) — a petición de
+      // Víctor de dejar mejor organizadas las pantallas de admin.
+      if (grupo === 'techo' || grupo === 'emailjs') continue;
       const label = GRUPOS_LABEL[grupo] || grupo;
-
-      if (grupo === 'emailjs') {
-        const get = clave => (items.find(i => i.clave === clave) || {}).valor || '';
-        const contador  = parseInt(get('emailjs_contador') || '0', 10);
-        const umbral    = parseInt(get('emailjs_umbral_cambio') || '195', 10);
-        const activa    = parseInt(get('emailjs_cuenta_activa') || '1', 10);
-        const cambioEn  = get('emailjs_cambio_automatico_en');
-        const pct       = umbral > 0 ? Math.min(100, Math.round(contador / umbral * 100)) : 0;
-        const pctColor  = pct >= 100 ? '#dc3545' : pct >= 80 ? '#ffc107' : '#28a745';
-        html += `<div style="margin:10px 0 6px;padding:0 16px">
-          <div style="font-weight:700;font-size:13px;color:#1a73e8;border-bottom:2px solid #e8f0fe;padding-bottom:5px;margin-bottom:10px">${label}</div>
-
-          <div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:12px 14px;margin-bottom:12px">
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
-              <span style="font-size:13px;font-weight:700;color:${activa !== 1 ? '#8B0000' : '#1a73e8'}">
-                Cuenta en uso ahora mismo: ${activa}${activa !== 1 ? ' (backup — ya se activó el cambio automático)' : ''}
-              </span>
-              ${get('emailjs_reinicio_fecha_' + activa) ? `<span style="font-size:11px;color:#888">Esta cuenta reinicia su cupo el ${esc(get('emailjs_reinicio_fecha_' + activa))}</span>` : ''}
-              ${cambioEn ? `<span style="font-size:11px;color:#888">Último cambio automático: ${esc(cambioEn)}</span>` : ''}
-            </div>
-            <div style="height:10px;background:#e9ecef;border-radius:5px;overflow:hidden;margin-bottom:6px">
-              <div style="height:100%;width:${pct}%;background:${pctColor}"></div>
-            </div>
-            <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:11.5px;color:#555">
-              <span>Envíos contados: <input type="number" min="0" id="cfg_emailjs_contador" value="${contador}"
-                style="width:70px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
-              <span>Cambiar de cuenta al llegar a: <input type="number" min="1" id="cfg_emailjs_umbral_cambio" value="${umbral}"
-                style="width:60px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
-              <span>Cuenta activa (1, 2 o 3): <input type="number" min="1" max="3" id="cfg_emailjs_cuenta_activa" value="${activa}"
-                style="width:40px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
-            </div>
-            <div style="font-size:10.5px;color:#888;margin-top:6px">
-              Para forzar la vuelta a la cuenta 1 (por ejemplo tras renovar/crear otra cuenta EmailJS),
-              pon "Cuenta activa" a 1 y "Envíos contados" a 0, y guarda.
-            </div>
-          </div>
-
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
-            ${[1, 2, 3].map(n => `
-              <div style="background:${activa === n ? '#eef6ff' : '#fafafa'};border:1px solid ${activa === n ? '#b6d4fe' : '#e9ecef'};border-radius:8px;padding:10px 12px">
-                <div style="font-size:12px;font-weight:700;color:${activa === n ? '#1a73e8' : '#555'};margin-bottom:8px">
-                  Cuenta ${n} ${n === 1 ? '(principal)' : n === 2 ? '(secundaria)' : '(backup)'} ${activa === n ? ' · en uso' : ''}
-                </div>
-                <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Public Key</label>
-                <input type="text" id="cfg_emailjs_public_key_${n}" value="${esc(get('emailjs_public_key_' + n))}"
-                       placeholder="Public Key" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
-                <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Service ID</label>
-                <input type="text" id="cfg_emailjs_service_id_${n}" value="${esc(get('emailjs_service_id_' + n))}"
-                       placeholder="service_xxxxxxx" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
-                <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Template ID</label>
-                <input type="text" id="cfg_emailjs_template_id_${n}" value="${esc(get('emailjs_template_id_' + n))}"
-                       placeholder="template_xxxxxxx" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
-                <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px" title="Fecha en la que esta cuenta de EmailJS recupera su cupo de 200 envíos/mes — visible en su panel de EmailJS ('Resets on ...'), cópiala aquí a mano para tenerlas todas controladas sin entrar a cada cuenta por separado">Reinicia cupo el</label>
-                <input type="date" id="cfg_emailjs_reinicio_fecha_${n}" value="${esc(get('emailjs_reinicio_fecha_' + n))}"
-                       style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px">
-              </div>`).join('')}
-          </div>
-          <div style="font-size:10.5px;color:#888;margin-top:8px">
-            Rellena las 3 cuentas con sus credenciales completas (misma plantilla en las tres, mismos campos
-            <code>to_email</code>/<code>bcc</code>/<code>reply_to</code>/<code>subject</code>/<code>message</code>) —
-            en cuanto los "Envíos contados" lleguen al umbral, el sistema pasa solo a la SIGUIENTE cuenta del ciclo
-            (1→2→3→1→...) y reinicia el contador a 0, sin desplegar nada. Si la siguiente cuenta no tiene las
-            credenciales completas, prueba con la de después, recorriendo las 3 antes de rendirse. Se avisará en
-            🔍 Integridad.
-          </div>
-
-          <!-- (2026-08-19) Cola de correos de sistema pendientes de enviar — ver
-               MAX_INTENTOS_EMAIL_SISTEMA en app.py. Antes de esto, una fila que fallaba
-               siempre al enviarse (típicamente por tamaño, EmailJS 413) reintentaba sola
-               sin límite, descontando cupo de EmailJS en cada intento aunque nunca llegase
-               a entregarse.
-               (2026-08-20) Ampliado a TODA la cola pendiente, no solo las ya "atascadas"
-               (que agotaron los reintentos): las filas grandes que llevaban en cola desde
-               antes de v12.30.20 arrancan con intentos=0 tras la migración, así que hasta
-               que no fallaban varias veces más no aparecían aquí — se puede descartar
-               cualquier fila a mano sin esperar a que se pare sola. Ordenadas por tamaño
-               (las más grandes, más sospechosas de fallar por 413, arriba). -->
-          <div id="emailjs-atascados-wrap" style="display:none;margin-top:14px;padding:10px 12px;background:#fff8f0;border:1px solid #ffd9a8;border-radius:8px">
-            <div style="font-weight:700;font-size:12px;color:#a15c00;margin-bottom:6px">
-              ⚠️ Cola de correos de sistema pendientes
-            </div>
-            <div style="font-size:10.5px;color:#888;margin-bottom:8px">
-              Ordenados por tamaño (los más grandes, arriba — normalmente son los que EmailJS
-              rechaza con 413). Las filas marcadas "parado" ya agotaron los reintentos y no
-              siguen descontando cupo solas; las demás siguen reintentándose cada pocos
-              minutos. Puedes descartar cualquiera a mano ahora mismo, sin esperar.
-            </div>
-            <div id="emailjs-atascados-list"></div>
-          </div>
-        </div>`;
-        continue;
-      }
 
       html += `<div style="margin:10px 0 6px;padding:0 16px">
         <div style="font-weight:700;font-size:13px;color:#1a73e8;border-bottom:2px solid #e8f0fe;padding-bottom:5px;margin-bottom:8px">${label}</div>
@@ -8032,7 +8077,6 @@ async function loadConfigAlertas() {
       html += `</div></div>`;
     }
     body.innerHTML = html;
-    _cargarEmailsAtascados();
   } catch(e) {
     body.innerHTML = `<div style="color:red;padding:24px">Error cargando configuración: ${e.message}</div>`;
   }
@@ -8075,7 +8119,13 @@ async function _descartarEmailAtascado(id) {
 }
 
 async function saveConfigAlertas() {
-  const inputs = document.querySelectorAll('input[id^="cfg_"]');
+  // (2026-08-29) Acotado a los inputs de ESTA vista (antes buscaba en todo
+  // el documento) — ahora que "Techo de gastos" y "EmailJS y cola de
+  // correo" tienen sus propios inputs cfg_ en su propia vista (oculta pero
+  // presente en el DOM, showView() solo la esconde con section-hidden, no
+  // la quita), guardar aquí ya no debe arrastrar de paso cambios sin
+  // guardar que hubiera en esas otras pantallas.
+  const inputs = document.querySelectorAll('#config-alertas-body input[id^="cfg_"]');
   const data = {};
   inputs.forEach(inp => {
     const clave = inp.id.replace('cfg_', '');
@@ -8097,6 +8147,141 @@ async function saveConfigAlertas() {
     if (d.ok) {
       msg.style.background = '#d4edda'; msg.style.color = '#155724';
       msg.textContent = `✅ ${d.actualizadas} parámetros guardados. Se aplican en el próximo ciclo de alertas.`;
+    } else {
+      msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
+      msg.textContent = '❌ Error: ' + d.error;
+    }
+    setTimeout(() => { msg.style.display = 'none'; }, 5000);
+  } catch(e) {
+    msg.style.display = 'block';
+    msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
+    msg.textContent = '❌ Error de red: ' + e.message;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   EmailJS y cola de correo (2026-08-29) — antes era el grupo "emailjs" de
+   "Parámetros de alertas" (ver comentario junto a la vista en el HTML).
+   Usa el mismo endpoint GET/PUT /api/admin/config-alertas de siempre (ya
+   era agnóstico de grupo) — solo lee/escribe las claves emailjs_*, y sigue
+   usando _cargarEmailsAtascados()/_descartarEmailAtascado() para la cola de
+   correos de sistema pendientes, sin cambios en esas dos funciones.
+═══════════════════════════════════════════════════════════════════════════ */
+async function loadEmailjsConfig() {
+  const body = document.getElementById('config-emailjs-body');
+  try {
+    const d = await api('/api/admin/config-alertas');
+    if (!d.ok) throw new Error(d.error);
+    const items = d.grupos.emailjs || [];
+    const get = clave => (items.find(i => i.clave === clave) || {}).valor || '';
+    const contador  = parseInt(get('emailjs_contador') || '0', 10);
+    const umbral    = parseInt(get('emailjs_umbral_cambio') || '195', 10);
+    const activa    = parseInt(get('emailjs_cuenta_activa') || '1', 10);
+    const cambioEn  = get('emailjs_cambio_automatico_en');
+    const pct       = umbral > 0 ? Math.min(100, Math.round(contador / umbral * 100)) : 0;
+    const pctColor  = pct >= 100 ? '#dc3545' : pct >= 80 ? '#ffc107' : '#28a745';
+    let html = `<div style="margin:10px 0 6px">
+        <div style="background:#f8f9fa;border:1px solid #e9ecef;border-radius:8px;padding:12px 14px;margin-bottom:12px">
+          <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px">
+            <span style="font-size:13px;font-weight:700;color:${activa !== 1 ? '#8B0000' : '#1a73e8'}">
+              Cuenta en uso ahora mismo: ${activa}${activa !== 1 ? ' (backup — ya se activó el cambio automático)' : ''}
+            </span>
+            ${get('emailjs_reinicio_fecha_' + activa) ? `<span style="font-size:11px;color:#888">Esta cuenta reinicia su cupo el ${esc(get('emailjs_reinicio_fecha_' + activa))}</span>` : ''}
+            ${cambioEn ? `<span style="font-size:11px;color:#888">Último cambio automático: ${esc(cambioEn)}</span>` : ''}
+          </div>
+          <div style="height:10px;background:#e9ecef;border-radius:5px;overflow:hidden;margin-bottom:6px">
+            <div style="height:100%;width:${pct}%;background:${pctColor}"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;font-size:11.5px;color:#555">
+            <span>Envíos contados: <input type="number" min="0" id="cfg_emailjs_contador" value="${contador}"
+              style="width:70px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
+            <span>Cambiar de cuenta al llegar a: <input type="number" min="1" id="cfg_emailjs_umbral_cambio" value="${umbral}"
+              style="width:60px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
+            <span>Cuenta activa (1, 2 o 3): <input type="number" min="1" max="3" id="cfg_emailjs_cuenta_activa" value="${activa}"
+              style="width:40px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
+          </div>
+          <div style="font-size:10.5px;color:#888;margin-top:6px">
+            Para forzar la vuelta a la cuenta 1 (por ejemplo tras renovar/crear otra cuenta EmailJS),
+            pon "Cuenta activa" a 1 y "Envíos contados" a 0, y guarda.
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          ${[1, 2, 3].map(n => `
+            <div style="background:${activa === n ? '#eef6ff' : '#fafafa'};border:1px solid ${activa === n ? '#b6d4fe' : '#e9ecef'};border-radius:8px;padding:10px 12px">
+              <div style="font-size:12px;font-weight:700;color:${activa === n ? '#1a73e8' : '#555'};margin-bottom:8px">
+                Cuenta ${n} ${n === 1 ? '(principal)' : n === 2 ? '(secundaria)' : '(backup)'} ${activa === n ? ' · en uso' : ''}
+              </div>
+              <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Public Key</label>
+              <input type="text" id="cfg_emailjs_public_key_${n}" value="${esc(get('emailjs_public_key_' + n))}"
+                     placeholder="Public Key" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
+              <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Service ID</label>
+              <input type="text" id="cfg_emailjs_service_id_${n}" value="${esc(get('emailjs_service_id_' + n))}"
+                     placeholder="service_xxxxxxx" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
+              <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Template ID</label>
+              <input type="text" id="cfg_emailjs_template_id_${n}" value="${esc(get('emailjs_template_id_' + n))}"
+                     placeholder="template_xxxxxxx" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
+              <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px" title="Fecha en la que esta cuenta de EmailJS recupera su cupo de 200 envíos/mes — visible en su panel de EmailJS ('Resets on ...'), cópiala aquí a mano para tenerlas todas controladas sin entrar a cada cuenta por separado">Reinicia cupo el</label>
+              <input type="date" id="cfg_emailjs_reinicio_fecha_${n}" value="${esc(get('emailjs_reinicio_fecha_' + n))}"
+                     style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px">
+            </div>`).join('')}
+        </div>
+        <div style="font-size:10.5px;color:#888;margin-top:8px">
+          Rellena las 3 cuentas con sus credenciales completas (misma plantilla en las tres, mismos campos
+          <code>to_email</code>/<code>bcc</code>/<code>reply_to</code>/<code>subject</code>/<code>message</code>) —
+          en cuanto los "Envíos contados" lleguen al umbral, el sistema pasa solo a la SIGUIENTE cuenta del ciclo
+          (1→2→3→1→...) y reinicia el contador a 0, sin desplegar nada. Si la siguiente cuenta no tiene las
+          credenciales completas, prueba con la de después, recorriendo las 3 antes de rendirse. Se avisará en
+          🔍 Integridad.
+        </div>
+
+        <!-- (2026-08-19) Cola de correos de sistema pendientes de enviar — ver
+             MAX_INTENTOS_EMAIL_SISTEMA en app.py. Antes de esto, una fila que fallaba
+             siempre al enviarse (típicamente por tamaño, EmailJS 413) reintentaba sola
+             sin límite, descontando cupo de EmailJS en cada intento aunque nunca llegase
+             a entregarse.
+             (2026-08-20) Ampliado a TODA la cola pendiente, no solo las ya "atascadas"
+             (que agotaron los reintentos): las filas grandes que llevaban en cola desde
+             antes de v12.30.20 arrancan con intentos=0 tras la migración, así que hasta
+             que no fallaban varias veces más no aparecían aquí — se puede descartar
+             cualquier fila a mano sin esperar a que se pare sola. Ordenadas por tamaño
+             (las más grandes, más sospechosas de fallar por 413, arriba). -->
+        <div id="emailjs-atascados-wrap" style="display:none;margin-top:14px;padding:10px 12px;background:#fff8f0;border:1px solid #ffd9a8;border-radius:8px">
+          <div style="font-weight:700;font-size:12px;color:#a15c00;margin-bottom:6px">
+            ⚠️ Cola de correos de sistema pendientes
+          </div>
+          <div style="font-size:10.5px;color:#888;margin-bottom:8px">
+            Ordenados por tamaño (los más grandes, arriba — normalmente son los que EmailJS
+            rechaza con 413). Las filas marcadas "parado" ya agotaron los reintentos y no
+            siguen descontando cupo solas; las demás siguen reintentándose cada pocos
+            minutos. Puedes descartar cualquiera a mano ahora mismo, sin esperar.
+          </div>
+          <div id="emailjs-atascados-list"></div>
+        </div>
+      </div>`;
+    body.innerHTML = html;
+    _cargarEmailsAtascados();
+  } catch(e) {
+    body.innerHTML = `<div style="color:red;padding:24px">Error cargando configuración: ${e.message}</div>`;
+  }
+}
+
+async function saveEmailjsConfig() {
+  const inputs = document.querySelectorAll('#config-emailjs-body input[id^="cfg_"]');
+  const data = {};
+  inputs.forEach(inp => { data[inp.id.replace('cfg_', '')] = inp.value; });
+  const msg = document.getElementById('config-emailjs-msg');
+  try {
+    const r = await fetch('/api/admin/config-alertas', {
+      method: 'PUT',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(data)
+    });
+    const d = await r.json();
+    msg.style.display = 'block';
+    if (d.ok) {
+      msg.style.background = '#d4edda'; msg.style.color = '#155724';
+      msg.textContent = `✅ ${d.actualizadas} parámetros guardados.`;
     } else {
       msg.style.background = '#f8d7da'; msg.style.color = '#721c24';
       msg.textContent = '❌ Error: ' + d.error;

@@ -25,6 +25,13 @@
 
 ---
 
+## 2026-08-29 — [Control Pedidos] Techo (€) y EmailJS salen de "Parámetros de alertas" a sus propias pantallas (v12.30.52)
+
+- Víctor: "puedes continuar" — segunda parte de la reorganización de admin (v12.30.51), sacando de "Parámetros de alertas" dos cosas sin relación con umbrales de alerta: los límites € del techo de gastos y la configuración de EmailJS.
+- **Cambio en `templates/index.html`**: el grupo `techo` (6 claves €/%/conteo) se mueve a un bloque nuevo "⚙️ Límites de Techo de Gastos" dentro de la propia vista "Techo de gastos", visible solo para admin (esa vista la comparte con compras). El grupo `emailjs` (3 cuentas rotativas, cupo, cola de correos atascados) se mueve a una vista nueva "📤 EmailJS y Cola de Correo", bajo "Sistema · Admin". Mismo endpoint de siempre (`GET`/`PUT /api/admin/config-alertas`, ya agnóstico de grupo) — sin cambios en `app.py`.
+- De paso, `saveConfigAlertas()` pasa de buscar inputs en todo el documento a buscar solo dentro de su propia vista, para no arrastrar cambios sin guardar de las pantallas nuevas (las vistas ocultas no se quitan del DOM, solo se tapan).
+- **Verificación**: `python3 -m py_compile app.py models.py` y `node --check` sin errores. Comprobación de que los 15 `data-view` siguen únicos y sin ids duplicados tras mover los dos bloques.
+
 ## 2026-08-29 — [Control Pedidos] Reorganización del menú lateral: las pantallas admin-only se agrupan por dominio (v12.30.51)
 
 - Víctor: "¿puedes revisar en control pedidos todos los apartados exclusivos de admin? Ahora mismo creo que están todos regados sin organización, ¿puedes reubicar mejor todo?"

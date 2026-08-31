@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.51** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.52** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -84,7 +84,11 @@ confundirse entre sí, ver más abajo):
 - **Techo de gastos** — resumen mensual de consumo de techo por hotel
   (semáforo verde/amarillo/rojo/azul), desglose por familia de
   artículos, y expedientes de autorización de exceso (Dirección
-  General) cuando un pedido supera el límite.
+  General) cuando un pedido supera el límite. Los propios límites en €
+  se configuran aquí mismo, en un bloque "⚙️ Límites de Techo de Gastos"
+  visible solo para admin (movido el 2026-08-29 desde "Parámetros de
+  alertas", donde vivía sin relación visible con esta pantalla — mismas
+  claves y mismo endpoint de siempre, solo cambió dónde se edita).
 
 **Datos maestros · Admin**
 - **Familias de artículos** — categorías usadas para agrupar pedidos y
@@ -111,8 +115,11 @@ confundirse entre sí, ver más abajo):
   destinatarios internos ya configurados (comprador, rol hotel,
   departamento y contactos adicionales).
 - **Parámetros de alertas** (antes "Config alertas", renombrada
-  2026-08-29) — umbrales de plazo y techo, y configuración de las
-  cuentas EmailJS.
+  2026-08-29) — umbrales de plazo de entrega, cotización, firma y
+  repetición de popups. Ya NO incluye los límites de techo (ver
+  "Gestión" arriba) ni la configuración de EmailJS (ver "Sistema"
+  abajo) — se sacaron de aquí el 2026-08-29 por no tener relación con
+  umbrales de alerta.
 - **Avisos por usuario** (antes "Config. Avisos", renombrada
   2026-08-29) — quién recibe cada aviso automático (Telegram/popup/email)
   por evento. Se renombraron estas dos porque sus nombres anteriores
@@ -126,6 +133,13 @@ confundirse entre sí, ver más abajo):
 
 **Sistema · Admin**
 - **Integridad** — comprobaciones de consistencia de datos.
+- **EmailJS y cola de correo** (movida aquí el 2026-08-29 desde
+  "Parámetros de alertas", donde estaba mezclada con umbrales de alerta
+  sin relación con esto) — credenciales y rotación automática de las 3
+  cuentas EmailJS, cupo consumido, y la cola de correos de sistema
+  pendientes de enviar (con la opción de descartar a mano una fila
+  atascada). Mismo endpoint de siempre (`/api/admin/config-alertas`),
+  solo cambió dónde se edita.
 - **Restaurar backup** — gestión de backups de la base de datos.
 
 ### Roles de usuario

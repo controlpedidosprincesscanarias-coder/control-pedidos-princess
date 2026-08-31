@@ -1,3 +1,19 @@
+# v12.30.52 — 29 agosto 2026
+
+✨ Los límites € de Techo de gastos y la configuración de EmailJS salen de "Parámetros de alertas" a sus propias pantallas
+
+**Petición de Víctor**: "puedes continuar", confirmando la segunda parte de la reorganización de admin propuesta tras v12.30.51 — además de reordenar el menú, sacar de "Parámetros de alertas" dos cosas que no tenían relación con umbrales de alerta: los límites en € del techo de gastos, y la configuración de las cuentas EmailJS.
+
+**Investigación previa**: dentro de "Parámetros de alertas" (grupo `config_alertas.grupo`), 10 subgrupos se renderizaban todos juntos mediante un motor genérico (`loadConfigAlertas()`/`GRUPOS_LABEL`, `templates/index.html`) — de esos 10, el grupo `techo` (6 claves: `techo_max_pedido`, `techo_max_mes`, `techo_max_pedidos`, `techo_max_pedidos_familia`, `techo_max_mes_familia`, `techo_pct_amarillo`) se renderizaba igual que los demás (fila genérica, sin relación visual con la vista "Techo de Gastos" que sí controla), y el grupo `emailjs` ya estaba especial-casado aparte (bloque de HTML propio con las 3 cuentas rotativas, cupo y la cola de correos de sistema atascados). Backend confirmado sin cambios necesarios: `GET`/`PUT /api/admin/config-alertas` ya eran agnósticos de a qué grupo pertenece cada clave (guardan cualquier subconjunto de `{clave: valor}` recibido) — la reorganización es enteramente de frontend.
+
+**Cambio en `templates/index.html` — Techo de gastos**: nuevo bloque "⚙️ Límites de Techo de Gastos" dentro de la propia vista `techo`, visible solo para `G.rol === 'admin'` (esta vista la comparte con `compras`, así que el bloque se oculta con JS en `loadTecho()`, no en el sidebar). Nuevas `loadTechoConfigAdmin()`/`saveTechoConfigAdmin()`, mismas 6 claves y mismo endpoint de siempre; al guardar, se invalida la caché de techo y se recarga el resumen de arriba para reflejar el nuevo límite al momento.
+
+**Cambio en `templates/index.html` — EmailJS**: nueva vista dedicada "📤 EmailJS y Cola de Correo" (bajo "Sistema · Admin" en el sidebar, junto a Integridad y Restaurar backup). Se trasladó tal cual el bloque de HTML que antes vivía especial-casado dentro de `loadConfigAlertas()` (3 cuentas, cupo, cola de correos atascados con "Descartar"), junto con `_cargarEmailsAtascados()`/`_descartarEmailAtascado()` sin cambios de lógica — ahora se invocan desde la nueva `loadEmailjsConfig()`/`saveEmailjsConfig()`.
+
+**Cambio en `templates/index.html` — "Parámetros de alertas"**: `loadConfigAlertas()` salta ahora los grupos `techo` y `emailjs` (`continue` en el bucle de renderizado genérico), dejando solo los 8 grupos que sí son umbrales de alerta (enviado, firma, entrega, cotización, plazo, global, repetición de popups, reenvío a admins). De paso, `saveConfigAlertas()` pasa de buscar `input[id^="cfg_"]` en todo el documento a buscar solo dentro de `#config-alertas-body` — antes, al no quitarse nunca del DOM las vistas ocultas (`showView()` solo las tapa con `section-hidden`), guardar aquí podía arrastrar de paso cambios sin guardar de las otras pantallas con inputs `cfg_`; ahora cada pantalla guarda solo lo suyo.
+
+**Verificación**: `python3 -m py_compile app.py models.py` sin errores (sin cambios en app.py, se ejecuta igualmente para confirmarlo). `node --check` sobre el JS extraído de `templates/index.html`, sin errores. Comprobación programática de que los 15 `data-view` del menú (14 anteriores + la nueva "EmailJS y cola de correo") siguen siendo únicos, cada uno con su `<div id="view-...">`, y de que ningún `id` quedó duplicado tras mover los dos bloques (`emailjs-atascados-wrap`/`-list`, `techo-config-*`, `config-emailjs-*` aparecen exactamente una vez cada uno).
+
 # v12.30.51 — 29 agosto 2026
 
 ✨ Reorganización del menú lateral: las 8 pantallas exclusivas de administración se agrupan por dominio, en vez de ir mezcladas entre las de uso diario
