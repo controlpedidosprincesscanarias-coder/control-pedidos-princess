@@ -8396,9 +8396,17 @@ def _prov_with_contactos(rows):
 def get_proveedores():
     q = request.args.get("q", "").strip()
     if q:
+        # (2026-08-31) Víctor: "debe dejar buscar por nombre, codigo sap y
+        # codigo dali" — antes solo buscaba por nombre. Un único cuadro de
+        # búsqueda, coincide con cualquiera de los tres campos (OR), igual
+        # de flexible (ILIKE + comodines) en los tres.
         rows = query(
-            "SELECT id,codigo,codigo_dali,nombre,observaciones,sujeto_seguimiento FROM proveedores WHERE activo=1 AND nombre ILIKE %s ORDER BY nombre",
-            (f"%{q}%",))
+            """SELECT id,codigo,codigo_dali,nombre,observaciones,sujeto_seguimiento
+               FROM proveedores
+               WHERE activo=1
+                 AND (nombre ILIKE %s OR codigo ILIKE %s OR codigo_dali ILIKE %s)
+               ORDER BY nombre""",
+            (f"%{q}%", f"%{q}%", f"%{q}%"))
     else:
         rows = query("SELECT id,codigo,codigo_dali,nombre,observaciones,sujeto_seguimiento FROM proveedores WHERE activo=1 ORDER BY nombre")
     result = _prov_with_contactos(rows)

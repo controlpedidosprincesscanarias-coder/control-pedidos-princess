@@ -349,6 +349,31 @@ tbody tr:last-child{border-bottom:none}
 .filter-input:focus,.filter-select:focus{border-color:var(--navy2)}
 .filter-input{width:240px}
 .filter-select{min-width:160px}
+/* (2026-08-31) Cabecera fija en Proveedores — Víctor: "cuando se realiza
+   scrol se debe quedar fijo la parte superior siempre visible" (tabla de
+   2000+ proveedores, se perdía de vista el nombre de cada columna al
+   bajar). El buscador y la fila de cabecera de la tabla se quedan
+   pegados justo debajo del topbar (que ya era sticky) mientras se hace
+   scroll por las filas. El offset exacto de la cabecera de tabla
+   (--prov-thead-top) se calcula en JS —_ajustarStickyProveedores(), más
+   abajo en el <script>— porque la altura real del cuadro de búsqueda
+   depende de métricas de fuente que no conviene hardcodear a ciegas;
+   estos valores en var() son solo el arranque antes de que corra ese JS. */
+#prov-filters{
+  position:sticky;top:var(--prov-filtros-top,56px);z-index:20;
+  background:var(--bg);padding:8px 0;margin-bottom:0
+}
+#tabla-proveedores thead th{position:sticky;top:var(--prov-thead-top,96px);z-index:15}
+/* .table-wrap{overflow-x:auto} convierte también overflow-y en "auto" por
+   cómo resuelve el navegador la combinación (una vez que un eje deja de
+   ser "visible", el otro dejar de serlo también) — eso rompe el sticky de
+   arriba, porque entonces "pega" contra el propio contenedor de la tabla
+   (que crece con el contenido y nunca hace scroll de verdad) en vez de
+   contra la ventana. Se anula aquí solo para esta tabla — no tiene tantas
+   columnas como para necesitar scroll horizontal propio en la práctica —
+   comprobado en un test aislado antes de aplicarlo. */
+#prov-table-wrap{overflow:visible}
+
 .search-chips{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin-bottom:16px}
 .search-chips-label{font-size:11px;color:var(--text-muted,#888);margin-right:2px}
 .schip{display:inline-flex;align-items:center;gap:5px;padding:3px 9px;border-radius:99px;font-size:11px;font-weight:500;border:1px solid transparent;cursor:default;user-select:none}
@@ -1337,7 +1362,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.57
+          V 12.30.58
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1593,14 +1618,14 @@ tbody tr:last-child{border-bottom:none}
 
       <!-- VIEW: PROVEEDORES ───────────────────────────────────────────── -->
       <div id="view-proveedores" class="section-hidden">
-        <div class="filters">
-          <input class="filter-input" id="prov-q" placeholder="🔍 Buscar proveedor…"
-                 oninput="debouncedLoadProveedores()" style="width:280px">
+        <div class="filters" id="prov-filters">
+          <input class="filter-input" id="prov-q" placeholder="🔍 Buscar por nombre, código SAP o código DALI…"
+                 oninput="debouncedLoadProveedores()" style="width:320px">
           <span id="prov-count" style="color:var(--text-secondary);font-size:.85rem;align-self:center"></span>
         </div>
         <div class="card">
-          <div class="table-wrap">
-            <table>
+          <div class="table-wrap" id="prov-table-wrap">
+            <table id="tabla-proveedores">
               <thead>
                 <tr><th>Código SAP</th><th>Código DALI</th><th>Nombre</th><th>Contactos</th><th>Observaciones</th><th></th></tr>
               </thead>
@@ -3946,7 +3971,7 @@ function showView(view, el) {
   if (view==='dashboard')   { loadStats(); _loadAndApplyDashboardPrefs(); }
   if (view==='pedidos')     loadPedidos();
   if (view==='alertas')     { loadAlertas(); loadTechoAlertas(); }
-  if (view==='proveedores') { loadProveedores(); _refreshProvAdminControls(); }
+  if (view==='proveedores') { loadProveedores(); _refreshProvAdminControls(); _ajustarStickyProveedores(); }
   if (view==='eliminados')  loadEliminados();
   if (view==='techo')       loadTecho();
   if (view==='familias')    loadFamilias();
@@ -5949,6 +5974,25 @@ async function loadEliminados() {
   }).join('');
 }
 
+// (2026-08-31) Cabecera fija en Proveedores — ver comentario CSS de
+// #prov-filters/#tabla-proveedores. Calcula en tiempo real cuánto mide el
+// topbar + el cuadro de búsqueda (en vez de asumir un valor fijo, que se
+// rompería si cambia la fuente, el tamaño de letra o se añade algo al
+// buscador) y lo deja en dos variables CSS que usa la cabecera de la
+// tabla para saber justo debajo de qué altura pegarse.
+function _ajustarStickyProveedores() {
+  const topbar  = document.getElementById('topbar');
+  const filtros = document.getElementById('prov-filters');
+  if (!topbar || !filtros) return;
+  const alturaTopbar  = topbar.offsetHeight;
+  const alturaFiltros = filtros.offsetHeight;
+  document.documentElement.style.setProperty('--prov-filtros-top', alturaTopbar + 'px');
+  document.documentElement.style.setProperty('--prov-thead-top', (alturaTopbar + alturaFiltros) + 'px');
+}
+window.addEventListener('resize', () => {
+  if (G.currentView === 'proveedores') _ajustarStickyProveedores();
+});
+
 async function loadProveedores() {
   const q = (document.getElementById('prov-q')?.value || '').trim();
   const url = q ? `/api/proveedores?q=${encodeURIComponent(q)}` : '/api/proveedores';
@@ -5970,12 +6014,14 @@ async function loadProveedores() {
     tbody.innerHTML = '';
     if (empty) empty.classList.remove('section-hidden');
     if (countEl) countEl.textContent = 'Error al cargar';
+    requestAnimationFrame(_ajustarStickyProveedores);
     return;
   }
   if (!d.length) {
     tbody.innerHTML='';
     empty.classList.remove('section-hidden');
     if (countEl) countEl.textContent = q ? 'Sin resultados' : '';
+    requestAnimationFrame(_ajustarStickyProveedores);
     return;
   }
   empty.classList.add('section-hidden');
@@ -6016,6 +6062,9 @@ async function loadProveedores() {
       </td>
     </tr>`;
   }).join('');
+  // Reajustar la cabecera fija por si el buscador cambió de altura
+  // (p.ej. el contador "N proveedores" hace que el texto cambie).
+  requestAnimationFrame(_ajustarStickyProveedores);
 }
 
 /* ── Helpers para contactos múltiples ── */

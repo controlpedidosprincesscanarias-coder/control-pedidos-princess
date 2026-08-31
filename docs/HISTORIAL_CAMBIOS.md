@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Buscador de proveedores por código SAP/DALI además de nombre + cabecera de tabla fija al hacer scroll (v12.30.58)
+
+- **Origen**: Víctor, sobre Proveedores (ya con 2151 registros): "debe dejar buscar por nombre, codigo sap y codigo dali, cuando se realiza scrol se debe quedar fijo la parte superior siempre visible".
+- **Cambio 1**: `GET /api/proveedores?q=...` ahora compara `q` contra `nombre`, `codigo` y `codigo_dali` (OR, todos `ILIKE`) — antes solo miraba `nombre`.
+- **Cambio 2**: el buscador y la fila de cabecera de la tabla se quedan pegados debajo de la barra superior durante el scroll (offset calculado en JS a partir de la altura real de ambos, no hardcodeado). Hubo que anular `overflow-x:auto` de `.table-wrap` solo para esta tabla (`#prov-table-wrap{overflow:visible}`) porque ese overflow convierte también `overflow-y` en `auto` de forma implícita, lo que impedía que la cabecera se pegara contra la ventana — comprobado con un test aislado en Playwright antes de aplicarlo.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; carga en Chromium headless sin errores de JS; reproducción aislada de la estructura real confirma visualmente el scroll fijo.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Corregido: la migración de "Código DALI" vivía al final de `_auto_migrate()` y nunca se ejecutaba — 500 en /api/proveedores (v12.30.57)
 
 - **Origen**: Víctor, tras desplegar v12.30.56 — capturas de "Proveedores" con "Error al cargar" y el toast `Error cargando proveedores: [500] ... column "codigo_dali" does not exist`.

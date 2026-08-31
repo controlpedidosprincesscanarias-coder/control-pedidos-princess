@@ -1,3 +1,15 @@
+# v12.30.58 — 31 agosto 2026
+
+✨ Buscador de proveedores por nombre, código SAP y código DALI + cabecera de la tabla siempre visible al hacer scroll
+
+**Petición de Víctor** (sobre la pantalla de Proveedores, ya con 2151 proveedores cargados): "debe dejar buscar por nombre, codigo sap y codigo dali, cuando se realiza scrol se debe quedar fijo la parte superior siempre visible".
+
+**Cambio 1 — buscador ampliado**: `GET /api/proveedores?q=...` antes solo comparaba contra `nombre` (`ILIKE`); ahora compara también contra `codigo` (SAP) y `codigo_dali`, cualquiera de los tres coincide (OR). Mismo cuadro de búsqueda de siempre, ahora con placeholder actualizado ("Buscar por nombre, código SAP o código DALI…") para que quede claro.
+
+**Cambio 2 — cabecera fija al hacer scroll**: con más de 2000 proveedores en la lista, se perdía de vista el nombre de cada columna (y el buscador) al bajar. Ahora el cuadro de búsqueda y la fila de cabecera de la tabla (Código SAP / Código DALI / Nombre / Contactos / Observaciones) se quedan pegados justo debajo de la barra superior mientras se hace scroll por las filas — igual que ya hacía la propia barra superior. El offset exacto se calcula en JS en tiempo real (altura real del topbar + del buscador), no a base de valores fijos, para no depender de que la fuente o el tamaño de letra no cambien nunca. Nota técnica para quien lo toque: hubo que anular `overflow-x:auto` (heredado de `.table-wrap`, la clase compartida por todas las tablas de la app) solo para esta tabla — ese `overflow-x` hace que el navegador convierta también `overflow-y` en `auto` internamente, lo que rompía el "pegado" de la cabecera contra la ventana (se quedaba pegada contra su propio contenedor, que nunca hace scroll de verdad, en vez de contra la página). Comprobado en un test aislado con Playwright antes de aplicarlo — con capturas confirmando que la cabecera queda fija durante el scroll.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; página cargada en Chromium headless sin errores de sintaxis JS; reproducción aislada de la estructura real (topbar + buscador + tabla) confirma que la cabecera se queda fija al hacer scroll.
+
 # v12.30.57 — 31 agosto 2026
 
 🐛 Corregido: la migración de "Código DALI" (v12.30.56) vivía al final de `_auto_migrate()` y nunca llegaba a ejecutarse — `/api/proveedores` daba 500
