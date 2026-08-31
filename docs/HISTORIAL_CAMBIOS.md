@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Corregido: la migración de "Código DALI" vivía al final de `_auto_migrate()` y nunca se ejecutaba — 500 en /api/proveedores (v12.30.57)
+
+- **Origen**: Víctor, tras desplegar v12.30.56 — capturas de "Proveedores" con "Error al cargar" y el toast `Error cargando proveedores: [500] ... column "codigo_dali" does not exist`.
+- **Causa**: antipatrón ya sufrido dos veces antes en este mismo archivo (`sujeto_seguimiento`, `total_pedido`) y documentado explícitamente en el código: `_auto_migrate()` encadena ~111 sentencias bajo un único try/except general; la migración de `codigo_dali` se puso (por error) al final de la función, así que cualquier fallo en cualquiera de las sentencias anteriores la dejaba sin ejecutar, sin aviso salvo un 500 en producción.
+- **Cambio**: movida al bloque protegido del principio de `_auto_migrate()`, con su propio try/except, junto a `sujeto_seguimiento` y `total_pedido`. Mismo `ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS codigo_dali TEXT`, sin cambios de esquema.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Campo "Código DALI" en proveedores + solo admin crea/modifica nombre y códigos + corregido el guardado de contactos para compras (v12.30.56)
 
 - **Origen**: Víctor, sobre la ficha de proveedores: "en la ficha de proveedores, necesito junto a la casilla CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos trabajando con los dos sistemas y vamos asociando tanto artículos como proveedores. Ambas celdas de edicion manual por los roles con permiso de edición y creacion de proveedores, creo que solo es admin la creacion y modificacion del nombre y codigo, los compradores pueden editar contactos ( esto ultimo verificalo porque creo que les da error o no hace nada cuando intentan guardar los cambios="

@@ -214,6 +214,29 @@ def _auto_migrate():
                 )
             except Exception as e:
                 log.warning(f"No se pudo añadir la columna pedidos.total_pedido: {e}")
+            # ── Código DALI del proveedor (2026-08-31) ────────────────────────
+            # Víctor: "en la ficha de proveedores, necesito junto a la casilla
+            # CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos
+            # trabajando con los dos sistemas y vamos asociando tanto
+            # artículos como proveedores." — columna nueva, editable a mano
+            # (sin integración automática con la app DALI todavía, es solo
+            # referencia cruzada mientras dura la migración a los dos
+            # sistemas en paralelo). Puesta aquí, en el bloque protegido del
+            # principio con su propio try/except, y NO al final de la función
+            # (como se hizo primero, error corregido en la misma entrega) —
+            # exactamente el mismo motivo, ya documentado arriba, por el que
+            # hubo que mover aquí sujeto_seguimiento y total_pedido: son 111
+            # sentencias en total, la mayoría sin try/except propio, y
+            # cualquier fallo anterior en la función aborta todo lo que venga
+            # después. Confirmado en producción: /api/proveedores daba 500
+            # con 'column "codigo_dali" does not exist' nada más desplegar,
+            # porque la migración vivía al final y nunca llegaba a ejecutarse.
+            try:
+                cur.execute(
+                    "ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS codigo_dali TEXT"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo añadir la columna proveedores.codigo_dali: {e}")
             # ── Correo de departamento por hotel (2026-08-28) ────────────────
             # A petición de Víctor: cada hotel tiene un correo distinto para
             # el mismo departamento (RESTAURANTE de JN != RESTAURANTE de GY),
@@ -1423,19 +1446,6 @@ def _auto_migrate():
             # usuario.
             cur.execute(
                 "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS dashboard_prefs TEXT"
-            )
-
-            # ── Código DALI del proveedor (2026-08-31) ──────────────────────
-            # Víctor: "en la ficha de proveedores, necesito junto a la casilla
-            # CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos
-            # trabajando con los dos sistemas y vamos asociando tanto
-            # artículos como proveedores." — columna nueva, editable a mano
-            # (no hay integración automática con la app DALI todavía, es solo
-            # el dato de referencia cruzada mientras dura la migración a los
-            # dos sistemas en paralelo). Igual que "codigo" (SAP), solo texto
-            # libre — un proveedor puede no tener código DALI todavía.
-            cur.execute(
-                "ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS codigo_dali TEXT"
             )
         db.close()
         log.info("Auto-migración OK")

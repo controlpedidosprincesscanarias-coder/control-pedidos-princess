@@ -1,3 +1,15 @@
+# v12.30.57 — 31 agosto 2026
+
+🐛 Corregido: la migración de "Código DALI" (v12.30.56) vivía al final de `_auto_migrate()` y nunca llegaba a ejecutarse — `/api/proveedores` daba 500
+
+**Reportado por Víctor** (capturas): al desplegar v12.30.56, la pantalla de Proveedores mostraba "Error al cargar" / "No hay proveedores registrados", con el error real en el toast: `Error cargando proveedores: [500] Error inesperado column "codigo_dali" does not exist`.
+
+**Causa**: `_auto_migrate()` tiene una lección ya documentada en el propio código dos veces (sujeto_seguimiento, total_pedido): la función ejecuta ~111 sentencias SQL seguidas, la mayoría sin try/except propio, bajo un único try/except general para toda la función. Si cualquier sentencia anterior falla por el motivo que sea, la función se corta ahí mismo y todo lo que viene después nunca se ejecuta — por eso existe un "bloque protegido" al principio de la función, con cada sentencia crítica en su propio try/except, para las columnas que la app necesita sí o sí para no dar 500. La migración de `codigo_dali` se añadió (por error, en la entrega anterior) al final de la función, justo antes de `db.close()` — el mismo antipatrón que ya causó este idéntico fallo con `sujeto_seguimiento` y `total_pedido`.
+
+**Cambio**: la sentencia `ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS codigo_dali TEXT` se mueve al bloque protegido del principio de `_auto_migrate()`, con su propio try/except, junto a `sujeto_seguimiento` y `total_pedido`. Sin cambios de comportamiento ni de esquema — mismo `ALTER TABLE ... IF NOT EXISTS` de siempre, solo movido de sitio para garantizar que se ejecute siempre.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores.
+
 # v12.30.56 — 31 agosto 2026
 
 ✨ Nuevo campo "Código DALI" en la ficha de proveedores + solo admin puede crear/modificar nombre y códigos + corregido el guardado de contactos para compras
