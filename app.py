@@ -15085,6 +15085,38 @@ def _job_recordar_emails_sistema_pendientes():
             log.error("[RECORDATORIO EMAILS SISTEMA] Error: %s", exc)
 
 
+def _job_purgar_emails_sistema_descartados():
+    """
+    (2026-08-31) Víctor, sobre el panel "Cola de correos de sistema
+    pendientes" (admin → EmailJS y Cola de Correo): "esto, una vez
+    descartado no tiene sentido seguir llenado la pantalla, podemos poner
+    otro botón para reactivar y que a los 2 días cauque y se elimine el
+    envío descartado". Antes, una fila descartada a mano (descartado_en,
+    ver api_descartar_email_sistema) se quedaba en la tabla para siempre
+    como constancia — con el tiempo, se iba acumulando sin ningún valor
+    real y ensuciando el panel.
+
+    Job diario (no hace falta más frecuencia — 2 días de margen de sobra
+    para reactivar a mano si el descarte fue un error, ver
+    api_reactivar_email_sistema): borra las filas descartadas hace más de
+    2 días. Solo toca filas ya descartadas Y no enviadas — nunca una fila
+    real de correo enviado.
+    """
+    with app.app_context():
+        try:
+            cur = execute(
+                "DELETE FROM emails_sistema_pendientes "
+                "WHERE enviado = FALSE AND descartado_en IS NOT NULL "
+                "  AND descartado_en < NOW() - INTERVAL '2 days'"
+            )
+            n = cur.rowcount
+            get_db().commit()
+            if n:
+                log.info("[EMAILS-SISTEMA] Purgadas %d fila(s) descartadas hace más de 2 días.", n)
+        except Exception as exc:
+            log.error("[EMAILS-SISTEMA] Error purgando descartados: %s", exc)
+
+
 def _job_health_check(force: bool = False):
     """
     Job diario (07:05 hora Canarias): valida integridad operativa y envía
@@ -15346,6 +15378,18 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=120,
     )
+    # Purga de correos de sistema descartados hace más de 2 días — diaria,
+    # de madrugada (no es urgente, solo limpieza del panel de admin).
+    scheduler.add_job(
+        _job_purgar_emails_sistema_descartados,
+        trigger="cron",
+        hour="4",
+        minute="0",
+        second="0",
+        id="purgar_emails_sistema_descartados",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
     log.info("✅ Scheduler iniciado — alertas cada 60s, lun-vie 07:00-16:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — techo URGENTE admins cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
@@ -15356,6 +15400,7 @@ def _iniciar_scheduler():
     log.info("✅ Scheduler — migración de adjuntos cerrados a Storage diaria a las 03:00, todos los días (Atlantic/Canary)")
     log.info("✅ Scheduler — alerta combinada de consumo (egress + tamaño BD) diaria, lun-vie 08:30 (Atlantic/Canary)")
     log.info("✅ Scheduler — recordatorio de emails de sistema pendientes cada 10 min, lun-vie 07:00-21:00 (Atlantic/Canary)")
+    log.info("✅ Scheduler — purga de correos de sistema descartados hace >2 días, diaria a las 04:00, todos los días (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()
@@ -16420,7 +16465,11 @@ def api_descartar_email_sistema(email_id):
     """
     (2026-08-19) Descarta a mano una fila de la cola de emails de sistema
     (marca descartado_en=NOW()) — dejará de reintentarse. No se envía ni
-    se borra el registro, queda como constancia de que se descartó.
+    se borra el registro al momento; ver
+    _job_purgar_emails_sistema_descartados (más abajo, corre a diario)
+    para el borrado automático a los 2 días — antes se quedaba como
+    constancia para siempre (2026-08-31, a petición de Víctor: "esto, una
+    vez descartado no tiene sentido seguir llenado la pantalla").
     POST /api/admin/emails-sistema-pendientes/<id>/descartar
     """
     try:
@@ -16432,6 +16481,35 @@ def api_descartar_email_sistema(email_id):
         return jsonify({"ok": True})
     except Exception as exc:
         log.error("[EMAILS-SISTEMA] Error descartando id=%s: %s", email_id, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/emails-sistema-pendientes/<int:email_id>/reactivar", methods=["POST"])
+@admin_required
+def api_reactivar_email_sistema(email_id):
+    """
+    (2026-08-31) Contrapartida del descarte manual — Víctor: "podemos
+    poner otro botón para reactivar". Limpia descartado_en (para que
+    api_emails_sistema_pendientes vuelva a considerarla candidata) y,
+    si ya había agotado los reintentos (intentos >= MAX_INTENTOS_EMAIL_SISTEMA,
+    caso típico: se descartó una fila que ya estaba "parada"), resetea
+    intentos a 0 — si no se reseteara, "Reactivar" no reactivaría nada de
+    verdad: seguiría excluida de la cola por haber agotado el cupo, solo
+    que etiquetada "parado" en vez de "descartado" en el panel.
+    POST /api/admin/emails-sistema-pendientes/<id>/reactivar
+    """
+    try:
+        execute(
+            "UPDATE emails_sistema_pendientes "
+            "SET descartado_en = NULL, "
+            "    intentos = CASE WHEN intentos >= %s THEN 0 ELSE intentos END "
+            "WHERE id=%s AND enviado = FALSE",
+            (MAX_INTENTOS_EMAIL_SISTEMA, email_id)
+        )
+        get_db().commit()
+        return jsonify({"ok": True})
+    except Exception as exc:
+        log.error("[EMAILS-SISTEMA] Error reactivando id=%s: %s", email_id, exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 

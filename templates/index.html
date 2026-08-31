@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.59
+          V 12.30.60
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -8278,19 +8278,49 @@ async function _cargarEmailsAtascados() {
           <div style="font-weight:600;color:#333">${esc(a.asunto || a.evento_codigo)}</div>
           <div style="color:#888">${esc(a.destinatario || '')} · ${a.intentos} intento(s) · ${(a.tam_html || 0).toLocaleString('es-ES')} caracteres
             ${a.descartado_en
-              ? ' · <span style="color:#a15c00">descartado</span>'
+              ? ` · <span style="color:#a15c00">descartado · ${_tiempoRestanteBorradoDescarte(a.descartado_en)}</span>`
               : a.atascado
               ? ' · <span style="color:#dc3545">parado (agotó reintentos)</span>'
               : ' · <span style="color:#0d6efd">reintentando</span>'}</div>
         </div>
-        ${!a.descartado_en ? `<button class="btn btn-ghost btn-sm" onclick="_descartarEmailAtascado(${a.id})">Descartar</button>` : ''}
+        ${a.descartado_en
+          ? `<button class="btn btn-ghost btn-sm" onclick="_reactivarEmailAtascado(${a.id})" title="Vuelve a intentarse enviar con normalidad">↻ Reactivar</button>`
+          : `<button class="btn btn-ghost btn-sm" onclick="_descartarEmailAtascado(${a.id})">Descartar</button>`}
       </div>`).join('');
   } catch (_) { wrap.style.display = 'none'; }
+}
+
+// (2026-08-31) Víctor, sobre esta cola: "esto, una vez descartado no tiene
+// sentido seguir llenado la pantalla, podemos poner otro botón para
+// reactivar y que a los 2 días cauque y se elimine el envío descartado".
+// Antes, una fila descartada a mano quedaba en la tabla (y por tanto en
+// este panel) PARA SIEMPRE como constancia — con el tiempo, se iba
+// acumulando sin ningún valor real. Ahora un job diario en el backend
+// (_job_purgar_emails_sistema_descartados, app.py) borra las filas
+// descartadas hace más de 2 días; este texto informativo, calculado aquí
+// mismo a partir de descartado_en, deja claro cuánto le queda a cada una
+// antes de desaparecer sola (o de "Reactivar" para que se vuelva a
+// intentar enviar con normalidad).
+function _tiempoRestanteBorradoDescarte(descartadoEnStr) {
+  try {
+    const limite = new Date(descartadoEnStr).getTime() + 2 * 24 * 60 * 60 * 1000;
+    const restanteMs = limite - Date.now();
+    if (restanteMs <= 0) return 'se elimina en breve';
+    const horas = Math.round(restanteMs / (60 * 60 * 1000));
+    return horas < 24 ? `se elimina en ~${horas}h` : `se elimina en ~${Math.round(restanteMs / (24*60*60*1000))}d`;
+  } catch (_) { return ''; }
 }
 
 async function _descartarEmailAtascado(id) {
   try {
     const r = await api(`/api/admin/emails-sistema-pendientes/${id}/descartar`, 'POST');
+    if (r && r.ok) _cargarEmailsAtascados();
+  } catch (_) {}
+}
+
+async function _reactivarEmailAtascado(id) {
+  try {
+    const r = await api(`/api/admin/emails-sistema-pendientes/${id}/reactivar`, 'POST');
     if (r && r.ok) _cargarEmailsAtascados();
   } catch (_) {}
 }

@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Botón "Reactivar" para correos de sistema descartados + purga automática a los 2 días (v12.30.60)
+
+- **Origen**: Víctor, sobre "Cola de correos de sistema pendientes" (admin → EmailJS y Cola de Correo): "esto, una vez descartado no tiene sentido seguir llenado la pantalla, podemos poner otro botón para reactivar y que a los 2 días cauque y se elimine el envío descartado".
+- **Antes**: una fila descartada a mano se quedaba en la tabla para siempre como constancia, acumulándose sin valor real y sin forma de deshacer el descarte salvo tocando la BD a mano.
+- **Cambio**: botón "↻ Reactivar" en las filas ya descartadas (`POST /api/admin/emails-sistema-pendientes/<id>/reactivar`) — limpia `descartado_en` y resetea `intentos` si ya había agotado el cupo, para que vuelva a intentarse de verdad. Cada fila descartada muestra cuánto le queda antes de autoeliminarse. Nuevo job diario (04:00, `_job_purgar_emails_sistema_descartados`) que borra las descartadas hace más de 2 días.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; renderizado probado con datos simulados (descartada hace 1 día, hace 3 días ya vencida, y una fila sin descartar de control).
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Cabecera fija también en Pedidos, Alertas, Familias de Artículos y Usuarios (v12.30.59)
 
 - **Origen**: Víctor, con capturas de las 4 pantallas: "todas estas pantallas también bloquear esto en lo alto de la ventana para scrol de las 4 opciones adjuntas" — mismo comportamiento de v12.30.58 (Proveedores), extendido a estas 4 vistas.

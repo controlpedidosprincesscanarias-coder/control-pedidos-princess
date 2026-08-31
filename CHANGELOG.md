@@ -1,3 +1,18 @@
+# v12.30.60 — 31 agosto 2026
+
+✨ Botón "Reactivar" para correos de sistema descartados + se eliminan solos a los 2 días
+
+**Petición de Víctor**, sobre el panel "Cola de correos de sistema pendientes" (Administrador → EmailJS y Cola de Correo): "esto, una vez descartado no tiene sentido seguir llenado la pantalla, podemos poner otro botón para reactivar y que a los 2 días cauque y se elimine el envío descartado".
+
+**Antes**: una fila descartada a mano (botón "Descartar") se quedaba en la tabla para siempre como constancia — con el tiempo se iba acumulando en el panel sin ningún valor real, y no había forma de deshacer un descarte hecho por error salvo tocando la base de datos a mano.
+
+**Cambio**:
+- Nuevo botón **"↻ Reactivar"** en cada fila ya descartada (sustituye a "Descartar" en esa fila) — `POST /api/admin/emails-sistema-pendientes/<id>/reactivar`. Limpia la marca de descarte y, si la fila ya había agotado sus reintentos antes de descartarse, le da un cupo nuevo (si no, "Reactivar" no reactivaría nada de verdad: seguiría parada por haber agotado los intentos).
+- Cada fila descartada muestra ahora cuánto le queda antes de desaparecer sola ("se elimina en ~Xh" / "~Xd" / "se elimina en breve").
+- Nuevo job diario (04:00) que borra las filas descartadas hace más de 2 días — tiempo de sobra para reactivar a mano si el descarte fue un error. Solo toca filas ya descartadas y no enviadas, nunca un correo real.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; renderizado de la lista probado con datos simulados (fila descartada hace 1 día → "se elimina en ~1d"; fila descartada hace 3 días, ya vencida → "se elimina en breve"; fila sin descartar → sigue mostrando "Descartar" como antes).
+
 # v12.30.59 — 31 agosto 2026
 
 ✨ Cabecera fija también en Pedidos, Alertas, Familias de Artículos y Usuarios
