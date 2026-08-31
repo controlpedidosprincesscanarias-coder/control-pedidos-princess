@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.75** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.76** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -178,6 +178,43 @@ dentro de `_auto_migrate()` en `app.py`, no solo en `SQL_STATEMENTS`
 aunque el código que depende de ese cambio de esquema sí esté
 desplegado. Esto ya ha causado dos bugs reales (hotel de pruebas "PR" en
 v12.29.32, tabla `expediente_exceso` en v12.29.33).
+
+---
+
+## Rendimiento
+
+La app se ha auditado y optimizado por etapas (agosto 2026, ver
+`CHANGELOG.md` v12.30.70-72 para el detalle técnico completo de cada
+una):
+
+- **Etapa 1 (v12.30.70)** — `GET /api/proveedores` pasó a paginar (antes
+  devolvía siempre la tabla completa) y se crearon índices GIN por
+  trigramas (extensión `pg_trgm`) sobre `proveedores.nombre/codigo/codigo_dali`,
+  para que el buscador (`ILIKE '%texto%'`, comodín al principio) deje de
+  recorrer la tabla entera en cada búsqueda.
+- **Etapa 2 (v12.30.71)** — mismo problema de índice, ahora en
+  `pedidos.pedido_num` y `pedidos.observaciones` — la tabla que más
+  rápido crece de toda la app.
+- **Etapa 3 (v12.30.72)** — compresión gzip de las respuestas del
+  servidor (`_comprimir_respuesta_gzip()` en `app.py`): `index.html`
+  (628 KB) y el JSON de la API viajan hasta un 80-90% más ligeros. No
+  se usó Flask-Compress — ver el porqué en el propio CHANGELOG.
+
+Estas tres etapas se apoyan en el trabajo previo de v12.7.0 (pool de
+conexiones psycopg2, en vez de abrir una conexión nueva por petición) y
+del "Fix egress" de julio 2026 (`index.html` se sirve con ETag +
+`Cache-Control: no-cache`, así que el navegador revalida con una
+petición condicional ligera en vez de descargar el archivo entero en
+cada recarga).
+
+Si vuelve a notarse lentitud con el tiempo (más hoteles, más pedidos,
+más proveedores), el sitio por donde empezar es `PEDIDO_SELECT` en
+`app.py`: arma cada fila del listado de Pedidos con 6 subconsultas
+correlacionadas para los datos de contacto del proveedor — señalado en
+la auditoría de la Etapa 2 pero no tocado a propósito (un proveedor
+puede tener varios contactos "principales" a la vez, y fusionar esas
+subconsultas cambiaría cuál de ellos "gana" en esos casos — requiere
+decidir antes ese criterio de desempate).
 
 ---
 

@@ -1,3 +1,13 @@
+# v12.30.76 — 31 agosto 2026
+
+✨ Auditoría documental (Etapa 4): README sin mencionar las 3 etapas de rendimiento ya desplegadas
+
+**Contexto**: continuación de la auditoría general (Etapas 1-3, v12.30.73-75). El README no mencionaba en ningún punto las 3 etapas de auditoría de rendimiento (paginación de Proveedores, índices por trigramas, compresión gzip) ya desplegadas y verificadas — quien lo leyera se llevaba una foto incompleta del estado real de la app.
+
+**Cambio en `README.md`**: nueva sección "Rendimiento", entre "Migraciones de base de datos" y "Puesta en marcha", con un resumen de las 3 etapas (remitiendo al CHANGELOG para el detalle técnico completo de cada una), el trabajo previo del que parten (pool de conexiones v12.7.0, ETag/Cache-Control de julio 2026), y una nota sobre el único punto señalado en la propia auditoría y dejado sin tocar a propósito (`PEDIDO_SELECT`, 6 subconsultas correlacionadas — pendiente de que se decida un criterio de desempate para proveedores con varios contactos "principales").
+
+**Verificación**: solo documentación, sin cambios de código. Badge de versión en `templates/index.html` actualizado.
+
 # v12.30.75 — 31 agosto 2026
 
 ✨ Auditoría documental/limpieza (Etapa 3, agrupada): favicons sobredimensionados + archivo basura fuera de lugar

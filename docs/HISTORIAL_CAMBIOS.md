@@ -25,6 +25,15 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Auditoría documental, Etapa 4: README sin mencionar las 3 etapas de rendimiento (v12.30.76)
+
+- **Origen**: continuación de la auditoría general (Etapas 1-3, v12.30.73-75).
+- **Hallazgo**: el README no mencionaba las 3 etapas de auditoría de rendimiento ya desplegadas (v12.30.70-72) — paginación de Proveedores, índices GIN por trigramas, compresión gzip.
+- **Cambio**: nueva sección "Rendimiento" en `README.md`, entre "Migraciones de base de datos" y "Puesta en marcha", resumiendo las 3 etapas, el trabajo previo del que parten, y el único punto señalado en la auditoría y dejado pendiente a propósito (`PEDIDO_SELECT`).
+- **Entrega**: `README.md`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Auditoría/limpieza, Etapa 3 (agrupada): favicons sobredimensionados + Thumbs.db (v12.30.75)
 
 - **Origen**: continuación de la auditoría general (Etapas 1-2, v12.30.73/74). Dos hallazgos independientes y de bajo riesgo, agrupados a petición del usuario.
