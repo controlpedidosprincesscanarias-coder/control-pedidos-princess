@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Código DALI obligatorio en Proveedores + aviso real de duplicado (con nombre del proveedor) — antes fallaba en silencio (v12.30.68)
+
+- **Origen**: Víctor: "en el apartado proveedores, tanto el codigo SAP como el DALI son obligatorios al crear un proveedor, en caso de duplicidad de alguno de los dos codigos ahora esta realizando error silencioso, debera indicar que codigo esta duplicado nombre asociado etc para poder localizarlo y arreglarlo".
+- **Causa raíz**: `saveProveedor()` (templates/index.html) no tenía el `try/catch` que sí tiene el resto de formularios (p. ej. `savePedido`) — `api()` lanza excepción en un 409, y esa excepción quedaba sin capturar: ningún aviso visible. Código DALI, además, no tenía ningún chequeo de duplicado en absoluto.
+- **Cambio**: código DALI pasa a obligatorio (crear y editar, admin); nuevo chequeo de duplicado para código DALI (antes solo existía para código SAP y nombre); mensajes de error de ambos códigos ahora indican nombre e ID del proveedor en conflicto (`_buscar_proveedor_duplicado()`, app.py); `saveProveedor()` envuelto en try/catch con `showFormAlert` y reactivación del botón, igual que `savePedido`.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; Playwright con mock de un 409 de código DALI duplicado confirmó que el mensaje con el proveedor en conflicto se muestra y el botón se reactiva; confirmado también el aviso al dejar el código DALI vacío.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] El correo interno de cambio de estado pasa de Bcc a CC visible + lista de destinatarios en el cuerpo (v12.30.67)
 
 - **Origen**: Víctor confirmó primero que solo se envía un correo con todos los destinatarios juntos ("SOLO SE ENVIA UN CORREO Y VAN TODOS LOS DESTINATARIOS JUNTOS EN EL MISMO ¿VERDAD?") y a continuación pidió: "ESTE CORREO INTERNO, ME GUSTARIA QUE NO FUERA EN OCULTO, ES INTERESANTE QUE TODOS LOS INVOLUCRADOS SEPAN QUIENES ESTAN INFORMADOS".

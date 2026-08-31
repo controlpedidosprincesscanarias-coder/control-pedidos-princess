@@ -1,3 +1,19 @@
+# v12.30.68 — 31 agosto 2026
+
+✨ Código DALI obligatorio en Proveedores + aviso real (con nombre del proveedor en conflicto) al duplicar código SAP o DALI — antes fallaba en silencio
+
+**Petición de Víctor**: "en el apartado proveedores, tanto el codigo SAP como el DALI son obligatorios al crear un proveedor, en caso de duplicidad de alguno de los dos codigos ahora esta realizando error silencioso, debera indicar que codigo esta duplicado nombre asociado etc para poder localizarlo y arreglarlo".
+
+**Causa raíz del "error silencioso" (confirmada)**: `saveProveedor()` (templates/index.html) no tenía el `try/catch` que sí tiene el resto de formularios de la app (p. ej. `savePedido`). `api()` lanza una excepción real en cualquier 409 "normal" — y el 409 de código SAP duplicado ya existía desde antes — así que esa excepción quedaba sin capturar: ningún aviso, ningún toast, el modal se quedaba tal cual sin ninguna pista de qué había pasado. Código DALI, además, no tenía NINGÚN chequeo de duplicado — se podían crear dos proveedores con el mismo código DALI sin aviso de ningún tipo.
+
+**Cambio**:
+- **Código DALI pasa a ser obligatorio** al crear un proveedor (igual que el código SAP) y también al editar uno ya existente desde el modal de admin — así una ficha antigua sin código DALI no se puede volver a guardar sin rellenarlo.
+- **Nuevo chequeo de duplicado para código DALI** (creación y edición) — antes solo existía para código SAP y para nombre.
+- **Mensajes de error mejorados**, en creación y edición, para ambos códigos: ya no dicen solo "ya existe un proveedor con ese código", ahora indican el **nombre y el ID** del proveedor que ya lo tiene — p. ej. *"El código DALI 'D-500' ya está en uso por el proveedor «Suministros Hoteleros S.L.» (ID 42) — corrige uno de los dos códigos."* — para poder localizarlo y arreglarlo de inmediato, tal como pidió.
+- **Arreglado el error silencioso de verdad**: `saveProveedor()` ahora envuelve el guardado en `try/catch` (mismo patrón que `savePedido`), muestra cualquier error del backend con `showFormAlert` y reactiva el botón "Guardar"/"Crear proveedor" si falla — antes, ante un error, el botón se podía quedar en "Guardando…" sin decir nada.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; con Playwright se simuló un 409 de código DALI duplicado (mock de `fetch`) y se comprobó que el mensaje con el nombre del proveedor en conflicto aparece en pantalla y que el botón se reactiva; también se comprobó que dejar el código DALI vacío al crear muestra el aviso "El código DALI es obligatorio" en vez de no hacer nada.
+
 # v12.30.67 — 31 agosto 2026
 
 ✨ El correo interno de cambio de estado deja de ir en copia oculta (Bcc) — pasa a CC visible + lista de destinatarios en el propio correo

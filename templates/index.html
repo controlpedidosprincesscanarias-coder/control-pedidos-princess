@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.67
+          V 12.30.68
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6449,12 +6449,14 @@ async function saveProveedor() {
     if (!nombre) { toast('El nombre del proveedor es obligatorio', 'error'); return; }
     const codigo = val('pv-codigo-input');
     if (!codigo) { toast('El código SAP es obligatorio', 'error'); return; }
+    // (2026-08-31) A petición de Víctor, el código DALI pasa a ser
+    // obligatorio también al crear (igual que el código SAP) — ver mismo
+    // requisito en create_proveedor(), app.py.
+    const codigoDali = val('pv-codigo-dali-input');
+    if (!codigoDali) { toast('El código DALI es obligatorio', 'error'); return; }
     body.nombre = nombre;
     body.codigo = codigo;
-    body.codigo_dali = val('pv-codigo-dali-input');
-    const r = await api('/api/proveedores', 'POST', body);
-    if (r.error) { toast(r.error, 'error'); return; }
-    toast('Proveedor creado correctamente', 'success');
+    body.codigo_dali = codigoDali;
   } else {
     // (2026-08-31) nombre/código SAP/código DALI son ahora solo-admin —
     // ver update_proveedor() en app.py, que ya no exige estos campos ni
@@ -6468,19 +6470,49 @@ async function saveProveedor() {
       if (!nombre) { toast('El nombre del proveedor es obligatorio', 'error'); return; }
       const codigo = val('pv-codigo-input');
       if (!codigo) { toast('El código SAP es obligatorio', 'error'); return; }
+      const codigoDali = val('pv-codigo-dali-input');
+      if (!codigoDali) { toast('El código DALI es obligatorio', 'error'); return; }
       body.nombre = nombre;
       body.codigo = codigo;
-      body.codigo_dali = val('pv-codigo-dali-input');
+      body.codigo_dali = codigoDali;
     } else {
       body.nombre = document.getElementById('pv-nombre-display').textContent.trim();
     }
-    const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'PUT', body);
-    if (r.error) { toast(r.error, 'error'); return; }
-    toast('Proveedor actualizado', 'success');
   }
 
-  closeModal('modal-proveedor');
-  loadProveedores();
+  // (2026-08-31) A petición de Víctor: "en caso de duplicidad de alguno de
+  // los dos códigos ahora está realizando error silencioso" — confirmado:
+  // faltaba el try/catch de aquí (el resto de formularios de la app, p.
+  // ej. savePedido/saveUsuario, sí lo tienen). api() lanza una excepción
+  // real en cualquier respuesta de error que no sea el caso especial de
+  // "validación de negocio" (ver comentario en la propia función api()) —
+  // el 409 de código SAP/DALI duplicado es justo ese caso normal que SÍ
+  // lanza excepción, y como aquí no había try/catch, la promesa quedaba
+  // rechazada sin capturar: no saltaba ningún aviso, el modal se quedaba
+  // tal cual, sin ninguna pista de qué había pasado. El backend ya indica
+  // en el mensaje qué código está duplicado y con qué proveedor (ver
+  // create_proveedor/update_proveedor, app.py) — aquí solo hacía falta
+  // mostrarlo.
+  const btn = document.getElementById('btn-save-proveedor');
+  const btnTextoOriginal = btn.textContent;
+  btn.disabled = true; btn.textContent = 'Guardando…';
+  try {
+    if (isNew) {
+      const r = await api('/api/proveedores', 'POST', body);
+      toast('Proveedor creado correctamente', 'success');
+    } else {
+      const r = await api(`/api/proveedores/${G.editingProveedorId}`, 'PUT', body);
+      toast('Proveedor actualizado', 'success');
+    }
+    closeModal('modal-proveedor');
+    loadProveedores();
+  } catch (e) {
+    const msg = e?.message || String(e) || 'Error desconocido';
+    console.error('[saveProveedor]', e);
+    showFormAlert(msg.replace(/^\[\d+\]\s*/, ''), { title: '⚠️ No se pudo guardar el proveedor' });
+  } finally {
+    btn.disabled = false; btn.textContent = btnTextoOriginal;
+  }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════

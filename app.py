@@ -8632,6 +8632,27 @@ def get_proveedores():
             p.pop("observaciones", None)
     return jsonify(result)
 
+
+def _buscar_proveedor_duplicado(campo: str, valor: str, excluir_id: int = None) -> dict:
+    """
+    (2026-08-31) Usado por create_proveedor/update_proveedor para el aviso
+    de código SAP/DALI duplicado que pidió Víctor: "deberá indicar qué
+    código está duplicado, nombre asociado, etc. para poder localizarlo y
+    arreglarlo". Devuelve {id, nombre} del proveedor activo que ya tiene
+    ese valor exacto en la columna `campo` ('codigo' o 'codigo_dali' — SOLO
+    se llama con estos dos literales fijos desde este archivo, nunca con
+    algo que venga del usuario, así que interpolarlo en el SQL es seguro),
+    o None si no hay ninguno. `excluir_id` se usa al editar, para no
+    comparar un proveedor consigo mismo.
+    """
+    sql = f"SELECT id, nombre FROM proveedores WHERE activo=1 AND {campo}=%s"
+    args = [valor]
+    if excluir_id is not None:
+        sql += " AND id!=%s"
+        args.append(excluir_id)
+    return row_to_dict(query(sql, tuple(args), one=True))
+
+
 @app.route("/api/proveedores", methods=["POST"])
 @login_required
 def create_proveedor():
@@ -8649,23 +8670,46 @@ def create_proveedor():
     data   = request.get_json(silent=True) or {}
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo") or "").strip()
-    codigo_dali = (data.get("codigo_dali") or "").strip() or None
+    codigo_dali = (data.get("codigo_dali") or "").strip()
     if not nombre:
         return jsonify({"error": "Nombre requerido"}), 400
     if not codigo:
         return jsonify({"error": "El código SAP es obligatorio"}), 400
+    # (2026-08-31) A petición de Víctor: "tanto el codigo SAP como el DALI
+    # son obligatorios al crear un proveedor" — antes codigo_dali era
+    # opcional (NULL permitido) desde que se añadió la columna (v12.30.56).
+    if not codigo_dali:
+        return jsonify({"error": "El código DALI es obligatorio"}), 400
     # Anti-duplicado: mismo nombre (insensible a mayúsculas)
     dup_nombre = query(
         "SELECT id FROM proveedores WHERE activo=1 AND LOWER(nombre)=LOWER(%s)", (nombre,)
     )
     if rows_to_list(dup_nombre):
         return jsonify({"error": f"Ya existe un proveedor con el nombre '{nombre}'"}), 409
-    # Anti-duplicado: mismo código SAP
-    dup_codigo = query(
-        "SELECT id FROM proveedores WHERE activo=1 AND codigo=%s", (codigo,)
-    )
-    if rows_to_list(dup_codigo):
-        return jsonify({"error": f"Ya existe un proveedor con el código SAP '{codigo}'"}), 409
+    # (2026-08-31) A petición de Víctor: "en caso de duplicidad de alguno de
+    # los dos códigos ahora está realizando error silencioso (...) deberá
+    # indicar qué código está duplicado, nombre asociado, etc. para poder
+    # localizarlo y arreglarlo" — el 409 de código SAP duplicado ya existía,
+    # pero (a) el frontend no lo llegaba a mostrar nunca (ver saveProveedor,
+    # templates/index.html — faltaba el try/catch alrededor de api(), así
+    # que la excepción se perdía sin avisar) y (b) el mensaje no decía CON
+    # QUÉ proveedor chocaba. Además, código DALI no tenía ningún chequeo de
+    # duplicado — se podían crear dos proveedores con el mismo código DALI
+    # sin ningún aviso. _buscar_proveedor_duplicado() (definida más abajo,
+    # junto a update_proveedor) da nombre + ID del proveedor que ya tiene
+    # ese código, para poder localizarlo y arreglarlo tal como pidió.
+    dup_codigo = _buscar_proveedor_duplicado("codigo", codigo)
+    if dup_codigo:
+        return jsonify({"error": (
+            f"El código SAP '{codigo}' ya está en uso por el proveedor «{dup_codigo['nombre']}» "
+            f"(ID {dup_codigo['id']}) — corrige uno de los dos códigos."
+        )}), 409
+    dup_dali = _buscar_proveedor_duplicado("codigo_dali", codigo_dali)
+    if dup_dali:
+        return jsonify({"error": (
+            f"El código DALI '{codigo_dali}' ya está en uso por el proveedor «{dup_dali['nombre']}» "
+            f"(ID {dup_dali['id']}) — corrige uno de los dos códigos."
+        )}), 409
     db  = get_db()
     # sujeto_seguimiento: solo admin puede llegar aquí ahora, así que se
     # toma directamente del payload (ya no hace falta la rama "compras
@@ -8721,11 +8765,18 @@ def update_proveedor(pid):
     if session.get("rol") == "admin":
         nombre = (data.get("nombre") or "").strip()
         codigo = (data.get("codigo") or "").strip()
-        codigo_dali = (data.get("codigo_dali") or "").strip() or None
+        codigo_dali = (data.get("codigo_dali") or "").strip()
         if not nombre:
             return jsonify({"error": "Nombre requerido"}), 400
         if not codigo:
             return jsonify({"error": "El código SAP es obligatorio"}), 400
+        # (2026-08-31) Mismo requisito que en create_proveedor — Víctor:
+        # "tanto el codigo SAP como el DALI son obligatorios". Se aplica
+        # también al editar (solo admin llega aquí) para que una ficha
+        # antigua sin código DALI no se pueda volver a guardar sin
+        # rellenarlo — de lo contrario el hueco se perpetúa indefinidamente.
+        if not codigo_dali:
+            return jsonify({"error": "El código DALI es obligatorio"}), 400
     else:
         _actual = query("SELECT nombre,codigo,codigo_dali FROM proveedores WHERE id=%s", (pid,), one=True)
         if not _actual:
@@ -8739,12 +8790,24 @@ def update_proveedor(pid):
     )
     if rows_to_list(dup_nombre):
         return jsonify({"error": f"Ya existe otro proveedor con el nombre '{nombre}'"}), 409
-    # Anti-duplicado: código SAP en uso por otro proveedor
-    dup_codigo = query(
-        "SELECT id FROM proveedores WHERE activo=1 AND codigo=%s AND id!=%s", (codigo, pid)
-    )
-    if rows_to_list(dup_codigo):
-        return jsonify({"error": f"Ya existe otro proveedor con el código SAP '{codigo}'"}), 409
+    # (2026-08-31) Mismos avisos detallados que en create_proveedor — ver
+    # comentario extenso ahí y _buscar_proveedor_duplicado() (definida justo
+    # antes de create_proveedor). Solo se comprueba cuando el admin está
+    # editando codigo/codigo_dali de verdad (los conserva sin más si no es
+    # admin, así que comparar consigo mismo con id!=pid ya lo cubre bien en
+    # ambos casos).
+    dup_codigo = _buscar_proveedor_duplicado("codigo", codigo, excluir_id=pid)
+    if dup_codigo:
+        return jsonify({"error": (
+            f"El código SAP '{codigo}' ya está en uso por el proveedor «{dup_codigo['nombre']}» "
+            f"(ID {dup_codigo['id']}) — corrige uno de los dos códigos."
+        )}), 409
+    dup_dali = _buscar_proveedor_duplicado("codigo_dali", codigo_dali, excluir_id=pid) if codigo_dali else None
+    if dup_dali:
+        return jsonify({"error": (
+            f"El código DALI '{codigo_dali}' ya está en uso por el proveedor «{dup_dali['nombre']}» "
+            f"(ID {dup_dali['id']}) — corrige uno de los dos códigos."
+        )}), 409
     db   = get_db()
     # (2026-08-10) sujeto_seguimiento solo lo puede cambiar un admin —
     # compras puede seguir editando la ficha del proveedor con normalidad
