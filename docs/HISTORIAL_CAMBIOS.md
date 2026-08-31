@@ -25,6 +25,15 @@
 
 ---
 
+## 2026-08-31 — [Infra] Auditoría/limpieza, Etapa 5: cron del keep-alive frágil ante el cambio de hora (v12.30.77)
+
+- **Origen**: continuación de la auditoría general (Etapas 1-4, v12.30.73-76).
+- **Hallazgo**: `.github/workflows/keep-alive-princess.yml` fijaba la ventana del cron para horario de verano, con un comentario indicando que había que cambiarla a mano en invierno — riesgo de que el servicio gratuito de Render se quede dormido en horario laboral real si se olvida.
+- **Cambio**: ventana ensanchada de `5-16` a `5-18` UTC — cubre 06:00-18:00 hora Canarias en las dos estaciones (unión de las ventanas UTC de verano e invierno) sin necesidad de tocar el archivo nunca más. Coste: ~1h de pings de más en cada extremo según la época, sin impacto práctico.
+- **Entrega**: `.github/workflows/keep-alive-princess.yml`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Auditoría documental, Etapa 4: README sin mencionar las 3 etapas de rendimiento (v12.30.76)
 
 - **Origen**: continuación de la auditoría general (Etapas 1-3, v12.30.73-75).

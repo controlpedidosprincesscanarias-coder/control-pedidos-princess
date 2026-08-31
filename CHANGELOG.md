@@ -1,3 +1,15 @@
+# v12.30.77 — 31 agosto 2026
+
+✨ Auditoría/limpieza (Etapa 5): cron del keep-alive frágil ante el cambio de hora
+
+**Contexto**: continuación de la auditoría general (Etapas 1-4, v12.30.73-76). `.github/workflows/keep-alive-princess.yml` (pings cada 10 min a `/ping` en horario laboral, para evitar el letargo del plan gratuito de Render) tenía la ventana del cron fijada para horario de verano (UTC+1), con un comentario que decía literalmente que había que cambiarla a mano en el cambio de hora de invierno. Riesgo real: si nadie se acuerda de editarlo a finales de octubre, el servicio puede quedarse dormido durante horario laboral real en invierno, y la primera petición del día tarda ~30-60s en despertar (típico de Render free).
+
+**Cambio**: ventana del cron ensanchada de `5-16` a `5-18` (UTC). El título del propio workflow dice "06:00-18:00 hora Canarias" — en verano eso es 05:00-17:00 UTC, en invierno 06:00-18:00 UTC; la unión de ambos rangos es 05:00-18:00 UTC, así que una sola ventana cubre las dos estaciones sin volver a tocar el archivo. Coste: ~1h de pings de más en cada extremo según la época del año — gratis, sin impacto práctico en el plan free de GitHub Actions (2.000 min/mes en repos privados, ilimitado en públicos; cada ping tarda segundos).
+
+**Verificación**: cálculo de la ventana revisado a mano para las dos estaciones (ver comentario nuevo en el propio YAML). No es un cambio de código de la app — no aplica `py_compile`; sintaxis YAML revisada visualmente (indentación y estructura sin tocar, solo el valor del cron y el comentario).
+
+**Entrega**: `.github/workflows/keep-alive-princess.yml`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
 # v12.30.76 — 31 agosto 2026
 
 ✨ Auditoría documental (Etapa 4): README sin mencionar las 3 etapas de rendimiento ya desplegadas
