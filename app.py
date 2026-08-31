@@ -3,7 +3,7 @@ Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase)
 Despliegue: Render.com  |  BD: Supabase  |  Email: EmailJS (frontend)
 """
 
-import os, json, logging, secrets, atexit, hashlib, re, threading, base64, hmac
+import os, json, logging, secrets, atexit, hashlib, re, threading, base64, hmac, gzip
 from html import unescape as _html_unescape
 from datetime import datetime, timedelta, timezone, date as _date
 from functools import wraps
@@ -87,6 +87,85 @@ app = Flask(__name__)
 app.secret_key = SECRET_KEY
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
+
+# ── Compresión gzip de respuestas de texto (2026-08-31, auditoría de
+# rendimiento, Etapa 3/3) ────────────────────────────────────────────────
+# Ninguna respuesta salía comprimida — ni el JSON de la API (el listado de
+# Pedidos o de Proveedores puede pesar cientos de KB) ni, sobre todo,
+# templates/index.html (628 KB, servido con Cache-Control: no-cache, así
+# que se descarga entero en cada carga/recarga de página).
+#
+# Se probó primero la librería Flask-Compress, pero se descartó por dos
+# motivos concretos, comprobados aquí antes de escribir nada de esto:
+# 1) TODAS sus versiones (hasta la 1.10.0, la más antigua publicada)
+#    dependen obligatoriamente del paquete `brotli` (una extensión en C) —
+#    no hay forma de usarla en modo "solo gzip, sin dependencias nuevas".
+# 2) Con esa librería instalada tal cual, index.html —el fichero que más
+#    pesa, el que más interesaba comprimir— NO llegaba a comprimirse con
+#    gzip: send_from_directory() devuelve una respuesta "en streaming", y
+#    Flask-Compress excluye gzip a propósito de su lista de algoritmos
+#    para streaming (usa brotli/zstd/deflate ahí, nunca gzip) — así que
+#    hacía falta que brotli funcionara de verdad en el build de Render
+#    para que el propio objetivo de esta etapa se cumpliera.
+#
+# Con un `after_request` propio, de una docena de líneas, se evita la
+# dependencia nueva y se comprime igual el fichero que más importa. Solo
+# actúa sobre contenido de texto (HTML/CSS/JS/JSON — nunca los PDF, Excel
+# o imágenes que ya sirve la app, que van comprimidos de otra forma o no
+# se benefician de gzip), respeta si el navegador anuncia soporte de gzip
+# (cabecera Accept-Encoding) y no toca respuestas ya comprimidas ni por
+# debajo de un tamaño mínimo (gzip añade su propia cabecera, no compensa
+# para respuestas muy pequeñas).
+#
+# No se toca el ETag de index() (más abajo) a propósito: esa vista ya
+# implementa su propio atajo 304 comparando If-None-Match contra el hash
+# tal cual, sin sufijo — si aquí se le añadiera algo como ":gzip" (como
+# hacen algunas librerías, para no confundir la versión comprimida con la
+# normal bajo el mismo validador), ese atajo dejaría de encajar y CADA
+# carga volvería a mandar el HTML entero, exactamente el problema de
+# egress que el ETag se creó para evitar (ver comentario de index()).
+# Sin caché intermedia compartida delante de esta app (Render sirve
+# directo), no hay ningún cliente que pueda recibir la copia comprimida
+# de otro por error — así que no hace falta ese sufijo aquí.
+_GZIP_MIMETYPES = {
+    "text/html", "text/css", "text/javascript", "application/javascript",
+    "application/json", "text/plain", "text/xml", "application/xml",
+}
+_GZIP_MIN_BYTES = 500
+
+@app.after_request
+def _comprimir_respuesta_gzip(response):
+    vary = response.headers.get("Vary")
+    if not vary:
+        response.headers["Vary"] = "Accept-Encoding"
+    elif "accept-encoding" not in vary.lower():
+        response.headers["Vary"] = f"{vary}, Accept-Encoding"
+
+    if (
+        "gzip" not in (request.headers.get("Accept-Encoding") or "")
+        or response.mimetype not in _GZIP_MIMETYPES
+        or "Content-Encoding" in response.headers
+        or response.status_code < 200 or response.status_code >= 300
+    ):
+        return response
+
+    # send_from_directory() (usada para los ficheros de static/, y como
+    # respaldo en index() si falla la lectura normal de index.html) marca
+    # la respuesta como "direct_passthrough" para poder enviar el fichero
+    # sin cargarlo entero en memoria de golpe — hay que desactivarlo antes
+    # de poder leer/reemplazar el cuerpo con get_data()/set_data(), si no
+    # Werkzeug lanza un error. (La vía normal de index() ya construye la
+    # respuesta con Response(content, ...) directamente, sin passthrough,
+    # pero desactivarlo aquí no le afecta — sigue funcionando igual.)
+    response.direct_passthrough = False
+    data = response.get_data()
+    if len(data) < _GZIP_MIN_BYTES:
+        return response
+
+    response.set_data(gzip.compress(data, compresslevel=6))
+    response.headers["Content-Encoding"] = "gzip"
+    response.headers["Content-Length"] = str(response.content_length)
+    return response
 
 def _auto_migrate():
     """Añade columnas/tablas nuevas de forma idempotente."""

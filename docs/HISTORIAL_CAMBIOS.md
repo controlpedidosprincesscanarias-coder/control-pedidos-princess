@@ -25,6 +25,17 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Auditoría de rendimiento, Etapa 3/3 (última): compresión gzip de las respuestas del servidor (v12.30.72)
+
+- **Origen**: continuación de las Etapas 1 y 2 — Víctor: "desplegada la dos continuamos con la 3".
+- **Causa raíz**: ninguna respuesta salía comprimida. `templates/index.html` (628 KB) se sirve con `Cache-Control: no-cache` a propósito (para no servir una versión vieja tras desplegar), así que se descarga entero sin comprimir en cada carga/recarga. El JSON de la API tampoco viajaba comprimido.
+- **Decisión — no se usó Flask-Compress**: probada primero, descartada al comprobar que (1) todas sus versiones dependen obligatoriamente del paquete `brotli` (extensión en C) — no hay modo "solo gzip, sin dependencias" con esa librería — y (2) con ella puesta, `index.html` (el objetivo principal) no llegaba a comprimirse con gzip: se sirve en streaming, y esa librería excluye gzip de los algoritmos de streaming (usa brotli/zstd/deflate ahí), así que el resultado dependía de que brotli funcionase de verdad en Render. Se implementó en su lugar un `after_request` propio, sin dependencias nuevas.
+- **Cambio**: `_comprimir_respuesta_gzip()` (app.py) comprime con gzip las respuestas de texto (HTML/CSS/JS/JSON) cuando el navegador lo admite (`Accept-Encoding`), con `Vary: Accept-Encoding`; no toca binarios (PDF/Excel/imágenes) ni respuestas por debajo de 500 bytes. El ETag de `index()` se deja intacto a propósito, para no romper su atajo 304 existente (`If-None-Match`).
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Réplica aislada en Flask del patrón real de `index()` (ETag + 304): confirmado que gzip comprime y descomprime correctamente, que sin `Accept-Encoding` se sirve igual que antes, que binarios/respuestas pequeñas no se tocan, y que el atajo 304 sigue funcionando igual con la compresión activada (primera visita → gzip; revisita con ETag en caché → 304; tras "deploy" con ETag viejo → 200 + gzip de nuevo).
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Auditoría de rendimiento, Etapa 2/3: índice de búsqueda por trigramas para Pedidos (v12.30.71)
 
 - **Origen**: continuación de la Etapa 1 — Víctor: "desplegada y probada la etapa 1, seguimos con la 2?".

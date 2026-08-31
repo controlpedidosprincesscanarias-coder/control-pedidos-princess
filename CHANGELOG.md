@@ -1,3 +1,17 @@
+# v12.30.72 — 31 agosto 2026
+
+✨ Auditoría de rendimiento (Etapa 3 de 3, última): compresión gzip de las respuestas del servidor — index.html y el JSON de la API viajan hasta un 80-90% más ligeros
+
+**Contexto**: cierre de la auditoría de rendimiento — Etapa 1 (Proveedores, v12.30.70) y Etapa 2 (índice de búsqueda de Pedidos, v12.30.71) ya desplegadas y probadas por Víctor.
+
+**Causa raíz**: ninguna respuesta del servidor salía comprimida. `templates/index.html` pesa 628 KB y se sirve con `Cache-Control: no-cache` (a propósito, para no servir una versión vieja tras un despliegue — ver comentario de `index()`), así que se descarga entero, sin comprimir, en cada carga y cada recarga de página. El JSON de la API (listados de Pedidos, Proveedores, etc.) tampoco viajaba comprimido.
+
+**Decisión técnica — por qué no se usó la librería Flask-Compress**: se probó primero (es la opción estándar para esto en Flask) pero se descartó tras comprobar dos problemas concretos: (1) todas sus versiones publicadas, incluida la más antigua (1.10.0), dependen obligatoriamente del paquete `brotli` (una extensión en C) — no existe forma de usarla en modo "solo gzip, sin dependencias nuevas" como se había planteado en la propia auditoría; (2) con la librería puesta tal cual, `index.html` (el fichero que más pesa, el objetivo principal de esta etapa) **no llegaba a comprimirse con gzip** — se sirve como respuesta "en streaming" y esa librería excluye gzip a propósito de los algoritmos que usa para streaming (usa brotli/zstd/deflate ahí en su lugar), así que el resultado dependía de que `brotli` funcionase de verdad en el build de Render para cumplir el objetivo. Se optó por un `after_request` propio, de una docena de líneas, sin dependencias nuevas, que sí comprime `index.html` con gzip puro.
+
+**Cambio en `app.py`**: nuevo `after_request` (`_comprimir_respuesta_gzip`) que comprime con gzip cualquier respuesta de tipo texto (HTML/CSS/JS/JSON) cuando el navegador anuncia soporte (cabecera `Accept-Encoding`), añadiendo `Vary: Accept-Encoding`. No toca PDF/Excel/imágenes (no están en la lista de tipos comprimibles) ni respuestas por debajo de 500 bytes (gzip añade su propia cabecera, no compensa en respuestas muy pequeñas). El ETag de `index()` se deja intacto a propósito — si se le añadiera un sufijo distinto por codificación (como hacen algunas librerías) el atajo 304 que ya usa esa vista dejaría de coincidir con `If-None-Match`, y cada carga volvería a mandar el HTML entero: justo el problema de egress que ese ETag se creó para evitar.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Con una app Flask de prueba aislada, replicando exactamente la vista `index()` real (mismo patrón de ETag + atajo 304): confirmado que con `Accept-Encoding: gzip` el HTML sale comprimido y descomprime al contenido original byte a byte; que sin esa cabecera se sirve igual que antes, sin comprimir; que respuestas pequeñas y binarias (PDF de prueba) no se tocan; y, el punto más delicado, que el atajo 304 (`If-None-Match`) sigue funcionando exactamente igual con la compresión activada — probado con 3 peticiones seguidas (primera visita con gzip, revisita con el ETag ya en caché → 304, y tras "desplegar" un cambio con el ETag viejo → vuelve a 200 + gzip).
+
 # v12.30.71 — 31 agosto 2026
 
 ✨ Auditoría de rendimiento (Etapa 2 de 3): índice de búsqueda por trigramas también para Pedidos
