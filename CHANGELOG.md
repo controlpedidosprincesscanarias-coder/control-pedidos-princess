@@ -1,3 +1,15 @@
+# v12.30.55 — 31 agosto 2026
+
+✨ El correo interno de "ENVIADO AL PROVEEDOR" también lleva ahora el botón de descarga del PDF del pedido
+
+**Petición de Víctor**: tras revisar el correo interno real de un pedido enviado al proveedor (captura de Gmail, sin ningún botón): "¿no habíamos modificado tanto el correo interno de comunicación estado ENVIADO AL PROVEEDOR como el que se envía al mismo proveedor para este asunto, para que adjúntense un botón y poder descargar el PDF del pedido en destino?"
+
+**Comprobado**: no — solo se había hecho para el correo AL PROVEEDOR (v12.30.40, 28 agosto 2026, `_enlaces_descarga_pedido_doc()` + `/descargas/adjunto/<token>`, enlace público y temporal en vez de adjuntar el PDF, ya que EmailJS en el plan Free no admite adjuntos). El correo INTERNO de ese mismo cambio de estado (`enviar_emails_estado()`, bloque `ESTADOS_EMAIL_INTERNO`) nunca llegó a llevarlo — no era un fallo, simplemente no estaba en el alcance de la petición original, que hablaba solo del correo al proveedor.
+
+**Cambio**: mismo bloque de botón (mismo estilo, mismo `_enlaces_descarga_pedido_doc(pedido_id)`, mismo enlace público sin login) añadido también al correo interno — pero SOLO cuando `estado_nuevo == "ENVIADO AL PROVEEDOR"` (igual que el correo al proveedor; el resto de estados que dispara este mismo bloque interno — ENTREGA PARCIAL, ENTREGADO, CANCELADO — no tienen un PDF nuevo que enseñar en ese momento, así que no lo llevan). Añadido tanto en la versión HTML como en la de texto plano del correo interno.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores.
+
 # v12.30.54 — 31 agosto 2026
 
 ✨ Norma documentada en `/api/externo/dali-sap/compradores`: el cruce por email para la firma de DALI solo mira el email principal, nunca `email2` (sin cambio funcional)

@@ -2594,6 +2594,39 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                     f"{_linea_obs_dg_text}"
                 )
 
+        # (2026-08-31) A petición de Víctor: el correo AL PROVEEDOR ya tiene,
+        # desde el 2026-08-28, un botón de descarga del PDF del pedido (ver
+        # _enlaces_descarga_pedido_doc más arriba) — pero el correo INTERNO
+        # de este mismo cambio de estado (el de más abajo, ESTADOS_EMAIL_INTERNO)
+        # nunca lo tuvo, así que quien lo recibe (compradores/usuarios hotel)
+        # no tiene forma de ver el PDF sin entrar a la app. Víctor: "no
+        # habíamos modificado tanto el correo interno de comunicación estado
+        # ENVIADO AL PROVEEDOR como el que se envía al mismo proveedor para
+        # este asunto, para que adjúntense un botón y poder descargar el PDF
+        # del pedido en destino?" — no, solo se había hecho para el correo al
+        # proveedor (ver CHANGELOG v12.30.40); esto añade el mismo botón
+        # aquí, con el mismo enlace público y temporal (sin login, ver
+        # /descargas/adjunto/<token>), solo para ENVIADO AL PROVEEDOR — igual
+        # que el correo al proveedor, no para el resto de estados de este
+        # bloque (ENTREGA PARCIAL/ENTREGADO/CANCELADO), que no tienen un PDF
+        # nuevo que enseñar en ese momento.
+        _bloque_doc_html_interno = ""
+        _bloque_doc_text_interno = ""
+        if estado_nuevo == "ENVIADO AL PROVEEDOR":
+            _enlaces_doc_interno = _enlaces_descarga_pedido_doc(pedido_id)
+            if _enlaces_doc_interno:
+                _botones_doc_interno = "".join(
+                    f'<p style="margin:6px 0"><a href="{e["url"]}" '
+                    f'style="display:inline-block;background:#1a3c6e;color:#fff;text-decoration:none;'
+                    f'padding:9px 18px;border-radius:5px;font-size:13px;font-weight:700">'
+                    f'📄 Descargar {e["nombre"]}</a></p>'
+                    for e in _enlaces_doc_interno
+                )
+                _bloque_doc_html_interno = f'<div style="margin:14px 0">{_botones_doc_interno}</div>'
+                _bloque_doc_text_interno = "\n" + "\n".join(
+                    f"Documento del pedido ({e['nombre']}): {e['url']}" for e in _enlaces_doc_interno
+                ) + "\n"
+
         # (2026-08-28) A petición de Víctor: cuando el cambio es automático
         # (es_automatico=True — decidido por _aplicar_coincidencia_albaran()
         # al confirmar una coincidencia de "Comparar Pedidos + Albaranes",
@@ -2659,6 +2692,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
           <tr><td><b>Fecha tramitación</b></td><td>{_fecha_tram_txt}{_dias_txt}</td></tr>
           {_fila_usuario_html}
         </table>
+        {_bloque_doc_html_interno}
         {_nota_base_imponible_html() if not _resumen_ent["entregas"] else ''}
         {_html_bloque_entregas(_resumen_ent, estado_nuevo)}
         """
@@ -2701,6 +2735,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             + (f"{_aviso_exceso_text.strip()}\n\n" if _aviso_exceso_text else "")
             + "📋 Datos del pedido\n"
             + "\n".join(_datos_lineas)
+            + _bloque_doc_text_interno
         )
         if not _resumen_ent["entregas"]:
             body_text_i += "\n\n" + _nota_base_imponible_text()

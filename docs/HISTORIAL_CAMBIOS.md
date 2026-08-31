@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] El correo interno de "ENVIADO AL PROVEEDOR" también lleva ahora el botón de descarga del PDF del pedido (v12.30.55)
+
+- **Origen**: Víctor, tras revisar el correo interno real de un pedido enviado al proveedor (sin ningún botón visible): "¿no habíamos modificado tanto el correo interno de comunicación estado ENVIADO AL PROVEEDOR como el que se envía al mismo proveedor para este asunto, para que adjúntense un botón y poder descargar el PDF del pedido en destino?"
+- **Comprobado**: no — el botón de descarga (`_enlaces_descarga_pedido_doc()` + `/descargas/adjunto/<token>`, enlace público y temporal en vez de adjuntar el PDF) solo se había añadido al correo AL PROVEEDOR (v12.30.40, 28 agosto 2026). El correo interno de ese mismo cambio de estado (`enviar_emails_estado()`, bloque `ESTADOS_EMAIL_INTERNO`) nunca lo tuvo — no era un fallo, no estaba en el alcance de la petición original.
+- **Cambio**: mismo bloque de botón (mismo estilo visual, mismo enlace público sin login) añadido también al correo interno, en HTML y en texto plano, pero solo cuando `estado_nuevo == "ENVIADO AL PROVEEDOR"` — igual que el correo al proveedor; el resto de estados que usan este mismo bloque interno (ENTREGA PARCIAL, ENTREGADO, CANCELADO) no llevan el botón, al no haber un PDF nuevo que enseñar en esos casos.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+- **Entrega**: solo `app.py` y `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos ↔ DALI] Norma documentada: el cruce por email para la firma de DALI solo mira el email principal, nunca email2 (sin cambio funcional) (v12.30.54)
 
 - **Origen**: al probar la firma del correo de DALI (endpoint de v12.30.53), apareció una colisión real de datos: dos usuarios de esta app comparten el mismo email principal — `comprascan` (Víctor, cuenta real, con móvil) y `usuario prueba` (cuenta de pruebas, sin móvil) — que hacía que DALI cogiera la cuenta equivocada. Resuelto del lado de DALI (prefiere, entre varias coincidencias, la que tiene móvil — ver `HISTORIAL.md` de `dali-sap-articulos-app`, v0.90/v1.19.8).
