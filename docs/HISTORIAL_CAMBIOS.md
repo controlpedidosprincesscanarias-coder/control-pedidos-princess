@@ -25,6 +25,19 @@
 
 ---
 
+## 2026-08-29 — [Control Pedidos ↔ DALI] Nuevo endpoint del puente: nombre/email/móvil de compradores y admins, para la firma de los correos de "Documentación faltante" de DALI (v12.30.53)
+
+- **Origen del cambio**: petición sobre DALI, no sobre esta app — Víctor pidió mejorar el correo de "Documentación faltante" de `dali-sap-articulos-app` (más profesional, petición elegante de imagen por referencia, y una firma "al estilo del resto de correos que se envían a los proveedores desde control pedidos" con nombre, teléfono y correo del admin que gestiona el envío). Al investigar, la tabla `usuarios` de DALI nunca ha tenido columna de teléfono, ni la sesión de esa app lo guarda en ningún sitio.
+- **Decisión de Víctor**: en vez de añadir un campo de teléfono nuevo en DALI (o fijar uno solo para todos), reutilizar el que YA existe aquí — "¿puedes coger la info de la ficha usuarios control pedidos? los admin son los mismos y los compradores son admin en catalogo dali". Es decir, DALI cruza por email contra los usuarios de esta app.
+- **Cambio en `app.py`**: nuevo `GET /api/externo/dali-sap/compradores`, mismo esquema de autenticación que el ya existente `GET /api/externo/dali-sap/proveedores` (firma HMAC-SHA256 con `DALI_SSO_SECRET` en `X-Dali-Timestamp`/`X-Dali-Signature`, sin sesión de usuario — llamada servidor a servidor). Devuelve `{nombre, email, movil}` de los usuarios activos con rol `compras` o `admin` (los dos roles que, en la práctica, son las cuentas de administrador de DALI). No expone contraseña ni ningún otro dato de la tabla `usuarios`.
+- **Sin cambios de esquema ni de datos** en esta app — la columna `movil` de `usuarios` ya existía (`models.py`); este cambio solo la expone, de solo lectura, a través del puente ya existente con DALI.
+- **Lado DALI** (repo `dali-sap-articulos-app`, ver su propio `HISTORIAL.md` v0.86 / `CHANGELOG.md` v1.19.4): `controlPedidosEmailBridge.js` (nuevas `obtenerCompradoresDeControlPedidos()`/`resolverMovilCompradorEnControlPedidos()`), `documentacionController.js` (`resolverFirmaAdmin()`, expuesta en `GET /admin/documentacion-faltante` como `firma_admin`), y `EmailProveedorModal.jsx` (firma añadida al final del correo generado). Si el puente falla o no hay coincidencia por email, la firma se genera igual, sin la línea de teléfono.
+- **Versión**: badge de `templates/index.html` y `CHANGELOG.md` → **V 12.30.53**.
+- **Verificación**: `python3 -m py_compile app.py models.py` sin errores.
+- **Entrega**: solo se modifica `app.py` (nuevo endpoint), `templates/index.html` (badge de versión) y este historial/`CHANGELOG.md` — sin cambios de esquema, sin necesidad de migración.
+
+---
+
 ## 2026-08-29 — [Control Pedidos] Techo (€) y EmailJS salen de "Parámetros de alertas" a sus propias pantallas (v12.30.52)
 
 - Víctor: "puedes continuar" — segunda parte de la reorganización de admin (v12.30.51), sacando de "Parámetros de alertas" dos cosas sin relación con umbrales de alerta: los límites € del techo de gastos y la configuración de EmailJS.

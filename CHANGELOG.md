@@ -1,3 +1,13 @@
+# v12.30.53 — 29 agosto 2026
+
+✨ Nuevo endpoint del puente con el catálogo DALI: expone nombre/email/móvil de los compradores y administradores, para que DALI pueda firmar sus correos a proveedores con esos mismos datos
+
+**Petición de Víctor**: sobre el correo de "Documentación faltante" de DALI (dali-sap-articulos-app), pidió añadirle una firma "al estilo del resto de correos que se envían a los proveedores desde control pedidos", con nombre, teléfono y correo del admin que gestiona el envío. Al investigar, DALI no tiene (ni ha tenido nunca) ningún campo de teléfono en su propia tabla de usuarios. Pregunté cómo resolverlo y Víctor respondió: "¿puedes coger la info de la ficha usuarios control pedidos? los admin son los mismos y los compradores son admin en catalogo dali" — es decir, cruzar por email contra los usuarios que ya existen aquí, en vez de duplicar el dato en DALI.
+
+**Cambio**: nuevo `GET /api/externo/dali-sap/compradores`, mismo esquema de autenticación (firma HMAC-SHA256 con `DALI_SSO_SECRET`, sin sesión de usuario) que ya usa `GET /api/externo/dali-sap/proveedores` desde el puente de correos (v12.27 y siguientes). Devuelve `{nombre, email, movil}` de los usuarios activos con rol `compras` o `admin` (los dos roles que, en la práctica, corresponden a las cuentas de administrador de DALI). No se expone contraseña ni ningún otro dato. DALI cruza por email en su propio lado (ver `resolverMovilCompradorEnControlPedidos` en su `controlPedidosEmailBridge.js`) — este endpoint no necesita saber nada de las cuentas de DALI.
+
+**Verificación**: `python3 -m py_compile app.py models.py` sin errores.
+
 # v12.30.52 — 29 agosto 2026
 
 ✨ Los límites € de Techo de gastos y la configuración de EmailJS salen de "Parámetros de alertas" a sus propias pantallas

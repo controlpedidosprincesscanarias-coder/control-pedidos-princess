@@ -16118,6 +16118,49 @@ def api_externo_dali_proveedores():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/externo/dali-sap/compradores", methods=["GET"])
+def api_externo_dali_compradores():
+    """
+    GET /api/externo/dali-sap/compradores — nombre/email/móvil de los
+    usuarios de ESTA app con rol 'compras' o 'admin', para que el
+    catálogo DALI pueda firmar sus correos a proveedores (pantalla
+    "Documentación faltante") con el mismo nombre/teléfono/email que ya
+    usa esa persona en el resto de correos de Control de Pedidos, en vez
+    de duplicar esos datos en la base de datos de DALI.
+
+    (2026-08-29) Víctor, sobre la firma de esos correos: "¿puedes coger
+    la info de la ficha usuarios control pedidos? los admin son los
+    mismos y los compradores son admin en catalogo dali" — los
+    administradores de Catálogo DALI son las mismas personas ya dadas de
+    alta aquí como compradores (rol 'compras') o administradoras (rol
+    'admin'); DALI cruza por EMAIL (el único identificador que comparte
+    con la sesión de esa app) contra la lista que devuelve este
+    endpoint, así que aquí basta con exponer ambos roles sin necesidad
+    de saber nada de las cuentas de DALI. Se omiten los usuarios sin
+    email (no habría con qué cruzarlos) y los inactivos.
+
+    Sin sesión de usuario (llamada servidor a servidor) — misma firma
+    HMAC que el resto del puente DALI (ver api_externo_dali_proveedores
+    arriba), aquí también con cuerpo vacío (GET).
+    """
+    if not _dali_bridge_firma_valida(request.get_data()):
+        return jsonify({"ok": False, "error": "Firma inválida o caducada."}), 401
+    try:
+        rows = query(
+            """SELECT nombre, email, movil FROM usuarios
+               WHERE activo = 1 AND rol IN ('compras', 'admin') AND email IS NOT NULL
+               ORDER BY nombre"""
+        )
+        salida = [
+            {"nombre": r["nombre"], "email": r["email"], "movil": r["movil"] or None}
+            for r in rows
+        ]
+        return jsonify({"ok": True, "compradores": salida})
+    except Exception as exc:
+        log.error("[DALI-BRIDGE] Error listando compradores para DALI: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 # (2026-08-19) Nº máximo de intentos de envío de una fila de
 # emails_sistema_pendientes antes de dejar de reintentarse sola — ver
 # api_emails_sistema_pendientes() y api_emails_sistema_atascados().
