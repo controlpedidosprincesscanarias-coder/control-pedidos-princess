@@ -1,3 +1,18 @@
+# v12.30.69 — 31 agosto 2026
+
+✨ El desplegable de Departamento no se puede tocar hasta elegir Hotel — así el filtro por hotel (v12.30.65) siempre se aplica
+
+**Petición de Víctor**: "EXITE UN ERROR DE ORDEN AL CREAR UN PDIDO NUEVO, NO DEBERIA DEJAR ELEGIR PROMERO EL DEPARTAMENTO PARA QUE EL FILTRO SEA CORRECTO".
+
+**Causa raíz**: el filtro de Departamento por hotel (v12.30.65) solo se aplicaba al recalcular las opciones, pero nada impedía abrir y elegir Departamento ANTES de elegir Hotel — en ese momento `_departamentosExcluidosParaHotel('')` no excluye nada, así que se veía (y se podía seleccionar) el catálogo completo sin filtrar, saltándose el filtro por hotel.
+
+**Cambio**:
+- `poblarSelectDeptos()` (templates/index.html) ahora deshabilita el desplegable de Departamento (`disabled`) mientras no haya un Hotel seleccionado, y muestra el texto "— Elige primero un hotel —" en vez de "— Selecciona —". En cuanto se elige un hotel, se habilita automáticamente y se rellena ya filtrado.
+- Como esta función ya se ejecutaba en los tres puntos relevantes (al cambiar de hotel, al abrir un pedido nuevo y al abrir uno existente para editar), el habilitar/deshabilitar queda correcto en los tres casos sin tocar nada más — al editar un pedido ya existente el hotel se fija antes de repoblar Departamento, así que se habilita de inmediato con el valor guardado.
+- De paso, se ha corregido un error de nombre en `_crearPedidoDesdeComparacion()` (llamaba a una función `openNuevoPedidoModal()` inexistente, lo que rompía el prellenado de pedido desde la comparación de PDF) y se ha añadido el refiltrado explícito de Departamento tras prellenar el hotel ahí mismo, por el mismo motivo de fondo.
+
+**Verificación**: con Playwright, cargando la lógica de `poblarSelectDeptos()` de forma aislada: sin hotel el desplegable sale deshabilitado con el aviso "Elige primero un hotel"; al elegir GY se habilita y excluye "RESTAURANTE & BARES"; al cambiar a un hotel sin separar excluye "RESTAURANTE"/"BARES"; al volver a quitar el hotel se deshabilita y se vacía de nuevo; simulado también el flujo de edición (hotel fijado antes de repoblar) confirmando que queda habilitado con el departamento guardado.
+
 # v12.30.68 — 31 agosto 2026
 
 ✨ Código DALI obligatorio en Proveedores + aviso real (con nombre del proveedor en conflicto) al duplicar código SAP o DALI — antes fallaba en silencio

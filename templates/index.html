@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.68
+          V 12.30.69
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -4112,7 +4112,15 @@ function poblarSelectDeptos() {
   const hotelId = document.getElementById('p-hotel').value;
   const excluidos = _departamentosExcluidosParaHotel(hotelId);
 
-  s.innerHTML = '<option value="">— Selecciona —</option>';
+  // Orden obligatorio: sin hotel seleccionado, Departamento se deshabilita
+  // por completo — así no se puede elegir Departamento antes que Hotel y
+  // el filtro por hotel se aplica siempre correctamente.
+  s.disabled = !hotelId;
+  s.innerHTML = hotelId
+    ? '<option value="">— Selecciona —</option>'
+    : '<option value="">— Elige primero un hotel —</option>';
+  if (!hotelId) { s.value = ''; return; }
+
   G.maestros.departamentos
     .filter(d => !excluidos.has((d.nombre || '').toUpperCase()))
     .forEach(d => s.innerHTML += `<option value="${d.id}">${d.nombre}</option>`);
@@ -7102,8 +7110,11 @@ function _crearPedidoDesdeComparacion(pedidoNumSap) {
   // usuario sepa qué PDF buscar y adjuntar.
   const hotelId = val('cmp-pdf-hotel');
   closeModal('modal-comparar-pdf');
-  openNuevoPedidoModal();
+  openPedidoModal();
   setVal('p-hotel', hotelId);
+  // setVal no dispara el 'onchange' del select — hay que refiltrar/habilitar
+  // Departamento a mano, igual que en el flujo de edición.
+  poblarSelectDeptos();
   toast(`Pedido prellenado con el hotel — adjunta el PDF del pedido oficial (Nº SAP ${pedidoNumSap}) para completar el Nº de Pedido y el Total`, 'success');
 }
 

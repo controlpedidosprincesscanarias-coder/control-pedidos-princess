@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Departamento deshabilitado hasta elegir Hotel — evita saltarse el filtro por hotel (v12.30.69)
+
+- **Origen**: Víctor: "EXITE UN ERROR DE ORDEN AL CREAR UN PDIDO NUEVO, NO DEBERIA DEJAR ELEGIR PROMERO EL DEPARTAMENTO PARA QUE EL FILTRO SEA CORRECTO".
+- **Causa raíz**: el filtro de Departamento por hotel (v12.30.65) solo actuaba al recalcular las opciones del desplegable, pero nada impedía elegir Departamento antes que Hotel — sin hotel elegido `_departamentosExcluidosParaHotel('')` no excluye nada, así que se veía y se podía seleccionar el catálogo completo sin filtrar.
+- **Cambio**: `poblarSelectDeptos()` (templates/index.html) deshabilita el select de Departamento (`disabled`) mientras no haya Hotel elegido, con el texto "— Elige primero un hotel —"; se habilita solo al elegir hotel, ya con las opciones filtradas. Al reutilizar la misma función en los tres puntos ya existentes (cambio de hotel, pedido nuevo, editar pedido) el comportamiento queda correcto en los tres sin duplicar lógica. De paso se corrige `_crearPedidoDesdeComparacion()`, que llamaba a una función inexistente (`openNuevoPedidoModal`) rompiendo el prellenado de pedido desde la comparación de PDF, y se añade ahí el refiltrado explícito de Departamento tras prellenar el hotel.
+- **Verificación**: Playwright, lógica de `poblarSelectDeptos()` probada de forma aislada — sin hotel: deshabilitado + aviso; con GY: habilitado y excluye "RESTAURANTE & BARES"; con hotel sin separar: excluye "RESTAURANTE"/"BARES"; al quitar el hotel: vuelve a deshabilitarse y vaciarse; flujo de edición (hotel fijado antes de repoblar): queda habilitado con el departamento guardado.
+- **Entrega**: `templates/index.html` (badge de versión incluido), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Código DALI obligatorio en Proveedores + aviso real de duplicado (con nombre del proveedor) — antes fallaba en silencio (v12.30.68)
 
 - **Origen**: Víctor: "en el apartado proveedores, tanto el codigo SAP como el DALI son obligatorios al crear un proveedor, en caso de duplicidad de alguno de los dos codigos ahora esta realizando error silencioso, debera indicar que codigo esta duplicado nombre asociado etc para poder localizarlo y arreglarlo".
