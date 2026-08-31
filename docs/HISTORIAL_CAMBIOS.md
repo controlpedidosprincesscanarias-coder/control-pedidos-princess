@@ -25,6 +25,26 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Auditoría/limpieza, Etapa 3 (agrupada): favicons sobredimensionados + Thumbs.db (v12.30.75)
+
+- **Origen**: continuación de la auditoría general (Etapas 1-2, v12.30.73/74). Dos hallazgos independientes y de bajo riesgo, agrupados a petición del usuario.
+- **Hallazgo 1**: `static/favicon.png` y `static/favicon-180.png` eran ambos de 1024×1024 px (236 KB y 295 KB) pese a usarse como icono de pestaña y `apple-touch-icon` — el segundo debía ser 180×180 exactos por el propio estándar que le da nombre. Redimensionados a 64×64 y 180×180 respectivamente: 236 KB → 2,1 KB, 295 KB → 11,3 KB (531 KB menos en cada carga de página). Rutas sin cambios, `templates/index.html` no se toca salvo el badge de versión.
+- **Hallazgo 2**: `static/Thumbs.db` (caché de miniaturas de Windows, sin uso) seguía en el repo pese a estar ya en `.gitignore` — la regla se añadió después de que el archivo quedara trackeado. Eliminado.
+- **Verificación**: inspección visual del favicon redimensionado (sin artefactos); confirmado que nada referencia `Thumbs.db`. Sin cambios de código Python.
+- **Entrega**: `static/favicon.png`, `static/favicon-180.png`, eliminación de `static/Thumbs.db`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
+## 2026-08-31 — [Control Pedidos] Auditoría documental, Etapa 2: documento de seguridad obsoleto corregido (v12.30.74)
+
+- **Origen**: continuación de la Etapa 1 (GUIA_DESPLIEGUE.md, v12.30.73).
+- **Hallazgo**: `docs/hallazgo-seguridad-princess.md` marcaba como "Sin corregir" un fallo de contraseñas en texto plano que en realidad se corrigió en v12.29.37 (hash con werkzeug + migración transparente al primer login). El documento nunca se actualizó tras el fix.
+- **Verificación**: releído `login()`/`_verifica_y_migra_password()` actuales y las 4 rutas que escriben la columna `password` — todas usan `generate_password_hash()`/`check_password_hash()`. `init_db.py`, `models.py` e `INSTRUCCIONES_RESTAURACION.md` no crean contraseñas en claro en ningún punto.
+- **Cambio**: añadido recuadro "✅ RESUELTO" al principio del documento con el estado real; el análisis original se conserva íntegro, marcado como histórico (útil para Organizador/Chat si tienen el mismo problema pendiente).
+- **Entrega**: `docs/hallazgo-seguridad-princess.md`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Auditoría documental, Etapa 1: `GUIA_DESPLIEGUE.md` corregida (v12.30.73)
 
 - **Origen**: petición del usuario de auditar la app en busca de "fallos e incongruencias... archivos fuera de lugar, README, changelog, index, algo desactualizado". Se acordó abordarlo por etapas, documentando cada una.

@@ -1,9 +1,45 @@
 # Hallazgo de seguridad — contraseñas en texto plano (`control-pedidos-princess`)
 
+> ## ✅ RESUELTO — corregido en v12.29.37
+>
+> **Actualizado:** 31/08/2026, durante una auditoría general de la app.
+>
+> Este documento describía una vulnerabilidad real, detectada el
+> 02/08/2026 al usarse `control-pedidos-princess` como referencia para
+> el login de DALI — pero **el proyecto original ya la corrigió**, poco
+> después, en **v12.29.37** (antes de la fecha de este documento incluso
+> llegara a circular como "sin corregir" fuera de este repo). Se deja el
+> análisis original íntegro más abajo por su valor como registro, pero
+> el estado real hoy es:
+>
+> - El login (`app.py`, función `login()`) ya no compara la contraseña
+>   en el propio `SELECT`; delega en `_verifica_y_migra_password()`.
+> - Esa función compara con `check_password_hash()` (werkzeug) cuando la
+>   contraseña guardada ya es un hash (`pbkdf2:`/`scrypt:`), y solo si
+>   sigue en texto plano (cuenta antigua no migrada) hace la comparación
+>   legacy **una última vez**, rehasheando y sobreescribiendo la BD en
+>   el mismo instante — migración transparente, sin obligar a resetear
+>   nada ni cortar el acceso a nadie.
+> - El cambio de contraseña (alta, reset por token, edición de usuario)
+>   guarda siempre con `generate_password_hash()` — verificado en las 4
+>   rutas del código que escriben la columna `password`.
+> - `init_db.py`, `models.py` y `INSTRUCCIONES_RESTAURACION.md` no crean
+>   ni escriben contraseñas en texto plano en ningún punto (punto 5 de
+>   la corrección propuesta más abajo, ya cubierto).
+>
+> **Por qué se deja este documento en vez de borrarlo:** sirve de
+> referencia de cómo se detectó y corrigió, y del patrón de migración
+> transparente usado — útil si algún otro proyecto del ecosistema
+> (Organizador, Chat) tiene el mismo problema pendiente.
+
+---
+
 **Detectado:** 02/08/2026, al revisar `app.py` como referencia para el
 login de este proyecto (DALI).
 **Severidad:** Alta.
-**Estado:** Sin corregir en el proyecto original a fecha de este documento.
+**Estado:** ✅ Corregido en v12.29.37 (ver recuadro superior). El resto
+de este documento es el análisis original, sin modificar, tal como se
+escribió cuando el fallo seguía activo.
 
 ---
 

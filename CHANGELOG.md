@@ -1,3 +1,31 @@
+# v12.30.75 — 31 agosto 2026
+
+✨ Auditoría documental/limpieza (Etapa 3, agrupada): favicons sobredimensionados + archivo basura fuera de lugar
+
+**Contexto**: continuación de la auditoría general (Etapas 1-2, v12.30.73/74). Dos hallazgos de bajo riesgo y alto beneficio, agrupados por ser independientes y rápidos.
+
+**Hallazgo 1 — favicons 15-20× más pesados de lo necesario**: `static/favicon.png` (236 KB) y `static/favicon-180.png` (295 KB) eran ambos imágenes de **1024×1024 px**, a pesar de que el segundo lleva "180" en el nombre por el estándar `apple-touch-icon` (que exige exactamente 180×180). Se cargan en cada visita a la app — el navegador descarga el archivo entero aunque solo lo pinte en unos pocos píxeles, y no se benefician de la compresión gzip nueva (v12.30.72) porque son binarios, no texto. Redimensionados a su tamaño real de uso: `favicon.png` a 64×64 (nítido incluso en pantallas retina) y `favicon-180.png` a 180×180 (el estándar exacto). Resultado: 236 KB → 2,1 KB y 295 KB → 11,3 KB — **531 KB de sobrepeso eliminados de cada carga de página**, sin cambiar ni una línea de `templates/index.html` (las rutas `/static/favicon.png` y `/static/favicon-180.png` no cambian).
+
+**Hallazgo 2 — `static/Thumbs.db`**: archivo de caché de miniaturas de Windows Explorer, sin ningún uso por la aplicación, presente en el repositorio a pesar de que `.gitignore` ya lo excluye (se añadió esa regla después de que el archivo ya estuviera trackeado, por eso seguía apareciendo). Eliminado.
+
+**Verificación**: `favicon-180.png` inspeccionado visualmente tras el redimensionado — el logo se conserva nítido y sin artefactos. Ningún archivo HTML/CSS/JS referencia `Thumbs.db`. Sin cambios de código Python; no aplica `py_compile`.
+
+**Entrega**: `static/favicon.png`, `static/favicon-180.png` (reemplazados), `static/Thumbs.db` (eliminado), `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+# v12.30.74 — 31 agosto 2026
+
+✨ Auditoría documental (Etapa 2): documento de seguridad obsoleto — marcaba como "sin corregir" un fallo ya resuelto hace 33 versiones
+
+**Contexto**: continuación de la auditoría general (Etapa 1, GUIA_DESPLIEGUE.md, v12.30.73). `docs/hallazgo-seguridad-princess.md` (fechado 02/08/2026, escrito desde el proyecto DALI usando este backend como referencia de qué NO hacer) afirmaba que las contraseñas se guardan en texto plano y las compara el login sin ningún hash, con **Estado: "Sin corregir"**.
+
+**Verificación realizada antes de tocar el documento**: se releyó el `login()` actual (`app.py`, ~línea 6732) y `_verifica_y_migra_password()` — el `SELECT` ya no filtra por contraseña, y la comparación delega en `check_password_hash()` de werkzeug cuando la contraseña guardada ya es un hash; si sigue en texto plano (cuenta antigua), se compara una última vez y se rehashea al vuelo, sin resetear nada. Las 4 rutas que escriben la columna `password` (alta de usuario, cambio de contraseña, reset por token, edición) usan todas `generate_password_hash()`. `init_db.py`, `models.py` e `INSTRUCCIONES_RESTAURACION.md` no crean contraseñas en texto plano en ningún punto (punto 5 de la corrección que el propio documento proponía). **Conclusión: el hallazgo ya está corregido, desde v12.29.37** — muy anterior a la fecha del propio documento (02/08/2026), que aparentemente nunca llegó a actualizarse tras el fix.
+
+**Por qué importa**: un documento de seguridad que afirma "sin corregir" sobre un fallo ya resuelto es, en la práctica, información falsa con apariencia de autoridad — riesgo de que alguien intente "corregir" algo ya corregido, o peor, que un futuro hallazgo real se descarte por confundirse con este.
+
+**Cambio**: `docs/hallazgo-seguridad-princess.md` — añadido un recuadro "✅ RESUELTO" al principio, con el estado real y la verificación hecha, sin borrar el análisis original (se conserva íntegro, marcado como histórico, por su valor como referencia para otros proyectos del ecosistema — Organizador, Chat — que puedan tener el mismo problema pendiente).
+
+**Verificación**: solo documentación, sin cambios de código. Badge de versión en `templates/index.html` actualizado.
+
 # v12.30.73 — 31 agosto 2026
 
 ✨ Auditoría documental (Etapa 1): `GUIA_DESPLIEGUE.md` corregida — describía un despliegue que ya no existe
