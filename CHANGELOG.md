@@ -1,3 +1,32 @@
+# v12.30.66 — 31 agosto 2026
+
+✨ "Comunicado A&B" y "Comunicado Jefe Dep." se marcan solas al enviarse de verdad el correo interno — ya no editables a mano
+
+**Petición de Víctor**: "PODEMOS HACER QUE CUANDO EL CORREO INTERNO DE 'PEDIDO ENVIADO AL PROVEEDOR' VA CON COPIA AL DEPARTAMENTO A&B SE MARQUE AUTOMATICAMENTE LA CASILLA Y EN TODOS LOS CASOS QUE SE PONGA EN COPIA AL RESPONSABLE DEL DEPARTAMENTE TAMBIEN SE MARQUE LA CORRESPONDIENTE, ESTAS DOS CELDAS NO PODRAN SER MODIFICADAS POR EL USIARIO, SOLO CON EL ENVIO DEL CORREO. EN CASO DE NO TENER CORREO CONFIGURADO UN DEPARTAMENTO ENTONCES NO SE MARCARA LA DE 'COMUNICADO AL JEFE DEL DEPTO'" (sección "Comunicaciones y partes" del modal de pedido).
+
+**Cambio**:
+- Las casillas **Comunicado A&B** y **Comunicado Jefe Dep.** del modal de pedido pasan a ser de solo lectura (`disabled` en el HTML, con 🔒 en la etiqueta y tooltip explicativo) — el usuario ya no puede marcarlas ni desmarcarlas a mano, ni siquiera al guardar el formulario (dejan de enviarse en el payload de guardado, así el backend conserva siempre el valor que ya tuvieran). "Parte Rotura y Sustitución" y "Parte Ampliación" no cambian, siguen editables.
+- Se marcan solas, y solo, cuando se confirma que el correo interno de **ENVIADO AL PROVEEDOR** se ha enviado DE VERDAD (no al encolarlo, no al guardar el pedido) — en `POST /api/emails-sistema-pendientes/<id>/marcar-enviado`, el mismo endpoint que ya usaba el navegador para confirmar el envío por EmailJS.
+- **Comunicado A&B**: se marca cuando ese envío va a un departamento de COCINA/BARES/RESTAURANTE/RESTAURANTE & BARES (mismo criterio que la frase de A&B del propio correo, ver v12.30.63/64).
+- **Comunicado Jefe Dep.**: se marca cuando ese envío lleva en copia el correo del departamento (tabla `departamento_hotel_email` para ese hotel+departamento) — si el departamento no tiene correo configurado para ese hotel, no se marca, tal como pidió Víctor.
+- Dos columnas nuevas en `emails_sistema_pendientes` (`marca_comunicado_ab`, `marca_comunicado_jefe_dep`) que guardan, al encolar el correo, la intención calculada — y se aplican a `pedidos.comunicado_ab`/`comunicado_jefe_dep` (con OR sobre el valor ya guardado, nunca se desmarca sola) solo cuando se confirma el envío real.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; con Playwright se comprobó que ambas casillas quedan `disabled` en el HTML, que conservan su estado al editar un pedido (asignación programática de `.checked` sigue funcionando aunque estén deshabilitadas) y que no se re-habilitan al marcar/desmarcar CANCELADO (bug que sí ocurría con la lista de campos anterior, corregido en `_setFormCanceladoSilent`).
+
+# v12.30.65 — 31 agosto 2026
+
+✨ El desplegable de Departamento del pedido se filtra según el hotel (RESTAURANTE/BARES vs. RESTAURANTE & BARES)
+
+**Petición de Víctor**: "en el apartado pedidos, cuando se indica departamento me gustaría que esto quedara filtrado, Hoteles GY - IT - MT - y TA ven todos los departamentos menos 'RESTAURANTE & BARES' el resto de hoteles ven todos menos 'RESTAURANTE' Y 'BARES' ESTOS SERIAN DOS DEPARTAMENTOS MENOS Y EN EL PRIMER CASO UN DEPARTAMENTO MENOS, ¿ES POSIBLE?"
+
+**Cambio** (solo frontend — `templates/index.html`, sin cambios en `app.py` ni en la base de datos, el catálogo global de departamentos no se toca):
+- Nuevo desplegable de Departamento del modal de pedido (`#p-depto`), filtrado según el hotel elegido en `#p-hotel`: hoteles **GY / IT / MT / TA** (usan RESTAURANTE y BARES como departamentos separados) no ven la opción "RESTAURANTE & BARES"; el resto de hoteles (usan el departamento combinado) no ven "RESTAURANTE" ni "BARES".
+- Se refiltra automáticamente al cambiar de hotel (`onchange` en `#p-hotel`) y también al abrir el modal para editar un pedido existente (antes de fijar su departamento guardado) y al abrir uno nuevo (vuelve a mostrar el catálogo completo hasta elegir hotel).
+- Si un pedido ya tenía guardado un departamento que el filtro excluiría para su hotel (dato anterior a este cambio, o hotel corregido después), esa opción se añade igualmente al desplegable marcada como "(no habitual en este hotel)" — el filtro solo limita qué elegir de nuevo, nunca oculta ni borra lo ya guardado.
+- El filtro de departamento en el listado de Pedidos (buscador, no el modal) no se toca — sigue mostrando el catálogo completo para poder buscar cualquier pedido.
+
+**Verificación**: probado con Playwright inyectando un catálogo de hoteles/departamentos de ejemplo — hotel GY excluye correctamente "RESTAURANTE & BARES" (quedan RESTAURANTE/BARES/etc.), hotel GC excluye "RESTAURANTE" y "BARES" (queda RESTAURANTE & BARES), y un departamento "no habitual" para el hotel elegido se conserva en el desplegable con su aviso en vez de desaparecer.
+
 # v12.30.64 — 31 agosto 2026
 
 ✨ Fila "Observaciones" en el cuadro del correo interno, texto sin "Por la presente", aviso a A&B simplificado y más aire en los márgenes

@@ -25,6 +25,24 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] "Comunicado A&B" / "Comunicado Jefe Dep." se marcan solas al confirmarse el envío real del correo (v12.30.66)
+
+- **Origen**: Víctor: "PODEMOS HACER QUE CUANDO EL CORREO INTERNO DE 'PEDIDO ENVIADO AL PROVEEDOR' VA CON COPIA AL DEPARTAMENTO A&B SE MARQUE AUTOMATICAMENTE LA CASILLA Y EN TODOS LOS CASOS QUE SE PONGA EN COPIA AL RESPONSABLE DEL DEPARTAMENTE TAMBIEN SE MARQUE LA CORRESPONDIENTE, ESTAS DOS CELDAS NO PODRAN SER MODIFICADAS POR EL USIARIO, SOLO CON EL ENVIO DEL CORREO. EN CASO DE NO TENER CORREO CONFIGURADO UN DEPARTAMENTO ENTONCES NO SE MARCARA LA DE 'COMUNICADO AL JEFE DEL DEPTO'".
+- **Cambio**: "Comunicado A&B" y "Comunicado Jefe Dep." (modal de pedido, sección Comunicaciones y partes) pasan a `disabled` y dejan de enviarse en el guardado manual del pedido — solo se marcan desde el backend, en `POST /api/emails-sistema-pendientes/<id>/marcar-enviado`, cuando se confirma el envío real del correo interno ENVIADO AL PROVEEDOR: A&B si el departamento es COCINA/BARES/RESTAURANTE/RESTAURANTE & BARES, Jefe Dep. si el correo del departamento (`departamento_hotel_email`) estaba configurado y en copia (si no hay correo configurado, no se marca). Nuevas columnas `marca_comunicado_ab`/`marca_comunicado_jefe_dep` en `emails_sistema_pendientes`, calculadas al encolar y aplicadas (con OR, nunca se desmarcan solas) solo al confirmarse el envío. Se corrigió además que `_setFormCanceladoSilent` volvía a habilitar estas dos casillas al desmarcar CANCELADO.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; Playwright confirmó que ambas casillas están `disabled`, que conservan su valor al abrir un pedido para editar, y que no se reactivan al alternar el bloqueo por CANCELADO.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
+## 2026-08-31 — [Control Pedidos] El desplegable de Departamento del pedido se filtra según el hotel (v12.30.65)
+
+- **Origen**: Víctor: "en el apartado pedidos, cuando se indica departamento me gustaría que esto quedara filtrado, Hoteles GY - IT - MT - y TA ven todos los departamentos menos 'RESTAURANTE & BARES' el resto de hoteles ven todos menos 'RESTAURANTE' Y 'BARES' (...) ¿ES POSIBLE?"
+- **Cambio** (solo `templates/index.html`, catálogo de departamentos sin tocar): el desplegable de Departamento del modal de pedido se filtra según el hotel elegido — GY/IT/MT/TA (RESTAURANTE y BARES separados) no ven "RESTAURANTE & BARES"; el resto (departamento combinado) no ven "RESTAURANTE" ni "BARES". Se refiltra al cambiar de hotel y al abrir el modal (nuevo o editar). Un departamento ya guardado que el filtro excluiría para su hotel se conserva en el desplegable marcado "(no habitual en este hotel)", nunca se oculta. El filtro de búsqueda de Pedidos (listado) no se toca.
+- **Verificación**: probado con Playwright inyectando catálogo de ejemplo — GY excluye "RESTAURANTE & BARES", GC excluye "RESTAURANTE"/"BARES", y un departamento no habitual para el hotel elegido se conserva marcado en vez de desaparecer.
+- **Entrega**: `templates/index.html` (badge de versión incluido), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Fila "Observaciones" en el correo interno, texto sin "Por la presente", A&B simplificado y más márgenes (v12.30.64)
 
 - **Origen**: Víctor: "podemos incluir en el cuadro el apartado observaciones que ya tenemos en pedidos? esto siempre puede dar mas información relevante. Quizás la coletilla 'Por la presente ...' no es muy ... Otra cosa, al departamento de A&B simplemente se le informa para su control interno, no dar mas explicaciones. Me gusta el del techo de gasto. Yo en todos los casos intentaria ordenar mejor las lineas, los margenes."

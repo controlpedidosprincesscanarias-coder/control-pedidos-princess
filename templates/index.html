@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.64
+          V 12.30.66
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2286,7 +2286,7 @@ tbody tr:last-child{border-bottom:none}
         <!-- Hotel + Departamento -->
         <div class="form-group">
           <label class="form-label">Hotel *</label>
-          <select class="form-control" id="p-hotel" required></select>
+          <select class="form-control" id="p-hotel" required onchange="poblarSelectDeptos()"></select>
         </div>
         <div class="form-group">
           <label class="form-label">Departamento *</label>
@@ -2461,8 +2461,12 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-section">Comunicaciones y partes</div>
         <div class="form-group full">
           <div class="checkbox-group">
-            <label class="checkbox-item"><input type="checkbox" id="p-ab"> Comunicado A&B</label>
-            <label class="checkbox-item"><input type="checkbox" id="p-jefe"> Comunicado Jefe Dep.</label>
+            <label class="checkbox-item" title="Se marca sola al enviarse el correo interno con copia a A&amp;B — no editable a mano">
+              <input type="checkbox" id="p-ab" disabled> 🔒 Comunicado A&amp;B
+            </label>
+            <label class="checkbox-item" title="Se marca sola al enviarse el correo interno con copia al departamento — no editable a mano">
+              <input type="checkbox" id="p-jefe" disabled> 🔒 Comunicado Jefe Dep.
+            </label>
             <label class="checkbox-item"><input type="checkbox" id="p-rotura"> Parte Rotura y Sustitución</label>
             <label class="checkbox-item"><input type="checkbox" id="p-ampliacion"> Parte Ampliación</label>
           </div>
@@ -4083,10 +4087,50 @@ function poblarSelectHoteles() {
   s.innerHTML = '<option value="">— Selecciona —</option>';
   G.maestros.hoteles.forEach(h => s.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
 }
+// (2026-08-31) A petición de Víctor: los hoteles GY/IT/MT/TA tienen
+// RESTAURANTE y BARES como departamentos separados, así que para ellos no
+// tiene sentido ofrecer el departamento combinado "RESTAURANTE & BARES".
+// El resto de hoteles es al revés: gestionan un único departamento
+// combinado "RESTAURANTE & BARES" y no usan "RESTAURANTE" ni "BARES" por
+// separado. Se filtra el desplegable de Departamento según el hotel
+// elegido en el propio modal — no depende de datos nuevos en BD, solo de
+// los códigos de hotel ya existentes en el catálogo de /api/maestros.
+const HOTELES_RESTAURANTE_BARES_SEPARADOS = new Set(['GY', 'IT', 'MT', 'TA']);
+
+function _departamentosExcluidosParaHotel(hotelId) {
+  if (!hotelId) return new Set();  // sin hotel elegido aún: no filtrar nada
+  const hotel = (G.maestros.hoteles || []).find(h => String(h.id) === String(hotelId));
+  if (!hotel) return new Set();
+  return HOTELES_RESTAURANTE_BARES_SEPARADOS.has(hotel.codigo)
+    ? new Set(['RESTAURANTE & BARES'])
+    : new Set(['RESTAURANTE', 'BARES']);
+}
+
 function poblarSelectDeptos() {
   const s = document.getElementById('p-depto');
+  const valorPrevio = s.value;
+  const hotelId = document.getElementById('p-hotel').value;
+  const excluidos = _departamentosExcluidosParaHotel(hotelId);
+
   s.innerHTML = '<option value="">— Selecciona —</option>';
-  G.maestros.departamentos.forEach(d => s.innerHTML += `<option value="${d.id}">${d.nombre}</option>`);
+  G.maestros.departamentos
+    .filter(d => !excluidos.has((d.nombre || '').toUpperCase()))
+    .forEach(d => s.innerHTML += `<option value="${d.id}">${d.nombre}</option>`);
+
+  if (!valorPrevio) return;
+  if ([...s.options].some(o => o.value === valorPrevio)) {
+    s.value = valorPrevio;   // seguía en la lista filtrada: se conserva
+    return;
+  }
+  // El pedido ya tenía asignado un departamento que el filtro excluiría
+  // para este hotel (p. ej. dato guardado antes de este cambio, o hotel
+  // corregido después) — se añade igualmente al final para no ocultar ni
+  // perder lo ya guardado; el filtro solo limita las opciones NUEVAS.
+  const depExistente = (G.maestros.departamentos || []).find(d => String(d.id) === String(valorPrevio));
+  if (depExistente) {
+    s.innerHTML += `<option value="${depExistente.id}">${depExistente.nombre} (no habitual en este hotel)</option>`;
+    s.value = valorPrevio;
+  }
 }
 function poblarSelectEstados() {
   const s = document.getElementById('p-estado');
@@ -4649,6 +4693,9 @@ async function openPedidoModal(id=null) {
     const p = d.pedido;
     G.currentPedidoData = p;  // guardar para modal de eliminación
     setVal('p-hotel', p.hotel_id);
+    // Re-filtrar Departamento para el hotel de este pedido (setVal no
+    // dispara el 'onchange' del select) antes de fijar el valor guardado.
+    poblarSelectDeptos();
     setVal('p-depto', p.departamento_id);
     setVal('p-f-solicitud', p.fecha_solicitud);
     setVal('p-f-vb', p.fecha_envio_visto_bueno);
@@ -5408,10 +5455,18 @@ function onEstadoChange() {
 
 // Versión silenciosa de setFormCancelado que NO llama a onEstadoChange (evita bucle)
 function _setFormCanceladoSilent(bloqueado) {
+  // (2026-08-31) 'p-ab' y 'p-jefe' YA NO están en esta lista: a petición de
+  // Víctor esas dos casillas se marcan solas en el backend al enviarse de
+  // verdad el correo interno de "ENVIADO AL PROVEEDOR" (ver
+  // api_marcar_email_sistema_enviado en app.py) y no pueden ser tocadas
+  // por el usuario en ningún caso — llevan el atributo `disabled` fijo en
+  // el propio HTML. Así que no deben quedar sujetas al bloqueo/desbloqueo
+  // por CANCELADO, que las volvía a habilitar (`el.disabled = bloqueado`,
+  // con bloqueado=false) en cuanto el pedido dejaba de estar cancelado.
   const CAMPOS_EDIT = [
     'p-hotel','p-depto','p-f-solicitud','p-f-vb','p-f-tramit',
     'p-pedido-num','p-presup','p-observaciones','p-proveedor-input',
-    'p-ab','p-jefe','p-rotura','p-ampliacion'
+    'p-rotura','p-ampliacion'
   ];
   CAMPOS_EDIT.forEach(id => {
     const el = document.getElementById(id);
@@ -5448,6 +5503,10 @@ function _setFormCanceladoSilent(bloqueado) {
 
 function clearPedidoForm() {
   ['p-hotel','p-depto','p-pedido-num','p-presup','p-total-pedido','p-observaciones','p-nota','p-plazo-entrega','p-fecha-entrega-especifica'].forEach(id=>setVal(id,''));
+  // Sin hotel seleccionado: el desplegable de Departamento vuelve a mostrar
+  // el catálogo completo (sin el filtro por hotel de poblarSelectDeptos),
+  // en vez de quedarse con el filtrado del pedido editado anteriormente.
+  poblarSelectDeptos();
   ['p-f-vb','p-f-tramit'].forEach(id=>setVal(id,''));
   document.getElementById('p-fecha-entrega-prevista-info').style.display = 'none';
   // Resetear checkbox "tarifa acordada" — siempre desmarcado por defecto
@@ -5673,8 +5732,15 @@ async function savePedido() {
     tarifa_acordada:      document.getElementById('chk-tarifa-acordada').checked,
     entrada_albaran_num:  getAlbaranCombined(),
     estado:               val('p-estado'),
-    comunicado_ab:        document.getElementById('p-ab').checked,
-    comunicado_jefe_dep:  document.getElementById('p-jefe').checked,
+    // (2026-08-31) comunicado_ab / comunicado_jefe_dep YA NO se envían
+    // desde aquí — a petición de Víctor, esas dos casillas ya no las
+    // controla el usuario, se marcan solas en el backend cuando se
+    // confirma el envío real del correo interno (ver
+    // api_marcar_email_sistema_enviado). Al no incluir la clave en el
+    // payload, el backend conserva el valor que ya tuviera guardado
+    // (update_pedido usa data.get("comunicado_ab", valor_actual)) en vez
+    // de sobrescribirlo con el estado (siempre deshabilitado/sin marcar)
+    // de estos dos checkboxes en el formulario.
     parte_rotura:         document.getElementById('p-rotura').checked,
     parte_ampliacion:     document.getElementById('p-ampliacion').checked,
     proveedor_id:         val('p-proveedor') || null,

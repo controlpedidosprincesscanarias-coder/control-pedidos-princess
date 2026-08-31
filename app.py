@@ -237,6 +237,37 @@ def _auto_migrate():
                 )
             except Exception as e:
                 log.warning(f"No se pudo añadir la columna proveedores.codigo_dali: {e}")
+            # ── Marcado automático de "Comunicado A&B" / "Comunicado Jefe
+            # Dep." (2026-08-31) ──────────────────────────────────────────
+            # Víctor: "cuando el correo interno de 'PEDIDO ENVIADO AL
+            # PROVEEDOR' va con copia al departamento A&B se marque
+            # automáticamente la casilla y en todos los casos que se ponga
+            # en copia al responsable del departamento también se marque la
+            # correspondiente (...) no podrán ser modificadas por el
+            # usuario, solo con el envío del correo." Estas dos columnas
+            # nuevas van en emails_sistema_pendientes (no en pedidos, que ya
+            # tiene comunicado_ab/comunicado_jefe_dep desde antes): guardan,
+            # en el momento en que se ENCOLA el correo "ENVIADO AL
+            # PROVEEDOR", si ese envío concreto va a incluir a A&B y/o al
+            # correo del departamento — para poder aplicarlo a pedidos.* SOLO
+            # cuando se confirme que el correo se ha enviado de verdad (ver
+            # api_marcar_email_sistema_enviado), nunca antes. Puesta aquí, en
+            # el bloque protegido, por el mismo motivo que codigo_dali/
+            # total_pedido/sujeto_seguimiento arriba.
+            try:
+                cur.execute(
+                    "ALTER TABLE emails_sistema_pendientes "
+                    "ADD COLUMN IF NOT EXISTS marca_comunicado_ab BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo añadir la columna emails_sistema_pendientes.marca_comunicado_ab: {e}")
+            try:
+                cur.execute(
+                    "ALTER TABLE emails_sistema_pendientes "
+                    "ADD COLUMN IF NOT EXISTS marca_comunicado_jefe_dep BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo añadir la columna emails_sistema_pendientes.marca_comunicado_jefe_dep: {e}")
             # ── Correo de departamento por hotel (2026-08-28) ────────────────
             # A petición de Víctor: cada hotel tiene un correo distinto para
             # el mismo departamento (RESTAURANTE de JN != RESTAURANTE de GY),
@@ -2093,7 +2124,9 @@ def _log_email(db, pedido_id, tipo, destinatario, asunto, enviado, error=None):
 
 def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinatario: str,
                                      asunto: str, cuerpo_html: str, cuerpo_text: str,
-                                     cc_emails: str = "", retraso_segundos: int = 300) -> None:
+                                     cc_emails: str = "", retraso_segundos: int = 300,
+                                     marca_comunicado_ab: bool = False,
+                                     marca_comunicado_jefe_dep: bool = False) -> None:
     """
     (2026-08-14) Encola un correo de cambio de estado en emails_sistema_pendientes
     con retraso (columna visible_en = NOW() + retraso_segundos), en vez de
@@ -2119,6 +2152,13 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
     Ventaja adicional sobre el envío inmediato de antes: ya no depende de que
     quien hizo el cambio no cierre la pestaña — lo despacha cualquier sesión
     abierta, la que sea.
+
+    marca_comunicado_ab / marca_comunicado_jefe_dep: (2026-08-31) si este
+    correo concreto va a llevar en copia a A&B / al buzón del departamento
+    — se guardan en la propia fila de la cola para que, cuando se confirme
+    que el correo se ha enviado de verdad (ver api_marcar_email_sistema_
+    enviado), se marquen solas las casillas "Comunicado A&B" / "Comunicado
+    Jefe Dep." del pedido — nunca antes, y nunca a mano por el usuario.
     """
     try:
         db = get_db()
@@ -2127,12 +2167,14 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
             """UPDATE emails_sistema_pendientes
                SET destinatario=%s, asunto=%s, cuerpo_html=%s, cuerpo_text=%s,
                    cc_emails=%s, creado_en=NOW(),
+                   marca_comunicado_ab=%s, marca_comunicado_jefe_dep=%s,
                    visible_en=NOW() + make_interval(secs => %s)
                WHERE pedido_id=%s AND evento_codigo=%s
                  AND enviado=FALSE
                  AND (en_proceso_desde IS NULL OR en_proceso_desde < NOW() - INTERVAL '2 minutes')
                RETURNING id""",
             (destinatario, asunto, cuerpo_html, cuerpo_text, cc_emails,
+             marca_comunicado_ab, marca_comunicado_jefe_dep,
              retraso_segundos, pedido_id, evento_codigo)
         )
         if cur.fetchone() is not None:
@@ -2141,10 +2183,12 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
         cur.execute(
             """INSERT INTO emails_sistema_pendientes
                (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
-                cc_emails, pedido_id, visible_en)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, NOW() + make_interval(secs => %s))""",
+                cc_emails, pedido_id, marca_comunicado_ab, marca_comunicado_jefe_dep,
+                visible_en)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW() + make_interval(secs => %s))""",
             (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
-             cc_emails, pedido_id, retraso_segundos)
+             cc_emails, pedido_id, marca_comunicado_ab, marca_comunicado_jefe_dep,
+             retraso_segundos)
         )
         db.commit()
     except Exception as exc:
@@ -2299,6 +2343,15 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     if not pedido:
         return pendientes
 
+    # (2026-08-31) Definido aquí arriba (antes solo existía más abajo, junto
+    # al párrafo introductorio) porque ahora también hace falta pronto, para
+    # calcular _incluye_ab_email (ver más abajo, junto al correo de
+    # departamento) — mismo criterio en los dos sitios: los hoteles con
+    # departamento "RESTAURANTE & BARES" combinado son los que reciben aviso
+    # de A&B en el correo ENVIADO AL PROVEEDOR.
+    _DEPARTAMENTOS_AB = {"COCINA", "BARES", "RESTAURANTE", "RESTAURANTE & BARES"}
+    _dept_nombre_i = (pedido.get('departamento_nombre') or '').strip()
+
     # Motivo real del cambio de estado (CANCELADO / DENEGADO POR DIRECCION
     # GENERAL): se guarda en historial_estados.nota en el momento de la
     # transición (ver update_pedido / denegar_expediente), NO en
@@ -2351,14 +2404,40 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     # coincida con quien hizo el cambio: es el buzón de un departamento, no
     # una persona concreta a la que no haga falta avisar de lo que acaba de
     # hacer.
+    # (2026-08-31) _incluye_jefe_depto_email — a petición de Víctor, sobre
+    # el correo interno de "PEDIDO ENVIADO AL PROVEEDOR": "en todos los
+    # casos que se ponga en copia al responsable del departamento también
+    # se marque la correspondiente [casilla]" — a diferencia de A&B (solo
+    # aplica a ciertos departamentos), aquí "todos los casos" es CUALQUIER
+    # departamento, siempre que tenga correo configurado; pero sigue
+    # limitado a ESE correo (ENVIADO AL PROVEEDOR), igual que A&B — no debe
+    # marcarse por un correo de ENTREGADO/CANCELADO/etc. que también vaya
+    # con copia al departamento. Se usa más abajo, al encolar el correo,
+    # para que la casilla "Comunicado Jefe Dep." del pedido se marque sola
+    # SOLO cuando el envío real lleve ese destinatario — "en caso de no
+    # tener correo configurado un departamento entonces no se marcará".
+    _incluye_jefe_depto_email = False
     if pedido.get("hotel_id") and pedido.get("departamento_id"):
         _depto_email_row = row_to_dict(query(
             "SELECT email, email2 FROM departamento_hotel_email WHERE hotel_id=%s AND departamento_id=%s",
             (pedido["hotel_id"], pedido["departamento_id"]), one=True
         ))
-        for _e in _emails_usuario(_depto_email_row):
+        _emails_depto = _emails_usuario(_depto_email_row)
+        _incluye_jefe_depto_email = bool(_emails_depto) and estado_nuevo == "ENVIADO AL PROVEEDOR"
+        for _e in _emails_depto:
             if _e not in _todos_internos:
                 _todos_internos.append(_e)
+
+    # (2026-08-31) _incluye_ab_email — mismo criterio que la frase de A&B en
+    # el párrafo introductorio del correo ENVIADO AL PROVEEDOR (ver más
+    # abajo, _intro_html/_intro_text): departamentos COCINA/BARES/
+    # RESTAURANTE/RESTAURANTE & BARES. Se usa para marcar sola la casilla
+    # "Comunicado A&B" del pedido cuando el correo que se envía de verdad es
+    # justo ese, el que informa a A&B.
+    _incluye_ab_email = (
+        estado_nuevo == "ENVIADO AL PROVEEDOR"
+        and _dept_nombre_i.upper() in _DEPARTAMENTOS_AB
+    )
 
     # (2026-08-28) Contactos adicionales de notificación — a petición de
     # Víctor: además del comprador, rol hotel y correo de departamento
@@ -2717,8 +2796,8 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         # RESTAURANTE & BARES"), añadir que también se comunica a A&B para
         # su control. Nombres exactos de departamento tomados de
         # models.py/SQL_STATEMENTS (semilla de la tabla departamentos).
-        _DEPARTAMENTOS_AB = {"COCINA", "BARES", "RESTAURANTE", "RESTAURANTE & BARES"}
-        _dept_nombre_i = (pedido.get('departamento_nombre') or '').strip()
+        # (_DEPARTAMENTOS_AB / _dept_nombre_i ya están definidos más arriba,
+        # justo tras cargar `pedido` — se reutilizan aquí.)
         _proveedor_nombre_i = pedido.get('proveedor_nombre') or '—'
         # (2026-08-31) Víctor pidió un texto más conciso y corporativo (4-5
         # líneas), que confirme la tramitación, nombre al proveedor en la
@@ -2892,6 +2971,8 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             cuerpo_html=body_html_i,
             cuerpo_text=body_text_i,
             cc_emails=",".join(_todos_internos[1:]),
+            marca_comunicado_ab=_incluye_ab_email,
+            marca_comunicado_jefe_dep=_incluye_jefe_depto_email,
         )
 
     return pendientes
@@ -16628,12 +16709,37 @@ def api_reactivar_email_sistema(email_id):
 @app.route("/api/emails-sistema-pendientes/<int:email_id>/marcar-enviado", methods=["POST"])
 @login_required
 def api_marcar_email_sistema_enviado(email_id):
-    """POST /api/emails-sistema-pendientes/<id>/marcar-enviado — tras enviarlo vía EmailJS."""
+    """POST /api/emails-sistema-pendientes/<id>/marcar-enviado — tras enviarlo vía EmailJS.
+
+    (2026-08-31) A petición de Víctor: "cuando el correo interno de PEDIDO
+    ENVIADO AL PROVEEDOR va con copia al departamento A&B se marque
+    automáticamente la casilla y en todos los casos que se ponga en copia
+    al responsable del departamento también se marque la correspondiente
+    (...) solo con el envío del correo" — este es justo el único sitio
+    donde se confirma que un correo se ha enviado DE VERDAD (lo llama el
+    navegador tras el ACK de EmailJS), así que es el punto correcto para
+    aplicar las marcas — nunca al encolar (ver enviar_emails_estado /
+    _encolar_email_pedido_retrasado, que solo calculan y guardan la
+    intención en marca_comunicado_ab/marca_comunicado_jefe_dep de esta
+    misma fila). Se usa OR sobre el valor ya guardado en pedidos: una vez
+    marcada, una casilla nunca se vuelve a desmarcar sola.
+    """
     try:
-        execute(
-            "UPDATE emails_sistema_pendientes SET enviado=TRUE, enviado_en=NOW() WHERE id=%s",
+        cur = execute(
+            "UPDATE emails_sistema_pendientes SET enviado=TRUE, enviado_en=NOW() "
+            "WHERE id=%s "
+            "RETURNING pedido_id, marca_comunicado_ab, marca_comunicado_jefe_dep",
             (email_id,)
         )
+        fila = cur.fetchone()
+        if fila and fila.get("pedido_id") and (fila.get("marca_comunicado_ab") or fila.get("marca_comunicado_jefe_dep")):
+            execute(
+                "UPDATE pedidos SET "
+                "comunicado_ab = (comunicado_ab OR %s), "
+                "comunicado_jefe_dep = (comunicado_jefe_dep OR %s) "
+                "WHERE id=%s",
+                (bool(fila.get("marca_comunicado_ab")), bool(fila.get("marca_comunicado_jefe_dep")), fila["pedido_id"])
+            )
         get_db().commit()
         return jsonify({"ok": True})
     except Exception as exc:
