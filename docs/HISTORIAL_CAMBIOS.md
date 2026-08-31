@@ -25,6 +25,17 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Campo "Código DALI" en proveedores + solo admin crea/modifica nombre y códigos + corregido el guardado de contactos para compras (v12.30.56)
+
+- **Origen**: Víctor, sobre la ficha de proveedores: "en la ficha de proveedores, necesito junto a la casilla CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos trabajando con los dos sistemas y vamos asociando tanto artículos como proveedores. Ambas celdas de edicion manual por los roles con permiso de edición y creacion de proveedores, creo que solo es admin la creacion y modificacion del nombre y codigo, los compradores pueden editar contactos ( esto ultimo verificalo porque creo que les da error o no hace nada cuando intentan guardar los cambios="
+- **Comprobado (bug confirmado)**: compras no podía guardar ningún cambio en un proveedor, ni siquiera solo contactos. El modal oculta nombre/código para compras, así que `saveProveedor()` nunca enviaba `codigo`; `update_proveedor()` lo exigía siempre antes de procesar los contactos ("El código SAP es obligatorio"), rompiendo cualquier guardado de compras.
+- **Aclarado con Víctor**: la creación de proveedores (`POST /api/proveedores`) llevaba desde el 10-ago-2026 abierta también a compras (decisión explícita de aquella entrega). Confirmó que ahora quiere que quede solo para admin, igual que la modificación de nombre/código — compras se queda con la edición de contactos/observaciones de los proveedores ya existentes.
+- **Cambio**: columna nueva `codigo_dali TEXT` en `proveedores` (migración automática); input "Código DALI" junto a "Código SAP" en el modal (creación y edición-admin; en modo compras se muestran ambos en solo-lectura). `POST /api/proveedores` ahora exige admin (antes admin+compras); botón "+ Nuevo proveedor" oculto para compras. `PUT /api/proveedores/<id>`: nombre/código SAP/código DALI solo se toman del payload si el rol es admin — si no, se conservan de BD (mismo patrón que `sujeto_seguimiento`), lo que de paso corrige el bug de guardado para compras.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión + modal + tabla), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] El correo interno de "ENVIADO AL PROVEEDOR" también lleva ahora el botón de descarga del PDF del pedido (v12.30.55)
 
 - **Origen**: Víctor, tras revisar el correo interno real de un pedido enviado al proveedor (sin ningún botón visible): "¿no habíamos modificado tanto el correo interno de comunicación estado ENVIADO AL PROVEEDOR como el que se envía al mismo proveedor para este asunto, para que adjúntense un botón y poder descargar el PDF del pedido en destino?"

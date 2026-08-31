@@ -1424,6 +1424,19 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS dashboard_prefs TEXT"
             )
+
+            # ── Código DALI del proveedor (2026-08-31) ──────────────────────
+            # Víctor: "en la ficha de proveedores, necesito junto a la casilla
+            # CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos
+            # trabajando con los dos sistemas y vamos asociando tanto
+            # artículos como proveedores." — columna nueva, editable a mano
+            # (no hay integración automática con la app DALI todavía, es solo
+            # el dato de referencia cruzada mientras dura la migración a los
+            # dos sistemas en paralelo). Igual que "codigo" (SAP), solo texto
+            # libre — un proveedor puede no tener código DALI todavía.
+            cur.execute(
+                "ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS codigo_dali TEXT"
+            )
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -8374,10 +8387,10 @@ def get_proveedores():
     q = request.args.get("q", "").strip()
     if q:
         rows = query(
-            "SELECT id,codigo,nombre,observaciones,sujeto_seguimiento FROM proveedores WHERE activo=1 AND nombre ILIKE %s ORDER BY nombre",
+            "SELECT id,codigo,codigo_dali,nombre,observaciones,sujeto_seguimiento FROM proveedores WHERE activo=1 AND nombre ILIKE %s ORDER BY nombre",
             (f"%{q}%",))
     else:
-        rows = query("SELECT id,codigo,nombre,observaciones,sujeto_seguimiento FROM proveedores WHERE activo=1 ORDER BY nombre")
+        rows = query("SELECT id,codigo,codigo_dali,nombre,observaciones,sujeto_seguimiento FROM proveedores WHERE activo=1 ORDER BY nombre")
     result = _prov_with_contactos(rows)
     # Rol hotel: solo consulta — se eliminan observaciones de la respuesta
     if session.get("rol") == "hotel":
@@ -8388,11 +8401,21 @@ def get_proveedores():
 @app.route("/api/proveedores", methods=["POST"])
 @login_required
 def create_proveedor():
-    if session.get("rol") not in ("admin", "compras"):
-        return jsonify({"error": "Acceso restringido"}), 403
+    # (2026-08-31) Víctor: "creo que solo es admin la creacion y
+    # modificacion del nombre y codigo, los compradores pueden editar
+    # contactos". Antes (2026-08-10) compras también podía dar de alta
+    # proveedores nuevos con nombre y código SAP propios — decisión
+    # explícita de aquella entrega. Víctor la revisa ahora y pide que la
+    # creación (que implica fijar nombre/código) quede solo para admin;
+    # compras deja de poder crear proveedores nuevos, pero conserva la
+    # edición de contactos/observaciones en los ya existentes (ver
+    # update_proveedor más abajo).
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido — solo un administrador puede crear proveedores nuevos"}), 403
     data   = request.get_json(silent=True) or {}
     nombre = (data.get("nombre") or "").strip()
     codigo = (data.get("codigo") or "").strip()
+    codigo_dali = (data.get("codigo_dali") or "").strip() or None
     if not nombre:
         return jsonify({"error": "Nombre requerido"}), 400
     if not codigo:
@@ -8410,16 +8433,13 @@ def create_proveedor():
     if rows_to_list(dup_codigo):
         return jsonify({"error": f"Ya existe un proveedor con el código SAP '{codigo}'"}), 409
     db  = get_db()
-    # (2026-08-10) sujeto_seguimiento solo lo puede fijar un admin —
-    # compras puede seguir dando de alta proveedores con normalidad, pero
-    # no marcar/desmarcar el seguimiento de "Comparar listado PDF" (rol
-    # restringido también en esa pantalla). Si no es admin, el proveedor
-    # nuevo se crea siempre con el valor por defecto (FALSE), aunque el
-    # payload trajera otra cosa.
-    sujeto_seg = bool(data.get("sujeto_seguimiento", False)) if session.get("rol") == "admin" else False
+    # sujeto_seguimiento: solo admin puede llegar aquí ahora, así que se
+    # toma directamente del payload (ya no hace falta la rama "compras
+    # siempre FALSE" de antes, porque compras ya no crea proveedores).
+    sujeto_seg = bool(data.get("sujeto_seguimiento", False))
     cur = execute(
-        "INSERT INTO proveedores (codigo,nombre,observaciones,sujeto_seguimiento) VALUES (%s,%s,%s,%s) RETURNING id",
-        (codigo, nombre, data.get("observaciones",""), sujeto_seg)
+        "INSERT INTO proveedores (codigo,codigo_dali,nombre,observaciones,sujeto_seguimiento) VALUES (%s,%s,%s,%s,%s) RETURNING id",
+        (codigo, codigo_dali, nombre, data.get("observaciones",""), sujeto_seg)
     )
     new_id = cur.fetchone()["id"]
     # Insertar contactos
@@ -8449,13 +8469,36 @@ def create_proveedor():
 def update_proveedor(pid):
     if session.get("rol") not in ("admin", "compras"):
         return jsonify({"error": "Acceso restringido"}), 403
-    data   = request.get_json(silent=True) or {}
-    nombre = (data.get("nombre") or "").strip()
-    codigo = (data.get("codigo") or "").strip()
-    if not nombre:
-        return jsonify({"error": "Nombre requerido"}), 400
-    if not codigo:
-        return jsonify({"error": "El código SAP es obligatorio"}), 400
+    data = request.get_json(silent=True) or {}
+    # (2026-08-31) Víctor: "creo que solo es admin la creacion y
+    # modificacion del nombre y codigo, los compradores pueden editar
+    # contactos ( esto ultimo verificalo porque creo que les da error o no
+    # hace nada cuando intentan guardar los cambios". Confirmado: antes,
+    # nombre/codigo eran obligatorios en TODO PUT sin importar el rol, pero
+    # el frontend nunca enviaba "codigo" para compras (el campo ni se
+    # muestra editable para ese rol) — así que cualquier guardado de
+    # compras (aunque solo tocara contactos) fallaba siempre con "El código
+    # SAP es obligatorio". Se corrige con el mismo patrón ya usado para
+    # sujeto_seguimiento: nombre/codigo/codigo_dali solo se toman del
+    # payload si el rol es admin; si no, se conservan los valores ya
+    # guardados en BD (nunca se exige ni se sobrescriben con lo que traiga
+    # el payload de un no-admin, y ya no hace falta que el payload los
+    # incluya siquiera).
+    if session.get("rol") == "admin":
+        nombre = (data.get("nombre") or "").strip()
+        codigo = (data.get("codigo") or "").strip()
+        codigo_dali = (data.get("codigo_dali") or "").strip() or None
+        if not nombre:
+            return jsonify({"error": "Nombre requerido"}), 400
+        if not codigo:
+            return jsonify({"error": "El código SAP es obligatorio"}), 400
+    else:
+        _actual = query("SELECT nombre,codigo,codigo_dali FROM proveedores WHERE id=%s", (pid,), one=True)
+        if not _actual:
+            return jsonify({"error": "Proveedor no encontrado"}), 404
+        nombre = _actual["nombre"]
+        codigo = _actual["codigo"]
+        codigo_dali = _actual["codigo_dali"]
     # Anti-duplicado: nombre en uso por otro proveedor
     dup_nombre = query(
         "SELECT id FROM proveedores WHERE activo=1 AND LOWER(nombre)=LOWER(%s) AND id!=%s", (nombre, pid)
@@ -8478,11 +8521,11 @@ def update_proveedor(pid):
     if session.get("rol") == "admin":
         sujeto_seg = bool(data.get("sujeto_seguimiento", False))
     else:
-        _actual = query("SELECT sujeto_seguimiento FROM proveedores WHERE id=%s", (pid,), one=True)
-        sujeto_seg = bool(_actual["sujeto_seguimiento"]) if _actual else False
+        _actual2 = query("SELECT sujeto_seguimiento FROM proveedores WHERE id=%s", (pid,), one=True)
+        sujeto_seg = bool(_actual2["sujeto_seguimiento"]) if _actual2 else False
     execute(
-        "UPDATE proveedores SET codigo=%s,nombre=%s,observaciones=%s,sujeto_seguimiento=%s WHERE id=%s",
-        (codigo, nombre, data.get("observaciones",""), sujeto_seg, pid)
+        "UPDATE proveedores SET codigo=%s,codigo_dali=%s,nombre=%s,observaciones=%s,sujeto_seguimiento=%s WHERE id=%s",
+        (codigo, codigo_dali, nombre, data.get("observaciones",""), sujeto_seg, pid)
     )
     # Reemplazar contactos (el DELETE cascada también borra sus filas en
     # proveedor_contacto_hoteles vía ON DELETE CASCADE)

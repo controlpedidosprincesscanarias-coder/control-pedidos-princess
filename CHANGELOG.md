@@ -1,3 +1,21 @@
+# v12.30.56 — 31 agosto 2026
+
+✨ Nuevo campo "Código DALI" en la ficha de proveedores + solo admin puede crear/modificar nombre y códigos + corregido el guardado de contactos para compras
+
+**Petición de Víctor** (capturas de la ficha de "ABEL LORENZO HENRIQUEZ"): "en la ficha de proveedores, necesito junto a la casilla CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos trabajando con los dos sistemas y vamos asociando tanto artículos como proveedores. Ambas celdas de edicion manual por los roles con permiso de edición y creacion de proveedores, creo que solo es admin la creacion y modificacion del nombre y codigo, los compradores pueden editar contactos ( esto ultimo verificalo porque creo que les da error o no hace nada cuando intentan guardar los cambios="
+
+**Comprobado (bug confirmado)**: sí, compras no podía guardar NINGÚN cambio en un proveedor — ni siquiera solo contactos. El modal oculta nombre/código para compras (no se los deja editar), así que `saveProveedor()` nunca enviaba `codigo` en el payload para ese rol, pero `update_proveedor()` lo exigía siempre ("El código SAP es obligatorio") antes de llegar a tocar los contactos — cualquier guardado de compras fallaba con ese error, tal como Víctor sospechaba.
+
+**Aclarado con Víctor**: antes (10 agosto 2026) se había decidido explícitamente que compras SÍ podía crear proveedores nuevos (con nombre y código SAP propios) además de admin. Al preguntarle si esta petición debía revertir también eso, confirmó que sí — quiere que la creación de proveedores quede restringida a admin igual que la modificación de nombre/código, y compras se quede solo con la edición de contactos y observaciones de los ya existentes.
+
+**Cambio**:
+- Columna nueva `codigo_dali TEXT` en `proveedores` (migración automática al arrancar, como el resto de columnas de esta tabla). Texto libre, sin validación de formato ni de unicidad (a diferencia del código SAP) — es solo referencia cruzada manual mientras conviven ambos sistemas.
+- Input "Código DALI" añadido junto a "Código SAP" en el modal de proveedores (creación y edición-admin). Para compras, en modo edición, ahora se muestran ambos códigos en modo solo-lectura (antes ni el código SAP se mostraba en absoluto en ese modo).
+- `POST /api/proveedores` (creación): ahora exige rol admin (antes admin+compras). El botón "+ Nuevo proveedor" se oculta para compras.
+- `PUT /api/proveedores/<id>` (edición): nombre/código SAP/código DALI ahora solo se toman del payload cuando el rol es admin; si no, se conservan los valores ya guardados en BD — mismo patrón ya usado para `sujeto_seguimiento`. Esto, de paso, corrige el bug: como ya no se exigen estos campos quien no sea admin, el guardado de solo-contactos de compras deja de fallar.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores.
+
 # v12.30.55 — 31 agosto 2026
 
 ✨ El correo interno de "ENVIADO AL PROVEEDOR" también lleva ahora el botón de descarga del PDF del pedido

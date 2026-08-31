@@ -1337,7 +1337,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.55
+          V 12.30.56
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1602,7 +1602,7 @@ tbody tr:last-child{border-bottom:none}
           <div class="table-wrap">
             <table>
               <thead>
-                <tr><th>Código</th><th>Nombre</th><th>Contactos</th><th>Observaciones</th><th></th></tr>
+                <tr><th>Código SAP</th><th>Código DALI</th><th>Nombre</th><th>Contactos</th><th>Observaciones</th><th></th></tr>
               </thead>
               <tbody id="proveedores-tbody"></tbody>
             </table>
@@ -2519,12 +2519,15 @@ tbody tr:last-child{border-bottom:none}
       <button class="close-btn" onclick="closeModal('modal-proveedor')">✕</button>
     </div>
     <div class="modal-body">
-      <!-- Modo edición: nombre como texto fijo para no-admin -->
+      <!-- Modo edición: nombre/códigos como texto fijo para no-admin -->
       <div class="form-group" id="pv-nombre-group" style="margin-bottom:12px">
         <label class="form-label" style="font-weight:700;color:var(--text-secondary)">Proveedor</label>
         <div id="pv-nombre-display" style="font-size:1rem;font-weight:600;padding:6px 0;color:var(--text)"></div>
+        <div style="font-size:.78rem;color:var(--text-secondary)" id="pv-codigos-display"></div>
       </div>
-      <!-- Modo creación / admin: campos nombre y código editables -->
+      <!-- Modo creación / admin: campos nombre y códigos editables. -->
+      <!-- (2026-08-31) Solo admin puede crear/modificar nombre, código SAP -->
+      <!-- y código DALI — ver saveProveedor()/update_proveedor() en app.py. -->
       <div class="form-grid" id="pv-create-fields" style="display:none;grid-template-columns:1fr 1fr;margin-bottom:4px">
         <div class="form-group" style="grid-column:1/-1">
           <label class="form-label">Nombre del proveedor <span style="color:#e74c3c">*</span></label>
@@ -2534,7 +2537,10 @@ tbody tr:last-child{border-bottom:none}
           <label class="form-label">Código SAP <span style="color:#e74c3c">*</span></label>
           <input class="form-control" id="pv-codigo-input" placeholder="Código SAP…">
         </div>
-        <div class="form-group"><!-- spacer --></div>
+        <div class="form-group">
+          <label class="form-label">Código DALI</label>
+          <input class="form-control" id="pv-codigo-dali-input" placeholder="Código DALI…">
+        </div>
       </div>
 
       <!-- ── CONTACTOS MÚLTIPLES ──────────────────────────────────── -->
@@ -5900,10 +5906,16 @@ let _provCache = {};
 // ── Mostrar/ocultar controles de admin en proveedores ─────────────────────
 function _refreshProvAdminControls() {
   const isAdmin = G.rol === 'admin';
-  // "Nuevo proveedor" también para comprador (rol 'compras'), igual que en
-  // el backend (create_proveedor ahora acepta admin+compras). La importación
-  // masiva por Excel se mantiene solo para admin.
-  const puedeCrear = G.rol === 'admin' || G.rol === 'compras';
+  // (2026-08-31) Víctor: "creo que solo es admin la creacion y
+  // modificacion del nombre y codigo". Antes (2026-08-10) "Nuevo
+  // proveedor" también estaba disponible para comprador (rol 'compras'),
+  // igual que en el backend de entonces — Víctor revisa ahora ese criterio
+  // y pide que la creación de proveedores quede solo para admin (compras
+  // sigue pudiendo editar contactos/observaciones de los ya existentes,
+  // ver openProveedorModal/saveProveedor). El backend (create_proveedor)
+  // ya exige admin también — esto solo oculta el botón para que compras
+  // no llegue a ver una opción que el servidor va a rechazar.
+  const puedeCrear = isAdmin;
   const btnNuevo = document.getElementById('btn-nuevo-proveedor');
   if (btnNuevo) btnNuevo.style.display = puedeCrear ? 'inline-flex' : 'none';
   const btnImport = document.getElementById('btn-importar-prov-trigger');
@@ -5993,6 +6005,7 @@ async function loadProveedores() {
     return `
     <tr>
       <td style="color:var(--text-secondary);font-size:.85rem">${p.codigo||'—'}</td>
+      <td style="color:var(--text-secondary);font-size:.85rem">${p.codigo_dali||'—'}</td>
       <td><strong>${p.nombre}</strong></td>
       <td style="font-size:.85rem;line-height:1.5">${contactos}</td>
       <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.observaciones||'')}">${p.observaciones||'—'}</td>
@@ -6152,9 +6165,15 @@ function openProveedorModal(pid) {
     document.getElementById('pv-create-fields').style.display = 'grid';
     setVal('pv-nombre-input', p.nombre||'');
     setVal('pv-codigo-input', p.codigo||'');
+    setVal('pv-codigo-dali-input', p.codigo_dali||'');
   } else {
     document.getElementById('pv-nombre-group').style.display = 'block';
     document.getElementById('pv-nombre-display').textContent = p.nombre || '';
+    // (2026-08-31) Solo lectura para compras: nombre/código SAP/código
+    // DALI son solo-admin, pero conviene que compras siga viéndolos aunque
+    // no pueda tocarlos (antes ni el código SAP se mostraba en este modo).
+    document.getElementById('pv-codigos-display').textContent =
+      `SAP: ${p.codigo || '—'}   ·   DALI: ${p.codigo_dali || '—'}`;
     document.getElementById('pv-create-fields').style.display = 'none';
   }
   pvSetContactos(p.contactos || []);
@@ -6179,6 +6198,13 @@ function _pvAplicarPermisoSeguimiento(esAdmin) {
 }
 
 function openNuevoProveedorModal() {
+  // (2026-08-31) Guardia defensiva, igual que el guardado — el botón ya
+  // está oculto para no-admin, esto evita el 403 silencioso si se llegara
+  // a invocar igualmente (p.ej. atajo de teclado o estado obsoleto en pantalla).
+  if (G.rol !== 'admin') {
+    showFormAlert('Solo un administrador puede crear proveedores nuevos.', { title: '🔒 Acción no disponible' });
+    return;
+  }
   G.editingProveedorId = null;
   document.getElementById('pv-nombre-group').style.display = 'none';
   document.getElementById('pv-create-fields').style.display = 'grid';
@@ -6187,6 +6213,7 @@ function openNuevoProveedorModal() {
   document.getElementById('btn-borrar-proveedor').style.display = 'none';
   setVal('pv-nombre-input', '');
   setVal('pv-codigo-input', '');
+  setVal('pv-codigo-dali-input', '');
   pvSetContactos([]);
   document.getElementById('pv-obs').value = '';
   document.getElementById('pv-sujeto-seguimiento').checked = false;
@@ -6203,6 +6230,11 @@ async function saveProveedor() {
     return;
   }
   const isNew = !G.editingProveedorId;
+  // (2026-08-31) Solo admin crea proveedores nuevos — ver openNuevoProveedorModal.
+  if (isNew && G.rol !== 'admin') {
+    showFormAlert('Solo un administrador puede crear proveedores nuevos.', { title: '🔒 Acción no disponible' });
+    return;
+  }
   const body = {
     observaciones: document.getElementById('pv-obs').value.trim(),
     sujeto_seguimiento: document.getElementById('pv-sujeto-seguimiento').checked,
@@ -6216,10 +6248,17 @@ async function saveProveedor() {
     if (!codigo) { toast('El código SAP es obligatorio', 'error'); return; }
     body.nombre = nombre;
     body.codigo = codigo;
+    body.codigo_dali = val('pv-codigo-dali-input');
     const r = await api('/api/proveedores', 'POST', body);
     if (r.error) { toast(r.error, 'error'); return; }
     toast('Proveedor creado correctamente', 'success');
   } else {
+    // (2026-08-31) nombre/código SAP/código DALI son ahora solo-admin —
+    // ver update_proveedor() en app.py, que ya no exige estos campos ni
+    // toca su valor cuando el que guarda no es admin (los conserva de BD).
+    // Antes, para compras, este bloque no enviaba "codigo" en absoluto y
+    // el backend lo exigía siempre → guardado de contactos roto para
+    // compras ("les da error o no hace nada"); ya no hace falta enviarlo.
     const createFields = document.getElementById('pv-create-fields');
     if (createFields.style.display !== 'none') {
       const nombre = val('pv-nombre-input');
@@ -6228,6 +6267,7 @@ async function saveProveedor() {
       if (!codigo) { toast('El código SAP es obligatorio', 'error'); return; }
       body.nombre = nombre;
       body.codigo = codigo;
+      body.codigo_dali = val('pv-codigo-dali-input');
     } else {
       body.nombre = document.getElementById('pv-nombre-display').textContent.trim();
     }
