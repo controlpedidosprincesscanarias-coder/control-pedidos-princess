@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] El correo interno de cambio de estado pasa de Bcc a CC visible + lista de destinatarios en el cuerpo (v12.30.67)
+
+- **Origen**: Víctor confirmó primero que solo se envía un correo con todos los destinatarios juntos ("SOLO SE ENVIA UN CORREO Y VAN TODOS LOS DESTINATARIOS JUNTOS EN EL MISMO ¿VERDAD?") y a continuación pidió: "ESTE CORREO INTERNO, ME GUSTARIA QUE NO FUERA EN OCULTO, ES INTERESANTE QUE TODOS LOS INVOLUCRADOS SEPAN QUIENES ESTAN INFORMADOS".
+- **Cambio**: el correo interno de cambio de estado (`cambio_estado_interno`) pasa de `bcc` a `cc` al enviarse por EmailJS (`_enviarEmailsSistemaPendientes`, templates/index.html) — el resto de correos de la misma cola (reclamación al proveedor, resúmenes, solicitudes de acceso) siguen en Bcc, sin cambios. Como red de seguridad — la copia visible depende de que la plantilla de EmailJS tenga un campo "Cc" enlazado (hay que añadirlo a mano en las 3 cuentas, instrucciones dejadas en Admin → EmailJS) — el propio cuerpo del correo (HTML y texto) añade ahora "Aviso enviado también a: ..." con la lista completa de destinatarios.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; HTML renderizado y revisado con el nuevo bloque de destinatarios; Playwright confirmó que el frontend carga sin errores de JS.
+- **Pendiente de Víctor**: configurar el campo "Cc" en las 3 plantillas de EmailJS para que la copia sea realmente visible en la cabecera del correo (instrucciones en el propio panel Admin → EmailJS).
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] "Comunicado A&B" / "Comunicado Jefe Dep." se marcan solas al confirmarse el envío real del correo (v12.30.66)
 
 - **Origen**: Víctor: "PODEMOS HACER QUE CUANDO EL CORREO INTERNO DE 'PEDIDO ENVIADO AL PROVEEDOR' VA CON COPIA AL DEPARTAMENTO A&B SE MARQUE AUTOMATICAMENTE LA CASILLA Y EN TODOS LOS CASOS QUE SE PONGA EN COPIA AL RESPONSABLE DEL DEPARTAMENTE TAMBIEN SE MARQUE LA CORRESPONDIENTE, ESTAS DOS CELDAS NO PODRAN SER MODIFICADAS POR EL USIARIO, SOLO CON EL ENVIO DEL CORREO. EN CASO DE NO TENER CORREO CONFIGURADO UN DEPARTAMENTO ENTONCES NO SE MARCARA LA DE 'COMUNICADO AL JEFE DEL DEPTO'".

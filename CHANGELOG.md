@@ -1,3 +1,18 @@
+# v12.30.67 — 31 agosto 2026
+
+✨ El correo interno de cambio de estado deja de ir en copia oculta (Bcc) — pasa a CC visible + lista de destinatarios en el propio correo
+
+**Petición de Víctor**: primero preguntó "SOLO SE ENVIA UN CORREO Y VAN TODOS LOS DESTINATARIOS JUNTOS EN EL MISMO ¿VERDAD?" (confirmado: sí, un único envío por EmailJS, con el primer comprador en "Para" y el resto en copia oculta) y a continuación pidió: "ESTE CORREO INTERNO, ME GUSTARIA QUE NO FUERA EN OCULTO, ES INTERESANTE QUE TODOS LOS INVOLUCRADOS SEPAN QUIENES ESTAN INFORMADOS".
+
+**Cambio**:
+- El correo interno de cambio de estado del pedido (evento `cambio_estado_interno`: ENVIADO AL PROVEEDOR / ENTREGA PARCIAL / ENTREGADO / CANCELADO / DENEGADO) pasa de mandarse con el resto de destinatarios en `bcc` (copia oculta) a mandarse en `cc` (copia visible) al llamar a EmailJS — así cualquiera que lo reciba puede ver en la cabecera del correo a quién más se ha avisado.
+- El resto de correos que comparten la misma cola de envío (reclamación automática al proveedor —los compradores en copia NUNCA deben ser visibles para el proveedor externo—, resúmenes de comparativas, solicitudes de acceso, etc.) **no cambian**, siguen en Bcc: el cambio se limita exactamente al correo interno del que se ha hablado en esta conversación.
+- **Red de seguridad**: como la copia visible depende de que la plantilla de EmailJS tenga un campo "Cc" enlazado a un encabezado real (algo que hay que configurar a mano en las 3 cuentas de Admin → EmailJS, documentado ahí mismo con instrucciones), el propio cuerpo del correo interno (HTML y texto plano) ahora incluye también, por escrito, "Aviso enviado también a: ..." con la lista completa de destinatarios — así el objetivo de Víctor (transparencia sobre quién está informado) se cumple igualmente aunque el campo CC de EmailJS tarde en configurarse o no llegue a funcionar como se espera.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; HTML del correo renderizado con datos de ejemplo, revisado visualmente el nuevo bloque "Aviso enviado también a:"; comprobado con Playwright que el resto del frontend carga sin errores de JS tras el cambio en `_enviarEmailsSistemaPendientes`.
+
+**Pendiente por parte de Víctor**: para que el CC salga realmente visible (y no solo listado en el texto del correo), hay que añadir en las 3 plantillas de EmailJS (Admin → EmailJS) un campo de destinatario "Cc" enlazado a la variable `cc` — mismo procedimiento que ya está hecho para `bcc`. Instrucciones dejadas en el propio panel de Admin → EmailJS.
+
 # v12.30.66 — 31 agosto 2026
 
 ✨ "Comunicado A&B" y "Comunicado Jefe Dep." se marcan solas al enviarse de verdad el correo interno — ya no editables a mano

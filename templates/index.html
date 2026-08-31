@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.66
+          V 12.30.67
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -8501,11 +8501,22 @@ async function loadEmailjsConfig() {
         </div>
         <div style="font-size:10.5px;color:#888;margin-top:8px">
           Rellena las 3 cuentas con sus credenciales completas (misma plantilla en las tres, mismos campos
-          <code>to_email</code>/<code>bcc</code>/<code>reply_to</code>/<code>subject</code>/<code>message</code>) —
+          <code>to_email</code>/<code>cc</code>/<code>bcc</code>/<code>reply_to</code>/<code>subject</code>/<code>message</code>) —
           en cuanto los "Envíos contados" lleguen al umbral, el sistema pasa solo a la SIGUIENTE cuenta del ciclo
           (1→2→3→1→...) y reinicia el contador a 0, sin desplegar nada. Si la siguiente cuenta no tiene las
           credenciales completas, prueba con la de después, recorriendo las 3 antes de rendirse. Se avisará en
           🔍 Integridad.
+          <br><br>
+          <b>⚠️ Campo <code>cc</code> nuevo (2026-08-31):</b> el correo interno de cambio de estado del pedido
+          (ENVIADO AL PROVEEDOR / ENTREGA PARCIAL / ENTREGADO / CANCELADO / DENEGADO) ahora manda el resto de
+          destinatarios en copia VISIBLE (<code>cc</code>) en vez de oculta (<code>bcc</code>), para que todos
+          los implicados vean quién más está informado. Para que EmailJS entregue esa copia visible de verdad,
+          entra en cada una de las 3 plantillas (emailjs.com → Email Templates) y añade un campo de destinatario
+          "Cc" enlazado a la variable <code>cc</code> (mismo procedimiento que ya tienes hecho para <code>bcc</code>),
+          en las 3 cuentas. Mientras no lo hagas, ese correo sigue llegando con normalidad (el <code>cc</code> nuevo
+          simplemente se ignora si la plantilla no lo tiene enlazado) — y el propio cuerpo del correo también lista
+          por escrito "Aviso enviado también a: ..." como respaldo, así que nadie deja de enterarse de quién está en
+          copia aunque tardes en configurar esto.
         </div>
 
         <!-- (2026-08-19) Cola de correos de sistema pendientes de enviar — ver
@@ -11194,13 +11205,39 @@ async function _enviarEmailsSistemaPendientes() {
     if (!r || !r.ok || !r.pendientes || !r.pendientes.length) return;
     for (const p of r.pendientes) {
       try {
-        await enviarEmailJS({
+        // (2026-08-31) A petición de Víctor: "este correo interno, me
+        // gustaría que no fuera en oculto, es interesante que todos los
+        // involucrados sepan quiénes están informados" — el correo
+        // interno de cambio de estado de pedido (evento_codigo
+        // "cambio_estado_interno": ENVIADO AL PROVEEDOR / ENTREGA
+        // PARCIAL / ENTREGADO / CANCELADO / DENEGADO) pasa de ir en
+        // "bcc" (copia oculta) a "cc" (copia visible) en el envío real
+        // por EmailJS. El resto de correos de esta misma cola —
+        // reclamación automática al proveedor (compradores en copia,
+        // pero NUNCA visibles para el proveedor externo), resúmenes de
+        // comparativas, solicitudes de acceso, etc. — siguen yendo en
+        // Bcc sin cambios, es lo correcto para ellos.
+        //
+        // IMPORTANTE: para que EmailJS entregue de verdad la copia
+        // visible hace falta que la plantilla (Admin → EmailJS, las 3
+        // cuentas) tenga un campo "cc" enlazado a un encabezado real de
+        // copia — si esa plantilla solo tiene "bcc" configurado, este
+        // "cc" nuevo puede llegar vacío/ignorado a ojos del destinatario.
+        // Por eso el propio cuerpo del correo interno (ver body_html_i /
+        // body_text_i en enviar_emails_estado(), app.py) también lista
+        // "Aviso enviado también a: ..." como red de seguridad, para que
+        // la transparencia que pidió Víctor se cumpla igualmente aunque
+        // el encabezado CC no llegue a estar bien configurado todavía.
+        const esCorreoInternoPedido = p.evento_codigo === 'cambio_estado_interno';
+        const payloadEmailJS = {
           to_email: p.destinatario,
           subject:  p.asunto,
           message:  p.cuerpo_html || p.cuerpo_text || '',
           reply_to: p.destinatario,
-          bcc:      p.cc_emails || '',
-        });
+        };
+        if (esCorreoInternoPedido) payloadEmailJS.cc  = p.cc_emails || '';
+        else                       payloadEmailJS.bcc = p.cc_emails || '';
+        await enviarEmailJS(payloadEmailJS);
         // (2026-08-20) El correo YA se ha enviado DE VERDAD por EmailJS en
         // este punto. Antes, si esta llamada de confirmación fallaba (red,
         // sesión caducada, pestaña recargándose...), la fila se quedaba

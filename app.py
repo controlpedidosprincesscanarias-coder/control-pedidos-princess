@@ -2893,7 +2893,28 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             _label_motivo = "Motivo de la denegación" if estado_nuevo == "DENEGADO POR DIRECCION GENERAL" else "Motivo de la cancelación"
             _motivo_html = _motivo_estado.replace("\n", "<br>")
             body_html_i += f'<p style="margin-top:14px"><b>{_label_motivo}:</b><br>{_motivo_html}</p>'
-        body_html_i += '<p style="margin-top:18px;font-size:11.5px;color:#888">Aviso automático del sistema de Control de Pedidos — Princess Hotels &amp; Resorts.</p>'
+        # (2026-08-31) A petición de Víctor: "me gustaría que no fuera en
+        # oculto, es interesante que todos los involucrados sepan quiénes
+        # están informados" — este correo interno pasa de ir en Bcc a ir en
+        # CC visible (ver cambio en _enviarEmailsSistemaPendientes, en
+        # templates/index.html: para evento_codigo == "cambio_estado_
+        # interno" ahora se manda como `cc` en vez de `bcc` a EmailJS — el
+        # resto de correos de esta misma cola, p. ej. la reclamación
+        # automática al proveedor, siguen en Bcc sin cambios). Como red de
+        # seguridad — por si la plantilla de EmailJS todavía no tiene un
+        # campo "cc" enlazado a un encabezado real de copia visible (hace
+        # falta añadirlo a mano en las 3 cuentas, ver Admin → EmailJS) — se
+        # lista también aquí, dentro del propio cuerpo, a quién se ha
+        # enviado el aviso: así el objetivo de Víctor (transparencia sobre
+        # quién está informado) se cumple aunque el encabezado CC de
+        # EmailJS falle o tarde en configurarse.
+        _destinatarios_aviso_txt = ", ".join(_todos_internos) if _todos_internos else "—"
+        body_html_i += (
+            '<p style="margin-top:14px;font-size:11.5px;color:#888">'
+            f'<b>Aviso enviado también a:</b> {_destinatarios_aviso_txt}'
+            '</p>'
+        )
+        body_html_i += '<p style="margin-top:8px;font-size:11.5px;color:#888">Aviso automático del sistema de Control de Pedidos — Princess Hotels &amp; Resorts.</p>'
         body_html_i += '</div></div>'
 
         _INTRO_ESTADO_TXT = {
@@ -2959,6 +2980,8 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         if estado_nuevo in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL") and _motivo_estado:
             _label_motivo_txt = "Motivo de la denegación" if estado_nuevo == "DENEGADO POR DIRECCION GENERAL" else "Motivo de la cancelación"
             body_text_i += f"\n\n{_label_motivo_txt}:\n{_motivo_estado}"
+        # (ver comentario equivalente en body_html_i, más arriba)
+        body_text_i += f"\n\nAviso enviado también a: {_destinatarios_aviso_txt}"
         body_text_i += f"\n\n{_SEP}\nAviso automático del sistema de Control de Pedidos — Princess Hotels & Resorts."
 
         for dest in _todos_internos:
