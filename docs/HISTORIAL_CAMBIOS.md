@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos ↔ DALI] Norma documentada: el cruce por email para la firma de DALI solo mira el email principal, nunca email2 (sin cambio funcional) (v12.30.54)
+
+- **Origen**: al probar la firma del correo de DALI (endpoint de v12.30.53), apareció una colisión real de datos: dos usuarios de esta app comparten el mismo email principal — `comprascan` (Víctor, cuenta real, con móvil) y `usuario prueba` (cuenta de pruebas, sin móvil) — que hacía que DALI cogiera la cuenta equivocada. Resuelto del lado de DALI (prefiere, entre varias coincidencias, la que tiene móvil — ver `HISTORIAL.md` de `dali-sap-articulos-app`, v0.90/v1.19.8).
+- **Aviso de Víctor al validar ese arreglo**: "tener en cuenta que este mismo correo tambien es correo secundario en otro usuario, asi que podemos poner como norma que solo mire en el primer correo de cada usuario".
+- **Comprobado**: `GET /api/externo/dali-sap/compradores` ya seleccionaba solo `email` (columna principal), nunca `email2`, desde que se creó — sin cambio de código necesario. Se documenta explícitamente en el docstring del endpoint como decisión deliberada, para que no se "mejore" sin querer añadiendo `email2` al cruce en el futuro (reintroduciría el mismo tipo de colisión).
+- **Verificación**: `python3 -m py_compile app.py models.py` sin errores.
+- **Entrega**: solo `app.py` (comentario), `templates/index.html` (badge de versión) y este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-29 — [Control Pedidos ↔ DALI] Nuevo endpoint del puente: nombre/email/móvil de compradores y admins, para la firma de los correos de "Documentación faltante" de DALI (v12.30.53)
 
 - **Origen del cambio**: petición sobre DALI, no sobre esta app — Víctor pidió mejorar el correo de "Documentación faltante" de `dali-sap-articulos-app` (más profesional, petición elegante de imagen por referencia, y una firma "al estilo del resto de correos que se envían a los proveedores desde control pedidos" con nombre, teléfono y correo del admin que gestiona el envío). Al investigar, la tabla `usuarios` de DALI nunca ha tenido columna de teléfono, ni la sesión de esa app lo guarda en ningún sitio.

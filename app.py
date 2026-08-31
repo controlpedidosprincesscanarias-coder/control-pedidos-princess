@@ -16142,6 +16142,21 @@ def api_externo_dali_compradores():
     Sin sesión de usuario (llamada servidor a servidor) — misma firma
     HMAC que el resto del puente DALI (ver api_externo_dali_proveedores
     arriba), aquí también con cuerpo vacío (GET).
+
+    (2026-08-31) Norma explícita a petición de Víctor, tras detectar una
+    colisión real entre dos cuentas con el mismo email principal ("¿puedes
+    coger la info de la ficha usuarios control pedidos?" derivó en que dos
+    usuarios distintos tenían el mismo `email`, y DALI cogía el que no
+    tenía móvil): esta consulta SOLO mira `email` (el principal, único por
+    convención de uso aunque no forzado por una constraint UNIQUE), nunca
+    `email2` — Víctor: "tener en cuenta que este mismo correo tambien es
+    correo secundario en otro usuario, asi que podemos poner como norma
+    que solo mire en el primer correo de cada usuario". `email2` puede
+    repetirse a propósito entre varias cuentas (para que más de una
+    persona reciba copia de avisos), así que cruzar también por ahí
+    multiplicaría las colisiones en vez de evitarlas. Si en el futuro
+    hiciera falta ampliar este cruce a `email2`, que sea una decisión
+    deliberada y no un descuido de "más datos es mejor".
     """
     if not _dali_bridge_firma_valida(request.get_data()):
         return jsonify({"ok": False, "error": "Firma inválida o caducada."}), 401

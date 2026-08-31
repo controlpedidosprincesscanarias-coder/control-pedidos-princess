@@ -1,3 +1,13 @@
+# v12.30.54 — 31 agosto 2026
+
+✨ Norma documentada en `/api/externo/dali-sap/compradores`: el cruce por email para la firma de DALI solo mira el email principal, nunca `email2` (sin cambio funcional)
+
+**Contexto**: al probar la firma del correo de "Documentación faltante" de DALI (v12.30.53), apareció una colisión real — dos usuarios de esta app comparten el mismo email principal (`comprascan`, la cuenta real de Víctor, y `usuario prueba`, una cuenta de pruebas sin móvil) — resuelta del lado de DALI prefiriendo, entre varias coincidencias, la que tiene móvil (ver su propio CHANGELOG/HISTORIAL.md, v1.19.8). Al validarlo, Víctor avisó de un riesgo relacionado: "tener en cuenta que este mismo correo tambien es correo secundario en otro usuario, asi que podemos poner como norma que solo mire en el primer correo de cada usuario".
+
+**Comprobado**: este endpoint (creado en v12.30.53) ya seleccionaba solo `email`, nunca `email2`, desde el principio — no hacía falta ningún cambio de código. Pero tampoco estaba dicho como decisión deliberada en ningún sitio, así que se documenta explícitamente en el docstring para que quien lo toque más adelante no lo "mejore" añadiendo `email2` al cruce sin saber que eso reintroduciría el mismo tipo de colisión de email que costó varias iteraciones diagnosticar del lado de DALI.
+
+**Verificación**: `python3 -m py_compile app.py models.py` sin errores.
+
 # v12.30.53 — 29 agosto 2026
 
 ✨ Nuevo endpoint del puente con el catálogo DALI: expone nombre/email/móvil de los compradores y administradores, para que DALI pueda firmar sus correos a proveedores con esos mismos datos
