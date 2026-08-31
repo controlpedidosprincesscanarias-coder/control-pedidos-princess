@@ -25,6 +25,42 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Fila "Observaciones" en el correo interno, texto sin "Por la presente", A&B simplificado y más márgenes (v12.30.64)
+
+- **Origen**: Víctor: "podemos incluir en el cuadro el apartado observaciones que ya tenemos en pedidos? esto siempre puede dar mas información relevante. Quizás la coletilla 'Por la presente ...' no es muy ... Otra cosa, al departamento de A&B simplemente se le informa para su control interno, no dar mas explicaciones. Me gusta el del techo de gasto. Yo en todos los casos intentaria ordenar mejor las lineas, los margenes."
+- **Cambio** (cuadro/márgenes: en todos los estados del correo interno; redacción: solo ENVIADO AL PROVEEDOR): nueva fila Observaciones en el cuadro (omitida en CANCELADO/DENEGADO, ya mostrado aparte como motivo); "Confirmamos que..." sustituye a "Por la presente se confirma..."; aviso a A&B reducido a "Se informa también al departamento de A&B para su control interno."; se mantiene la frase de exceso de techo de v12.30.63; más margen entre bloques y más padding en el cuadro en los 5 estados del correo.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; HTML renderizado para caso completo (A&B + exceso + observaciones) y caso simple, capturas revisadas.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
+## 2026-08-31 — [Control Pedidos] El aviso de exceso de techo de gastos se menciona también en el párrafo introductorio (v12.30.63)
+
+- **Origen**: Víctor: "Mantén el cuadro de datos exactamente igual. Redacta un aviso interno profesional, conciso y corporativo. El texto debe confirmar la tramitación del pedido, informar al responsable del departamento y, en pedidos de Cocina/Bares/Restaurantes, notificar también a A&B. Si el pedido supera el techo de gastos establecido, indícalo explícitamente en el texto para que no pase desapercibido. Evita redundancias y limita el mensaje a 4–5 líneas."
+- **Cambio, solo para ENVIADO AL PROVEEDOR** (HTML y texto plano): párrafo introductorio reestructurado en frases cortas independientes (tramitación + proveedor, departamento informado, A&B si aplica, cierre de novedades); nueva frase de aviso explícito cuando el pedido superó el techo de gastos y fue autorizado por Dirección General, sin repetir el detalle que ya da el recuadro amarillo existente justo debajo. Cuadro de datos sin cambios.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; HTML renderizado para las 4 combinaciones (A&B sí/no × exceso sí/no) — capturas revisadas, 3 a 6 líneas según el caso, sin redundancia con el recuadro de detalle.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
+## 2026-08-31 — [Control Pedidos] Texto del correo interno "ENVIADO AL PROVEEDOR" más conciso y corporativo, nombrando al proveedor (v12.30.62)
+
+- **Origen**: Víctor: "Redacta un aviso interno corporativo, conciso y estructurado. El mensaje debe confirmar la tramitación del pedido, indicar el proveedor y especificar que A&B queda informado cuando el pedido pertenece a Cocina, Bares o Restaurantes. Evita frases redundantes y limita el texto a 4–5 líneas. El cuadro esta perfecto, si el pedido enviado supera el techo de gasto, tambien se incluye esta información y se pone en copia a quien corresponda segun el apartado Notificaciones Adicionales, ahi esta incluido Dpto. A&B Chef Director Compras etc" — feedback sobre el párrafo entregado en v12.30.61.
+- **Cambio, solo para ENVIADO AL PROVEEDOR** (HTML y texto plano): párrafo introductorio reescrito, más corto, nombrando al proveedor explícitamente ("...al proveedor **{proveedor}**, quedando el departamento de **{departamento}** informado de la gestión..."); se mantiene la frase de A&B para COCINA/BARES/RESTAURANTE/RESTAURANTE & BARES. Redacción ajustada para no cerrar la frase justo tras el nombre del proveedor (evita doble punto cuando el proveedor termina en "S.L."/"S.A."). Sin cambios en la tabla ni en el mecanismo de exceso de techo de gasto (ya correcto desde el 2026-08-28, solo verificado).
+- **Verificación**: `python3 -m py_compile app.py` sin errores; HTML final renderizado con proveedores con forma jurídica al final del nombre (sin doble punto) y capturas revisadas para COCINA (con A&B) y RECEPCIÓN (sin ella).
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
+## 2026-08-31 — [Control Pedidos] El correo interno de "ENVIADO AL PROVEEDOR" pasa de aviso de cambio de estado a notificación de tramitación al departamento (+ A&B) (v12.30.61)
+
+- **Origen**: Víctor: "ahora se utilizara para que todos sepan que el pedido ya ha sido enviado al proveedor y cuando, entonces ya no es necesario poner en este caso Estado Anterior y Estado Nuevo (...) por la presente se informa al responsable del Dpto. X que su pedido ha sido tramitado correctamente al proveedor y entramos en el proceso de espera para la entrega (...) en los casos de que el departamento sea COCINA, BARES, RESTAURANTE Y/O RESTAURANTE & BARES, también se comunica al departamento de A&B para su control (...) dar las instrucciones pertinentes para descargar el PDF".
+- **Cambio, solo para ENVIADO AL PROVEEDOR** (el resto de estados de este correo no cambian): se retiran las filas Estado anterior/Estado nuevo; nuevo párrafo introductorio dirigido al departamento del pedido, con línea adicional para A&B cuando el departamento es COCINA/BARES/RESTAURANTE/RESTAURANTE & BARES (nombres exactos de `models.py`); frase explicativa añadida antes del botón de descarga del PDF.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; HTML final renderizado y revisado con datos de ejemplo (COCINA con línea de A&B, ECONOMATO sin ella, tabla sin filas de estado).
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Botón "Reactivar" para correos de sistema descartados + purga automática a los 2 días (v12.30.60)
 
 - **Origen**: Víctor, sobre "Cola de correos de sistema pendientes" (admin → EmailJS y Cola de Correo): "esto, una vez descartado no tiene sentido seguir llenado la pantalla, podemos poner otro botón para reactivar y que a los 2 días cauque y se elimine el envío descartado".

@@ -1,3 +1,59 @@
+# v12.30.64 — 31 agosto 2026
+
+✨ Fila "Observaciones" en el cuadro del correo interno, texto sin "Por la presente", aviso a A&B simplificado y más aire en los márgenes
+
+**Petición de Víctor**: "podemos incluir en el cuadro el apartado observaciones que ya tenemos en pedidos? esto siempre puede dar mas información relevante. Quizás la coletilla 'Por la presente ...' no es muy ... Otra cosa, al departamento de A&B simplemente se le informa para su control interno, no dar mas explicaciones. Me gusta el del techo de gasto. Yo en todos los casos intentaria ordenar mejor las lineas, los margenes."
+
+**Cambio** (cuadro y márgenes: en TODOS los estados del correo interno; redacción del párrafo: solo `estado_nuevo == "ENVIADO AL PROVEEDOR"`):
+- Nueva fila **Observaciones** en el cuadro de datos, con el contenido de `pedido.observaciones`, cuando el pedido tiene alguna — se omite en CANCELADO/DENEGADO POR DIRECCIÓN GENERAL porque ahí ese mismo campo ya se muestra aparte como "Motivo de la cancelación/denegación" (evita duplicarlo).
+- Párrafo introductorio: se quita la coletilla "Por la presente se confirma..." y se sustituye por un "Confirmamos que el pedido ha sido tramitado y enviado correctamente al proveedor **{proveedor}**..." más directo.
+- Aviso a A&B simplificado a una sola frase de trámite: "Se informa también al departamento de A&B para su control interno." (antes explicaba "por tratarse de un pedido de {departamento}", ya innecesario porque el departamento consta en la tabla).
+- Se mantiene sin cambios la frase de aviso de exceso de techo de gastos añadida en v12.30.63 ("Me gusta el del techo de gasto").
+- Más aire y mejor jerarquía visual en todo el correo (aplica a los 5 estados: ENVIADO AL PROVEEDOR/ENTREGA PARCIAL/ENTREGADO/CANCELADO/DENEGADO): más margen entre el título, el párrafo introductorio, el recuadro de exceso, el cuadro de datos y el botón de descarga; celdas del cuadro con más relleno (`cellpadding` 6→8) e interlineado propio.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; HTML final renderizado con datos de ejemplo — caso completo (Cocina, con A&B, con exceso de techo y con observaciones) y caso simple (Recepción, sin ninguno de esos extras) — capturas revisadas antes de entregar.
+
+# v12.30.63 — 31 agosto 2026
+
+✨ El aviso de exceso de techo de gastos se menciona también en el propio párrafo introductorio (no solo en el recuadro)
+
+**Petición de Víctor**: "Mantén el cuadro de datos exactamente igual. Redacta un aviso interno profesional, conciso y corporativo. El texto debe confirmar la tramitación del pedido, informar al responsable del departamento y, en pedidos de Cocina/Bares/Restaurantes, notificar también a A&B. Si el pedido supera el techo de gastos establecido, indícalo explícitamente en el texto para que no pase desapercibido. Evita redundancias y limita el mensaje a 4–5 líneas."
+
+**Cambio, solo para `estado_nuevo == "ENVIADO AL PROVEEDOR"`** (HTML y texto plano):
+- Párrafo introductorio recortado y reestructurado en frases cortas independientes (sin "quedando...; cualquier..." enlazado): confirma tramitación + nombra al proveedor, informa al departamento, añade la frase de A&B cuando aplica, y cierra con la disponibilidad para novedades — evitando repetir ideas entre frases.
+- Nueva frase de aviso explícito cuando el pedido superó el techo de gastos (transición `ENVIADO AL PROVEEDOR` desde `PENDIENTE Vº Bº DIRECCIÓN GENERAL` con expediente de exceso resuelto): "**Este pedido superó el techo de gastos mensual y fue autorizado por Dirección General** (detalle más abajo)." — en negrita/color de aviso en HTML. No repite el detalle (familia, importe, exceso, quién autorizó), que sigue únicamente en el recuadro amarillo ya existente justo debajo (`_aviso_exceso_html`/`_aviso_exceso_text`), para no ser redundante.
+- Sin cambios en el cuadro de datos ("Mantén el cuadro de datos exactamente igual") ni en el recuadro de detalle de exceso ni en el reparto de copias (`ESTADO_NOTIF_EXCESO_TECHO_DG` / Notificaciones Adicionales) — ya correctos.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; HTML final renderizado para las 4 combinaciones posibles (departamento A&B sí/no × exceso de techo sí/no) — capturas revisadas: caso base 3 líneas, caso con A&B 4 líneas, caso con exceso 4 líneas, caso combinado (A&B + exceso) 6 líneas — todas legibles y sin redundancia con el recuadro de detalle.
+
+# v12.30.62 — 31 agosto 2026
+
+✨ Texto del correo interno "ENVIADO AL PROVEEDOR" más conciso y corporativo, nombrando al proveedor
+
+**Petición de Víctor**: "Redacta un aviso interno corporativo, conciso y estructurado. El mensaje debe confirmar la tramitación del pedido, indicar el proveedor y especificar que A&B queda informado cuando el pedido pertenece a Cocina, Bares o Restaurantes. Evita frases redundantes y limita el texto a 4–5 líneas. El cuadro esta perfecto, si el pedido enviado supera el techo de gasto, tambien se incluye esta información y se pone en copia a quien corresponda segun el apartado Notificaciones Adicionales, ahi esta incluido Dpto. A&B Chef Director Compras etc" — feedback directo sobre el párrafo introductorio entregado en v12.30.61.
+
+**Cambio, solo para `estado_nuevo == "ENVIADO AL PROVEEDOR"`** (HTML y texto plano):
+- Párrafo introductorio reescrito, más corto y sin frases redundantes: "Por la presente se confirma la tramitación y envío del pedido al proveedor **{proveedor}**, quedando el departamento de **{departamento}** informado de la gestión. Cualquier novedad sobre la entrega (confirmación, fecha, entregas parciales) se comunicará en su momento." — ahora nombra al proveedor explícitamente en el propio texto (antes solo aparecía en la tabla).
+- Se mantiene la frase adicional para COCINA/BARES/RESTAURANTE/RESTAURANTE & BARES: "Al tratarse de un pedido de {Departamento}, se informa también al departamento de A&B para su control."
+- Se evita a propósito terminar la frase justo después del nombre del proveedor: muchos proveedores llevan forma jurídica al final ("S.L.", "S.A.") y un punto de cierre inmediatamente después producía doble punto ("...S.L.."); la redacción ahora sigue con una coma en ese punto.
+- Sin cambios en la tabla de datos ("El cuadro esta perfecto") ni en el mecanismo de aviso/copia por exceso de techo de gasto (`_aviso_exceso_html`/`_aviso_exceso_text` + regla `ESTADO_NOTIF_EXCESO_TECHO_DG` en Notificaciones Adicionales) — ya funcionaba correctamente desde el 2026-08-28, verificado en el código, no requiere cambios.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; HTML final renderizado con datos de ejemplo y proveedores con forma jurídica ("Suministros Hoteleros S.L.", "Distribuciones Ejemplo S.A.") para comprobar que no aparece doble punto; capturas revisadas para COCINA (con línea de A&B, 5 líneas de texto) y RECEPCIÓN (sin ella, 3 líneas) antes de entregar.
+
+# v12.30.61 — 31 agosto 2026
+
+✨ El correo interno de "ENVIADO AL PROVEEDOR" pasa de aviso genérico de cambio de estado a notificación de tramitación al departamento (+ A&B en cocina/sala)
+
+**Petición de Víctor**, con capturas del correo interno real: "vamos a dar mas contexto ahora a este correo interno, ahora se utilizara para que todos sepan que el pedido ya ha sido enviado al proveedor y cuando, entonces ya no es necesario poner en este caso Estado Anterior y Estado Nuevo (...) simplemente hay que indicar que el pedido ha sido tramitado correctamente con el proveedor, indicar que por la presente se informa al responsable del Dpto. X que su pedido ha sido tramitado correctamente al proveedor y entramos en el proceso de espera para la entrega, que informaremos de cualquier otra novedad (...) en los casos de que el departamento sea COCINA, BARES, RESTAURANTE Y/O RESTAURANTE & BARES, también habrá que indicar que por la presente se comunica también al departamento de A&B para su control (...) dar las instrucciones pertinentes para que se puedan descargar el pedido PDF con el botón al uso".
+
+**Cambio, solo para `estado_nuevo == "ENVIADO AL PROVEEDOR"`** (el resto de estados de este mismo correo — ENTREGA PARCIAL/ENTREGADO/CANCELADO/DENEGADO — no cambian, siguen mostrando Estado anterior/Estado nuevo con normalidad, ahí sí aporta):
+- Se retiran las filas "Estado anterior" y "Estado nuevo" de la tabla (HTML y texto plano).
+- El párrafo introductorio pasa de ser un aviso genérico a un texto dirigido al departamento: "Por la presente se informa al responsable del departamento de **{departamento}** que su pedido ha sido tramitado correctamente y enviado al proveedor. A partir de ahora entramos en el proceso de espera para la entrega — se informará de cualquier otra novedad (confirmación del proveedor, fecha de entrega, entregas parciales, etc.)."
+- Si el departamento del pedido es COCINA, BARES, RESTAURANTE o RESTAURANTE & BARES (nombres exactos de `models.py`), se añade además: "Por la presente se comunica también al departamento de A&B para su control."
+- El botón de descarga del PDF (ya existente desde v12.30.55) ahora va precedido de una frase explicando qué es: "Puede descargar el documento del pedido tramitado y enviado al proveedor pulsando el siguiente botón:".
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; renderizado del HTML final probado con datos de ejemplo (departamento COCINA con línea de A&B, departamento ECONOMATO sin ella, tabla sin filas de estado) — captura revisada antes de entregar.
+
 # v12.30.60 — 31 agosto 2026
 
 ✨ Botón "Reactivar" para correos de sistema descartados + se eliminan solos a los 2 días

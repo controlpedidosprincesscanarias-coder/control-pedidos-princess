@@ -2616,6 +2616,14 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                     f"   Autorizado por:                 {_resuelve_txt} — {_fecha_resol_txt}"
                     f"{_linea_obs_dg_text}"
                 )
+        # (2026-08-31, v12.30.63) Víctor: "Si el pedido supera el techo de
+        # gastos establecido, indícalo explícitamente en el texto para que
+        # no pase desapercibido" — el recuadro amarillo de detalle
+        # (_aviso_exceso_html/_aviso_exceso_text, justo debajo) ya existía,
+        # pero el propio párrafo introductorio no lo mencionaba. Esta
+        # bandera se usa más abajo para añadir una frase de aviso corta en
+        # el propio párrafo, sin repetir el detalle que ya da el recuadro.
+        _hubo_exceso_techo = bool(_aviso_exceso_html)
 
         # (2026-08-31) A petición de Víctor: el correo AL PROVEEDOR ya tiene,
         # desde el 2026-08-28, un botón de descarga del PDF del pedido (ver
@@ -2645,10 +2653,21 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                     f'📄 Descargar {e["nombre"]}</a></p>'
                     for e in _enlaces_doc_interno
                 )
-                _bloque_doc_html_interno = f'<div style="margin:14px 0">{_botones_doc_interno}</div>'
-                _bloque_doc_text_interno = "\n" + "\n".join(
-                    f"Documento del pedido ({e['nombre']}): {e['url']}" for e in _enlaces_doc_interno
-                ) + "\n"
+                # (2026-08-31) A petición de Víctor: "en todo momento dar las
+                # instrucciones pertinentes para que se puedan descargar el
+                # pedido PDF con el botón al uso" — el botón aparecía solo,
+                # sin ninguna frase que explique qué es o para qué sirve.
+                _bloque_doc_html_interno = (
+                    '<p style="margin:14px 0 4px">Puede descargar el documento del pedido tramitado '
+                    'y enviado al proveedor pulsando el siguiente botón:</p>'
+                    f'<div style="margin:4px 0 14px">{_botones_doc_interno}</div>'
+                )
+                _bloque_doc_text_interno = (
+                    "\nPuede descargar el documento del pedido tramitado y enviado al proveedor "
+                    "en el siguiente enlace:\n"
+                    + "\n".join(f"Documento del pedido ({e['nombre']}): {e['url']}" for e in _enlaces_doc_interno)
+                    + "\n"
+                )
 
         # (2026-08-28) A petición de Víctor: cuando el cambio es automático
         # (es_automatico=True — decidido por _aplicar_coincidencia_albaran()
@@ -2678,14 +2697,61 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _icono = _ICONO_ESTADO.get(estado_nuevo, "🔔")
 
         _INTRO_ESTADO = {
-            "ENVIADO AL PROVEEDOR": "El pedido se ha tramitado y enviado al proveedor. En cuanto haya novedades de entrega o cotización recibirás un nuevo aviso.",
             "ENTREGA PARCIAL":      "Se ha registrado una <strong>entrega parcial</strong> en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
             "ENTREGADO":            "El pedido ha sido marcado como <strong>ENTREGADO</strong> (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
             "CANCELADO":            "El pedido ha sido <strong>CANCELADO</strong>.",
             "DENEGADO POR DIRECCION GENERAL": "El pedido ha sido <strong>DENEGADO POR DIRECCIÓN GENERAL</strong>.",
         }
-        _intro_html = _INTRO_ESTADO.get(estado_nuevo, "")
-        _intro_html_block = f"<p>{_intro_html}</p>" if _intro_html else ""
+        # (2026-08-31) A petición de Víctor: este correo interno de "ENVIADO
+        # AL PROVEEDOR" cambia de enfoque — antes era un aviso genérico de
+        # "cambio de estado" (con Estado anterior/Estado nuevo, ver más
+        # abajo, ahora retirados solo para este caso); ahora se usa
+        # específicamente para que el departamento que hizo el pedido (y,
+        # si aplica, A&B) sepan que ya se tramitó y se envió al proveedor, y
+        # que entran en espera de entrega. Víctor: "por la presente se
+        # informa al responsable del Dpto. X que su pedido ha sido
+        # tramitado correctamente al proveedor y entramos en el proceso de
+        # espera para la entrega, que informaremos de cualquier otra
+        # novedad" — y, para los departamentos de cocina/sala ("en los
+        # casos de que el departamento sea COCINA, BARES, RESTAURANTE Y/O
+        # RESTAURANTE & BARES"), añadir que también se comunica a A&B para
+        # su control. Nombres exactos de departamento tomados de
+        # models.py/SQL_STATEMENTS (semilla de la tabla departamentos).
+        _DEPARTAMENTOS_AB = {"COCINA", "BARES", "RESTAURANTE", "RESTAURANTE & BARES"}
+        _dept_nombre_i = (pedido.get('departamento_nombre') or '').strip()
+        _proveedor_nombre_i = pedido.get('proveedor_nombre') or '—'
+        # (2026-08-31) Víctor pidió un texto más conciso y corporativo (4-5
+        # líneas), que confirme la tramitación, nombre al proveedor en la
+        # propia redacción (no solo en la tabla) y mantenga el aviso a A&B
+        # para Cocina/Bares/Restaurante(s). El resto (cuadro de datos y
+        # aviso de exceso de techo, ya en copia a Notificaciones
+        # Adicionales) se deja tal cual: "El cuadro esta perfecto".
+        # (2026-08-31, ajuste tras ver el resultado) Víctor: la coletilla
+        # "Por la presente..." no convencía del todo — se sustituye por un
+        # "Confirmamos que..." más directo. El aviso a A&B se deja en una
+        # sola frase de mero trámite ("para su control interno"), sin
+        # justificar por qué se le informa (antes explicaba "por tratarse
+        # de un pedido de X", información que ya está en la fila
+        # Departamento de la tabla).
+        if estado_nuevo == "ENVIADO AL PROVEEDOR":
+            _intro_html = (
+                f"Confirmamos que el pedido ha sido tramitado y enviado correctamente al proveedor "
+                f"<strong>{_proveedor_nombre_i}</strong>, quedando informado el departamento de "
+                f"<strong>{_dept_nombre_i or '—'}</strong>."
+            )
+            if _dept_nombre_i.upper() in _DEPARTAMENTOS_AB:
+                _intro_html += (
+                    ' Se informa también al departamento de <strong>A&amp;B</strong> para su control interno.'
+                )
+            if _hubo_exceso_techo:
+                _intro_html += (
+                    ' <strong style="color:#7a5b00">Este pedido superó el techo de gastos mensual y fue '
+                    'autorizado por Dirección General</strong> (detalle más abajo).'
+                )
+            _intro_html += ' Cualquier novedad sobre la entrega se comunicará en su momento.'
+        else:
+            _intro_html = _INTRO_ESTADO.get(estado_nuevo, "")
+        _intro_html_block = f'<p style="margin:0 0 16px;line-height:1.55;color:#222">{_intro_html}</p>' if _intro_html else ""
 
         subject_i = f"[Control Pedidos] {pedido.get('hotel_codigo','')} · Pedido {pedido.get('pedido_num','—')} → {_icono} {estado_nuevo}"
         if estado_nuevo == "ENTREGADO" and _resumen_ent["ultima_fecha_es"]:
@@ -2694,15 +2760,40 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             subject_i += f" — última entrega {_resumen_ent['ultima_fecha_es']}"
 
         _fila_usuario_html = f'<tr><td><b>Realizado por</b></td><td>{_usuario_txt}</td></tr>' if _usuario_txt else ''
+        # (2026-08-31) Víctor: "podemos incluir en el cuadro el apartado
+        # observaciones que ya tenemos en pedidos? esto siempre puede dar
+        # mas información relevante" — se añade como última fila, cuando
+        # el pedido tiene observaciones. Se omite para CANCELADO/DENEGADO
+        # POR DIRECCION GENERAL porque ese mismo campo (pedido.observaciones)
+        # ya se muestra ahí, aparte de la tabla, como "Motivo de la
+        # cancelación/denegación" (ver _motivo_estado más abajo) — mostrarlo
+        # también en la tabla sería puro duplicado.
+        _fila_obs_html = ''
+        if pedido.get('observaciones') and estado_nuevo not in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL"):
+            _fila_obs_html = (
+                f'<tr><td><b>Observaciones</b></td><td>{pedido["observaciones"].replace(chr(10), "<br>")}</td></tr>'
+            )
+        # (2026-08-31) Estado anterior/Estado nuevo ya no aportan nada en el
+        # caso ENVIADO AL PROVEEDOR — el correo entero ya trata justo de
+        # eso (ver _intro_html arriba), así que sobra repetirlo en la
+        # tabla. Se mantienen sin cambios para el resto de estados
+        # (ENTREGA PARCIAL/ENTREGADO/CANCELADO/DENEGADO), donde sí importa
+        # dejar constancia de qué estado había antes.
+        _filas_estado_html = (
+            ''
+            if estado_nuevo == "ENVIADO AL PROVEEDOR" else
+            f'<tr><td><b>Estado anterior</b></td><td>{estado_antes or "—"}</td></tr>\n'
+            f'          <tr><td><b>Estado nuevo</b></td><td><b>{estado_nuevo}</b></td></tr>'
+        )
         body_html_i = f"""
         <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
           {_email_header_html("Princess Hotels &amp; Resorts", "Control de Pedidos — Aviso interno",
                                 color_fondo="#1a3a6b", color_subtitulo="#a8c0e8")}
           <div style="padding:24px">
-        <p style="font-size:15px"><strong>{_icono} {estado_nuevo}</strong> — Pedido {pedido.get('pedido_num','—')} · {pedido.get('hotel_codigo','')}</p>
+        <p style="font-size:15px;margin:0 0 16px"><strong>{_icono} {estado_nuevo}</strong> — Pedido {pedido.get('pedido_num','—')} · {pedido.get('hotel_codigo','')}</p>
         {_intro_html_block}
         {_aviso_exceso_html}
-        <table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">
+        <table border="1" cellpadding="8" style="border-collapse:collapse;font-family:sans-serif;font-size:13px;line-height:1.4;margin:4px 0 16px">
           <tr><td><b>Hotel</b></td><td>{pedido.get('hotel_nombre','')} ({pedido.get('hotel_codigo','')})</td></tr>
           <tr><td><b>Departamento</b></td><td>{pedido.get('departamento_nombre','')}</td></tr>
           <tr><td><b>Pedido Nº</b></td><td>{pedido.get('pedido_num','—')}</td></tr>
@@ -2710,10 +2801,10 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
           <tr><td><b>Proveedor</b></td><td>{pedido.get('proveedor_nombre','—')}</td></tr>
           <tr><td><b>Importe (techo de gastos)</b></td><td>{_importe_txt}</td></tr>
           <tr><td><b>Total Pedido (base imponible)</b></td><td>{_total_pedido_txt}</td></tr>
-          <tr><td><b>Estado anterior</b></td><td>{estado_antes or '—'}</td></tr>
-          <tr><td><b>Estado nuevo</b></td><td><b>{estado_nuevo}</b></td></tr>
+          {_filas_estado_html}
           <tr><td><b>Fecha tramitación</b></td><td>{_fecha_tram_txt}{_dias_txt}</td></tr>
           {_fila_usuario_html}
+          {_fila_obs_html}
         </table>
         {_bloque_doc_html_interno}
         {_nota_base_imponible_html() if not _resumen_ent["entregas"] else ''}
@@ -2727,13 +2818,26 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         body_html_i += '</div></div>'
 
         _INTRO_ESTADO_TXT = {
-            "ENVIADO AL PROVEEDOR": "El pedido se ha tramitado y enviado al proveedor. En cuanto haya novedades de entrega o cotización recibirás un nuevo aviso.",
             "ENTREGA PARCIAL":      "Se ha registrado una entrega parcial en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
             "ENTREGADO":            "El pedido ha sido marcado como ENTREGADO (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
             "CANCELADO":            "El pedido ha sido CANCELADO.",
             "DENEGADO POR DIRECCION GENERAL": "El pedido ha sido DENEGADO POR DIRECCIÓN GENERAL.",
         }
-        _intro_text = _INTRO_ESTADO_TXT.get(estado_nuevo, "")
+        if estado_nuevo == "ENVIADO AL PROVEEDOR":
+            _intro_text = (
+                f"Confirmamos que el pedido ha sido tramitado y enviado correctamente al proveedor "
+                f"{_proveedor_nombre_i}, quedando informado el departamento de {_dept_nombre_i or '—'}."
+            )
+            if _dept_nombre_i.upper() in _DEPARTAMENTOS_AB:
+                _intro_text += " Se informa también al departamento de A&B para su control interno."
+            if _hubo_exceso_techo:
+                _intro_text += (
+                    " ATENCIÓN: este pedido superó el techo de gastos mensual y fue autorizado por "
+                    "Dirección General (detalle más abajo)."
+                )
+            _intro_text += " Cualquier novedad sobre la entrega se comunicará en su momento."
+        else:
+            _intro_text = _INTRO_ESTADO_TXT.get(estado_nuevo, "")
 
         _SEP = "─" * 42
         _datos_lineas = [
@@ -2744,12 +2848,20 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             f"   Proveedor:          {pedido.get('proveedor_nombre','—')}",
             f"   Importe (techo):    {_importe_txt}",
             f"   Total Pedido (base imponible): {_total_pedido_txt}",
-            f"   Estado anterior:    {estado_antes or '—'}",
-            f"   Estado nuevo:       {estado_nuevo}",
-            f"   Fecha tramitación:  {_fecha_tram_txt}{_dias_txt}",
         ]
+        # (2026-08-31) Igual que en la tabla HTML: Estado anterior/Estado
+        # nuevo se omiten solo para ENVIADO AL PROVEEDOR (ver _filas_estado_html).
+        if estado_nuevo != "ENVIADO AL PROVEEDOR":
+            _datos_lineas.append(f"   Estado anterior:    {estado_antes or '—'}")
+            _datos_lineas.append(f"   Estado nuevo:       {estado_nuevo}")
+        _datos_lineas.append(f"   Fecha tramitación:  {_fecha_tram_txt}{_dias_txt}")
         if _usuario_txt:
             _datos_lineas.append(f"   Realizado por:      {_usuario_txt}")
+        # (2026-08-31) Observaciones — mismo criterio que en la tabla HTML:
+        # se omite para CANCELADO/DENEGADO POR DIRECCION GENERAL porque ya
+        # se muestra aparte como "Motivo de la cancelación/denegación".
+        if pedido.get('observaciones') and estado_nuevo not in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL"):
+            _datos_lineas.append(f"   Observaciones:      {pedido['observaciones']}")
 
         body_text_i = (
             f"{_icono} {estado_nuevo} — Pedido {pedido.get('pedido_num','—')} · {pedido.get('hotel_codigo','')}\n"
