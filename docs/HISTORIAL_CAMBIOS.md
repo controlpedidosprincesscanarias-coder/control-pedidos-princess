@@ -25,6 +25,17 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Auditoría de rendimiento, Etapa 2/3: índice de búsqueda por trigramas para Pedidos (v12.30.71)
+
+- **Origen**: continuación de la Etapa 1 — Víctor: "desplegada y probada la etapa 1, seguimos con la 2?".
+- **Causa raíz**: `GET /api/pedidos` busca con `ILIKE '%texto%'` (comodín al principio) sobre `pedido_num`/`observaciones`/`pr.nombre`/`h.codigo` a la vez — mismo problema que en Proveedores (Etapa 1): sin índice de apoyo, cada búsqueda recorre la tabla `pedidos` entera, y esa tabla es la que más rápido crece de toda la app.
+- **Cambio**: `_auto_migrate()` (app.py) crea 2 índices GIN por trigramas nuevos sobre `pedidos.pedido_num` y `pedidos.observaciones` (mismo patrón protegido que la Etapa 1). `pr.nombre` ya estaba cubierto por el índice de Proveedores; `h.codigo` se deja sin indexar por ser una tabla de ~10 filas, donde no aporta nada.
+- **Decisión — no se tocó `PEDIDO_SELECT`**: la fusión de las 3 subconsultas del "contacto principal" del proveedor (email/nombre/teléfono), contemplada en la auditoría original, se descarta por ahora: un proveedor puede tener varios contactos marcados "principal" a la vez (funcionalidad intencional, `pvSetPrincipal()`), y cada subconsulta actual resuelve su campo de forma independiente entre esos contactos — fusionarlas podría cambiar qué contacto "gana" en fichas con más de un principal. Como las 3 ya se apoyan en el índice existente de `proveedor_contactos(proveedor_id)`, el ahorro real era menor de lo esperado y no compensa el riesgo sin que Víctor decida antes el criterio de desempate. Queda pendiente de una decisión de producto, no es un arreglo técnico directo.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Auditoría de rendimiento, Etapa 1/3: Proveedores paginado + índice de búsqueda por trigramas (v12.30.70)
 
 - **Origen**: Víctor: "necesito le realices un chequeo para buscar posibles problemas ya que esta comenzando a ir mas lenta, no alarmante pero si. La ficha proveedores se atasca un poco y en líneas generales el resto." Tras la auditoría, Víctor pidió implantar los arreglos por etapas ("implantamos por etapas si te parece") — esta es la Etapa 1, centrada en Proveedores por ser la molestia más directa.

@@ -160,6 +160,31 @@ def _auto_migrate():
                     )
                 except Exception as e:
                     log.warning(f"No se pudo crear el índice {_idx_nombre}: {e}")
+            # ── Índices de búsqueda de pedidos (2026-08-31, auditoría de
+            # rendimiento, Etapa 2/3) ───────────────────────────────────────
+            # get_pedidos() busca con ILIKE '%texto%' (comodín al principio)
+            # en pedido_num/observaciones a la vez (pr.nombre ya quedó
+            # cubierto por idx_prov_nombre_trgm, arriba; h.codigo no —
+            # hoteles tiene ~10 filas, un índice ahí no aporta nada). Mismo
+            # problema que en Proveedores: sin este índice, cada búsqueda
+            # recorre la tabla `pedidos` entera — y esa tabla crece muy
+            # deprisa (Víctor: +306,7% de pedidos en el último mes visto en
+            # el propio dashboard), así que sin esto la búsqueda se pone más
+            # lenta cada mes que pasa, aunque no se toque nada más.
+            try:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")  # no-op si Proveedores ya la creó
+            except Exception as e:
+                log.warning(f"No se pudo crear la extensión pg_trgm: {e}")
+            for _idx_nombre, _columna in (
+                ("idx_pedidos_pedido_num_trgm",   "pedido_num"),
+                ("idx_pedidos_observaciones_trgm", "observaciones"),
+            ):
+                try:
+                    cur.execute(
+                        f"CREATE INDEX IF NOT EXISTS {_idx_nombre} ON pedidos USING gin ({_columna} gin_trgm_ops)"
+                    )
+                except Exception as e:
+                    log.warning(f"No se pudo crear el índice {_idx_nombre}: {e}")
             # ── Verificación de listados PDF de SAP — filtro de proveedores ──
             # (2026-08-10) A petición del usuario: el criterio se invierte a
             # "opt-in" — DEFAULT FALSE, ningún proveedor está sujeto a

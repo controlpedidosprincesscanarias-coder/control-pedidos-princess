@@ -1,3 +1,17 @@
+# v12.30.71 — 31 agosto 2026
+
+✨ Auditoría de rendimiento (Etapa 2 de 3): índice de búsqueda por trigramas también para Pedidos
+
+**Contexto**: continuación de la Etapa 1 (v12.30.70, Proveedores) — Víctor confirmó que esa etapa ya está desplegada y probada, y pidió seguir con la Etapa 2.
+
+**Causa raíz (pedidos)**: igual que en Proveedores, `GET /api/pedidos` busca con `ILIKE '%texto%'` (comodín al principio) sobre `pedido_num`, `observaciones`, `pr.nombre` y `h.codigo` a la vez — patrón que no puede usar un índice normal. La tabla `pedidos` es, además, la que más deprisa crece de toda la app (Víctor mencionó en su día un dashboard con +306,7% de pedidos respecto al mes anterior), así que sin índice de apoyo esta búsqueda se pone más lenta cada mes que pasa, incluso sin tocar nada más.
+
+**Cambio en `app.py`**: `_auto_migrate()` crea 2 índices GIN por trigramas nuevos, sobre `pedidos.pedido_num` y `pedidos.observaciones` (mismo bloque protegido, mismo patrón que la Etapa 1). `pr.nombre` ya quedó cubierto por el índice creado en la Etapa 1 para Proveedores — se reutiliza tal cual, sin duplicar nada. `h.codigo` (columna de `hoteles`, ~10 filas en total) se deja sin indexar a propósito: con una tabla tan pequeña, un índice ahí no aporta nada medible.
+
+**Decisión tomada — NO se ha tocado `PEDIDO_SELECT` en esta etapa**: la auditoría original también señalaba que el listado de pedidos arma cada fila con 6 subconsultas correlacionadas (email/móvil/teléfono/nombre de contacto del proveedor + si tiene adjuntos), y que 3 de ellas (las que leen el "contacto principal") podrían fusionarse en una sola. Al revisar el código de Proveedores con más detalle se ha confirmado que un proveedor puede tener **varios contactos marcados como "principal" a la vez** (`pvSetPrincipal()`, pensado para que todos reciban notificaciones automáticas). Las 3 subconsultas actuales resuelven cada campo (email/nombre/teléfono) de forma independiente entre esos contactos principales — fusionarlas en una única consulta podría hacer que los tres campos pasen a salir siempre del mismo contacto principal "elegido al azar" en vez de, como ahora, el primero que tenga cada dato relleno. Como cada subconsulta ya se apoya en el índice existente de `proveedor_contactos(proveedor_id)` (no hace tabla completa), el ahorro de tocar esto era menor de lo que parecía a primera vista y el riesgo de cambiar el resultado en fichas con varios contactos principales no compensa hacerlo sin que Víctor decida antes cómo debería resolverse ese empate. Se deja fuera de esta entrega; si se quiere abordar más adelante, hace falta antes decidir ese criterio de desempate.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores.
+
 # v12.30.70 — 31 agosto 2026
 
 ✨ Auditoría de rendimiento (Etapa 1 de 3): Proveedores deja de cargarse entero de golpe — paginado + índice de búsqueda, igual que Pedidos
