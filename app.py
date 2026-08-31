@@ -129,6 +129,37 @@ def _auto_migrate():
                     cur.execute(f"ALTER TABLE IF EXISTS {_tabla_rls} ENABLE ROW LEVEL SECURITY")
                 except Exception as e:
                     log.warning(f"No se pudo activar RLS en {_tabla_rls}: {e}")
+            # ── Índices de búsqueda de proveedores (2026-08-31, auditoría de
+            # rendimiento — Víctor: "la ficha proveedores se atasca un poco")
+            # ─────────────────────────────────────────────────────────────
+            # get_proveedores() busca con ILIKE '%texto%' (comodín al
+            # PRINCIPIO) en nombre/codigo/codigo_dali a la vez — ese patrón
+            # no puede usar un índice normal (B-tree), así que cada letra
+            # tecleada en el buscador de Proveedores obligaba a Postgres a
+            # recorrer la tabla entera de proveedores. La extensión pg_trgm
+            # (trigramas) sí permite indexar ILIKE con comodín al principio;
+            # Supabase la trae disponible de fábrica, sin coste ni permisos
+            # especiales. Bloque puesto aquí arriba, cada sentencia con su
+            # propio try/except, por el mismo motivo ya documentado para
+            # sujeto_seguimiento/codigo_dali más abajo: _auto_migrate() tiene
+            # 111+ sentencias, la mayoría sin try/except propio, y un fallo
+            # anterior cualquiera abortaría la función antes de llegar aquí
+            # si este bloque viviera al final.
+            try:
+                cur.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+            except Exception as e:
+                log.warning(f"No se pudo crear la extensión pg_trgm: {e}")
+            for _idx_nombre, _columna in (
+                ("idx_prov_nombre_trgm",      "nombre"),
+                ("idx_prov_codigo_trgm",      "codigo"),
+                ("idx_prov_codigo_dali_trgm", "codigo_dali"),
+            ):
+                try:
+                    cur.execute(
+                        f"CREATE INDEX IF NOT EXISTS {_idx_nombre} ON proveedores USING gin ({_columna} gin_trgm_ops)"
+                    )
+                except Exception as e:
+                    log.warning(f"No se pudo crear el índice {_idx_nombre}: {e}")
             # ── Verificación de listados PDF de SAP — filtro de proveedores ──
             # (2026-08-10) A petición del usuario: el criterio se invierte a
             # "opt-in" — DEFAULT FALSE, ningún proveedor está sujeto a
@@ -8610,27 +8641,60 @@ def _prov_with_contactos(rows):
 @app.route("/api/proveedores", methods=["GET"])
 @login_required
 def get_proveedores():
+    # (2026-08-31, auditoría de rendimiento — Víctor: "la ficha proveedores
+    # se atasca un poco") Antes este endpoint devolvía SIEMPRE la tabla
+    # `proveedores` entera (sin paginar), y el frontend reconstruía toda la
+    # tabla en cada carga de la vista y en cada tecla del buscador — cuantos
+    # más proveedores se dan de alta con el tiempo, más pesada se pone cada
+    # carga, a diferencia de /api/pedidos, que ya está paginado desde hace
+    # tiempo. Mismo patrón de paginación que get_pedidos() (page/page_size,
+    # devuelve total/pages), aplicado aquí ahora. El buscador (q) usa ILIKE
+    # con comodín al principio en los 3 campos — ahora sí puede apoyarse en
+    # los índices pg_trgm creados en _auto_migrate().
+    #
+    # OJO al tocar la forma de la respuesta: antes era un array plano;
+    # ahora es {proveedores,total,page,page_size,pages}. Los dos
+    # consumidores del frontend (loadProveedores() y el autocompletado
+    # buscarProveedor() en el modal de pedido) se actualizaron a la vez en
+    # esta misma entrega — si se añade un tercer consumidor, recordar que
+    # ya no es un array.
     q = request.args.get("q", "").strip()
+    try:
+        page      = max(1, int(request.args.get("page", 1)))
+        page_size = max(1, min(100, int(request.args.get("page_size", 30))))
+    except ValueError:
+        page, page_size = 1, 30
+
+    wheres, args = ["activo=1"], []
     if q:
         # (2026-08-31) Víctor: "debe dejar buscar por nombre, codigo sap y
         # codigo dali" — antes solo buscaba por nombre. Un único cuadro de
         # búsqueda, coincide con cualquiera de los tres campos (OR), igual
         # de flexible (ILIKE + comodines) en los tres.
-        rows = query(
-            """SELECT id,codigo,codigo_dali,nombre,observaciones,sujeto_seguimiento
-               FROM proveedores
-               WHERE activo=1
-                 AND (nombre ILIKE %s OR codigo ILIKE %s OR codigo_dali ILIKE %s)
-               ORDER BY nombre""",
-            (f"%{q}%", f"%{q}%", f"%{q}%"))
-    else:
-        rows = query("SELECT id,codigo,codigo_dali,nombre,observaciones,sujeto_seguimiento FROM proveedores WHERE activo=1 ORDER BY nombre")
+        wheres.append("(nombre ILIKE %s OR codigo ILIKE %s OR codigo_dali ILIKE %s)")
+        args += [f"%{q}%", f"%{q}%", f"%{q}%"]
+    where_sql = " AND ".join(wheres)
+
+    total = query(f"SELECT COUNT(*) as total FROM proveedores WHERE {where_sql}", args, one=True)["total"]
+    rows = query(
+        f"""SELECT id,codigo,codigo_dali,nombre,observaciones,sujeto_seguimiento
+            FROM proveedores WHERE {where_sql}
+            ORDER BY nombre
+            LIMIT %s OFFSET %s""",
+        args + [page_size, (page - 1) * page_size]
+    )
     result = _prov_with_contactos(rows)
     # Rol hotel: solo consulta — se eliminan observaciones de la respuesta
     if session.get("rol") == "hotel":
         for p in result:
             p.pop("observaciones", None)
-    return jsonify(result)
+    return jsonify({
+        "proveedores": result,
+        "total":       total,
+        "page":        page,
+        "page_size":   page_size,
+        "pages":       max(1, (total + page_size - 1) // page_size),
+    })
 
 
 def _buscar_proveedor_duplicado(campo: str, valor: str, excluir_id: int = None) -> dict:

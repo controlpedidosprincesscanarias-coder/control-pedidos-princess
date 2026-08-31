@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.69
+          V 12.30.70
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1668,6 +1668,15 @@ tbody tr:last-child{border-bottom:none}
           </div>
           <div id="prov-empty" class="empty-state section-hidden">
             <div class="icon">🏭</div><div>No hay proveedores registrados</div>
+          </div>
+          <!-- (2026-08-31) Paginación — antes se cargaban todos los
+               proveedores de golpe, ver loadProveedores(). Mismo patrón
+               visual que la paginación de Pedidos (#pagination). -->
+          <div style="padding:12px 20px;border-top:1px solid var(--border)">
+            <div style="display:flex;align-items:center">
+              <div class="page-info" id="prov-page-info-text"></div>
+              <div class="pagination" id="prov-pagination" style="margin-left:auto"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -2935,6 +2944,9 @@ let G = {
   user: null, rol: null, nombre: null, userId: null,
   maestros: { hoteles:[], departamentos:[], proveedores:[], estados:[], familias:[] },
   pedidos: [], total: 0, page: 1, pages: 1,
+  // (2026-08-31) Paginación de Proveedores — antes se cargaban todos de
+  // golpe, ver loadProveedores() y la auditoría de rendimiento.
+  provPage: 1, provPages: 1, provTotal: 0,
   editingPedidoId: null,
   editingProveedorId: null,
   currentPedidoData: null,
@@ -6033,6 +6045,10 @@ function _renderAlertasTabla(lista) {
 ═══════════════════════════════════════════════════════════════════════════ */
 let _provDebounceT = null;
 function debouncedLoadProveedores() {
+  // (2026-08-31) Cada búsqueda nueva vuelve a la página 1 — si no, tras
+  // buscar algo estando en la página 3, por ejemplo, podía pedirse una
+  // página que ya no existe para esos resultados.
+  G.provPage = 1;
   clearTimeout(_provDebounceT);
   _provDebounceT = setTimeout(loadProveedores, 300);
 }
@@ -6157,13 +6173,18 @@ window.addEventListener('resize', () => {
 
 async function loadProveedores() {
   const q = (document.getElementById('prov-q')?.value || '').trim();
-  const url = q ? `/api/proveedores?q=${encodeURIComponent(q)}` : '/api/proveedores';
+  const params = new URLSearchParams({ page: G.provPage, page_size: 30, ...(q && {q}) });
   const tbody = document.getElementById('proveedores-tbody');
   const empty = document.getElementById('prov-empty');
   const countEl = document.getElementById('prov-count');
   let d;
   try {
-    d = await api(url);
+    // (2026-08-31, auditoría de rendimiento) Antes traía TODOS los
+    // proveedores activos de golpe en cada carga de esta vista y en cada
+    // tecla del buscador — con la lista creciendo con el tiempo, cada vez
+    // pesaba más. Ahora paginado igual que /api/pedidos: la respuesta pasa
+    // de ser un array plano a {proveedores,total,page,pages}.
+    d = await api(`/api/proveedores?${params}`);
   } catch (e) {
     // (2026-08-10) FIX: antes, si la petición fallaba (p.ej. un 500 real
     // del backend), la excepción se quedaba sin capturar aquí — la
@@ -6176,25 +6197,36 @@ async function loadProveedores() {
     tbody.innerHTML = '';
     if (empty) empty.classList.remove('section-hidden');
     if (countEl) countEl.textContent = 'Error al cargar';
+    document.getElementById('prov-pagination').innerHTML = '';
+    document.getElementById('prov-page-info-text').textContent = '';
     requestAnimationFrame(_ajustarStickyProveedores);
     return;
   }
-  if (!d.length) {
+  const lista = d.proveedores || [];
+  G.provTotal = d.total || 0; G.provPages = d.pages || 1; G.provPage = d.page || 1;
+  if (!lista.length) {
     tbody.innerHTML='';
     empty.classList.remove('section-hidden');
     if (countEl) countEl.textContent = q ? 'Sin resultados' : '';
+    document.getElementById('prov-pagination').innerHTML = '';
+    document.getElementById('prov-page-info-text').textContent = q || G.provTotal ? '0 proveedores' : '';
     requestAnimationFrame(_ajustarStickyProveedores);
     return;
   }
   empty.classList.add('section-hidden');
-  if (countEl) countEl.textContent = `${d.length} proveedor${d.length!==1?'es':''}`;
-  // Guardar en cache por id para el modal
+  if (countEl) countEl.textContent = `${G.provTotal} proveedor${G.provTotal!==1?'es':''}`;
+  renderProvPagination(G.provPage, G.provPages, G.provTotal);
+  // Guardar en cache por id para el modal (solo los de la página actual;
+  // openProveedorModal() solo puede pulsarse sobre una fila visible, así
+  // que siempre está en esta cache en el momento del clic).
   _provCache = {};
-  d.forEach(p => { _provCache[p.id] = p; });
-  tbody.innerHTML = d.map(p => {
-    const _hotelCodMap = (G.maestros && G.maestros.hoteles)
-      ? Object.fromEntries(G.maestros.hoteles.map(h => [h.id, h.codigo]))
-      : {};
+  lista.forEach(p => { _provCache[p.id] = p; });
+  // Mapa hotel_id -> código, calculado UNA sola vez para toda la tabla (antes
+  // se recalculaba dentro del .map(), una vez por cada fila, sin necesidad).
+  const _hotelCodMap = (G.maestros && G.maestros.hoteles)
+    ? Object.fromEntries(G.maestros.hoteles.map(h => [h.id, h.codigo]))
+    : {};
+  tbody.innerHTML = lista.map(p => {
     const contactos = (p.contactos && p.contactos.length)
       ? p.contactos.map(c => {
           const parts = [];
@@ -6228,6 +6260,23 @@ async function loadProveedores() {
   // (p.ej. el contador "N proveedores" hace que el texto cambie).
   requestAnimationFrame(_ajustarStickyProveedores);
 }
+
+// (2026-08-31) Paginación de Proveedores — mismo patrón que
+// renderPagination()/goPage() de Pedidos, con sus propios ids/estado
+// (#prov-pagination, G.provPage) para no interferir con los de Pedidos.
+function renderProvPagination(page, pages, total) {
+  document.getElementById('prov-page-info-text').textContent = `${total} proveedor${total!==1?'es':''}`;
+  const el = document.getElementById('prov-pagination');
+  let html = `<button class="page-btn" onclick="goProvPage(${page-1})" ${page<=1?'disabled':''}>‹</button>`;
+  for (let i=1; i<=pages; i++) {
+    if (pages>7 && i>2 && i<pages-1 && Math.abs(i-page)>1) { if(i===3||i===pages-2) html+='<span class="page-info">…</span>'; continue; }
+    html += `<button class="page-btn ${i===page?'active':''}" onclick="goProvPage(${i})">${i}</button>`;
+  }
+  html += `<button class="page-btn" onclick="goProvPage(${page+1})" ${page>=pages?'disabled':''}>›</button>`;
+  el.innerHTML = html;
+}
+
+function goProvPage(p) { G.provPage = p; loadProveedores(); }
 
 /* ── Helpers para contactos múltiples ── */
 function pvContactoRow(c = {}, idx) {
@@ -7248,7 +7297,12 @@ async function buscarProveedor(q) {
     return;
   }
   _provTimer = setTimeout(async () => {
-    const res = await api(`/api/proveedores?q=${encodeURIComponent(q)}`);
+    // (2026-08-31) /api/proveedores devuelve ahora {proveedores,total,...}
+    // en vez de un array plano (ver auditoría de rendimiento) — se pide
+    // directamente page_size=10, que es lo único que este desplegable
+    // llega a mostrar de todos modos.
+    const data = await api(`/api/proveedores?q=${encodeURIComponent(q)}&page_size=10`);
+    const res  = data.proveedores || [];
     if (!res.length) {
       drop.innerHTML = '<div style="padding:14px 16px;color:#9ca3af;font-size:.88rem;text-align:center;font-style:italic">Sin resultados para esa búsqueda</div>';
     } else {

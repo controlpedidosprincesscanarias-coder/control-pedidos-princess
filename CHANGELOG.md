@@ -1,3 +1,25 @@
+# v12.30.70 — 31 agosto 2026
+
+✨ Auditoría de rendimiento (Etapa 1 de 3): Proveedores deja de cargarse entero de golpe — paginado + índice de búsqueda, igual que Pedidos
+
+**Petición de Víctor**: "necesito le realices un chequeo para buscar posibles problemas ya que esta comenzando a ir mas lenta, no alarmante pero si. La ficha proveedores se atasca un poco y en líneas generales el resto." Tras la auditoría, Víctor pidió implantar los arreglos encontrados por etapas — esta es la primera.
+
+**Causa raíz confirmada (proveedores)**: `GET /api/proveedores` devolvía SIEMPRE la tabla de proveedores activos entera, sin paginar — a diferencia de `/api/pedidos`, que ya pagina desde hace tiempo. El frontend (`loadProveedores()`) reconstruía toda la tabla con cada carga de la vista y con cada tecla del buscador (con 300ms de debounce). Cuantos más proveedores se dan de alta con el tiempo, más pesada se pone cada carga. Además, el buscador usa `ILIKE '%texto%'` (comodín al PRINCIPIO) sobre nombre/código SAP/código DALI a la vez — ese patrón no puede usar un índice normal (B-tree), así que cada búsqueda obligaba a Postgres a recorrer la tabla entera. De propina, el frontend recalculaba un mapa auxiliar (hotel_id → código) dentro del bucle de cada fila, en vez de una sola vez para toda la tabla.
+
+**Otras causas detectadas en la misma auditoría, con arreglo previsto en próximas etapas** (no incluidas en esta entrega): el buscador de Pedidos tiene el mismo problema de índice (ILIKE con comodín al principio, sobre 4 columnas, ejecutado dos veces por búsqueda — una para el total, otra para la página) y la tabla de pedidos está creciendo muy rápido; el listado de Pedidos arma cada fila con 6 subconsultas correlacionadas en vez de una sola consulta más eficiente; `templates/index.html` pesa 628 KB y se sirve sin compresión (gzip/brotli) y con `Cache-Control: no-cache`, así que se descarga entero en cada carga de página.
+
+**Cambio en `app.py`**:
+- `_auto_migrate()`: nuevo bloque (protegido con su propio `try/except` por sentencia, en la parte de arriba de la función por el mismo motivo ya documentado para `sujeto_seguimiento`/`codigo_dali` — un fallo posterior no debe impedir que esto se aplique) que activa la extensión `pg_trgm` de PostgreSQL (disponible de fábrica en Supabase) y crea 3 índices GIN por trigramas sobre `proveedores.nombre`, `proveedores.codigo` y `proveedores.codigo_dali` — con esto, `ILIKE '%texto%'` con comodín al principio sí puede usar índice.
+- `GET /api/proveedores` pasa a aceptar `page`/`page_size` (mismo patrón que `get_pedidos()`, tamaño de página 30, máximo 100) y devuelve `{proveedores, total, page, page_size, pages}` en vez de un array plano.
+
+**Cambio en `templates/index.html`**:
+- `loadProveedores()` pide ahora la página actual (`G.provPage`, nuevo estado en `G`) y renderiza también la paginación (`renderProvPagination()`/`goProvPage()`, mismo patrón visual que la de Pedidos, con sus propios ids `#prov-pagination`/`#prov-page-info-text` para no interferir).
+- El mapa hotel_id → código se calcula una sola vez por carga, no una vez por fila.
+- `debouncedLoadProveedores()` vuelve a la página 1 en cada búsqueda nueva (si no, tras buscar estando en la página 3 podía pedirse una página que ya no existe para esos resultados).
+- `buscarProveedor()` (autocompletado de proveedor en el modal de Pedido, mismo endpoint) actualizado a la nueva forma de la respuesta y pide directamente `page_size=10` (lo único que llega a mostrar).
+
+**Verificación**: `python3 -m py_compile app.py models.py` sin errores; `node --check` sobre el JavaScript de `templates/index.html` sin errores. Revisados uno a uno todos los puntos del frontend que llaman a `GET /api/proveedores` (solo dos: `loadProveedores()` y `buscarProveedor()`) para confirmar que ambos quedan actualizados a la nueva forma de la respuesta — no queda ningún consumidor esperando el array plano antiguo.
+
 # v12.30.69 — 31 agosto 2026
 
 ✨ El desplegable de Departamento no se puede tocar hasta elegir Hotel — así el filtro por hotel (v12.30.65) siempre se aplica

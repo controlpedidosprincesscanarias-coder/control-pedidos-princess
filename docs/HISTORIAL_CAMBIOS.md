@@ -25,6 +25,17 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Auditoría de rendimiento, Etapa 1/3: Proveedores paginado + índice de búsqueda por trigramas (v12.30.70)
+
+- **Origen**: Víctor: "necesito le realices un chequeo para buscar posibles problemas ya que esta comenzando a ir mas lenta, no alarmante pero si. La ficha proveedores se atasca un poco y en líneas generales el resto." Tras la auditoría, Víctor pidió implantar los arreglos por etapas ("implantamos por etapas si te parece") — esta es la Etapa 1, centrada en Proveedores por ser la molestia más directa.
+- **Causa raíz (proveedores)**: `GET /api/proveedores` no estaba paginado — siempre devolvía la tabla entera de proveedores activos, a diferencia de `/api/pedidos` (paginado desde hace tiempo). `loadProveedores()` (templates/index.html) reconstruía la tabla completa en cada apertura de la vista y en cada tecla del buscador (debounce 300ms) — cuantos más proveedores se dan de alta con el tiempo, más pesada cada carga. El buscador usa `ILIKE '%texto%'` (comodín al principio) sobre nombre/código SAP/código DALI a la vez, patrón que no puede usar un índice normal (B-tree): cada búsqueda recorría la tabla entera. También se encontró un recálculo innecesario (un mapa hotel→código recalculado fila a fila en vez de una sola vez).
+- **Otras causas detectadas en la misma auditoría, pendientes de etapas siguientes**: el buscador de Pedidos tiene el mismo problema de índice (ILIKE con comodín al principio, ejecutado dos veces por búsqueda) sobre una tabla que crece muy rápido; el listado de Pedidos arma cada fila con 6 subconsultas correlacionadas; `templates/index.html` (628 KB) se sirve sin compresión y con `Cache-Control: no-cache`.
+- **Cambio**: `_auto_migrate()` (app.py) activa la extensión `pg_trgm` de PostgreSQL y crea 3 índices GIN por trigramas sobre `proveedores.nombre`/`codigo`/`codigo_dali` (cada sentencia con su propio try/except, en la parte protegida de arriba de la función). `GET /api/proveedores` pasa a aceptar `page`/`page_size` (page_size 30, máx. 100) y devuelve `{proveedores,total,page,page_size,pages}` en vez de un array plano. `loadProveedores()` (templates/index.html) pagina con el mismo patrón visual que Pedidos (`renderProvPagination()`/`goProvPage()`, nuevo estado `G.provPage`), vuelve a la página 1 en cada búsqueda nueva, y calcula el mapa hotel→código una sola vez por carga. `buscarProveedor()` (autocompletado del modal de Pedido, mismo endpoint) actualizado a la nueva forma de la respuesta.
+- **Verificación**: `python3 -m py_compile app.py models.py` sin errores; `node --check` sobre el JavaScript de `templates/index.html` sin errores. Revisados los dos únicos puntos del frontend que consumen `GET /api/proveedores` para confirmar que ambos quedan adaptados a la nueva forma de la respuesta.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Departamento deshabilitado hasta elegir Hotel — evita saltarse el filtro por hotel (v12.30.69)
 
 - **Origen**: Víctor: "EXITE UN ERROR DE ORDEN AL CREAR UN PDIDO NUEVO, NO DEBERIA DEJAR ELEGIR PROMERO EL DEPARTAMENTO PARA QUE EL FILTRO SEA CORRECTO".
