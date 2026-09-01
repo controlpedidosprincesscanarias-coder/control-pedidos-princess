@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.92
+          V 12.30.93
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -8692,7 +8692,7 @@ async function loadEmailjsConfig() {
               style="width:70px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
             <span>Cambiar de cuenta al llegar a: <input type="number" min="1" id="cfg_emailjs_umbral_cambio" value="${umbral}"
               style="width:60px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
-            <span>Cuenta activa (1, 2 o 3): <input type="number" min="1" max="3" id="cfg_emailjs_cuenta_activa" value="${activa}"
+            <span>Cuenta activa (1, 2, 3 o 4): <input type="number" min="1" max="4" id="cfg_emailjs_cuenta_activa" value="${activa}"
               style="width:40px;padding:2px 4px;border:1px solid #ccc;border-radius:4px;text-align:center;font-weight:700"></span>
           </div>
           <div style="font-size:10.5px;color:#888;margin-top:6px">
@@ -8701,11 +8701,11 @@ async function loadEmailjsConfig() {
           </div>
         </div>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
-          ${[1, 2, 3].map(n => `
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(200px, 1fr));gap:12px">
+          ${[1, 2, 3, 4].map(n => `
             <div style="background:${activa === n ? '#eef6ff' : '#fafafa'};border:1px solid ${activa === n ? '#b6d4fe' : '#e9ecef'};border-radius:8px;padding:10px 12px">
               <div style="font-size:12px;font-weight:700;color:${activa === n ? '#1a73e8' : '#555'};margin-bottom:8px">
-                Cuenta ${n} ${n === 1 ? '(principal)' : n === 2 ? '(secundaria)' : '(backup)'} ${activa === n ? ' · en uso' : ''}
+                Cuenta ${n} ${n === 1 ? '(principal)' : n === 2 ? '(secundaria)' : n === 3 ? '(terciaria)' : '(backup)'} ${activa === n ? ' · en uso' : ''}
               </div>
               <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Public Key</label>
               <input type="text" id="cfg_emailjs_public_key_${n}" value="${esc(get('emailjs_public_key_' + n))}"
@@ -8722,20 +8722,20 @@ async function loadEmailjsConfig() {
             </div>`).join('')}
         </div>
         <div style="font-size:10.5px;color:#888;margin-top:8px">
-          Rellena las 3 cuentas con sus credenciales completas (misma plantilla en las tres, mismos campos
+          Rellena las 4 cuentas con sus credenciales completas (misma plantilla en las cuatro, mismos campos
           <code>to_email</code>/<code>cc</code>/<code>bcc</code>/<code>reply_to</code>/<code>subject</code>/<code>message</code>) —
           en cuanto los "Envíos contados" lleguen al umbral, el sistema pasa solo a la SIGUIENTE cuenta del ciclo
-          (1→2→3→1→...) y reinicia el contador a 0, sin desplegar nada. Si la siguiente cuenta no tiene las
-          credenciales completas, prueba con la de después, recorriendo las 3 antes de rendirse. Se avisará en
+          (1→2→3→4→1→...) y reinicia el contador a 0, sin desplegar nada. Si la siguiente cuenta no tiene las
+          credenciales completas, prueba con la de después, recorriendo las 4 antes de rendirse. Se avisará en
           🔍 Integridad.
           <br><br>
           <b>⚠️ Campo <code>cc</code> nuevo (2026-08-31):</b> el correo interno de cambio de estado del pedido
           (ENVIADO AL PROVEEDOR / ENTREGA PARCIAL / ENTREGADO / CANCELADO / DENEGADO) ahora manda el resto de
           destinatarios en copia VISIBLE (<code>cc</code>) en vez de oculta (<code>bcc</code>), para que todos
           los implicados vean quién más está informado. Para que EmailJS entregue esa copia visible de verdad,
-          entra en cada una de las 3 plantillas (emailjs.com → Email Templates) y añade un campo de destinatario
+          entra en cada una de las 4 plantillas (emailjs.com → Email Templates) y añade un campo de destinatario
           "Cc" enlazado a la variable <code>cc</code> (mismo procedimiento que ya tienes hecho para <code>bcc</code>),
-          en las 3 cuentas. Mientras no lo hagas, ese correo sigue llegando con normalidad (el <code>cc</code> nuevo
+          en las 4 cuentas. Mientras no lo hagas, ese correo sigue llegando con normalidad (el <code>cc</code> nuevo
           simplemente se ignora si la plantilla no lo tiene enlazado) — y el propio cuerpo del correo también lista
           por escrito "Aviso enviado también a: ..." como respaldo, así que nadie deja de enterarse de quién está en
           copia aunque tardes en configurar esto.

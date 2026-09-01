@@ -1,3 +1,23 @@
+# v12.30.93 — 1 septiembre 2026
+
+✨ Admin → "EmailJS y cola de correo": 4ª cuenta de backup, misma mecánica que las otras 3
+
+**Petición de Víctor**: añadir una 4ª cuenta EmailJS a la rotación, dejando el hueco en el panel para rellenarla él mismo igual que las otras 3.
+
+**Contexto**: el ciclo de cuentas ya estaba escrito de forma genérica en torno a la constante `_EMAILJS_MAX_CUENTAS` desde que se generalizó de 2 a 3 cuentas en v12.29.94 — subir el número de cuentas no toca la lógica de rotación (`registrar-envio`), el aviso de Integridad ni el job de avance de fechas de v12.30.92, todos calculan el rango a partir de esa constante.
+
+**Cambio en `app.py`**: `_EMAILJS_MAX_CUENTAS` de 3 a 4. Nuevas claves de configuración `emailjs_public_key_4`/`emailjs_service_id_4`/`emailjs_template_id_4`/`emailjs_reinicio_fecha_4` (mismo patrón que las 3 existentes, `ON CONFLICT DO NOTHING`, no toca nada ya configurado). El job de avance de fechas de v12.30.92 pasa a iterar también n=4. Relabel cosmético: cuenta 3 pasa de "(backup)" a "(terciaria)" y la nueva cuenta 4 toma la etiqueta "(backup)", para que el nombre siga describiendo a la última del ciclo.
+
+**Cambio en `templates/index.html`**: la rejilla de tarjetas de cuenta pasa de `[1,2,3]` a `[1,2,3,4]`, con la 4ª tarjeta idéntica a las demás (Public Key / Service ID / Template ID / Reinicia cupo el). El `grid-template-columns` fijo a 3 columnas se cambia a `repeat(auto-fit, minmax(200px, 1fr))` para que la fila se reparta bien con 4 tarjetas en pantallas anchas y las envuelva en pantallas estrechas, en vez de forzar 4 columnas apretadas. Selector "Cuenta activa" con tope subido de 3 a 4. Textos de ayuda del panel ("Rellena las N cuentas...", ciclo "1→2→3→...") actualizados a 4.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Función `loadEmailjsConfig()` extraída y verificada con `node --check`, sin errores de sintaxis. No probado en vivo (sin acceso a producción desde este entorno).
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md` sí aplica — el paso 2 (EmailJS) mencionaba explícitamente "una segunda (y una tercera) cuenta"; actualizado a "hasta 4 cuentas en total", con nota de que rellenar solo la Cuenta 1 sigue siendo válido (sin failover). `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` y `docs/hallazgo-seguridad-princess.md` (no existe en este repo) — no aplica. `README.md` sí — versión actual y sección "Sistema · Admin".
+
+**Entrega**: `app.py`, `templates/index.html`, `GUIA_DESPLIEGUE.md`, `README.md`, más este historial/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.30.92 — 1 septiembre 2026
 
 ✨ Admin → "EmailJS y cola de correo": las 3 fechas "Reinicia cupo el" se avanzan solas, ya no hace falta entrar a EmailJS.com cada mes a copiarlas a mano

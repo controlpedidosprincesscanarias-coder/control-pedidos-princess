@@ -1144,6 +1144,15 @@ def _auto_migrate():
             # estas filas: si ya existían de la v12.27.8 (2 cuentas), esta
             # migración solo añade las 3 nuevas claves de la cuenta 3 sin
             # tocar nada de lo ya configurado.
+            #
+            # (2026-09-01) 4ª cuenta EmailJS, misma petición de siempre
+            # (más margen de backup): ciclo ahora 1 (principal) → 2
+            # (secundaria) → 3 (terciaria) → 4 (backup) → vuelta a la 1.
+            # Igual que la vez anterior, solo hace falta subir
+            # _EMAILJS_MAX_CUENTAS (la lógica cíclica ya estaba escrita en
+            # función de esa constante desde que se generalizó de 2 a 3) y
+            # añadir aquí las 4 claves nuevas de la cuenta 4 — `ON CONFLICT
+            # DO NOTHING` de nuevo, no toca las 3 cuentas ya configuradas.
             _emailjs_defaults = [
                 ('emailjs_public_key_1',   'bxFzHypsIrNqcDh15',  'texto',  'Cuenta 1 (principal) — Public Key',    'emailjs', 1),
                 ('emailjs_service_id_1',   'service_shvrzuv',    'texto',  'Cuenta 1 (principal) — Service ID',    'emailjs', 2),
@@ -1151,10 +1160,10 @@ def _auto_migrate():
                 ('emailjs_public_key_2',   '',                   'texto',  'Cuenta 2 (secundaria) — Public Key',   'emailjs', 4),
                 ('emailjs_service_id_2',   '',                   'texto',  'Cuenta 2 (secundaria) — Service ID',   'emailjs', 5),
                 ('emailjs_template_id_2',  '',                   'texto',  'Cuenta 2 (secundaria) — Template ID',  'emailjs', 6),
-                ('emailjs_public_key_3',   '',                   'texto',  'Cuenta 3 (backup) — Public Key',       'emailjs', 7),
-                ('emailjs_service_id_3',   '',                   'texto',  'Cuenta 3 (backup) — Service ID',       'emailjs', 8),
-                ('emailjs_template_id_3',  '',                   'texto',  'Cuenta 3 (backup) — Template ID',      'emailjs', 9),
-                ('emailjs_cuenta_activa',  '1',                  'numero', 'Cuenta actualmente en uso (1, 2 o 3)', 'emailjs', 10),
+                ('emailjs_public_key_3',   '',                   'texto',  'Cuenta 3 (terciaria) — Public Key',    'emailjs', 7),
+                ('emailjs_service_id_3',   '',                   'texto',  'Cuenta 3 (terciaria) — Service ID',    'emailjs', 8),
+                ('emailjs_template_id_3',  '',                   'texto',  'Cuenta 3 (terciaria) — Template ID',   'emailjs', 9),
+                ('emailjs_cuenta_activa',  '1',                  'numero', 'Cuenta actualmente en uso (1, 2, 3 o 4)', 'emailjs', 10),
                 ('emailjs_contador',       '0',                  'numero', 'Envíos contabilizados este ciclo',     'emailjs', 11),
                 ('emailjs_umbral_cambio',  '195',                'numero', 'Cambiar de cuenta al llegar a',        'emailjs', 12),
                 ('emailjs_cambio_automatico_en', '',             'texto',  'Último cambio automático (fecha)',     'emailjs', 13),
@@ -1164,10 +1173,17 @@ def _auto_migrate():
                 # su cupo mensual de 200 envíos — visible en el panel de cada
                 # cuenta en EmailJS.com ("Resets on ..."), pero solo se ve
                 # entrando a cada cuenta por separado; el admin la copia aquí
-                # a mano para tenerlas las tres controladas de un vistazo.
+                # a mano para tenerlas todas controladas de un vistazo (desde
+                # v12.30.92 esta fecha además se avanza sola +30 días en
+                # cuanto se cumple, ver _job_avanzar_reinicio_emailjs).
                 ('emailjs_reinicio_fecha_1', '',                 'fecha',  'Cuenta 1 (principal) — Reinicia cupo el',  'emailjs', 14),
                 ('emailjs_reinicio_fecha_2', '',                 'fecha',  'Cuenta 2 (secundaria) — Reinicia cupo el', 'emailjs', 15),
-                ('emailjs_reinicio_fecha_3', '',                 'fecha',  'Cuenta 3 (backup) — Reinicia cupo el',     'emailjs', 16),
+                ('emailjs_reinicio_fecha_3', '',                 'fecha',  'Cuenta 3 (terciaria) — Reinicia cupo el',  'emailjs', 16),
+                # (2026-09-01) Cuenta 4 (backup) — mismo patrón que las otras 3.
+                ('emailjs_public_key_4',    '',                  'texto',  'Cuenta 4 (backup) — Public Key',       'emailjs', 17),
+                ('emailjs_service_id_4',    '',                  'texto',  'Cuenta 4 (backup) — Service ID',       'emailjs', 18),
+                ('emailjs_template_id_4',   '',                  'texto',  'Cuenta 4 (backup) — Template ID',      'emailjs', 19),
+                ('emailjs_reinicio_fecha_4', '',                 'fecha',  'Cuenta 4 (backup) — Reinicia cupo el',     'emailjs', 20),
             ]
             for _clave, _valor, _tipo, _label, _grupo, _orden in _emailjs_defaults:
                 cur.execute("""
@@ -15376,7 +15392,7 @@ def _validar_integridad_operativa() -> dict:
         ))
         problemas["hoteles_duplicados"] = duplicados
 
-        # ── EmailJS: contador, backup y cambio automático (v12.27.8/.10, v12.29.94: ciclo de 3 cuentas) ─
+        # ── EmailJS: contador, backup y cambio automático (v12.27.8/.10, v12.29.94: ciclo de 3 cuentas; v12.30.93: ampliado a 4) ─
         try:
             _c = get_config()
             _contador  = int(_c.get("emailjs_contador", 0) or 0)
@@ -15890,13 +15906,13 @@ def _job_purgar_emails_sistema_descartados():
 
 def _job_avanzar_reinicio_emailjs():
     """
-    (2026-09-01) Job diario: las 3 fechas `emailjs_reinicio_fecha_N` son
+    (2026-09-01) Job diario: las 4 fechas `emailjs_reinicio_fecha_N` son
     puramente informativas — el admin las copiaba a mano desde el panel de
     cada cuenta en EmailJS.com para saber cuándo recupera su cupo mensual,
     y ningún otro código las lee (el cambio real de cuenta activa depende
     solo del contador de envíos, ver /api/emailjs/registrar-envio).
 
-    Para no tener que entrar a mirar las 3 cuentas cada mes: en cuanto la
+    Para no tener que entrar a mirar las 4 cuentas cada mes: en cuanto la
     fecha guardada de una cuenta ya ha pasado (hoy > fecha), se avanza ella
     sola +30 días (el ciclo gratuito de EmailJS es rolling de 30 días desde
     el último reinicio, no mes de calendario — por eso +30 días y no "+1
@@ -15908,6 +15924,10 @@ def _job_avanzar_reinicio_emailjs():
     en EmailJS.com se desvía (p.ej. tras un cambio manual de plan), basta
     con corregir la fecha a mano una vez en Admin y el job sigue avanzándola
     sola desde ahí.
+
+    (2026-09-01, v12.30.93) Ampliado a la 4ª cuenta añadida en esa misma
+    versión — sin más cambios que iterar también n=4, el resto de la
+    lógica (parseo, +30 días, tope de reintentos) ya era genérica.
     """
     with app.app_context():
         try:
@@ -15915,7 +15935,7 @@ def _job_avanzar_reinicio_emailjs():
             cur = db.cursor()
             c   = get_config()
             hoy = _hoy_canarias()
-            for n in (1, 2, 3):
+            for n in (1, 2, 3, 4):
                 clave = f"emailjs_reinicio_fecha_{n}"
                 valor = (c.get(clave) or "").strip()
                 if not valor:
@@ -16210,7 +16230,7 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=3600,
     )
-    # Avance automático de las fechas de "reinicia cupo" de las 3 cuentas
+    # Avance automático de las fechas de "reinicia cupo" de las 4 cuentas
     # EmailJS: diario a las 06:00, TODOS los días (el cupo de EmailJS
     # también se resetea en fin de semana, a diferencia del resto de jobs
     # de esta lista que sí respetan lun-vie).
@@ -16314,10 +16334,12 @@ def test_familia_repetida():
 
 
 # (2026-08-12) Nº de cuentas EmailJS en rotación — 1 (principal), 2
-# (secundaria), 3 (backup). Único sitio a tocar si en el futuro se añade
-# o se quita alguna: el resto del ciclo (registrar-envio, el aviso de
-# Integridad y el panel de Admin) se calcula a partir de esta constante.
-_EMAILJS_MAX_CUENTAS = 3
+# (secundaria), 3 (terciaria), 4 (backup) desde v12.30.92 (antes solo
+# hasta la 3). Único sitio a tocar si en el futuro se añade o se quita
+# alguna: el resto del ciclo (registrar-envio, el aviso de Integridad,
+# el job de avance de fechas y el panel de Admin) se calcula a partir de
+# esta constante.
+_EMAILJS_MAX_CUENTAS = 4
 
 def _emailjs_cuenta_valida(valor) -> int:
     """Normaliza `emailjs_cuenta_activa` a un entero dentro de [1, _EMAILJS_MAX_CUENTAS];
@@ -16329,20 +16351,22 @@ def _emailjs_cuenta_valida(valor) -> int:
     return n if 1 <= n <= _EMAILJS_MAX_CUENTAS else 1
 
 def _emailjs_siguiente_cuenta(activa: int) -> int:
-    """Siguiente cuenta en el ciclo 1→2→3→1→... ."""
+    """Siguiente cuenta en el ciclo 1→2→3→4→1→... ."""
     return activa + 1 if activa < _EMAILJS_MAX_CUENTAS else 1
 
 
 @app.route("/api/emailjs/config", methods=["GET"])
 def api_emailjs_config():
     """
-    v12.27.8 — Credenciales EmailJS activas (cuenta 1, 2 o 3 según
+    v12.27.8 — Credenciales EmailJS activas (cuenta 1, 2, 3 o 4 según
     emailjs_cuenta_activa) + contador/umbral, para que el frontend inicialice
     emailjs.init() dinámicamente en vez de llevarlas hardcodeadas — así un
     cambio de cuenta (manual o automático al llegar al umbral) se aplica al
     momento, sin necesidad de desplegar nada.
 
     (2026-08-12) Generalizado de 2 a 3 cuentas (_EMAILJS_MAX_CUENTAS).
+    (2026-09-01) Generalizado de 3 a 4 cuentas (_EMAILJS_MAX_CUENTAS) — sin
+    más cambios en este endpoint, ya calculaba todo a partir de la constante.
     """
     c = get_config()
     activa = _emailjs_cuenta_valida(c.get("emailjs_cuenta_activa", 1))
@@ -16408,6 +16432,11 @@ def api_emailjs_registrar_envio():
     credenciales completas, NO cambia (evita dejar la app sin poder
     enviar) y se queda como aviso en Admin → Integridad para que un admin
     las rellene a tiempo.
+
+    v12.30.92 — Ciclo ampliado a 4 cuentas (1→2→3→4→1→...), mismo
+    mecanismo de siempre: solo cambió _EMAILJS_MAX_CUENTAS, esta función
+    ya recorría "las _EMAILJS_MAX_CUENTAS-1 restantes" en un bucle
+    genérico, sin ningún número de cuentas hardcodeado.
     """
     autenticado = "user_id" in session
     if autenticado and session.get("login_date") != _hoy_canarias().isoformat():

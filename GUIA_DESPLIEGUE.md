@@ -65,12 +65,15 @@ momento, sin desplegar nada.
 3. En la propia app, entra como `admin` → menú lateral **"EmailJS y cola
    de correo"** → pega los 3 valores en **Cuenta 1 (principal)**.
 4. **Opcional pero recomendado — failover automático:** repite el
-   proceso con una segunda (y una tercera) cuenta EmailJS gratuita y
-   rellena también **Cuenta 2** y **Cuenta 3** en ese mismo panel. El
-   sistema lleva la cuenta de envíos y, al acercarse al límite gratuito
-   de 200/mes (umbral configurable, 195 por defecto), cambia solo a la
-   siguiente cuenta sin cortar el envío de correos ni requerir ningún
-   despliegue.
+   proceso con hasta 3 cuentas EmailJS gratuitas más (v12.30.93: hasta 4
+   cuentas en total en rotación) y rellena también **Cuenta 2**,
+   **Cuenta 3** y **Cuenta 4** en ese mismo panel. El sistema lleva la
+   cuenta de envíos y, al acercarse al límite gratuito de 200/mes
+   (umbral configurable, 195 por defecto), cambia solo a la siguiente
+   cuenta del ciclo (1→2→3→4→1→...) sin cortar el envío de correos ni
+   requerir ningún despliegue. No hace falta rellenar las 4 desde el
+   principio — con solo la Cuenta 1 la app funciona igual, simplemente
+   sin failover automático si esa cuenta agota su cupo.
 
 ---
 

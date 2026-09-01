@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.92** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.93** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -157,7 +157,9 @@ confundirse entre sí, ver más abajo):
   ya no hay que actualizarlas a mano cada mes: un job diario (06:00,
   todos los días) las avanza solo +30 días en cuanto se cumplen, así
   el panel siempre muestra la próxima fecha real sin entrar a
-  EmailJS.com.
+  EmailJS.com. Desde v12.30.93, son 4 cuentas en rotación (1 principal,
+  2 secundaria, 3 terciaria, 4 backup) en vez de 3 — mismo mecanismo,
+  con una tarjeta más que rellenar de la misma forma que las otras.
 - **Restaurar backup** — gestión de backups de la base de datos.
 
 ### Roles de usuario
