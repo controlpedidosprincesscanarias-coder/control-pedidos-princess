@@ -1,3 +1,21 @@
+# v12.30.79 — 31 agosto 2026
+
+✨ Auditoría documental (Etapa 7): documento duplicado eliminado + "UptimeRobot" desactualizado en 3 archivos + confirmación de que no queda más código muerto
+
+**Contexto**: continuación de la auditoría general, ya cerrada en apariencia tras la Etapa 6 (v12.30.78), pero se revisaron los 2 documentos que quedaban sin auditar (`INSTRUCCIONES_RESTAURACION.md`, correcto — coincide con las tablas/rutas reales; y `CAMBIOS_solicitud_directa_backend.md`, obsoleto) y se hizo un rastreo sistemático de código muerto adicional en `app.py`.
+
+**Hallazgo 1 — `CAMBIOS_solicitud_directa_backend.md` duplicado y obsoleto**: nota de entrega de `POST /api/solicitar-usuario/directo` que decía *"No he podido ejecutarlo contra una base de datos real... recomiendo probarlo en local"*, y remitía a la tabla según `init_db()` (función ya eliminada en v12.30.78). El endpoint lleva funcionando en producción desde **v12.20.2 (hace 58 versiones)**, con una entrada más completa ya en `CHANGELOG.md` (incluye hasta la decisión de seguridad asumida). Archivo eliminado; su referencia en la tabla de "Estructura del repositorio" de `README.md` también retirada.
+
+**Hallazgo 2 — "UptimeRobot" desactualizado en 3 sitios**: `GUIA_DESPLIEGUE.md` (título del stack + Paso 5 completo + tabla de costes) y `README.md` (2 menciones) seguían describiendo UptimeRobot como el mecanismo anti-letargo, cuando `docs/HISTORIAL_CAMBIOS.md` ya documentaba —solo ahí, nunca se propagó a la guía del proyecto— que se sustituyó por el workflow de GitHub Actions en ambos servicios (`control-pedidos-princess` y `control-pedidos-chat`) hace tiempo. Corregido en los 3 sitios; Paso 5 reescrito explicando el mecanismo real, con UptimeRobot dejado como alternativa opcional documentada (por si se quiere cobertura fuera de horario laboral, cosa que el workflow actual no hace a propósito). De paso, corregido un comentario obsoleto en `app.py` (línea ~14864, `# Ping endpoint (UptimeRobot)` → referencia al workflow real).
+
+**Aviso, fuera del alcance de este repositorio**: `docs/HISTORIAL_CAMBIOS.md` (entrada de la migración de `control-pedidos-chat`) revela que el workflow homólogo en ese otro repo (`controlpedidosprincesscanarias-coder/control-pedidos-chat` → `.github/workflows/keep-alive-chat.yml`) tiene el **mismo problema de cron frágil ante el cambio de hora** que se corrigió aquí en la Etapa 5 (v12.30.77) — sin corregir todavía, por estar en un repositorio distinto al de esta auditoría.
+
+**Hallazgo 3 (negativo, confirmatorio) — rastreo de código muerto**: script de análisis estático sobre las 298 funciones de nivel superior de `app.py`, excluyendo las invocadas por el framework (rutas Flask, error handlers) por decorador. De 168 funciones "planas" candidatas a necesitar una llamada explícita, 10 no aparecían con paréntesis en ningún otro punto — las 10 se verificaron una por una y son falsos positivos: se usan como objeto de función sin paréntesis (`scheduler.add_job(func=...)`, `threading.Thread(target=...)`) o como decoradores (`@admin_required`, `@login_required`). **Conclusión: no queda código muerto en `app.py` aparte del `init_db()` ya retirado en la Etapa 6.**
+
+**Verificación**: `python3 -m py_compile app.py models.py init_db.py` sin errores. Búsqueda completa sin referencias residuales a `CAMBIOS_solicitud_directa_backend.md` ni a `UptimeRobot` fuera de los sitios donde se dejó a propósito (histórico, y la mención explícita como alternativa en el Paso 5 nuevo).
+
+**Entrega**: `GUIA_DESPLIEGUE.md`, `README.md`, `app.py` (solo comentario), eliminación de `CAMBIOS_solicitud_directa_backend.md`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
 # v12.30.78 — 31 agosto 2026
 
 ✨ Limpieza (Etapa 6, última de esta auditoría): variables sin uso en `render.yaml` + función muerta `init_db()` en `app.py`

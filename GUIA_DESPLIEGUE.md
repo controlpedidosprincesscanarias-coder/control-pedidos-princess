@@ -1,5 +1,5 @@
 # Guía de despliegue — Control Pedidos Princess
-## Stack: Render (Flask) + Supabase (PostgreSQL) + EmailJS (email, frontend) + UptimeRobot (anti-sleep)
+## Stack: Render (Flask) + Supabase (PostgreSQL) + EmailJS (email, frontend) + GitHub Actions (anti-sleep)
 
 > **v9.2.0** — Contactos múltiples por proveedor. Los campos `telefono` y `movil` se han
 > unificado en una única columna `telefono` dentro de la tabla `proveedor_contactos`.
@@ -150,15 +150,21 @@ que seguir. Para restaurar datos de un backup ya en Postgres, usa
 
 ---
 
-## PASO 5 — UptimeRobot: eliminar el letargo de 15 minutos
+## PASO 5 — Anti-letargo: workflow de GitHub Actions
 
-1. Regístrate en https://uptimerobot.com (plan gratuito: 50 monitores)
-2. **New Monitor:**
-   - Type: **HTTP(s)**
-   - Friendly Name: `Princess Pedidos — keepalive`
-   - URL: `https://TU-APP.onrender.com/ping`
-   - Monitoring Interval: **Every 14 minutes**
-3. Guarda. Ya no habrá más letargo.
+> ⚠️ **Corregido:** esta guía recomendaba UptimeRobot. El mecanismo real
+> en producción es un workflow de GitHub Actions
+> (`.github/workflows/keep-alive-princess.yml`, ya incluido en este
+> repositorio) que hace ping a `/ping` cada 10 minutos en horario
+> laboral (L-V, 06:00-18:00 hora Canarias, cubriendo verano e invierno
+> sin necesidad de tocarlo — ver v12.30.77). No requiere ninguna cuenta
+> ni configuración externa: en cuanto el repositorio está en GitHub con
+> Actions habilitado (viene activado por defecto), el workflow se
+> ejecuta solo. Si prefieres UptimeRobot en su lugar (por ejemplo, para
+> cubrir también fines de semana o fuera de horario laboral, cosa que
+> el workflow actual no hace a propósito, para no gastar minutos de
+> Actions sin necesidad), los pasos originales seguían siendo válidos:
+> https://uptimerobot.com, monitor HTTP(s) sobre `/ping`, cada 5-14 min.
 
 El endpoint `/ping` ya está incluido en `app.py` y devuelve `OK 200`.
 
@@ -203,7 +209,7 @@ partes de cero:
 | Render | Free | 0 € |
 | Supabase | Free (500 MB BD, 1 GB Storage) | 0 € |
 | EmailJS | Free tier | 0 € |
-| UptimeRobot | Free (50 monitores) | 0 € |
+| GitHub Actions (anti-sleep) | Free (2.000 min/mes privado, ilimitado público) | 0 € |
 | **TOTAL** | | **0 €/mes** |
 
 ---

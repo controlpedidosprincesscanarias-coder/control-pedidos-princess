@@ -25,6 +25,17 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Auditoría documental, Etapa 7: doc duplicado + UptimeRobot desactualizado + confirmación de código muerto (v12.30.79)
+
+- **Origen**: continuación de la auditoría general (Etapas 1-6, v12.30.73-78) tras revisar los 2 documentos que quedaban sin auditar.
+- **Hallazgo 1**: `CAMBIOS_solicitud_directa_backend.md` — nota de entrega obsoleta de un endpoint que lleva en producción desde v12.20.2 (58 versiones), con entrada más completa ya en `CHANGELOG.md`. Eliminado, junto con su referencia en `README.md`.
+- **Hallazgo 2**: "UptimeRobot" desactualizado en `GUIA_DESPLIEGUE.md` (stack, Paso 5, costes) y `README.md` (2 menciones) — el mecanismo real, documentado solo en este mismo historial pero nunca propagado a la guía del proyecto, es el workflow de GitHub Actions. Corregido en los 3 sitios + un comentario en `app.py`.
+- **Aviso fuera de alcance**: el repo hermano `control-pedidos-chat` tiene el mismo bug de cron frágil ante el cambio de hora que se corrigió aquí en la Etapa 5 — pendiente, en otro repositorio.
+- **Hallazgo 3 (negativo)**: rastreo estático de las 298 funciones de `app.py` — confirmado que no queda código muerto aparte del `init_db()` ya retirado en la Etapa 6.
+- **Entrega**: `GUIA_DESPLIEGUE.md`, `README.md`, `app.py` (comentario), eliminación de `CAMBIOS_solicitud_directa_backend.md`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Limpieza, Etapa 6 (última): variables sin uso en render.yaml + init_db() muerta en app.py (v12.30.78)
 
 - **Origen**: cierre de la auditoría general (Etapas 1-5, v12.30.73-77), petición inicial del usuario.

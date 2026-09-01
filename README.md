@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.78** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.79** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -54,10 +54,8 @@ docs/HISTORIAL_CAMBIOS.md Historial unificado de todo el ecosistema
                         Princess Compras (Control Pedidos + Organizador +
                         Chat + Infra), por fecha.
 GUIA_DESPLIEGUE.md        Guía paso a paso para desplegar desde cero
-                        (Supabase + Render + EmailJS + UptimeRobot).
+                        (Supabase + Render + EmailJS + GitHub Actions).
 INSTRUCCIONES_RESTAURACION.md  Cómo restaurar un backup de la base de datos.
-CAMBIOS_solicitud_directa_backend.md  Notas de un cambio concreto (solicitud
-                        directa de acceso), documentación puntual.
 ```
 
 ---
@@ -223,7 +221,7 @@ decidir antes ese criterio de desempate).
 ### Despliegue completo desde cero
 
 Sigue `GUIA_DESPLIEGUE.md` paso a paso (Supabase → EmailJS → Render →
-UptimeRobot).
+GitHub Actions).
 
 ### Desarrollo local (resumen rápido)
 

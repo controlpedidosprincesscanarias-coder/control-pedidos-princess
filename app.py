@@ -14861,7 +14861,7 @@ def delete_adjunto(aid):
     return jsonify({"ok": True})
 
 
-# ── Ping endpoint (UptimeRobot) ────────────────────────────────────────────────
+# ── Ping endpoint (usado por el workflow de anti-letargo, ver .github/workflows/keep-alive-princess.yml) ──
 
 @app.route("/ping")
 def ping():
