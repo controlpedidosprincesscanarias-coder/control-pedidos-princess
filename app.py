@@ -17,7 +17,7 @@ import requests
 
 from flask import Flask, request, jsonify, send_from_directory, session, g, Response
 from werkzeug.security import generate_password_hash, check_password_hash
-from models import SQL_STATEMENTS, ESTADOS_VALIDOS, ESTADOS_EMAIL_PROVEEDOR, ESTADOS_EMAIL_INTERNO
+from models import ESTADOS_VALIDOS, ESTADOS_EMAIL_PROVEEDOR, ESTADOS_EMAIL_INTERNO
 
 # ── Configuración ──────────────────────────────────────────────────────────────
 
@@ -1732,25 +1732,6 @@ def _track_egress(response):
     except Exception as e:
         log.debug(f"[EGRESS_TRACK] No se pudo registrar: {e}")
     return response
-
-def init_db():
-    """Ejecuta el esquema inicial en PostgreSQL. Llamar solo una vez."""
-    with app.app_context():
-        db = get_db()
-        with db.cursor() as cur:
-            for stmt in SQL_STATEMENTS:
-                cur.execute(stmt)
-            # Migración: añadir columnas nuevas a proveedores si no existen
-            for col_def in [
-                ("codigo",        "TEXT"),
-                ("movil",         "TEXT"),
-                ("observaciones", "TEXT"),
-            ]:
-                cur.execute(f"""
-                    ALTER TABLE proveedores ADD COLUMN IF NOT EXISTS {col_def[0]} {col_def[1]}
-                """)
-        db.commit()
-        log.info("Base de datos inicializada en PostgreSQL")
 
 def query(sql, args=(), one=False):
     """SELECT helper — devuelve list[RealDictRow] o un RealDictRow."""
@@ -9436,8 +9417,8 @@ def _ejecutar_comparacion_pdf_bg(job_id, hotel_id, pdf_bytes):
     fuera del ciclo petición/respuesta original, por eso necesita su
     propio contexto de aplicación (with app.app_context()) para poder
     usar query()/get_db(), que dependen de Flask g (con ámbito de
-    petición, no accesible desde un hilo nuevo sin esto). Mismo patrón ya
-    usado en init_db() para lo mismo.
+    petición, no accesible desde un hilo nuevo sin esto). Mismo patrón
+    usado en init_db.py para lo mismo.
     """
     import time as _time_pdf
     with app.app_context():

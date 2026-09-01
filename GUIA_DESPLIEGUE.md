@@ -121,7 +121,6 @@ momento, sin desplegar nada.
    | `SUPABASE_STORAGE_BUCKET` | No | Por defecto `adjuntos-cerrados` si no se define |
    | `DALI_SSO_SECRET` | Solo si integras con DALI | Debe ser idéntica a la del backend de DALI |
    | `DALI_FRONTEND_URL` | No | Por defecto el proxy Cloudflare de DALI ya en producción |
-   | `RESEND_API_KEY`, `EMAIL_FROM`, `EMAILS_INTERNOS` | No — **actualmente sin uso** | Declaradas en `render.yaml` pero ningún punto de `app.py` las lee hoy (email va por EmailJS, Paso 2; destinatarios internos se leen de la BD). Puedes dejarlas vacías; no bloquean nada. |
 
 5. Haz clic en **Create Web Service** y espera el primer deploy (~2 min).
 

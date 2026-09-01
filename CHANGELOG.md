@@ -1,3 +1,19 @@
+# v12.30.78 — 31 agosto 2026
+
+✨ Limpieza (Etapa 6, última de esta auditoría): variables sin uso en `render.yaml` + función muerta `init_db()` en `app.py`
+
+**Contexto**: cierre de la auditoría general iniciada a petición del usuario (Etapas 1-5, v12.30.73-77). Los dos últimos hallazgos, ambos ya señalados como "pendientes" en la Etapa 1, pero dejados fuera entonces por tocar configuración/código real en vez de solo documentación.
+
+**Hallazgo 1 — `render.yaml`**: `RESEND_API_KEY`, `EMAIL_FROM` y `EMAILS_INTERNOS` estaban declaradas como variables de entorno del servicio, pero una búsqueda completa en `app.py`/`models.py`/`init_db.py`/`templates/index.html` confirma que ninguna se lee en ningún punto (el email va por EmailJS desde el frontend — Paso 2 de `GUIA_DESPLIEGUE.md` — y los destinatarios internos se leen siempre de la BD, ver comentario ya existente en `app.py` línea 84). Eliminadas las 3 entradas de `envVars`. **Nota importante para el despliegue**: `render.yaml` solo aplica valores nuevos si el servicio está gestionado como Blueprint y se resincroniza — si ya tienes estas variables puestas a mano en el panel de Render, este cambio no las borra por sí solo; puedes quitarlas tú también desde ahí si quieres, o dejarlas (no hacen nada, pero tampoco estorban).
+
+**Hallazgo 2 — función muerta `init_db()` en `app.py`**: definida (~línea 1736) pero sin ninguna llamada en todo el proyecto — el proceso real de inicialización es el script independiente `init_db.py` (ya corregido en la documentación, Etapa 1). Eliminada, junto con el import ahora huérfano de `SQL_STATEMENTS` en la cabecera del fichero (`from models import ...`) y un comentario en `_ejecutar_comparacion_pdf_bg()` que la mencionaba como referencia de patrón — corregido para apuntar a `init_db.py`.
+
+**Verificación**: `python3 -m py_compile app.py models.py init_db.py` sin errores. Búsqueda completa confirmando cero llamadas residuales a `init_db()` ni a `SQL_STATEMENTS` fuera de comentarios descriptivos. `app.py` pasa de 17.463 a 17.444 líneas.
+
+**Entrega**: `render.yaml`, `app.py`, `GUIA_DESPLIEGUE.md` (tabla de variables sincronizada, ya no lista las 3 eliminadas), `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+**Con esta entrega se cierra la auditoría general** iniciada por el usuario (fallos, incongruencias, archivos fuera de lugar, documentación desactualizada): 6 etapas, v12.30.73 a v12.30.78.
+
 # v12.30.77 — 31 agosto 2026
 
 ✨ Auditoría/limpieza (Etapa 5): cron del keep-alive frágil ante el cambio de hora

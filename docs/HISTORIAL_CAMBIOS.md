@@ -25,6 +25,17 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Limpieza, Etapa 6 (última): variables sin uso en render.yaml + init_db() muerta en app.py (v12.30.78)
+
+- **Origen**: cierre de la auditoría general (Etapas 1-5, v12.30.73-77), petición inicial del usuario.
+- **Hallazgo 1**: `RESEND_API_KEY`/`EMAIL_FROM`/`EMAILS_INTERNOS` en `render.yaml`, sin uso real en ningún punto del código (email va por EmailJS; destinatarios internos se leen de la BD). Eliminadas de `envVars`.
+- **Hallazgo 2**: función `init_db()` en `app.py`, sin llamadas en todo el proyecto (el proceso real es el script `init_db.py`). Eliminada, junto con el import huérfano de `SQL_STATEMENTS` y un comentario que la referenciaba.
+- **Verificación**: `python3 -m py_compile app.py models.py init_db.py` sin errores; búsqueda completa sin referencias residuales.
+- **Entrega**: `render.yaml`, `app.py`, `GUIA_DESPLIEGUE.md` (tabla de variables), `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+- **Cierre**: con esta entrega termina la auditoría general solicitada por el usuario — 6 etapas, v12.30.73 a v12.30.78.
+
+---
+
 ## 2026-08-31 — [Infra] Auditoría/limpieza, Etapa 5: cron del keep-alive frágil ante el cambio de hora (v12.30.77)
 
 - **Origen**: continuación de la auditoría general (Etapas 1-4, v12.30.73-76).
