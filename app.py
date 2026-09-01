@@ -8654,6 +8654,35 @@ def set_usuario_comprador_hoteles(uid):
     return jsonify({"ok": True, "reasignados": reasignados})
 
 
+@app.route("/api/usuarios/hoteles-asignados")
+@admin_required
+def get_usuarios_hoteles_asignados():
+    """
+    (2026-09-01, repaso "agilizar y limpiar", Etapa 4) Versión "todos de
+    una vez" de GET /api/usuarios/<id>/hoteles y GET
+    /api/usuarios/<id>/hoteles-compras — esos dos endpoints se mantienen
+    tal cual (los sigue usando el modal de edición de un usuario
+    concreto), pero loadUsuarios() los llamaba una vez POR CADA usuario
+    con rol hotel/compras para pintar la tabla entera — con 40 usuarios,
+    eran ~40 peticiones solo para esto. Aquí se hacen las 2 consultas
+    (una por tabla) una única vez y se devuelven ya agrupadas por
+    usuario_id, sin tocar el modelo de datos ni los endpoints existentes.
+    """
+    hoteles_rows = rows_to_list(query(
+        "SELECT usuario_id, hotel_id FROM usuario_hoteles"
+    ))
+    compras_rows = rows_to_list(query(
+        "SELECT usuario_id, hotel_id FROM usuario_comprador_hoteles"
+    ))
+    hoteles = {}
+    for r in hoteles_rows:
+        hoteles.setdefault(r["usuario_id"], []).append(r["hotel_id"])
+    compras = {}
+    for r in compras_rows:
+        compras.setdefault(r["usuario_id"], []).append(r["hotel_id"])
+    return jsonify({"hoteles": hoteles, "compras": compras})
+
+
 @app.route("/api/compradores-por-hotel")
 @admin_required
 def get_compradores_por_hotel():

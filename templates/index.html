@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.87
+          V 12.30.88
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -9516,33 +9516,29 @@ async function loadUsuarios() {
     tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;padding:20px">No hay usuarios</td></tr>';
     return;
   }
-  // Para usuarios hotel, cargar sus hoteles asignados
-  const maestros = await api('/api/maestros');
-  const todosHoteles = (maestros && maestros.hoteles) ? maestros.hoteles : [];
+  // (2026-09-01, repaso "agilizar y limpiar", Etapa 4) Antes: una llamada
+  // a /api/maestros (redundante — G.maestros ya está cargado desde el
+  // arranque de la app, ver loadMaestros()) más una petición HTTP POR
+  // CADA usuario con rol hotel/compras para saber sus hoteles asignados
+  // — con 40 usuarios activos eran ~40 peticiones solo para pintar esta
+  // tabla. Ahora: 0 peticiones de más (se reutiliza G.maestros) + 1 sola
+  // llamada a /api/usuarios/hoteles-asignados que trae ya agrupadas las
+  // asignaciones de todos los usuarios a la vez.
   const hotelMap = {};
-  todosHoteles.forEach(h => hotelMap[h.id] = h.codigo);
+  ((G.maestros && G.maestros.hoteles) || []).forEach(h => hotelMap[h.id] = h.codigo);
 
-  // Cargar asignaciones de hoteles para usuarios tipo hotel
+  let asignaciones = { hoteles: {}, compras: {} };
+  try {
+    asignaciones = await api('/api/usuarios/hoteles-asignados') || asignaciones;
+  } catch(e) { /* si falla, se pinta la tabla igualmente sin las columnas de hoteles asignados */ }
   const asignMap = {};
-  await Promise.all(
-    rows.filter(u => u.rol === 'hotel').map(async u => {
-      try {
-        const ids = await api(`/api/usuarios/${u.id}/hoteles`);
-        asignMap[u.id] = (ids || []).map(id => hotelMap[id] || id);
-      } catch(e) { asignMap[u.id] = []; }
-    })
-  );
-
-  // Cargar asignaciones de hoteles para usuarios tipo compras
+  rows.filter(u => u.rol === 'hotel').forEach(u => {
+    asignMap[u.id] = ((asignaciones.hoteles && asignaciones.hoteles[u.id]) || []).map(id => hotelMap[id] || id);
+  });
   const compradorMap = {};
-  await Promise.all(
-    rows.filter(u => u.rol === 'compras' || u.rol === 'user').map(async u => {
-      try {
-        const ids = await api(`/api/usuarios/${u.id}/hoteles-compras`);
-        compradorMap[u.id] = (ids || []).map(id => hotelMap[id] || id);
-      } catch(e) { compradorMap[u.id] = []; }
-    })
-  );
+  rows.filter(u => u.rol === 'compras' || u.rol === 'user').forEach(u => {
+    compradorMap[u.id] = ((asignaciones.compras && asignaciones.compras[u.id]) || []).map(id => hotelMap[id] || id);
+  });
 
   tbody.innerHTML = rows.map(u => {
     const rolBadge = u.rol === 'admin'

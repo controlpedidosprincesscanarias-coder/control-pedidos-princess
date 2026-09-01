@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.87** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.88** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -235,10 +235,18 @@ cada recarga).
   está en vez de paginarlo; el histórico completo ahora se consulta a
   través del botón de exportar, no de esa dirección.
 
-**Pendiente (repaso "agilizar y limpiar", septiembre 2026, con foco en
-egress de Supabase además de velocidad):** `loadUsuarios()` hace una
-petición HTTP por cada usuario con hoteles asignados, más una llamada
-redundante a `/api/maestros` que ya está en caché. No tocado todavía.
+- **Etapa 7 (v12.30.88, última del repaso "agilizar y limpiar")** —
+  `loadUsuarios()` (pestaña Usuarios · Admin) hacía una petición HTTP
+  por cada usuario con hoteles asignados más una llamada redundante a
+  `/api/maestros` (ya cargado en `G.maestros` desde el arranque de la
+  app) — con 40 usuarios, ~40 peticiones solo para pintar esa tabla.
+  Nuevo `GET /api/usuarios/hoteles-asignados` trae las asignaciones de
+  todos los usuarios de una sola vez; los endpoints por usuario
+  (`GET /api/usuarios/<id>/hoteles[-compras]`) se mantienen tal cual,
+  los sigue usando el modal de edición de un usuario concreto.
+
+Con esto se cierran las 7 etapas del repaso "agilizar y limpiar"
+(v12.30.85-88) iniciado a petición de Víctor.
 
 ---
 

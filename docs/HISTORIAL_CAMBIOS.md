@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-01 — [Control Pedidos] Repaso "agilizar y limpiar", Etapa 4 (última): `loadUsuarios()` deja de hacer una petición por usuario (v12.30.88)
+
+- **Origen**: última etapa pendiente del repaso; Víctor confirmó seguir adelante ("CON QUE SEGUIMOS?").
+- **Hallazgo** (ya identificado en la auditoría inicial, v12.30.85): `loadUsuarios()` llamaba a `/api/maestros` de forma redundante (`G.maestros` ya está en memoria desde el arranque) y hacía una petición HTTP por cada usuario con rol hotel/compras/user para sus hoteles asignados — con 40 usuarios, ~40 peticiones solo para pintar la pestaña.
+- **Cambio en `app.py`**: nuevo `GET /api/usuarios/hoteles-asignados` — 2 consultas totales (`usuario_hoteles`, `usuario_comprador_hoteles`), agrupadas por `usuario_id` en Python. Los endpoints por usuario existentes no se tocan (los sigue usando el modal de edición).
+- **Cambio en `templates/index.html`**: `loadUsuarios()` reescrita — ya no llama a `/api/maestros` (reutiliza `G.maestros.hoteles`) ni hace una llamada por usuario; una sola llamada a `/api/usuarios/hoteles-asignados`. Si falla, la tabla se pinta igual sin esas columnas en vez de romperse.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; `node --check` sobre los `<script>`. Agrupación del backend probada con datos de ejemplo. Frontend probado con harness Playwright y `api()` simulada (5 usuarios, los 4 roles): 2 llamadas totales en vez de 6 en este ejemplo pequeño (y la diferencia crece con cada usuario), mismos datos mostrados que antes por rol — 10 comprobaciones, todas correctas.
+- **Cierre**: con esta entrega terminan las 4 etapas del repaso "agilizar y limpiar" (v12.30.85 a v12.30.88).
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `requirements.txt` no cambia.
+
+---
+
 ## 2026-09-01 — [Control Pedidos] Repaso "agilizar y limpiar", Etapa 3: botón "Exportar histórico" de expedientes a Excel (v12.30.87)
 
 - **Origen**: cierre de la duda abierta en v12.30.86 sobre si algo externo consumía `GET /api/expedientes` sin paginar. Víctor preguntó si el botón "Imprimir" de Techo de Gastos ya mostraba esa información — se comprobó que no (usa `/api/techo/resumen-historico`, siempre acotado a un mes/año, fuente distinta) — y a partir de ahí pidió una solución mejor que paginar: un botón para exportar el histórico completo a Excel, "en cualquier momento".

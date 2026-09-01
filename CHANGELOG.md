@@ -1,3 +1,21 @@
+# v12.30.88 — 1 septiembre 2026
+
+✨ Repaso "agilizar y limpiar" (Etapa 4, última): `loadUsuarios()` deja de hacer una petición por usuario
+
+**Contexto**: última etapa pendiente del repaso iniciado tras el cierre de la documentación (v12.30.83-84). Confirmado con Víctor seguir adelante.
+
+**Hallazgo (ya verificado en la auditoría inicial, v12.30.85)**: `loadUsuarios()` (pestaña Usuarios · Admin) hacía una llamada redundante a `/api/maestros` — con `G.maestros` ya cargado en memoria desde el arranque de la app (`loadMaestros()`, que se ejecuta una vez al iniciar sesión) — y además una petición HTTP **por cada usuario** con rol hotel o compras/user, para averiguar sus hoteles asignados. Con 40 usuarios activos, abrir esta pestaña disparaba del orden de 40 peticiones solo para pintar la tabla.
+
+**Cambio en `app.py`**: nuevo `GET /api/usuarios/hoteles-asignados` — 2 consultas (una a `usuario_hoteles`, otra a `usuario_comprador_hoteles`), sin JOIN ni filtro por usuario, agrupadas en Python por `usuario_id` antes de devolverlas. Los endpoints existentes `GET /api/usuarios/<id>/hoteles` y `GET /api/usuarios/<id>/hoteles-compras` **no se tocan** — los sigue usando el modal de edición de un usuario concreto, que solo necesita los de uno.
+
+**Cambio en `templates/index.html`**: `loadUsuarios()` reescrita — ya no llama a `/api/maestros` (reutiliza `G.maestros.hoteles`) ni hace una llamada por usuario; una única llamada a `/api/usuarios/hoteles-asignados` trae ya agrupadas las asignaciones de todos. Si esa llamada falla, la tabla se pinta igualmente (sin las columnas de hoteles asignados) en vez de romperse entera.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; `node --check` sobre los `<script>` de `index.html`. Lógica de agrupación del backend probada con datos de ejemplo (varios hoteles por usuario, usuarios sin ninguno). Frontend probado con un harness Playwright y `api()` simulada (5 usuarios con los 4 roles): confirmado que ahora se hacen exactamente 2 llamadas en total (antes séria 1+1+2+2=6 solo para este ejemplo pequeño, y crecería con cada usuario nuevo) y que las columnas de hoteles asignados muestran los mismos datos que antes para cada rol — 10 comprobaciones, todas correctas.
+
+**Con esta entrega se cierran las 4 etapas del repaso "agilizar y limpiar"** (v12.30.85 a v12.30.88): índices que faltaban, papelera de Eliminados paginada, exportación de expedientes a Excel, y esta última.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md` (versión actual + sección "Rendimiento" — Etapa 7 añadida, nota "Pendiente" ya vacía), más este historial/`CHANGELOG.md`. `requirements.txt` no cambia.
+
 # v12.30.87 — 1 septiembre 2026
 
 ✨ Repaso "agilizar y limpiar" (Etapa 3): botón "Exportar histórico" de expedientes a Excel — y cierre de la duda sobre `/api/expedientes`
