@@ -25,6 +25,17 @@
 
 ---
 
+## 2026-09-01 — [Control Pedidos] Reproducibilidad, Etapa 9 (última): requirements.txt fijado a versiones exactas (v12.30.81)
+
+- **Origen**: cierre del segundo punto pendiente de la auditoría general (Etapas 1-8, v12.30.73-80). `requirements.txt` usaba `>=`, con riesgo de que un deploy nuevo instalara silenciosamente una versión más reciente y rompiera algo sin cambios de código.
+- **Origen de los números**: log de build real de Render pegado por el usuario (Shell no disponible en plan free) — no inventados.
+- **Cambio**: las 9 dependencias directas fijadas con `==`, más las 12 transitivas también fijadas explícitamente, para reproducibilidad completa del entorno.
+- **Verificación**: instalado en un venv limpio en este entorno de trabajo, sin errores ni conflictos. No se ha probado la app real contra estas versiones (son las mismas que ya corren en Render).
+- **Entrega**: `requirements.txt`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+- **Cierre**: con esta entrega termina también el segundo (y último) punto pendiente de la auditoría general — 9 etapas, v12.30.73 a v12.30.81.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Limpieza, Etapa 8: 2 columnas muertas en 4 consultas de pedidos (v12.30.80)
 
 - **Origen**: al aclarar con el usuario el criterio de negocio de `PEDIDO_SELECT` (v12.30.79), se confirmó que 2 de los 5 campos de proveedor (`proveedor_movil`, `proveedor_contacto_nombre`) no los lee nadie en toda la aplicación.

@@ -1,3 +1,21 @@
+# v12.30.81 — 1 septiembre 2026
+
+✨ Reproducibilidad (Etapa 9, última): `requirements.txt` fijado a versiones exactas
+
+**Contexto**: cierre del último punto pendiente de la auditoría general (Etapas 1-8, v12.30.73-80). `requirements.txt` usaba `>=` en las 9 dependencias directas — cada deploy nuevo podía instalar una versión más reciente que la ya probada, sin que nadie lo decidiera a propósito, con riesgo de que algo se rompiera en producción sin haber tocado una sola línea de código.
+
+**Origen de los números**: no se han adivinado ni copiado de memoria. El usuario pegó el log de build real de Render (1 sept 2026, línea `Successfully installed ...`) con lo que su servicio tiene instalado ahora mismo — Shell no está disponible en el plan free para hacer `pip freeze` directamente, así que se usó el log de build como alternativa (misma información).
+
+**Cambio**: `requirements.txt` reescrito con `==` en vez de `>=` en las 9 dependencias directas, y además con las 12 transitivas (dependencias de las dependencias — Werkzeug, Jinja2, urllib3, etc.) también fijadas explícitamente, en vez de dejarlas sin listar (que es lo habitual, pero deja resolverlas a pip en cada build según lo que haya disponible ese día — el mismo problema que se quería resolver, solo que un nivel más abajo). Con las 21 líneas fijadas, un `pip install -r requirements.txt` instala exactamente lo mismo hoy que dentro de un año, sin sorpresas.
+
+**Verificación**: se instaló el `requirements.txt` nuevo en un entorno virtual limpio, en este mismo entorno de trabajo — `pip install -r requirements.txt` termina sin errores ni conflictos de versiones. No se ha podido probar arrancando la app real contra estas versiones exactas (no hay acceso a la base de datos de producción desde aquí); dado que son las mismas versiones que Render ya tiene funcionando ahora mismo, no debería haber ningún cambio de comportamiento — este cambio solo evita que el *próximo* deploy silenciosamente instale algo distinto.
+
+**Mantenimiento futuro**: si se actualiza una dependencia a propósito (por ejemplo, subir Flask por una vulnerabilidad), hay que volver a fijar el archivo entero con el log de build del deploy siguiente — no basta con cambiar solo esa línea, porque sus propias dependencias transitivas también pueden cambiar.
+
+**Entrega**: `requirements.txt`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+**Con esta entrega se cierra también el segundo punto que quedaba pendiente de la auditoría general** (v12.30.73 a v12.30.81, 9 etapas en total).
+
 # v12.30.80 — 31 agosto 2026
 
 ✨ Limpieza (Etapa 8): 2 columnas muertas quitadas de 4 consultas de pedidos — sin tocar la agenda de proveedores
