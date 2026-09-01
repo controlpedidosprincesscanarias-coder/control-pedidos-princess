@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.88** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.89** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -138,9 +138,12 @@ confundirse entre sí, ver más abajo):
   "Parámetros de alertas", donde estaba mezclada con umbrales de alerta
   sin relación con esto) — credenciales y rotación automática de las 3
   cuentas EmailJS, cupo consumido, y la cola de correos de sistema
-  pendientes de enviar (con la opción de descartar a mano una fila
-  atascada). Mismo endpoint de siempre (`/api/admin/config-alertas`),
-  solo cambió dónde se edita.
+  pendientes de enviar (con la opción de descartar/reactivar a mano una
+  fila atascada). Mismo endpoint de siempre (`/api/admin/config-alertas`),
+  solo cambió dónde se edita. Desde v12.30.89, una fila que sí llegó a
+  enviarse de verdad pero cuya confirmación en BD falló se distingue con
+  "✅ se envió, sin confirmar en BD" y un botón "Marcar como enviado" —
+  nunca "Reactivar" para estas, que sí reenviaría el correo de verdad.
 - **Restaurar backup** — gestión de backups de la base de datos.
 
 ### Roles de usuario

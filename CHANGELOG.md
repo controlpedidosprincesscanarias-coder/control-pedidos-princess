@@ -1,3 +1,26 @@
+# v12.30.89 — 1 septiembre 2026
+
+✨ Corrección: duplicados reales del correo interno de cambio de estado (ENVIADO AL PROVEEDOR) — causa raíz + red de seguridad
+
+**Contexto**: Víctor reportó que el correo interno de cambio de estado (enviado al proveedor / entrega parcial / entrega total) se estaba enviando varias veces, descontando cupo de EmailJS en cada envío. Aportó capturas de Gmail (3 correos idénticos espaciados 5 min, para los pedidos LP 16445, IT 28252 y GY 41254) y, tras dos intentos con la franja horaria equivocada, el log real de Render de la franja del incidente (12:26–12:36 UTC).
+
+**Diagnóstico**: el flujo normal es `emailjs.send()` (entrega real) → el navegador confirma con `POST /api/emails-sistema-pendientes/<id>/marcar-enviado`. Si esa confirmación fallaba (antes: 3 reintentos de ~1s), la fila quedaba `enviado=FALSE`, la reserva de 2 min caducaba, y el siguiente sondeo del poller (5 min después) la reclamaba y volvía a llamar a `emailjs.send()` **de verdad** — un envío real duplicado, no un simple reintento. El log de la franja correcta mostró el patrón exacto: de cada 2 filas por pedido, la del correo al proveedor confirmaba con 200 a la primera, y la del correo interno (la que activa `marca_comunicado_ab`/`marca_comunicado_jefe_dep`) devolvía **500 de forma 100% determinista**, repetido igual en los 3 ciclos del poller (12:26, 12:31, 12:36) — no era mala suerte de red.
+
+**Causa raíz**: `pedidos.comunicado_ab`/`comunicado_jefe_dep` son columnas `INTEGER` (0/1), como en todo el resto de `app.py`. El bloque añadido el 31-08 en `api_marcar_email_sistema_enviado` hacía `comunicado_ab = (comunicado_ab OR %s)` — el operador lógico `OR` de SQL aplicado directamente sobre un entero, que PostgreSQL rechaza con un error de tipo siempre. Esa rama solo se ejecuta cuando el correo trae `marca_comunicado_ab`/`marca_comunicado_jefe_dep` a `True`, y eso solo ocurre en el correo interno de "ENVIADO AL PROVEEDOR" — de ahí que fallasen justo esos correos, y solo esos, el 100% de las veces.
+
+**Cambio en `app.py`**:
+- **Fix de la causa raíz**: `comunicado_ab = (comunicado_ab OR %s)` / `comunicado_jefe_dep = (comunicado_jefe_dep OR %s)` → `GREATEST(comunicado_ab, %s)` / `GREATEST(comunicado_jefe_dep, %s)`, pasando los parámetros como enteros 0/1 (mismo patrón que usa el resto de la app), no como booleanos de Python.
+- **Red de seguridad** (para que un fallo de confirmación, sea cual sea su causa, no vuelva a traducirse en un reenvío real): nueva columna `emails_sistema_pendientes.enviado_no_confirmado` (migración idempotente, mismo patrón que las columnas `marca_comunicado_*`) y nuevo endpoint `POST /api/emails-sistema-pendientes/<id>/marcar-enviado-no-confirmado` — deliberadamente mínimo (un único UPDATE, sin tocar `pedidos` ni las columnas `comunicado_*`), para tener muchas más papeletas de funcionar incluso si el fallo viniera de ese mismo bloque. Sube `intentos` a `MAX_INTENTOS_EMAIL_SISTEMA`: la fila deja de reclamarse para siempre en vez de esperar a que caduque la reserva de 2 min y reenviarse. `api_emails_sistema_atascados` devuelve ahora también `enviado_no_confirmado`.
+
+**Cambio en `templates/index.html`**:
+- Confirmación (`marcar-enviado`) más robusta: de 3 intentos en ~2s a 7 intentos con backoff hasta ~90s, para dar margen de sobra a un fallo de red puntual.
+- Si aun así se agotan los reintentos, se llama al nuevo endpoint de bloqueo en vez de dejar la fila expuesta a que la reclame el poller.
+- Panel "Emails de sistema atascados" (Admin): estas filas se distinguen ahora con "✅ se envió, sin confirmar en BD" y un botón nuevo **"Marcar como enviado"** — nunca "Reactivar", que sí volvería a llamar a EmailJS de verdad y duplicaría el envío.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre los bloques `<script>` de `index.html` tocados (poller de emails de sistema y panel de atascados). Diagnóstico confirmado contra los logs reales de Render de la franja del incidente (patrón alternado 200/500×3 por pedido, idéntico en los 3 ciclos del poller). No se ha podido reproducir el fix contra una base de datos real desde este entorno (sin acceso a Supabase de producción); recomendable confirmar tras desplegar que el próximo "ENVIADO AL PROVEEDOR" confirma a la primera y que el panel de atascados muestra correctamente el nuevo estado si se fuerza un fallo.
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md` (versión actual + sección "Sistema · Admin"), más este historial/`CHANGELOG.md`. `requirements.txt` no cambia. `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` y `docs/hallazgo-seguridad-princess.md` revisados — no aplica, ninguno documenta esta cola ni estas columnas.
+
 # v12.30.88 — 1 septiembre 2026
 
 ✨ Repaso "agilizar y limpiar" (Etapa 4, última): `loadUsuarios()` deja de hacer una petición por usuario

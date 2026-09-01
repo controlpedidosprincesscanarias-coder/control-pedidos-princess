@@ -454,6 +454,27 @@ def _auto_migrate():
                 )
             except Exception as e:
                 log.warning(f"No se pudo añadir la columna emails_sistema_pendientes.marca_comunicado_jefe_dep: {e}")
+            # (2026-09-01) Fix duplicados reales de correo interno de cambio de
+            # estado (ENVIADO AL PROVEEDOR / ENTREGA PARCIAL / ENTREGADO):
+            # cuando emailjs.send() ya ha entregado el correo DE VERDAD pero la
+            # confirmación posterior (marcar-enviado) falla repetidamente, la
+            # fila se quedaba enviado=FALSE y la reserva de 2 min caducaba —
+            # el siguiente sondeo (5 min después) la reclamaba y volvía a
+            # llamar a emailjs.send() de verdad: un segundo correo real, no un
+            # simple reintento. Esta columna marca esas filas como "se entregó
+            # pero no se pudo confirmar en BD" para (a) que el poller deje de
+            # reclamarlas para siempre (ver api_marcar_email_sistema_enviado_
+            # no_confirmado, que sube intentos a MAX_INTENTOS_EMAIL_SISTEMA) y
+            # (b) que el panel de admin las distinga de un fallo real de envío
+            # — con "Marcar como enviado" en vez de "Reactivar", para no
+            # arriesgarse a un reenvío real por error.
+            try:
+                cur.execute(
+                    "ALTER TABLE emails_sistema_pendientes "
+                    "ADD COLUMN IF NOT EXISTS enviado_no_confirmado BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo añadir la columna emails_sistema_pendientes.enviado_no_confirmado: {e}")
             # ── Correo de departamento por hotel (2026-08-28) ────────────────
             # A petición de Víctor: cada hotel tiene un correo distinto para
             # el mismo departamento (RESTAURANTE de JN != RESTAURANTE de GY),
@@ -17195,7 +17216,7 @@ def api_emails_sistema_atascados():
     try:
         rows = rows_to_list(query(
             """SELECT id, evento_codigo, destinatario, asunto, LENGTH(cuerpo_html) as tam_html,
-                      intentos, creado_en, descartado_en,
+                      intentos, creado_en, descartado_en, enviado_no_confirmado,
                       (intentos >= %s OR descartado_en IS NOT NULL) AS atascado
                  FROM emails_sistema_pendientes
                 WHERE enviado = FALSE
@@ -17290,17 +17311,72 @@ def api_marcar_email_sistema_enviado(email_id):
         )
         fila = cur.fetchone()
         if fila and fila.get("pedido_id") and (fila.get("marca_comunicado_ab") or fila.get("marca_comunicado_jefe_dep")):
+            # (2026-09-01) FIX: pedidos.comunicado_ab / comunicado_jefe_dep son
+            # columnas INTEGER (0/1) — igual que en el resto de la app (ver
+            # api_guardar_pedido, api_actualizar_pedido: "1 if data.get(...)
+            # else 0"). El `comunicado_ab OR %s` de antes aplicaba el
+            # operador lógico OR de SQL directamente sobre un INTEGER, lo
+            # cual PostgreSQL rechaza con un error de tipo — de forma
+            # SIEMPRE determinista, nunca aleatoria, cada vez que esta rama
+            # se ejecutaba (marca_comunicado_ab o marca_comunicado_jefe_dep
+            # a True). Como esa rama SOLO se activa para el correo interno
+            # de "ENVIADO AL PROVEEDOR" (el único evento que pone estas
+            # marcas), esto explica por qué justo esos envíos — y solo esos
+            # — devolvían 500 en marcar-enviado el 100% de las veces,
+            # provocando el reenvío real duplicado que reportó Víctor.
+            # GREATEST(entero, entero) da el mismo resultado que un OR
+            # lógico para valores 0/1, sin el problema de tipos.
             execute(
                 "UPDATE pedidos SET "
-                "comunicado_ab = (comunicado_ab OR %s), "
-                "comunicado_jefe_dep = (comunicado_jefe_dep OR %s) "
+                "comunicado_ab = GREATEST(comunicado_ab, %s), "
+                "comunicado_jefe_dep = GREATEST(comunicado_jefe_dep, %s) "
                 "WHERE id=%s",
-                (bool(fila.get("marca_comunicado_ab")), bool(fila.get("marca_comunicado_jefe_dep")), fila["pedido_id"])
+                (1 if fila.get("marca_comunicado_ab") else 0,
+                 1 if fila.get("marca_comunicado_jefe_dep") else 0,
+                 fila["pedido_id"])
             )
         get_db().commit()
         return jsonify({"ok": True})
     except Exception as exc:
         log.error("[EMAILS-SISTEMA] Error marcando enviado id=%s: %s", email_id, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/emails-sistema-pendientes/<int:email_id>/marcar-enviado-no-confirmado", methods=["POST"])
+@login_required
+def api_marcar_email_sistema_enviado_no_confirmado(email_id):
+    """POST /api/emails-sistema-pendientes/<id>/marcar-enviado-no-confirmado
+
+    (2026-09-01) El navegador llama a esto cuando emailjs.send() SÍ ha
+    entregado el correo de verdad pero la confirmación normal
+    (marcar-enviado, varios intentos) ha fallado igualmente. A propósito
+    es una operación mínima y aislada — un único UPDATE sin tocar
+    `pedidos` ni las columnas comunicado_ab/jefe_dep — para que tenga
+    muchas más papeletas de funcionar incluso si el fallo de la
+    confirmación normal viniera de ese bloque concreto.
+
+    Sube `intentos` a MAX_INTENTOS_EMAIL_SISTEMA: dado que el correo YA
+    se entregó, no debe volver a reclamarse ni reenviarse nunca — antes,
+    al quedar enviado=FALSE, la reserva de 2 minutos caducaba y el
+    siguiente sondeo (u otra pestaña) volvía a llamar a emailjs.send()
+    de verdad, duplicando la entrega real cada vez que la confirmación
+    fallaba. `enviado_no_confirmado=TRUE` dejar rastro para el panel de
+    admin (ver api_emails_sistema_atascados): así se distingue de una
+    fila que nunca llegó a enviarse (esas sí pueden "Reactivarse" con
+    seguridad; estas no deben reenviarse jamás, solo cerrarse a mano con
+    "Marcar como enviado").
+    """
+    try:
+        execute(
+            "UPDATE emails_sistema_pendientes "
+            "SET intentos = %s, en_proceso_desde = NOW(), enviado_no_confirmado = TRUE "
+            "WHERE id=%s AND enviado = FALSE",
+            (MAX_INTENTOS_EMAIL_SISTEMA, email_id)
+        )
+        get_db().commit()
+        return jsonify({"ok": True})
+    except Exception as exc:
+        log.error("[EMAILS-SISTEMA] Error marcando enviado-no-confirmado id=%s: %s", email_id, exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
