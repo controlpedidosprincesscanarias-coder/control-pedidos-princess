@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.91** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.92** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -152,7 +152,12 @@ confundirse entre sí, ver más abajo):
   igual que si se hubiera confirmado a la primera. Desde v12.30.91, ese
   mismo botón está disponible también para filas ya descartadas a mano
   (junto a "Reactivar") — a diferencia de "Reactivar", "Marcar como
-  enviado" nunca reenvía el correo, solo cierra el registro.
+  enviado" nunca reenvía el correo, solo cierra el registro. Desde
+  v12.30.92, las 3 fechas "Reinicia cupo el" (una por cuenta EmailJS)
+  ya no hay que actualizarlas a mano cada mes: un job diario (06:00,
+  todos los días) las avanza solo +30 días en cuanto se cumplen, así
+  el panel siempre muestra la próxima fecha real sin entrar a
+  EmailJS.com.
 - **Restaurar backup** — gestión de backups de la base de datos.
 
 ### Roles de usuario

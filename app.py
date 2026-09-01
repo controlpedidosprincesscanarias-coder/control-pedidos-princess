@@ -15888,6 +15888,55 @@ def _job_purgar_emails_sistema_descartados():
             log.error("[EMAILS-SISTEMA] Error purgando descartados: %s", exc)
 
 
+def _job_avanzar_reinicio_emailjs():
+    """
+    (2026-09-01) Job diario: las 3 fechas `emailjs_reinicio_fecha_N` son
+    puramente informativas — el admin las copiaba a mano desde el panel de
+    cada cuenta en EmailJS.com para saber cuándo recupera su cupo mensual,
+    y ningún otro código las lee (el cambio real de cuenta activa depende
+    solo del contador de envíos, ver /api/emailjs/registrar-envio).
+
+    Para no tener que entrar a mirar las 3 cuentas cada mes: en cuanto la
+    fecha guardada de una cuenta ya ha pasado (hoy > fecha), se avanza ella
+    sola +30 días (el ciclo gratuito de EmailJS es rolling de 30 días desde
+    el último reinicio, no mes de calendario — por eso +30 días y no "+1
+    mes", que además tropezaría con meses de distinta duración). Si el
+    servidor ha estado parado más de un ciclo, avanza de 30 en 30 hasta que
+    la fecha vuelva a caer en el futuro, para no arrastrar un desfase.
+
+    Puramente informativo: si en algún momento el ciclo real de una cuenta
+    en EmailJS.com se desvía (p.ej. tras un cambio manual de plan), basta
+    con corregir la fecha a mano una vez en Admin y el job sigue avanzándola
+    sola desde ahí.
+    """
+    with app.app_context():
+        try:
+            db  = get_db()
+            cur = db.cursor()
+            c   = get_config()
+            hoy = _hoy_canarias()
+            for n in (1, 2, 3):
+                clave = f"emailjs_reinicio_fecha_{n}"
+                valor = (c.get(clave) or "").strip()
+                if not valor:
+                    continue
+                try:
+                    fecha = datetime.strptime(valor, "%Y-%m-%d").date()
+                except ValueError:
+                    log.warning("[EMAILJS] %s con formato de fecha inválido: %r — se ignora", clave, valor)
+                    continue
+                original = fecha
+                while fecha <= hoy:
+                    fecha += timedelta(days=30)
+                if fecha != original:
+                    nueva = fecha.isoformat()
+                    cur.execute("UPDATE config_alertas SET valor=%s WHERE clave=%s", (nueva, clave))
+                    log.info("[EMAILJS] %s vencida (%s) — avanzada a %s (+30 días)", clave, original.isoformat(), nueva)
+            db.commit()
+        except Exception as exc:
+            log.error("[EMAILJS] Error avanzando fechas de reinicio de cupo: %s", exc)
+
+
 def _job_health_check(force: bool = False):
     """
     Job diario (07:05 hora Canarias): valida integridad operativa y envía
@@ -16161,6 +16210,20 @@ def _iniciar_scheduler():
         replace_existing=True,
         misfire_grace_time=3600,
     )
+    # Avance automático de las fechas de "reinicia cupo" de las 3 cuentas
+    # EmailJS: diario a las 06:00, TODOS los días (el cupo de EmailJS
+    # también se resetea en fin de semana, a diferencia del resto de jobs
+    # de esta lista que sí respetan lun-vie).
+    scheduler.add_job(
+        _job_avanzar_reinicio_emailjs,
+        trigger="cron",
+        hour="6",
+        minute="0",
+        second="0",
+        id="avanzar_reinicio_emailjs",
+        replace_existing=True,
+        misfire_grace_time=3600,
+    )
     scheduler.start()
     log.info("✅ Scheduler iniciado — alertas cada 60s, lun-vie 07:00-16:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — techo URGENTE admins cada 60s, lun-vie 07:00-16:59 (Atlantic/Canary)")
@@ -16172,6 +16235,7 @@ def _iniciar_scheduler():
     log.info("✅ Scheduler — alerta combinada de consumo (egress + tamaño BD) diaria, lun-vie 08:30 (Atlantic/Canary)")
     log.info("✅ Scheduler — recordatorio de emails de sistema pendientes cada 10 min, lun-vie 07:00-21:00 (Atlantic/Canary)")
     log.info("✅ Scheduler — purga de correos de sistema descartados hace >2 días, diaria a las 04:00, todos los días (Atlantic/Canary)")
+    log.info("✅ Scheduler — avance automático de fechas 'reinicia cupo' EmailJS, diario a las 06:00, todos los días (Atlantic/Canary)")
     atexit.register(lambda: scheduler.shutdown(wait=False))
 
 _iniciar_scheduler()

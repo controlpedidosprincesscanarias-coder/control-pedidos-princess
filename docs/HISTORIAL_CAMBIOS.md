@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-01 — [Control Pedidos] Admin → EmailJS: las 3 fechas "Reinicia cupo el" se avanzan solas (+30 días), sin entrar a EmailJS.com cada mes (v12.30.92)
+
+- **Origen**: Víctor preguntó si el plan gratuito de EmailJS es mensual y, confirmado que sí, pidió automatizar el avance de las 3 fechas "Reinicia cupo el" (`emailjs_reinicio_fecha_1/2/3`, una por cuenta) para no tener que entrar a los paneles de EmailJS.com a copiarlas a mano cada ciclo.
+- **Estado previo**: esas 3 fechas son puramente informativas desde que se añadieron en v12.30.14 (ver entrada de esa versión más abajo) — ningún código las leía; el cambio real de cuenta activa (rotación 1→2→3→1) depende solo del contador de envíos llegando al umbral configurable (195/200 por defecto), no de estas fechas.
+- **Por qué +30 días y no "+1 mes"**: el ciclo gratuito de EmailJS es un *rolling* de 30 días desde el último reinicio, no un mes de calendario. Sumar un mes de calendario habría arrastrado un desfase en cuanto el mes de origen o destino tuviera menos de 31 días — caso real detectado en la propia conversación: la cuenta 2 tenía guardado 31/08/2026, y septiembre no tiene día 31.
+- **Cambio en `app.py`**: nuevo job `_job_avanzar_reinicio_emailjs()` — por cada una de las 3 cuentas, si su fecha guardada ya pasó (`hoy > fecha`), le suma +30 días; si el servidor ha estado parado más de un ciclo sin correr el job, repite la suma hasta que la fecha vuelva a caer en el futuro (evita arrastrar un desfase acumulado). Registrado en `_iniciar_scheduler()` como `avanzar_reinicio_emailjs`, cron diario a las 06:00, **todos los días** (a diferencia de la mayoría de jobs de este scheduler, que solo corren lun-vie — el cupo de EmailJS también se resetea en fin de semana). Puramente informativo: no toca `emailjs_cuenta_activa` ni `emailjs_contador`, ni la rotación real de cuentas.
+- **Verificación**: `python3 -m py_compile app.py` sin errores de sintaxis. No probado en vivo contra el scheduler real de producción (sin acceso desde este entorno) — a confirmar en el primer ciclo tras desplegar: la fecha de la cuenta 2 (31/08/2026, ya vencida a fecha de esta entrega) debería avanzar sola a 30/09/2026 en el primer job de las 06:00.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md` — no aplica, ninguno documenta el detalle de estas fechas ni el cambio afecta a pasos de despliegue o restauración. `docs/hallazgo-seguridad-princess.md` no existe en este repo. `README.md` sí — versión actual y sección "Sistema · Admin" (bullet "EmailJS y cola de correo").
+- **Entrega**: `app.py` (job nuevo + alta en el scheduler), `templates/index.html` (badge de versión), `README.md` (versión actual + sección "Sistema · Admin"), más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-01 — [Control Pedidos] Panel "Emails de sistema atascados": también cierra sin reenviar las filas ya DESCARTADAS a mano (v12.30.91)
 
 - **Origen**: al revisar el panel en vivo tras la v12.30.90, las 3 filas del incidente original (pedidos 16445/28252/41254) resultaron estar ya "descartadas" (alguien las descartó a mano cuando esa era la única opción disponible), no "paradas" como se había asumido — así que el botón nuevo de la v12.30.90 (pensado para filas "paradas") no las cubría: seguían mostrando solo "↻ Reactivar", que sí reenvía el correo de verdad y habría producido un 4º envío real.

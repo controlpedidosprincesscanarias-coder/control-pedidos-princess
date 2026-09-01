@@ -1,3 +1,21 @@
+# v12.30.92 — 1 septiembre 2026
+
+✨ Admin → "EmailJS y cola de correo": las 3 fechas "Reinicia cupo el" se avanzan solas, ya no hace falta entrar a EmailJS.com cada mes a copiarlas a mano
+
+**Petición de Víctor**: confirmar si el plan gratuito de EmailJS es mensual y, si es así, automatizar el avance de las 3 fechas de "Reinicia cupo el" (una por cuenta) para no tener que entrar a los paneles de EmailJS.com a mirarlas.
+
+**Contexto**: esas 3 fechas (`emailjs_reinicio_fecha_1/2/3`) son puramente informativas desde que se añadieron en v12.30.14 — el admin las copiaba a mano desde el panel de cada cuenta en EmailJS.com; ningún otro código las lee, y el cambio real de cuenta activa depende solo del contador de envíos llegando al umbral (195/200 por defecto), no de estas fechas. El ciclo gratuito de EmailJS es un rolling de 30 días desde el último reinicio (no un mes de calendario), así que "sumar un mes" habría arrastrado un desfase cada vez que el mes de origen o destino tuviera menos de 31 días (p. ej. 31 de agosto → no hay 31 de septiembre).
+
+**Cambio en `app.py`**: nuevo job `_job_avanzar_reinicio_emailjs()`, programado a diario a las 06:00 (**todos los días**, incluido fin de semana — a diferencia de la mayoría de jobs de este scheduler, el cupo de EmailJS también se resetea en fin de semana). Por cada una de las 3 cuentas: si su fecha guardada ya ha pasado, le suma +30 días; si el servidor ha estado parado más de un ciclo, repite la suma hasta que la fecha vuelva a caer en el futuro. Puramente informativo — no toca `emailjs_cuenta_activa` ni `emailjs_contador`.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. No probado en vivo contra el scheduler real (sin entorno de producción disponible desde aquí) — a vigilar en el primer ciclo tras desplegar que la fecha de la cuenta 2 (31/08/2026, ya vencida) avance a 30/09/2026.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` y `docs/hallazgo-seguridad-princess.md` — no aplica, ninguno documenta el detalle de este campo ni requiere cambios de despliegue o restauración. `README.md` sí — versión actual y sección "Sistema · Admin" (bullet "EmailJS y cola de correo").
+
+**Entrega**: `app.py` (job nuevo + registro en el scheduler), `templates/index.html` (badge de versión), `README.md` (versión actual + sección "Sistema · Admin"), más este historial/`docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.30.91 — 1 septiembre 2026
 
 ✨ Panel "Emails de sistema atascados": también permite cerrar sin reenviar las filas que ya se DESCARTARON a mano (no solo las "paradas")
