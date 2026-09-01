@@ -36,6 +36,42 @@
 
 ---
 
+## 2026-09-01 — [Control Pedidos] Repaso "agilizar y limpiar", Etapa 3: botón "Exportar histórico" de expedientes a Excel (v12.30.87)
+
+- **Origen**: cierre de la duda abierta en v12.30.86 sobre si algo externo consumía `GET /api/expedientes` sin paginar. Víctor preguntó si el botón "Imprimir" de Techo de Gastos ya mostraba esa información — se comprobó que no (usa `/api/techo/resumen-historico`, siempre acotado a un mes/año, fuente distinta) — y a partir de ahí pidió una solución mejor que paginar: un botón para exportar el histórico completo a Excel, "en cualquier momento".
+- **Cambio en `app.py`**: nuevo `GET /api/expedientes/exportar` — misma consulta y filtros opcionales que `listar_expedientes()`, sin filtros exporta el histórico entero. Excel con `openpyxl`, mismo patrón visual que `exportar_excel()` (Pedidos): cabecera azul de marca, filas coloreadas por resultado (verde/amarillo/rojo, mismo criterio semáforo que Techo de Gastos en pantalla), formato moneda y fecha, mes legible ("Agosto 2026"), texto largo con ajuste de línea, fila de totales, auto-filtro, cabecera fija.
+- **Cambio en `templates/index.html`**: botón "⬇ Exportar histórico" en Techo de Gastos, junto a "🖨️ Imprimir" pero con estilo distinto para no confundirlos. Nueva `exportarExpedientesExcel()`, mismo patrón que `exportarExcel()`.
+- **`GET /api/expedientes` no se toca**: sigue sin paginar y sin uso en el frontend — el histórico completo ahora se consulta por el nuevo botón, no hace falta la pantalla de listado (Fase 6) que iba a depender de esa paginación.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; `node --check` sobre los `<script>` de `index.html`. Generación del Excel probada aparte con datos de prueba (incluidos casos límite: valores nulos, mes mal formado, expediente sin resolver) — estructura, colores, formatos y totales comprobados leyendo el `.xlsx` con `openpyxl`, y convertido a PDF con LibreOffice para una comprobación visual real (así se encontró y corrigió que la columna HOTEL quedaba en blanco en vez de "—" cuando faltaban ambos datos). Frontend probado con harness Playwright y `fetch` simulado — 10 comprobaciones, todas correctas.
+- **Revisión de otros documentos** (norma 5): `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: "Funcionalidades principales" (nuevo botón documentado) y "Rendimiento" (Etapa 6 añadida, nota "Pendiente" reducida a `loadUsuarios()`).
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `requirements.txt` no cambia (`openpyxl` ya estaba pinneado desde antes).
+
+---
+
+## 2026-09-01 — [Control Pedidos] Repaso "agilizar y limpiar", Etapa 2: paginada la papelera de Pedidos Eliminados (v12.30.86)
+
+- **Origen**: continuación de v12.30.85. Víctor confirmó seguir por etapas ("continuamos?"); esta ataca `GET /api/pedidos_eliminados`, la candidata con más impacto real en egress de las tres pendientes.
+- **Hallazgo al implementar**: se comprobó que `GET /api/expedientes` (la otra candidata) no la llama nada en el frontend actual — búsqueda completa sin resultados salvo las rutas de acción (`aprobar`/`denegar`/`informe`), y su propio docstring ya avisaba de que la paginación quedaba para una "Fase 6" que nunca se construyó. Se decidió centrar esta etapa en Eliminados (uso confirmado, `loadEliminados()`) y dejar `/api/expedientes` pendiente de una respuesta de Víctor — sin saber si algo externo al repo la consume sin parámetros de paginación, no se le pone límite por defecto sin confirmarlo antes.
+- **Cambio en `app.py`**: `GET /api/pedidos_eliminados` acepta ahora `page`/`page_size` (por defecto 30, máx. 100), responde `{registros,total,page,page_size,pages}` en vez del array completo. Se mantiene la clave `"registros"`.
+- **Cambio en `templates/index.html`**: `loadEliminados()` reescrita para pedir por páginas; `renderElimPagination()`/`goElimPage()` nuevas (mismo patrón visual que Proveedores); nuevo bloque de paginación (`#elim-pagination`, `#elim-page-info-text`); `G.elimPage/elimPages/elimTotal` nuevos.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; `node --check` sobre los 9 bloques `<script>` extraídos de `index.html`. Consulta de paginación probada contra PostgreSQL 16 real (73 filas de prueba, 3 páginas). Lógica de frontend probada con un harness Playwright aislado (`api()` mockeada) — 9 comprobaciones (carga página 1, salto a página 3, vuelta a página 1), todas correctas.
+- **Revisión de otros documentos** (norma 5): `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica, ninguno documenta esto. `README.md` sí: sección "Rendimiento" actualizada (nueva "Etapa 5", nota "Pendiente" reducida a `/api/expedientes` con la pregunta abierta a Víctor, y `loadUsuarios()`).
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `requirements.txt` no cambia.
+
+---
+
+## 2026-09-01 — [Control Pedidos] Repaso "agilizar y limpiar", Etapa 1: índices que faltaban en `pedidos` y `historial_estados` (v12.30.85)
+
+- **Origen**: Víctor pidió una revisión nueva de rendimiento/limpieza tras cerrar la documentación (v12.30.83-84), avisando explícitamente de tener en cuenta el consumo de egress de Supabase. Barrido con 2 agentes en paralelo (backend/frontend); cada hallazgo relevante se verificó a mano contra el código real antes de reportarlo. Aprobado ir por etapas — esta es la primera.
+- **Aviso sobre egress**: esta etapa es una mejora de velocidad/cómputo, no de egress — `GET /api/pedidos` ya estaba paginado desde la Etapa 2, así que el volumen de datos devuelto no cambia. Las etapas que sí reducen egress (`/api/expedientes`, "Eliminados") quedan para después — ver nota "Pendiente" añadida en `README.md` § Rendimiento.
+- **Hallazgo verificado**: `get_pedidos()` filtra por `hotel_id`/`estado`/`departamento_id`/`fecha_solicitud` y ordena por `creado_en`/`norden`, sin índice propio en ninguna de esas columnas — ni el listado paginado ni su `COUNT(*)` de paginación podían evitar recorrer la tabla entera. Mismo problema en `historial_estados.pedido_id` (detalle de cada pedido).
+- **Cambio**: en `_auto_migrate()`, índices B-tree en `pedidos(hotel_id/estado/departamento_id/fecha_solicitud/creado_en/norden)`, un índice parcial en `pedidos(fecha_tramitacion) WHERE fecha_tramitacion IS NOT NULL`, y un índice compuesto `historial_estados(pedido_id, creado_en DESC)`. Mismo patrón que los índices `pg_trgm` ya existentes (cada `CREATE INDEX IF NOT EXISTS` en su propio `try/except`).
+- **Verificación**: `python3 -m py_compile app.py` sin errores. PostgreSQL 16 real montado en este entorno con ~80.000 pedidos / ~200.000 filas de historial (volumen realista según el propio dashboard de Víctor); `EXPLAIN` de las 4 consultas afectadas antes/después confirma el paso de `Seq Scan`/`Parallel Seq Scan` a `Index Scan`/`Bitmap Index Scan` en las 4.
+- **Revisión de otros documentos** (norma 5 de arriba): `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` y `docs/hallazgo-seguridad-princess.md` revisados — ninguno documenta nada relacionado con estos índices, no requieren cambios. `README.md` sí: se actualizó la sección "Rendimiento" (nueva entrada de esta etapa, se corrigió el párrafo final que ya estaba desactualizado sobre `PEDIDO_SELECT` —resuelto en v12.30.82-83— y se añadió una nota "Pendiente" con las 3 etapas que quedan).
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md`, más este historial/`CHANGELOG.md`. `requirements.txt` no cambia.
+
+---
+
 ## 2026-09-01 — [Control Pedidos] Limpieza documental: eliminado archivo obsoleto que no se había borrado de verdad (v12.30.84)
 
 - **Origen**: al revisar la documentación por el aviso de Víctor de mantenerla siempre al día (v12.30.83), se vio que `CAMBIOS_solicitud_directa_backend.md` seguía en el ZIP del proyecto, pese a que esta misma historia (v12.30.79) decía que se había eliminado. Víctor preguntó qué recomendaba y, tras confirmar que el archivo era realmente obsoleto y no tenía ninguna otra referencia en el proyecto salvo las entradas históricas que documentan su eliminación, pidió borrarlo ("bórralo").

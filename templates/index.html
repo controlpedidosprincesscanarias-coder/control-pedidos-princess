@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.84
+          V 12.30.87
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1712,6 +1712,16 @@ tbody tr:last-child{border-bottom:none}
           <div id="eliminados-empty" class="empty-state section-hidden">
             <div class="icon">✅</div><div>No se han eliminado pedidos</div>
           </div>
+          <!-- (2026-09-01, repaso "agilizar y limpiar", Etapa 2) Paginación
+               — antes se cargaba la papelera entera de golpe, ver
+               loadEliminados(). Mismo patrón visual que Proveedores
+               (#prov-pagination). -->
+          <div style="padding:12px 20px;border-top:1px solid var(--border)">
+            <div style="display:flex;align-items:center">
+              <div class="page-info" id="elim-page-info-text"></div>
+              <div class="pagination" id="elim-pagination" style="margin-left:auto"></div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -1721,7 +1731,12 @@ tbody tr:last-child{border-bottom:none}
           <div class="card-header" style="gap:10px">
             <span class="card-title">📉 Techo de Gastos — Mes en curso</span>
             <span id="techo-mes-label" style="font-size:12px;color:var(--text-secondary)"></span>
-            <button onclick="abrirModalImpresion('techo')" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:5px 14px;font-size:12px;font-weight:600;border:1px solid #1a73e8;border-radius:6px;cursor:pointer;background:#fff;color:#1a73e8" title="Imprimir informe de techo de gastos">🖨️ Imprimir</button>
+            <!-- (2026-09-01, repaso "agilizar y limpiar", Etapa 3) A petición
+                 de Víctor: exporta el HISTÓRICO COMPLETO de expedientes de
+                 exceso de techo (todos los hoteles y meses), a diferencia de
+                 "Imprimir" que solo cubre el mes en curso/seleccionado. -->
+            <button onclick="exportarExpedientesExcel()" id="btn-exportar-expedientes" style="margin-left:auto;display:inline-flex;align-items:center;gap:6px;padding:5px 14px;font-size:12px;font-weight:600;border:1px solid #6c757d;border-radius:6px;cursor:pointer;background:#fff;color:#6c757d" title="Exportar a Excel el histórico completo de expedientes de exceso de techo (todos los hoteles y meses)">⬇ Exportar histórico</button>
+            <button onclick="abrirModalImpresion('techo')" style="display:inline-flex;align-items:center;gap:6px;padding:5px 14px;font-size:12px;font-weight:600;border:1px solid #1a73e8;border-radius:6px;cursor:pointer;background:#fff;color:#1a73e8" title="Imprimir informe de techo de gastos">🖨️ Imprimir</button>
           </div>
           <div id="techo-resumen-grid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px;padding:16px 0"></div>
           <div id="techo-empty" class="empty-state section-hidden">
@@ -2947,6 +2962,10 @@ let G = {
   // (2026-08-31) Paginación de Proveedores — antes se cargaban todos de
   // golpe, ver loadProveedores() y la auditoría de rendimiento.
   provPage: 1, provPages: 1, provTotal: 0,
+  // (2026-09-01, repaso "agilizar y limpiar", Etapa 2) Paginación de la
+  // papelera de Pedidos Eliminados — mismo motivo que Proveedores/Pedidos:
+  // es un histórico que nunca se purga, solo crece.
+  elimPage: 1, elimPages: 1, elimTotal: 0,
   editingPedidoId: null,
   editingProveedorId: null,
   currentPedidoData: null,
@@ -6076,16 +6095,35 @@ function _refreshProvAdminControls() {
 }
 
 async function loadEliminados() {
-  const d = await api('/api/pedidos_eliminados');
+  // (2026-09-01, repaso "agilizar y limpiar", Etapa 2) Antes traía la
+  // papelera entera de golpe — un registro que nunca se purga, solo
+  // crece. Ahora paginado igual que Proveedores/Pedidos: la respuesta
+  // pasa de un array plano a {registros,total,page,pages}.
+  const params = new URLSearchParams({ page: G.elimPage, page_size: 30 });
   const tbody = document.getElementById('eliminados-tbody');
   const empty = document.getElementById('eliminados-empty');
-  if (!d.registros || !d.registros.length) {
+  let d;
+  try {
+    d = await api(`/api/pedidos_eliminados?${params}`);
+  } catch (e) {
+    toast('Error cargando pedidos eliminados: ' + e.message, 'error');
     tbody.innerHTML = '';
     empty.classList.remove('section-hidden');
+    document.getElementById('elim-pagination').innerHTML = '';
+    document.getElementById('elim-page-info-text').textContent = '';
+    return;
+  }
+  const lista = d.registros || [];
+  G.elimTotal = d.total || 0; G.elimPages = d.pages || 1; G.elimPage = d.page || 1;
+  if (!lista.length) {
+    tbody.innerHTML = '';
+    empty.classList.remove('section-hidden');
+    document.getElementById('elim-pagination').innerHTML = '';
+    document.getElementById('elim-page-info-text').textContent = '';
     return;
   }
   empty.classList.add('section-hidden');
-  tbody.innerHTML = d.registros.map(r => {
+  tbody.innerHTML = lista.map(r => {
     const fecha = r.eliminado_en ? new Date(r.eliminado_en).toLocaleString('es-ES') : '—';
     return `<tr style="background:#fff5f5">
       <td><strong style="color:var(--danger,#dc3545)">Nº ${r.norden || '—'}</strong><br><small style="color:#999">ID pedido: ${r.pedido_id}</small></td>
@@ -6100,7 +6138,22 @@ async function loadEliminados() {
       <td style="font-size:12px;white-space:nowrap">${fecha}</td>
     </tr>`;
   }).join('');
+  renderElimPagination(G.elimPage, G.elimPages, G.elimTotal);
 }
+
+function renderElimPagination(page, pages, total) {
+  document.getElementById('elim-page-info-text').textContent = `${total} registro${total!==1?'s':''}`;
+  const el = document.getElementById('elim-pagination');
+  let html = `<button class="page-btn" onclick="goElimPage(${page-1})" ${page<=1?'disabled':''}>‹</button>`;
+  for (let i=1; i<=pages; i++) {
+    if (pages>7 && i>2 && i<pages-1 && Math.abs(i-page)>1) { if(i===3||i===pages-2) html+='<span class="page-info">…</span>'; continue; }
+    html += `<button class="page-btn ${i===page?'active':''}" onclick="goElimPage(${i})">${i}</button>`;
+  }
+  html += `<button class="page-btn" onclick="goElimPage(${page+1})" ${page>=pages?'disabled':''}>›</button>`;
+  el.innerHTML = html;
+}
+
+function goElimPage(p) { G.elimPage = p; loadEliminados(); }
 
 // (2026-08-31) Cabecera fija en Proveedores — ver comentario CSS de
 // #prov-filters/#tabla-proveedores. Calcula en tiempo real cuánto mide el
@@ -7398,6 +7451,32 @@ async function exportarExcel() {
     alert('Error al exportar: ' + e.message);
   } finally {
     if (btn) { btn.disabled = false; btn.innerHTML = '⬇ Exportar'; }
+  }
+}
+
+// (2026-09-01, repaso "agilizar y limpiar", Etapa 3) Mismo patrón que
+// exportarExcel() — a petición de Víctor, para tener "en cualquier momento"
+// el histórico completo de expedientes de exceso de techo en Excel, sin
+// depender de una pantalla de listado que nunca se llegó a construir.
+async function exportarExpedientesExcel() {
+  const btn = document.getElementById('btn-exportar-expedientes');
+  if (btn) { btn.disabled = true; btn.innerHTML = '<span class="btn-spinner-dark"></span>Exportando…'; }
+  try {
+    const resp = await fetch('/api/expedientes/exportar');
+    if (!resp.ok) throw new Error('Error al exportar');
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    const disposition = resp.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename[^;=\n]*=(['"]?)([^'"\n]*)\1/);
+    a.download = match ? match[2] : 'expedientes_techo.xlsx';
+    a.click();
+    URL.revokeObjectURL(url);
+  } catch(e) {
+    alert('Error al exportar el histórico de expedientes: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = '⬇ Exportar histórico'; }
   }
 }
 

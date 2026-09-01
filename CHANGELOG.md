@@ -1,3 +1,51 @@
+# v12.30.87 — 1 septiembre 2026
+
+✨ Repaso "agilizar y limpiar" (Etapa 3): botón "Exportar histórico" de expedientes a Excel — y cierre de la duda sobre `/api/expedientes`
+
+**Contexto**: cierre de la pregunta que había quedado abierta en v12.30.86 (si algo externo consumía `GET /api/expedientes` sin paginación). Al explicar el caso, Víctor preguntó si el botón "Imprimir" de Techo de Gastos ya mostraba esta información — se comprobó que no: ese botón (`imprimirTecho()`) usa `/api/techo/resumen-historico`, con datos siempre acotados a un mes y año concretos, una fuente completamente distinta de `/api/expedientes`. A partir de ahí, Víctor pidió una solución mejor que simplemente paginar: un botón para exportar el histórico completo a un Excel profesional, disponible "en cualquier momento".
+
+**Cambio en `app.py`**: nuevo endpoint `GET /api/expedientes/exportar` — reutiliza la misma consulta y los mismos filtros opcionales (`hotel_id`/`familia_id`/`resultado`/`mes`) que `listar_expedientes()`, pero sin filtros (uso normal del botón) exporta el histórico entero. Genera el Excel con `openpyxl`, mismo patrón visual que `exportar_excel()` (el Excel de Pedidos): cabecera azul de marca (#1a3a6b) en blanco y negrita, filas coloreadas según el resultado del expediente (verde=aprobado, amarillo=pendiente, rojo=denegado — mismo criterio semáforo que ya usa Techo de Gastos en pantalla), formato de moneda en los 5 importes, formato de fecha en fecha de resolución y de creación, mes traducido a texto legible ("Agosto 2026" en vez de "2026-08"), motivo y observaciones con ajuste de línea para no cortar el texto, fila de totales al final (nº de expedientes por resultado + suma de importes/exceso) separada con borde, columnas con ancho ajustado, cabecera fija y auto-filtro para poder acotar por hotel/familia/resultado ya dentro del propio Excel.
+
+**Cambio en `templates/index.html`**: nuevo botón "⬇ Exportar histórico" en la cabecera de la vista Techo de Gastos, junto al de "🖨️ Imprimir" pero con estilo distinto (gris, no azul) para no confundirlos — el tooltip aclara que exporta todos los hoteles y meses, no solo lo que se ve en pantalla. Nueva función `exportarExpedientesExcel()`, mismo patrón que `exportarExcel()` (fetch → blob → descarga, nombre de archivo tomado de `Content-Disposition`, estados de carga/error en el botón).
+
+**`GET /api/expedientes` (el listado en bruto) no se toca**: se mantiene sin paginar, tal como se dejó documentado en v12.30.86 — sigue sin usarlo nada en el frontend, y ahora que el histórico completo se consulta a través de este nuevo botón, no hay necesidad de construir la pantalla de listado (Fase 6) que iba a depender de esa paginación.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; `node --check` sobre los bloques `<script>` de `index.html`. La lógica de generación del Excel se probó aparte, con datos de prueba que incluyen casos límite (valores nulos, mes mal formado, expediente sin resolver): estructura, colores por resultado, formato de moneda y fecha, fila de totales y auto-filtro comprobados leyendo el `.xlsx` generado con `openpyxl`, y visualmente convirtiéndolo a PDF con LibreOffice para confirmar que se ve profesional y legible de verdad, no solo "sin errores" — así se encontró y corrigió un detalle menor (la columna HOTEL quedaba en blanco en vez de mostrar "—" cuando faltaban ambos datos del hotel). La función de frontend (`exportarExpedientesExcel()`) se probó con un harness Playwright con `fetch` simulado: 10 comprobaciones (estado del botón durante la exportación, URL llamada, descarga con el nombre de archivo correcto, revocación de la URL del blob, recuperación del botón tanto en éxito como en error), todas correctas.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md` (versión actual + sección "Funcionalidades principales" y "Rendimiento" actualizadas), más este historial/`CHANGELOG.md`. `requirements.txt` no cambia — `openpyxl` ya era una dependencia existente (la usa `exportar_excel()` desde antes).
+
+# v12.30.86 — 1 septiembre 2026
+
+✨ Repaso "agilizar y limpiar" (Etapa 2): paginada la papelera de Pedidos Eliminados — esta sí ahorra egress de Supabase
+
+**Contexto**: continuación del repaso de rendimiento/limpieza (v12.30.85). Víctor confirmó seguir por etapas; esta es la Etapa 2, `GET /api/pedidos_eliminados`, la que más impacto real en egress tenía de las tres pendientes.
+
+**Hallazgo al ponerse a implementarlo**: al revisar quién llama a `/api/expedientes` (la otra candidata a esta etapa) se comprobó que **ningún sitio del frontend la usa hoy** — ni `loadX()` ni ninguna vista la invoca; solo existen `POST /api/expedientes/<id>/aprobar|denegar` y `GET /api/expedientes/<id>/informe`, que son otra cosa. Su propio docstring ya lo anticipaba ("el frontend (Fase 6) decidirá si pagina" — esa Fase 6 nunca se construyó). Por eso esta etapa se centra en Eliminados (sí confirmado en uso real, `loadEliminados()`) y `/api/expedientes` queda pendiente de una respuesta de Víctor: como no hay forma de saber desde este repo si algo externo (informe, integración) la llama sin parámetros de paginación, no se le pone un límite por defecto sin confirmar antes que eso no rompe nada fuera de este código.
+
+**Cambio en `app.py`**: `GET /api/pedidos_eliminados` pasa a aceptar `page`/`page_size` (por defecto 30, máx. 100) y devuelve `{registros,total,page,page_size,pages}` en vez del array completo — mismo patrón que `/api/pedidos` y `/api/proveedores`. Se mantiene la clave `"registros"` (no se renombra a `"items"`) para no romper nada.
+
+**Cambio en `templates/index.html`**: `loadEliminados()` reescrita para pedir por páginas (30 registros) en vez de traer la papelera entera; nuevas `renderElimPagination()`/`goElimPage()` (mismo patrón visual que Proveedores) y nuevo bloque de paginación en la vista de Eliminados (`#elim-pagination`, `#elim-page-info-text`). Nuevos campos `G.elimPage/elimPages/elimTotal`.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Sintaxis de los 9 bloques `<script>` de `templates/index.html` comprobada con `node --check`. Consulta de paginación probada contra PostgreSQL 16 real en este entorno (73 filas de prueba, `page_size=30` → 3 páginas, matemática de `pages` correcta). Lógica de frontend probada con un harness Playwright aislado (api() mockeada con 73 registros): carga de página 1 (30 filas), salto a página 3 (13 filas, resto), vuelta a página 1 — 9 comprobaciones, todas correctas.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md` (versión actual + sección "Rendimiento": Etapa 5 añadida, nota "Pendiente" reducida a `/api/expedientes` — con la pregunta abierta a Víctor — y `loadUsuarios()`), más este historial/`CHANGELOG.md`. `requirements.txt` no cambia.
+
+# v12.30.85 — 1 septiembre 2026
+
+✨ Repaso "agilizar y limpiar" (Etapa 1): índices que faltaban en `pedidos` y `historial_estados`
+
+**Contexto**: tras cerrar la documentación (v12.30.83-84), Víctor pidió una revisión nueva para seguir agilizando y limpiando la app, con el aviso explícito de tener en cuenta el consumo de egress de Supabase. Se hizo un barrido con dos agentes en paralelo (backend y frontend) y cada hallazgo relevante se verificó a mano leyendo el código real antes de reportarlo — no solo el resultado del barrido automático. Víctor aprobó ir por etapas; esta es la primera: la de mayor impacto y menor riesgo de todas las encontradas.
+
+**Aviso honesto sobre egress**: esta etapa mejora velocidad/cómputo en Supabase (menos trabajo para encontrar las filas), **no** egress — el volumen de datos que se devuelve no cambia, porque `GET /api/pedidos` ya estaba paginado (LIMIT/OFFSET) desde la Etapa 2. Las etapas que sí reducen egress de verdad (`/api/expedientes` y "Eliminados" sin paginar, que hoy devuelven la tabla completa) quedan para las siguientes etapas — ver `README.md`, sección "Rendimiento".
+
+**Hallazgo verificado**: `GET /api/pedidos` (la pantalla principal) filtra por `hotel_id`, `estado`, `departamento_id`, `fecha_solicitud` y ordena por `creado_en` o `norden` según el caso — ninguna de esas columnas tenía índice propio (solo los `pg_trgm` de texto libre de la Etapa 2). Confirmado leyendo el código de `get_pedidos()`: tanto el `SELECT` paginado como su propio `COUNT(*)` (para calcular el total de páginas) recorren la tabla `pedidos` entera en cada petición. Lo mismo para `historial_estados.pedido_id`, consultado en cada apertura del detalle de un pedido (`GET /api/pedidos/<id>`).
+
+**Cambio en `app.py`** (`_auto_migrate()`, mismo patrón que los índices `pg_trgm` ya existentes — cada `CREATE INDEX IF NOT EXISTS` en su propio `try/except`): índices B-tree en `pedidos(hotel_id)`, `pedidos(estado)`, `pedidos(departamento_id)`, `pedidos(fecha_solicitud)`, `pedidos(creado_en)`, `pedidos(norden)`, un índice parcial en `pedidos(fecha_tramitacion) WHERE fecha_tramitacion IS NOT NULL` (solo se filtra con "IS NOT NULL", así que un índice parcial es más pequeño y más útil que uno completo), y un índice compuesto `historial_estados(pedido_id, creado_en DESC)` que cubre exactamente el patrón `WHERE pedido_id=%s ORDER BY creado_en DESC` de `get_pedido()`.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Se montó PostgreSQL 16 real en este entorno con ~80.000 pedidos y ~200.000 filas de historial (volumen realista — Víctor reportó +306,7% de pedidos en un mes en su propio dashboard) y se comparó el plan de ejecución (`EXPLAIN`) de las 4 consultas afectadas antes y después de crear los índices: las 4 pasaron de `Seq Scan`/`Parallel Seq Scan` sobre la tabla completa a `Index Scan`/`Bitmap Index Scan`, incluida la consulta sin ningún filtro (abrir la app, primera página) que ahora usa directamente el índice de `norden` sin necesidad de ordenar nada.
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md` (versión actual + sección "Rendimiento" actualizada, incluye ahora las etapas pendientes: `/api/expedientes`, "Eliminados" y `loadUsuarios()`), más este historial/`CHANGELOG.md`. `requirements.txt` no cambia.
+
 # v12.30.84 — 1 septiembre 2026
 
 🧹 Limpieza documental: eliminado un archivo obsoleto que había quedado sin borrar de verdad

@@ -264,6 +264,57 @@ def _auto_migrate():
                     )
                 except Exception as e:
                     log.warning(f"No se pudo crear el índice {_idx_nombre}: {e}")
+            # ── Índices B-tree de filtros/orden de pedidos (2026-09-01,
+            # revisión "agilizar y limpiar" tras el cierre de la auditoría de
+            # rendimiento) ───────────────────────────────────────────────────
+            # get_pedidos() (GET /api/pedidos, la pantalla principal) filtra
+            # por hotel_id/estado/departamento_id/fecha_solicitud y ordena
+            # por creado_en o norden según el caso — ninguna de esas columnas
+            # tenía índice propio (los trgm de arriba solo cubren el texto
+            # libre de pedido_num/observaciones). Sin esto, tanto el listado
+            # como su COUNT(*) de paginación recorren la tabla entera en cada
+            # página — coste que solo crece con el tiempo, igual que con los
+            # índices trgm. No reduce el tamaño de lo que se devuelve (eso ya
+            # lo limita la paginación), así que esto es una mejora de
+            # velocidad/cómputo en Supabase, no de egress — el ahorro de
+            # egress real está en las Etapas siguientes (expedientes,
+            # eliminados).
+            for _idx_nombre, _columna in (
+                ("idx_pedidos_hotel_id",        "hotel_id"),
+                ("idx_pedidos_estado",          "estado"),
+                ("idx_pedidos_departamento_id", "departamento_id"),
+                ("idx_pedidos_fecha_solicitud", "fecha_solicitud"),
+                ("idx_pedidos_creado_en",       "creado_en"),
+                ("idx_pedidos_norden",          "norden"),
+            ):
+                try:
+                    cur.execute(
+                        f"CREATE INDEX IF NOT EXISTS {_idx_nombre} ON pedidos ({_columna})"
+                    )
+                except Exception as e:
+                    log.warning(f"No se pudo crear el índice {_idx_nombre}: {e}")
+            # fecha_tramitacion solo se filtra con "IS NOT NULL" (filtro
+            # rápido alerta=1) — índice parcial, más pequeño y más útil que
+            # uno completo ya que la mayoría de pedidos no están en trámite.
+            try:
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_pedidos_fecha_tramitacion "
+                    "ON pedidos (fecha_tramitacion) WHERE fecha_tramitacion IS NOT NULL"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo crear el índice idx_pedidos_fecha_tramitacion: {e}")
+            # historial_estados.pedido_id: sin índice, se recorría entera en
+            # cada apertura del detalle de un pedido (GET /api/pedidos/<id>,
+            # WHERE pedido_id=%s ORDER BY creado_en DESC) — se incluye
+            # creado_en en el mismo índice porque es exactamente el orden que
+            # pide esa consulta.
+            try:
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_historial_estados_pedido_id "
+                    "ON historial_estados (pedido_id, creado_en DESC)"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo crear el índice idx_historial_estados_pedido_id: {e}")
             # ── Verificación de listados PDF de SAP — filtro de proveedores ──
             # (2026-08-10) A petición del usuario: el criterio se invierte a
             # "opt-in" — DEFAULT FALSE, ningún proveedor está sujeto a
@@ -11871,6 +11922,202 @@ def listar_expedientes():
     return jsonify({"expedientes": expedientes})
 
 
+@app.route("/api/expedientes/exportar")
+@login_required
+def exportar_expedientes_excel():
+    """
+    (2026-09-01, repaso "agilizar y limpiar", Etapa 3) Excel profesional con
+    el histórico completo de expedientes de exceso de techo — a petición de
+    Víctor, para poder consultar este histórico "en cualquier momento" sin
+    depender de una pantalla que nunca se llegó a construir (Fase 6). Mismos
+    filtros opcionales que listar_expedientes() (hotel_id/familia_id/
+    resultado/mes) por si algún día hace falta un export acotado, pero sin
+    filtros — el uso normal del botón — exporta el histórico entero, que es
+    justo lo que se pidió.
+
+    Mismo patrón que exportar_excel() (Excel de Pedidos): cabecera con el
+    color de marca de la app (#1a3a6b), filas coloreadas según su estado
+    (mismo criterio semáforo verde/amarillo/rojo que ya usa Techo de Gastos
+    en pantalla), formato de moneda en los importes, fila de totales al
+    final y auto-filtro para poder acotar por hotel/familia/resultado ya
+    dentro del propio Excel.
+    """
+    if session.get("rol") == "hotel":
+        return jsonify({"error": "Sin permisos"}), 403
+
+    try:
+        import openpyxl, io
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from flask import send_file
+
+        where   = ["1=1"]
+        args: list = []
+
+        hotel_id = request.args.get("hotel_id")
+        if hotel_id:
+            where.append("e.hotel_id = %s")
+            args.append(hotel_id)
+
+        familia_id = request.args.get("familia_id")
+        if familia_id:
+            where.append("e.familia_id = %s")
+            args.append(familia_id)
+
+        resultado_f = request.args.get("resultado")
+        if resultado_f in ("pendiente", "aprobado", "denegado"):
+            where.append("e.resultado = %s")
+            args.append(resultado_f)
+
+        mes_f = request.args.get("mes")
+        if mes_f:
+            where.append("e.mes = %s")
+            args.append(mes_f)
+
+        expedientes = rows_to_list(query(f"""
+            SELECT e.*,
+                   h.codigo AS hotel_codigo, h.nombre AS hotel_nombre,
+                   f.nombre AS familia_nombre,
+                   p.pedido_num, p.norden, p.estado AS pedido_estado,
+                   us.nombre AS usuario_solicitante_nombre,
+                   ur.nombre AS usuario_resuelve_nombre
+            FROM expediente_exceso e
+            LEFT JOIN hoteles   h  ON e.hotel_id              = h.id
+            LEFT JOIN familias  f  ON e.familia_id            = f.id
+            LEFT JOIN pedidos   p  ON e.pedido_id              = p.id
+            LEFT JOIN usuarios  us ON e.usuario_solicitante_id = us.id
+            LEFT JOIN usuarios  ur ON e.usuario_resuelve_id    = ur.id
+            WHERE {' AND '.join(where)}
+            ORDER BY e.creado_en DESC
+        """, tuple(args)))
+
+        wb = openpyxl.Workbook()
+        ws = wb.active
+        ws.title = "EXPEDIENTES TECHO"
+
+        HEADERS = [
+            "MES", "HOTEL", "FAMILIA", "Nº PEDIDO", "ESTADO PEDIDO",
+            "IMPORTE PEDIDO", "CONSUMO PREVIO", "EXCESO",
+            "CONSUMIDO EN SOLICITUD", "DISPONIBLE EN SOLICITUD",
+            "MOTIVO SOLICITUD", "SOLICITADO POR", "RESULTADO",
+            "RESUELTO POR", "FECHA RESOLUCIÓN",
+            "OBSERVACIONES DIRECCIÓN GENERAL", "CREADO EN",
+        ]
+        ws.append(HEADERS)
+        header_fill = PatternFill("solid", fgColor="1a3a6b")
+        header_font = Font(bold=True, color="FFFFFF")
+        for cell in ws[1]:
+            cell.fill = header_fill
+            cell.font = header_font
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        ws.row_dimensions[1].height = 30
+
+        # Mismo criterio semáforo que ya usa Techo de Gastos en pantalla
+        # (verde=aprobado, amarillo=pendiente, rojo=denegado) — y misma
+        # paleta que ya usa exportar_excel() para ENTREGADO/CANCELADO, para
+        # que los dos Excel de la app se vean coherentes entre sí.
+        RESULTADO_COLORES = {
+            "aprobado":  "d4edda",
+            "pendiente": "fff3cd",
+            "denegado":  "f8d7da",
+        }
+        MESES_ES = ["Enero","Febrero","Marzo","Abril","Mayo","Junio","Julio",
+                    "Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
+
+        def strip_tz(val):
+            if hasattr(val, "tzinfo") and val.tzinfo is not None:
+                return val.replace(tzinfo=None)
+            return val
+
+        def mes_legible(mes_str):
+            # mes_str viene como "YYYY-MM" (ver expediente_exceso.mes) —
+            # se traduce a "Agosto 2026" para que el Excel sea legible sin
+            # tener que descifrar el formato de la base de datos.
+            if not mes_str or "-" not in str(mes_str):
+                return mes_str or "—"
+            try:
+                anio, mes_n = str(mes_str).split("-")
+                return f"{MESES_ES[int(mes_n) - 1]} {anio}"
+            except (ValueError, IndexError):
+                return mes_str
+
+        EUR = '#,##0.00 "€"'
+        FECHA = "DD/MM/YYYY"
+
+        totales = {"importe_pedido": 0, "exceso": 0}
+        conteo_resultado = {"aprobado": 0, "pendiente": 0, "denegado": 0}
+
+        for e in expedientes:
+            resultado = (e.get("resultado") or "pendiente").lower()
+            conteo_resultado[resultado] = conteo_resultado.get(resultado, 0) + 1
+            totales["importe_pedido"] += float(e.get("importe_pedido") or 0)
+            totales["exceso"]         += float(e.get("exceso") or 0)
+
+            hotel_txt = f"{e.get('hotel_codigo') or ''} — {e.get('hotel_nombre') or ''}".strip(" —")
+            fila = [
+                mes_legible(e.get("mes")),
+                hotel_txt or "—",
+                e.get("familia_nombre") or "—",
+                e.get("pedido_num") or (f"#{e.get('norden')}" if e.get("norden") else "—"),
+                e.get("pedido_estado") or "—",
+                float(e.get("importe_pedido") or 0),
+                float(e.get("consumo_previo") or 0),
+                float(e.get("exceso") or 0),
+                float(e.get("consumido_en_solicitud") or 0),
+                float(e.get("disponible_en_solicitud") or 0),
+                e.get("motivo_solicitud") or "",
+                e.get("usuario_solicitante_nombre") or "—",
+                resultado.upper(),
+                e.get("usuario_resuelve_nombre") or "—",
+                strip_tz(e.get("fecha_resolucion")),
+                e.get("observaciones_direccion_general") or "",
+                strip_tz(e.get("creado_en")),
+            ]
+            ws.append(fila)
+            row = ws.max_row
+            fill = PatternFill("solid", fgColor=RESULTADO_COLORES.get(resultado, "FFFFFF"))
+            for cell in ws[row]:
+                cell.fill = fill
+            for col in (6, 7, 8, 9, 10):
+                ws.cell(row=row, column=col).number_format = EUR
+            for col in (15, 17):
+                ws.cell(row=row, column=col).number_format = FECHA
+            ws.cell(row=row, column=11).alignment = Alignment(wrap_text=True, vertical="top")
+            ws.cell(row=row, column=16).alignment = Alignment(wrap_text=True, vertical="top")
+
+        # Fila de totales — separada con un borde superior para que no se
+        # confunda con una fila de datos más.
+        if expedientes:
+            fila_totales = ws.max_row + 1
+            ws.cell(row=fila_totales, column=1, value=f"TOTAL ({len(expedientes)} expedientes: "
+                    f"{conteo_resultado.get('aprobado',0)} aprobados, "
+                    f"{conteo_resultado.get('pendiente',0)} pendientes, "
+                    f"{conteo_resultado.get('denegado',0)} denegados)")
+            ws.cell(row=fila_totales, column=6, value=totales["importe_pedido"]).number_format = EUR
+            ws.cell(row=fila_totales, column=8, value=totales["exceso"]).number_format = EUR
+            top_border = Border(top=Side(style="thin"))
+            bold = Font(bold=True)
+            for cell in ws[fila_totales]:
+                cell.border = top_border
+                cell.font = bold
+
+        COL_WIDTHS = [16, 26, 20, 14, 20, 16, 16, 14, 18, 18, 34, 20, 12, 20, 16, 34, 16]
+        for i, w in enumerate(COL_WIDTHS, 1):
+            ws.column_dimensions[openpyxl.utils.get_column_letter(i)].width = w
+        ws.freeze_panes = "A2"
+        if expedientes:
+            ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(HEADERS))}{ws.max_row - 1}"
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        filename = f"EXPEDIENTES_TECHO_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+        return send_file(buf,
+                         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                         as_attachment=True, download_name=filename)
+    except ImportError:
+        return jsonify({"error": "openpyxl no instalado"}), 500
+
+
 @app.route("/api/expedientes/pedido/<int:pedido_id>")
 @login_required
 def historico_expedientes_pedido(pedido_id):
@@ -13005,10 +13252,32 @@ def delete_pedido(pid):
 def get_pedidos_eliminados():
     if session.get("rol") not in ("admin", "compras"):
         return jsonify({"error": "Acceso restringido"}), 403
+
+    # (2026-09-01, repaso "agilizar y limpiar", Etapa 2) Antes devolvía la
+    # tabla `pedidos_eliminados` entera de golpe — un registro que solo
+    # crece (nunca se purga, es el histórico de bajas) y no tenía filtros
+    # ni límite. Mismo patrón de paginación ya probado en /api/pedidos y
+    # /api/proveedores: {registros,total,page,page_size,pages}. Mantiene
+    # el nombre de clave "registros" (no "items") para no romper nada que
+    # ya dependa de esa forma de respuesta.
+    try:
+        page      = max(1, int(request.args.get("page", 1)))
+        page_size = max(1, min(100, int(request.args.get("page_size", 30))))
+    except ValueError:
+        page, page_size = 1, 30
+
+    total = query("SELECT COUNT(*) as total FROM pedidos_eliminados", one=True)["total"]
     registros = rows_to_list(query(
-        "SELECT * FROM pedidos_eliminados ORDER BY eliminado_en DESC"
+        "SELECT * FROM pedidos_eliminados ORDER BY eliminado_en DESC LIMIT %s OFFSET %s",
+        (page_size, (page - 1) * page_size)
     ))
-    return jsonify({"registros": registros})
+    return jsonify({
+        "registros":  registros,
+        "total":      total,
+        "page":       page,
+        "page_size":  page_size,
+        "pages":      max(1, (total + page_size - 1) // page_size),
+    })
 
 # ── API Stats ──────────────────────────────────────────────────────────────────
 

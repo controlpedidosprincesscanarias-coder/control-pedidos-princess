@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.84** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.87** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -87,6 +87,9 @@ confundirse entre sí, ver más abajo):
   visible solo para admin (movido el 2026-08-29 desde "Parámetros de
   alertas", donde vivía sin relación visible con esta pantalla — mismas
   claves y mismo endpoint de siempre, solo cambió dónde se edita).
+  Botón "⬇ Exportar histórico" (2026-09-01) junto al de "🖨️ Imprimir":
+  descarga en Excel el histórico completo de expedientes de exceso de
+  techo — todos los hoteles y meses, no solo el mes en pantalla.
 
 **Datos maestros · Admin**
 - **Familias de artículos** — categorías usadas para agrupar pedidos y
@@ -181,9 +184,8 @@ v12.29.32, tabla `expediente_exceso` en v12.29.33).
 
 ## Rendimiento
 
-La app se ha auditado y optimizado por etapas (agosto 2026, ver
-`CHANGELOG.md` v12.30.70-72 para el detalle técnico completo de cada
-una):
+La app se ha auditado y optimizado por etapas (agosto-septiembre 2026,
+ver `CHANGELOG.md` para el detalle técnico completo de cada una):
 
 - **Etapa 1 (v12.30.70)** — `GET /api/proveedores` pasó a paginar (antes
   devolvía siempre la tabla completa) y se crearon índices GIN por
@@ -197,22 +199,46 @@ una):
   servidor (`_comprimir_respuesta_gzip()` en `app.py`): `index.html`
   (628 KB) y el JSON de la API viajan hasta un 80-90% más ligeros. No
   se usó Flask-Compress — ver el porqué en el propio CHANGELOG.
+- **Cierre de un punto pendiente de la Etapa 2 (v12.30.82-83)** — el
+  respaldo `proveedor_email` (usado en `PEDIDO_SELECT` y otras 3
+  consultas donde se repite) pasó a ser determinista cuando un
+  proveedor tiene varios contactos "principal" a la vez, y a respetar
+  el hotel del pedido — el criterio de desempate que quedaba pendiente
+  aquí abajo ya está decidido y aplicado.
+- **Etapa 4 (v12.30.85)** — índices B-tree en `pedidos` (`hotel_id`,
+  `estado`, `departamento_id`, `fecha_solicitud`, `creado_en`, `norden`,
+  `fecha_tramitacion`) y en `historial_estados.pedido_id`: el listado
+  principal de Pedidos (filtro + orden + su propio `COUNT` de
+  paginación) y el detalle de cada pedido dejaron de recorrer la tabla
+  entera en cada petición.
 
-Estas tres etapas se apoyan en el trabajo previo de v12.7.0 (pool de
+Estas etapas se apoyan en el trabajo previo de v12.7.0 (pool de
 conexiones psycopg2, en vez de abrir una conexión nueva por petición) y
 del "Fix egress" de julio 2026 (`index.html` se sirve con ETag +
 `Cache-Control: no-cache`, así que el navegador revalida con una
 petición condicional ligera en vez de descargar el archivo entero en
 cada recarga).
 
-Si vuelve a notarse lentitud con el tiempo (más hoteles, más pedidos,
-más proveedores), el sitio por donde empezar es `PEDIDO_SELECT` en
-`app.py`: arma cada fila del listado de Pedidos con 6 subconsultas
-correlacionadas para los datos de contacto del proveedor — señalado en
-la auditoría de la Etapa 2 pero no tocado a propósito (un proveedor
-puede tener varios contactos "principales" a la vez, y fusionar esas
-subconsultas cambiaría cuál de ellos "gana" en esos casos — requiere
-decidir antes ese criterio de desempate).
+- **Etapa 5 (v12.30.86)** — la vista "Eliminados" (papelera de pedidos)
+  pasó a paginar igual que Proveedores/Pedidos: `GET
+  /api/pedidos_eliminados` devolvía la tabla completa sin límite (un
+  histórico que nunca se purga, solo crece), y a diferencia de los
+  índices de la Etapa 4 esto sí reduce egress de Supabase de verdad, no
+  solo velocidad.
+
+- **Etapa 6 (v12.30.87)** — nuevo botón "⬇ Exportar histórico" en Techo
+  de Gastos (`GET /api/expedientes/exportar`): Excel profesional del
+  histórico completo de expedientes de exceso de techo, a petición de
+  Víctor. `GET /api/expedientes` (el listado en bruto sin este Excel) se
+  confirmó que no lo usa nada en el frontend actual — la pantalla que
+  iba a necesitarlo (Fase 6) nunca se construyó — así que se deja como
+  está en vez de paginarlo; el histórico completo ahora se consulta a
+  través del botón de exportar, no de esa dirección.
+
+**Pendiente (repaso "agilizar y limpiar", septiembre 2026, con foco en
+egress de Supabase además de velocidad):** `loadUsuarios()` hace una
+petición HTTP por cada usuario con hoteles asignados, más una llamada
+redundante a `/api/maestros` que ya está en caché. No tocado todavía.
 
 ---
 
