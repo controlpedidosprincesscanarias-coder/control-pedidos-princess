@@ -1,3 +1,17 @@
+# v12.30.91 — 1 septiembre 2026
+
+✨ Panel "Emails de sistema atascados": también permite cerrar sin reenviar las filas que ya se DESCARTARON a mano (no solo las "paradas")
+
+**Contexto**: los 3 registros del incidente de la v12.30.89 (pedidos LP 16445, IT 28252, GY 41254) no estaban "parados" como se asumió en la v12.30.90 — ya se habían **descartado a mano** (con la única opción que ofrecía el panel en ese momento), antes de que existiera "✅ Marcar como enviado" para el caso "parado". Con solo el cambio de la v12.30.90, estas filas seguían mostrando únicamente "↻ Reactivar" — botón que **sí reenvía el correo de verdad** (llama a `emailjs.send()` otra vez), lo que habría sido un 4º envío real a los mismos destinatarios.
+
+**Cambio en `templates/index.html`**: en `_cargarEmailsAtascados()`, las filas ya descartadas (`descartado_en` no nulo, `enviado=FALSE`) muestran ahora, junto a "↻ Reactivar", el mismo botón "✅ Marcar como enviado" (endpoint `marcar-enviado`, aplica `GREATEST` sobre las marcas de comunicado) — con tooltips explícitos: el primero deja claro que NO reenvía nada, el segundo que SÍ reenvía de verdad, para evitar confundirlos.
+
+**Verificación**: `node --check` sobre la función `_cargarEmailsAtascados()` aislada — sin errores. No probado contra base de datos real (sin acceso a Supabase de producción desde este entorno).
+
+**Entrega**: `templates/index.html` (panel de atascados + badge de versión), `README.md` (versión actual + sección "Sistema · Admin"), más este historial/`CHANGELOG.md`. `app.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.30.90 — 1 septiembre 2026
 
 ✨ Panel "Emails de sistema atascados": permite cerrar a mano filas "paradas" anteriores al fix de v12.30.89 (los 3 pedidos del incidente original)

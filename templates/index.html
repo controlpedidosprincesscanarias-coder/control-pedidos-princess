@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.90
+          V 12.30.91
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -8534,7 +8534,18 @@ async function _cargarEmailsAtascados() {
           // el envío normal al confirmar), nunca reintentarla.
           ? `<button class="btn btn-ghost btn-sm" onclick="_marcarEmailAtascadoComoEnviado(${a.id})" title="El correo ya se entregó; esto solo cierra el registro">✅ Marcar como enviado</button>`
           : a.descartado_en
-          ? `<button class="btn btn-ghost btn-sm" onclick="_reactivarEmailAtascado(${a.id})" title="Vuelve a intentarse enviar con normalidad">↻ Reactivar</button>`
+          // (2026-09-01, v12.30.91) Filas ya DESCARTADAS a mano (antes de
+          // que el panel ofreciera "Marcar como enviado" para el caso
+          // "paradas" — v12.30.90) — p. ej. los 3 registros del incidente
+          // de los pedidos 16445/28252/41254: se descartaron con la única
+          // opción que había entonces, pero el correo SÍ se había
+          // entregado de verdad. "Reactivar" NO sirve aquí — volvería a
+          // reclamar la fila y llamaría a emailjs.send() otra vez, un
+          // reenvío real (el 4º, en este caso). Se añade el mismo botón de
+          // cierre sin reenvío junto a "Reactivar", con tooltips que dejan
+          // claro cuál de los dos reenvía de verdad y cuál no.
+          ? `<button class="btn btn-ghost btn-sm" onclick="_marcarEmailAtascadoComoEnviado(${a.id})" title="Solo si has confirmado por otra vía (p. ej. bandeja de enviados) que este correo SÍ llegó de verdad — NO reenvía nada, solo cierra el registro y aplica las marcas de comunicado si corresponden">✅ Marcar como enviado</button>
+             <button class="btn btn-ghost btn-sm" onclick="_reactivarEmailAtascado(${a.id})" title="⚠️ Esto SÍ reenvía el correo de verdad — solo si el anterior no llegó a entregarse">↻ Reactivar</button>`
           : a.atascado
           // (2026-09-01, v12.30.90) Filas "paradas" (agotaron reintentos)
           // de ANTES de que existiera la columna enviado_no_confirmado —

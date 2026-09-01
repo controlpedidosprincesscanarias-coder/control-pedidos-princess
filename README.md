@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.90** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.91** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -149,7 +149,10 @@ confundirse entre sí, ver más abajo):
   "✅ Marcar como enviado" (junto a "Descartar"), para los casos en que el
   admin ya ha confirmado por otra vía (p. ej. Gmail) que el correo sí se
   entregó — aplica las marcas de "Comunicado A&B"/"Comunicado Jefe Dep."
-  igual que si se hubiera confirmado a la primera.
+  igual que si se hubiera confirmado a la primera. Desde v12.30.91, ese
+  mismo botón está disponible también para filas ya descartadas a mano
+  (junto a "Reactivar") — a diferencia de "Reactivar", "Marcar como
+  enviado" nunca reenvía el correo, solo cierra el registro.
 - **Restaurar backup** — gestión de backups de la base de datos.
 
 ### Roles de usuario

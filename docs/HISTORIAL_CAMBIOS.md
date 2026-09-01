@@ -36,7 +36,18 @@
 
 ---
 
-## 2026-09-01 — [Control Pedidos] Panel "Emails de sistema atascados": cierre a mano de las filas "paradas" del incidente original (v12.30.90)
+## 2026-09-01 — [Control Pedidos] Panel "Emails de sistema atascados": también cierra sin reenviar las filas ya DESCARTADAS a mano (v12.30.91)
+
+- **Origen**: al revisar el panel en vivo tras la v12.30.90, las 3 filas del incidente original (pedidos 16445/28252/41254) resultaron estar ya "descartadas" (alguien las descartó a mano cuando esa era la única opción disponible), no "paradas" como se había asumido — así que el botón nuevo de la v12.30.90 (pensado para filas "paradas") no las cubría: seguían mostrando solo "↻ Reactivar", que sí reenvía el correo de verdad y habría producido un 4º envío real.
+- **Cambio en `templates/index.html`**: en `_cargarEmailsAtascados()`, la rama de filas descartadas (`descartado_en` no nulo) muestra ahora también "✅ Marcar como enviado" junto a "↻ Reactivar", con tooltips que distinguen cuál de los dos reenvía de verdad (Reactivar) y cuál no (Marcar como enviado — cierra el registro y aplica `GREATEST` sobre `comunicado_ab`/`comunicado_jefe_dep`, mismo endpoint `marcar-enviado`).
+- **`app.py` no cambia**: mismo endpoint reutilizado, sin condición sobre `descartado_en`.
+- **Verificación**: `node --check` sobre la función aislada, sin errores. Pendiente de confirmar en el panel real tras desplegar: las 3 filas de 16445/28252/41254 deberían mostrar ya ambos botones.
+- **Revisión de otros documentos** (norma 5): igual que en v12.30.90 — no aplica a `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md`. `README.md` sí: versión actual y sección "Sistema · Admin".
+- **Entrega**: `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `app.py` y `requirements.txt` no cambian.
+
+---
+
+## 2026-09-01 — [Control Pedidos] Panel "Emails de sistema atascados": permite cerrar a mano filas "paradas" anteriores al fix de v12.30.89 (los 3 pedidos del incidente original) (v12.30.90)
 
 - **Origen**: repaso del incidente de la v12.30.89 (correo interno "ENVIADO AL PROVEEDOR" duplicado, pedidos LP 16445 / IT 28252 / GY 41254). Ese fix corrige la causa raíz hacia delante, pero deja sin corregir los 3 registros ya afectados: sus filas en `emails_sistema_pendientes` agotaron los reintentos ANTES de que existiera la columna `enviado_no_confirmado` (añadida en el mismo fix), así que quedaron "paradas" (`atascado=TRUE`) con `enviado_no_confirmado=FALSE` — el panel solo les ofrecía "Descartar", que cierra la fila sin aplicar `GREATEST` sobre `comunicado_ab`/`comunicado_jefe_dep`. Resultado: las casillas "Comunicado A&B" / "Comunicado Jefe Dep." de esos 3 pedidos siguen sin marcar aunque el correo sí se entregó de verdad (confirmado por capturas de Gmail). Como esas casillas están bloqueadas para edición manual desde la v12.30.65, no había ninguna vía para corregirlas sin este cambio.
 - **Cambio en `templates/index.html`**: en `_cargarEmailsAtascados()`, las filas "paradas" sin `enviado_no_confirmado` (y sin descartar) muestran ahora dos botones — "✅ Marcar como enviado" (mismo endpoint `POST /api/emails-sistema-pendientes/<id>/marcar-enviado`, que ya aplica `GREATEST` sobre las marcas de comunicado desde la v12.30.89) junto al "Descartar" ya existente — con tooltip explícito de que solo debe pulsarse si el admin ha confirmado por otra vía (p. ej. bandeja de enviados) que el correo llegó de verdad, a diferencia del caso `enviado_no_confirmado=TRUE` donde esa garantía ya es automática.
