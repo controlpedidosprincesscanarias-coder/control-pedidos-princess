@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.89** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.90** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -144,6 +144,12 @@ confundirse entre sí, ver más abajo):
   enviarse de verdad pero cuya confirmación en BD falló se distingue con
   "✅ se envió, sin confirmar en BD" y un botón "Marcar como enviado" —
   nunca "Reactivar" para estas, que sí reenviaría el correo de verdad.
+  Desde v12.30.90, las filas "paradas" (agotaron reintentos) de ANTES de
+  que existiera esa distinción también pueden cerrarse con el mismo botón
+  "✅ Marcar como enviado" (junto a "Descartar"), para los casos en que el
+  admin ya ha confirmado por otra vía (p. ej. Gmail) que el correo sí se
+  entregó — aplica las marcas de "Comunicado A&B"/"Comunicado Jefe Dep."
+  igual que si se hubiera confirmado a la primera.
 - **Restaurar backup** — gestión de backups de la base de datos.
 
 ### Roles de usuario

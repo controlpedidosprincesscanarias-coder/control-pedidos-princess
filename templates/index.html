@@ -1396,7 +1396,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.89
+          V 12.30.90
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -8535,6 +8535,22 @@ async function _cargarEmailsAtascados() {
           ? `<button class="btn btn-ghost btn-sm" onclick="_marcarEmailAtascadoComoEnviado(${a.id})" title="El correo ya se entregó; esto solo cierra el registro">✅ Marcar como enviado</button>`
           : a.descartado_en
           ? `<button class="btn btn-ghost btn-sm" onclick="_reactivarEmailAtascado(${a.id})" title="Vuelve a intentarse enviar con normalidad">↻ Reactivar</button>`
+          : a.atascado
+          // (2026-09-01, v12.30.90) Filas "paradas" (agotaron reintentos)
+          // de ANTES de que existiera la columna enviado_no_confirmado —
+          // p. ej. el incidente de los pedidos 16445/28252/41254 (ver
+          // CHANGELOG v12.30.89): el correo SÍ se entregó por EmailJS (comprobable
+          // en la bandeja de enviados) pero la confirmación en BD nunca
+          // llegó a completarse, así que ni enviado_no_confirmado quedó
+          // marcado ni las casillas de comunicado se aplicaron. Se ofrece
+          // el mismo botón que en el caso de arriba (mismo endpoint,
+          // mismo efecto: enviado=TRUE + marcas GREATEST), pero AL LADO de
+          // "Descartar" y con aviso explícito, porque aquí — a diferencia
+          // del caso enviado_no_confirmado — no hay garantía automática de
+          // que el correo llegara: el admin debe confirmarlo por su cuenta
+          // (p. ej. Gmail) antes de pulsarlo.
+          ? `<button class="btn btn-ghost btn-sm" onclick="_marcarEmailAtascadoComoEnviado(${a.id})" title="Solo si has confirmado por otra vía (p. ej. bandeja de enviados) que este correo SÍ llegó de verdad — si no estás seguro, usa Descartar">✅ Marcar como enviado</button>
+             <button class="btn btn-ghost btn-sm" onclick="_descartarEmailAtascado(${a.id})">Descartar</button>`
           : `<button class="btn btn-ghost btn-sm" onclick="_descartarEmailAtascado(${a.id})">Descartar</button>`}
       </div>`).join('');
   } catch (_) { wrap.style.display = 'none'; }

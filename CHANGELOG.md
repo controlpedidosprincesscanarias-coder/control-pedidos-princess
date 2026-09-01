@@ -1,3 +1,17 @@
+# v12.30.90 — 1 septiembre 2026
+
+✨ Panel "Emails de sistema atascados": permite cerrar a mano filas "paradas" anteriores al fix de v12.30.89 (los 3 pedidos del incidente original)
+
+**Contexto**: el fix de la v12.30.89 (causa raíz `OR` sobre `INTEGER` → `GREATEST`, más la red de seguridad `enviado_no_confirmado`) corrige el problema **hacia delante**, pero no dejaba forma de cerrar correctamente los 3 registros ya afectados por el incidente original (pedidos LP 16445, IT 28252, GY 41254): sus filas en `emails_sistema_pendientes` agotaron los reintentos y quedaron "paradas" (`atascado=TRUE`) con `enviado_no_confirmado=FALSE`, porque esa columna no existía todavía cuando fallaron. El panel solo ofrecía "Descartar" para esas filas — cerraría el registro pero sin aplicar `GREATEST` sobre `comunicado_ab`/`comunicado_jefe_dep`, dejando las casillas del pedido sin marcar aunque el correo sí se hubiera entregado de verdad (confirmado por Víctor con capturas de Gmail). Las casillas están bloqueadas para edición manual desde la v12.30.65, así que no había ninguna vía para corregirlas.
+
+**Cambio en `templates/index.html`**: en `_cargarEmailsAtascados()`, las filas "paradas" (`atascado=TRUE`, `enviado_no_confirmado=FALSE`, sin descartar) muestran ahora **dos** botones en vez de uno: "✅ Marcar como enviado" (mismo endpoint `marcar-enviado` que ya aplica `GREATEST` sobre las marcas de comunicado) junto a "Descartar", con tooltip explícito: solo pulsar el primero si el admin ha confirmado por otra vía (p. ej. bandeja de enviados) que el correo llegó de verdad — a diferencia de las filas `enviado_no_confirmado=TRUE`, aquí no hay garantía automática. No se toca `app.py`: el endpoint `marcar-enviado` ya soportaba este caso desde la v12.30.89, solo faltaba exponerlo en el panel para filas "paradas" sin esa columna.
+
+**Verificación**: `node --check` sobre la función `_cargarEmailsAtascados()` aislada — sin errores de sintaxis. No se ha podido probar contra la base de datos real de producción desde este entorno (sin acceso a Supabase); recomendable, tras desplegar, entrar en Admin → "Emails de sistema atascados", localizar las filas "cambio_estado_interno" de los pedidos 16445/28252/41254 y pulsar "✅ Marcar como enviado" en cada una, comprobando después que las casillas "Comunicado A&B"/"Comunicado Jefe Dep." de esos 3 pedidos quedan marcadas donde corresponda (A&B: los 3 son RESTAURANTE & BARES/similar — confirmar dept. real de 28252 e IT 41254; Jefe Dep.: solo si ese hotel+departamento tiene correo configurado en `departamento_hotel_email`).
+
+**Entrega**: `templates/index.html` (panel de atascados + badge de versión), `README.md` (versión actual + sección "Sistema · Admin"), más este historial/`CHANGELOG.md`. `app.py` no cambia. `requirements.txt` no cambia. `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` y `docs/hallazgo-seguridad-princess.md` revisados — no aplica, ninguno documenta este panel.
+
+---
+
 # v12.30.89 — 1 septiembre 2026
 
 ✨ Corrección: duplicados reales del correo interno de cambio de estado (ENVIADO AL PROVEEDOR) — causa raíz + red de seguridad
