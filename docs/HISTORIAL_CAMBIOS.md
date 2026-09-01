@@ -25,6 +25,16 @@
 
 ---
 
+## 2026-08-31 — [Control Pedidos] Limpieza, Etapa 8: 2 columnas muertas en 4 consultas de pedidos (v12.30.80)
+
+- **Origen**: al aclarar con el usuario el criterio de negocio de `PEDIDO_SELECT` (v12.30.79), se confirmó que 2 de los 5 campos de proveedor (`proveedor_movil`, `proveedor_contacto_nombre`) no los lee nadie en toda la aplicación.
+- **Verificación previa clave**: confirmado que la agenda de proveedores (`/api/proveedores`, `_prov_with_contactos()`) es un camino de código distinto e independiente, no afectado por este cambio — el usuario pidió explícitamente no tocar esa información visual.
+- **Cambio**: quitadas ambas subconsultas de las 4 consultas que las calculaban sin usarlas: `PEDIDO_SELECT`, `PEDIDO_SELECT_ALERTA`, `_JOB_PEDIDO_SQL`, y la consulta inline de emails pendientes (~línea 2440).
+- **Verificación**: `py_compile` sin errores, revisión visual de las 4 consultas, búsqueda completa sin referencias residuales. Sin poder probar contra base de datos real desde este entorno — recomendable verificar tras desplegar.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-08-31 — [Control Pedidos] Auditoría documental, Etapa 7: doc duplicado + UptimeRobot desactualizado + confirmación de código muerto (v12.30.79)
 
 - **Origen**: continuación de la auditoría general (Etapas 1-6, v12.30.73-78) tras revisar los 2 documentos que quedaban sin auditar.

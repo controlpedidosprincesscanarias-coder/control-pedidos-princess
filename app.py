@@ -2447,9 +2447,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         """SELECT p.*, h.nombre as hotel_nombre, h.codigo as hotel_codigo,
                   d.nombre as departamento_nombre,
                   pr.nombre as proveedor_nombre,
-                  (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' AND es_principal=1 LIMIT 1) as proveedor_email,
-                  (SELECT COALESCE(NULLIF(movil,''), NULLIF(telefono,'')) FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_movil,
-                  (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_contacto_nombre
+                  (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' AND es_principal=1 LIMIT 1) as proveedor_email
            FROM pedidos p
            LEFT JOIN hoteles h ON p.hotel_id = h.id
            LEFT JOIN departamentos d ON p.departamento_id = d.id
@@ -4189,9 +4187,7 @@ _JOB_PEDIDO_SQL = """
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
-           (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!=\'\' AND es_principal=1 LIMIT 1) as proveedor_email,
-           (SELECT COALESCE(NULLIF(movil,\'\'),NULLIF(telefono,\'\')) FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_movil,
-           (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_contacto_nombre
+           (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!=\'\' AND es_principal=1 LIMIT 1) as proveedor_email
     FROM pedidos p
     LEFT JOIN hoteles h ON p.hotel_id = h.id
     LEFT JOIN departamentos d ON p.departamento_id = d.id
@@ -6367,9 +6363,7 @@ PEDIDO_SELECT_ALERTA = """
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
            pr.nombre as proveedor_nombre,
-           (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' AND es_principal=1 LIMIT 1) as proveedor_email,
-           (SELECT COALESCE(NULLIF(movil,''),NULLIF(telefono,'')) FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_movil,
-           (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_contacto_nombre
+           (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' AND es_principal=1 LIMIT 1) as proveedor_email
     FROM pedidos p
     LEFT JOIN hoteles h ON p.hotel_id = h.id
     LEFT JOIN departamentos d ON p.departamento_id = d.id
@@ -12222,8 +12216,6 @@ PEDIDO_SELECT = """
            d.nombre  as departamento_nombre,
            pr.nombre as proveedor_nombre,
            (SELECT email FROM proveedor_contactos WHERE proveedor_id=pr.id AND email IS NOT NULL AND email!='' AND es_principal=1 LIMIT 1) as proveedor_email,
-                  (SELECT COALESCE(NULLIF(movil,''), NULLIF(telefono,'')) FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_movil,
-                  (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id AND es_principal=1 LIMIT 1) as proveedor_contacto_nombre,
            (SELECT telefono FROM proveedor_contactos WHERE proveedor_id=pr.id AND telefono IS NOT NULL AND telefono!='' ORDER BY orden,id LIMIT 1) as proveedor_telefono,
            (SELECT nombre FROM proveedor_contactos WHERE proveedor_id=pr.id ORDER BY orden,id LIMIT 1) as proveedor_contacto,
            COALESCE(p.creado_por_nombre,    u1.nombre) as creado_por_nombre,

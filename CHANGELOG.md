@@ -1,3 +1,17 @@
+# v12.30.80 — 31 agosto 2026
+
+✨ Limpieza (Etapa 8): 2 columnas muertas quitadas de 4 consultas de pedidos — sin tocar la agenda de proveedores
+
+**Contexto**: al hablar del criterio de negocio pendiente en `PEDIDO_SELECT` (ver v12.30.79), se aclaró con el usuario que el marcado "principal" de un contacto solo rige el envío de emails a proveedores — el teléfono en el listado de Pedidos es una referencia aparte (se usa en la exportación a Excel), sin relación con ese marcado. Al revisar los 5 campos uno por uno para explicar esto, aparecieron 2 que no los usa nadie en ningún punto de la aplicación: `proveedor_movil` y `proveedor_contacto_nombre`.
+
+**Verificación antes de tocar nada**: se confirmó explícitamente que la agenda de proveedores (`/api/proveedores`, función `_prov_with_contactos()`) es un camino de código completamente distinto e independiente — trae la lista completa de contactos de cada proveedor directamente de `proveedor_contactos`, sin pasar por ninguna de las 4 consultas tocadas aquí. Esta limpieza no afecta a esa información en absoluto, tal y como pidió el usuario.
+
+**Cambio**: quitadas las subconsultas `proveedor_movil` y `proveedor_contacto_nombre` de las 4 consultas que las calculaban en cada fila sin que ningún punto de `app.py` ni de `templates/index.html` las leyera después: `PEDIDO_SELECT` (listado de Pedidos), `PEDIDO_SELECT_ALERTA` (proponer email por alerta), `_JOB_PEDIDO_SQL` (job diario de alertas) y la consulta inline de `pedido = row_to_dict(query(...))` de emails pendientes (~línea 2440). `PEDIDO_SELECT` pasa de 6 a 4 subconsultas correlacionadas por fila; las otras 3, de 2 a 1. Se conservan intactos `proveedor_email` (con su rol de reserva/visualización ya descrito en v12.30.79) y, solo en `PEDIDO_SELECT`, `proveedor_telefono`/`proveedor_contacto` (sí se usan, en la exportación a Excel).
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; revisión visual de las 4 consultas tras el cambio (comas y paréntesis correctos); búsqueda completa confirmando cero apariciones residuales de `proveedor_movil`/`proveedor_contacto_nombre` en todo el proyecto. No se ha podido probar contra una base de datos real desde este entorno — recomendable verificar que el listado de Pedidos y las alertas por email siguen funcionando igual tras desplegar.
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
 # v12.30.79 — 31 agosto 2026
 
 ✨ Auditoría documental (Etapa 7): documento duplicado eliminado + "UptimeRobot" desactualizado en 3 archivos + confirmación de que no queda más código muerto
