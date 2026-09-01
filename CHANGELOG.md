@@ -1,3 +1,31 @@
+# v12.30.84 — 1 septiembre 2026
+
+🧹 Limpieza documental: eliminado un archivo obsoleto que había quedado sin borrar de verdad
+
+**Contexto**: al revisar la documentación a raíz del aviso de Víctor de mantenerla siempre al día (ver v12.30.83), se detectó que `CAMBIOS_solicitud_directa_backend.md` seguía presente en el ZIP del proyecto, aunque el historial (`v12.30.79`) registraba que se había eliminado. El contenido del archivo se revisó de nuevo y se confirmó obsoleto: describe el endpoint `POST /api/solicitar-usuario/directo` mencionando `init_db()` (función ya retirada del código hace varias versiones) y advirtiendo "no he podido ejecutarlo contra una base de datos real" — el endpoint lleva funcionando en producción desde v12.20.2, con una entrada completa y actualizada ya en este mismo `CHANGELOG.md`.
+
+**Cambio**: archivo `CAMBIOS_solicitud_directa_backend.md` eliminado. Búsqueda completa en el proyecto confirma que ninguna otra parte lo referenciaba salvo las propias entradas de este historial y de `CHANGELOG.md` que documentan la decisión de eliminarlo (esas se mantienen tal cual, son el registro histórico correcto).
+
+**Nota**: esto no cambia ningún comportamiento de la aplicación — `app.py` y `templates/index.html` no llevan cambios de código en esta entrega, solo el badge de versión.
+
+**Entrega**: eliminación de `CAMBIOS_solicitud_directa_backend.md`, `templates/index.html` (badge de versión), `README.md` (versión actual), más este historial/`CHANGELOG.md`.
+
+# v12.30.83 — 1 septiembre 2026
+
+✨ Corrección: el email de respaldo del proveedor ahora respeta el hotel del pedido, igual que el camino "bueno"
+
+**Contexto**: al cerrar la v12.30.82 (orden determinista para el email de respaldo cuando hay varios contactos "principal"), surgió al margen un segundo problema, relacionado pero distinto, que Víctor pidió corregir aparte: esa misma subconsulta de respaldo (`proveedor_email`, usada en `PEDIDO_SELECT`, `PEDIDO_SELECT_ALERTA`, `_JOB_PEDIDO_SQL` y la consulta de `enviar_emails_estado()`) no tenía en cuenta el hotel del pedido — a diferencia de `_get_proveedor_emails_principales()`, la función "buena", que sí lo hace desde siempre.
+
+**El caso de borde que corrige**: un proveedor que trabaja con varios hoteles puede tener contactos "principal" distintos asignados a cada hotel (agenda de Proveedores → asignar contacto a hotel concreto). Antes, si `_get_proveedor_emails_principales()` no encontraba destinatario aplicable (caso de respaldo, poco frecuente), la subconsulta de respaldo podía devolver el email de un contacto "principal" del proveedor asignado a **otro** hotel distinto del pedido — en teoría, el aviso automático podía acabar en el hotel equivocado. Muy de borde (hace falta que el camino "bueno" falle Y que el proveedor tenga contactos "principal" asignados a hoteles distintos), pero real.
+
+**Cambio en `app.py`**: la subconsulta de respaldo pasa a aplicar el mismo criterio que `_get_proveedor_emails_principales()`: primero busca un contacto "principal" asignado específicamente al hotel del pedido (`proveedor_contacto_hoteles`); si no hay ninguno así, cae solo a los contactos "principal" generales (sin ningún hotel asignado) — nunca a uno asignado a un hotel distinto. Aplicado de forma idéntica en los mismos 4 sitios que en la v12.30.82.
+
+**Qué NO cambia**: para el caso normal — proveedor sin contactos asignados a hoteles concretos, que es la inmensa mayoría — el resultado es exactamente el mismo de siempre. Solo cambia el caso de borde descrito arriba.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Se montó una base de datos PostgreSQL 16 real (no SQLite, para que la subconsulta correlacionada de dos niveles se comporte igual que en producción) con 6 escenarios — contacto único sin hotel (caso normal), contacto con hotel que coincide + contacto general (debe ganar el del hotel), contacto asignado solo a otro hotel sin respaldo general (debe devolver vacío, nunca el contacto del otro hotel), contacto asignado a varios hoteles incluido el del pedido, empate entre dos contactos generales (desempate por `orden`, de la v12.30.82), y pedido sin hotel asignado (debe caer al contacto general) — los 6 dieron el resultado esperado. Además se extrajeron las 4 cadenas SQL tal cual quedaron en `app.py` y se validó cada una con `EXPLAIN` contra esa misma base de datos, para descartar errores de sintaxis o de escapado de comillas (uno de los 4 sitios usa `\'` en vez de `'`).
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md` (versión actual — llevaba desde v12.30.81 sin actualizar, corregido aquí a raíz de un aviso del usuario sobre mantener toda la documentación al día en cada entrega), más este historial/`CHANGELOG.md`. `requirements.txt` no cambia.
+
 # v12.30.82 — 1 septiembre 2026
 
 ✨ Auditoría de rendimiento — cierre del punto pendiente: email de respaldo del proveedor, determinista cuando hay varios contactos "principal"

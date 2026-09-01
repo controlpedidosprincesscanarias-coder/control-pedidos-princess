@@ -17,11 +17,43 @@
 > 2. Toda entrega debe registrar una entrada nueva aquí (más reciente
 >    arriba) y en `CHANGELOG.md`, describiendo petición, causa/hallazgo
 >    y corrección aplicada.
-> 3. Actualizar `README.md` si el cambio afecta a algo que el README
->    documenta (versión actual, funcionalidades, requisitos, etc.).
+> 3. `README.md`: la línea "Versión actual" se actualiza en **todas**
+>    las entregas, sin excepción (no solo cuando el cambio es visible) —
+>    quedó desincronizada 2 versiones seguidas (v12.30.82 y v12.30.83) por
+>    no tratarla como obligatoria, ver entrada de la v12.30.83. Además,
+>    el resto del README (funcionalidades, requisitos, secciones como
+>    "Rendimiento") se actualiza si el cambio afecta a algo que documenta.
 > 4. Subir el número de versión en el badge de `templates/index.html`
 >    (formato `V MAJOR.MINOR.PATCH`), coherente con el de `CHANGELOG.md`
 >    y esta entrada.
+> 5. Revisar en cada entrega si el cambio afecta a algún otro documento
+>    de mantenimiento del proyecto — `GUIA_DESPLIEGUE.md`,
+>    `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`,
+>    `docs/hallazgo-seguridad-princess.md` — y actualizarlo si es así.
+>    Dejar constancia en la entrada de este historial de qué se revisó,
+>    aunque la conclusión sea "no aplica" (para que quede claro que se
+>    comprobó y no que se olvidó).
+
+---
+
+## 2026-09-01 — [Control Pedidos] Limpieza documental: eliminado archivo obsoleto que no se había borrado de verdad (v12.30.84)
+
+- **Origen**: al revisar la documentación por el aviso de Víctor de mantenerla siempre al día (v12.30.83), se vio que `CAMBIOS_solicitud_directa_backend.md` seguía en el ZIP del proyecto, pese a que esta misma historia (v12.30.79) decía que se había eliminado. Víctor preguntó qué recomendaba y, tras confirmar que el archivo era realmente obsoleto y no tenía ninguna otra referencia en el proyecto salvo las entradas históricas que documentan su eliminación, pidió borrarlo ("bórralo").
+- **Contenido revisado de nuevo antes de borrar**: describía `POST /api/solicitar-usuario/directo` mencionando `init_db()` (retirada del código hace varias versiones) y avisando de que no se había podido probar contra una base de datos real — el endpoint lleva en producción desde v12.20.2, con entrada completa y actualizada en `CHANGELOG.md`.
+- **Cambio**: archivo eliminado. Sin cambios de código (`app.py`/`templates/index.html` solo llevan el badge de versión).
+- **Entrega**: eliminación de `CAMBIOS_solicitud_directa_backend.md`, `templates/index.html` (badge de versión), `README.md` (versión actual), más este historial/`CHANGELOG.md`.
+
+---
+
+## 2026-09-01 — [Control Pedidos] Corrección: el email de respaldo del proveedor ahora respeta el hotel del pedido (v12.30.83)
+
+- **Origen**: al cerrar la v12.30.82, se detectó al margen (no era lo que se estaba preguntando) un segundo problema en la misma subconsulta de respaldo (`proveedor_email`): no tenía en cuenta el hotel del pedido, a diferencia de `_get_proveedor_emails_principales()` (la función "buena"), que sí lo hace desde siempre. Se dejó anotado sin tocar, Víctor confirmó que sí quería corregirlo ("si por favor").
+- **Caso de borde que corrige**: un proveedor con contactos "principal" distintos asignados a hoteles distintos (agenda de Proveedores). Si el camino "bueno" no encontraba destinatario aplicable (caso de respaldo, poco frecuente), la subconsulta podía devolver el contacto "principal" de **otro** hotel del mismo proveedor — el aviso automático podía, en teoría, acabar en el hotel equivocado.
+- **Cambio**: la subconsulta de respaldo aplica ahora el mismo criterio que `_get_proveedor_emails_principales()`: prioridad al contacto "principal" asignado específicamente al hotel del pedido (`proveedor_contacto_hoteles`); si no hay ninguno, cae solo a los contactos "principal" generales (sin hotel asignado); nunca a uno de un hotel distinto. Aplicado en los mismos 4 sitios que la v12.30.82.
+- **Sin cambio de comportamiento** para el caso normal: proveedor sin contactos asignados a hoteles concretos (la inmensa mayoría) — resultado idéntico al de siempre.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Se montó PostgreSQL 16 real en este entorno (no SQLite, por la subconsulta correlacionada de dos niveles) con 6 escenarios (contacto único general, hotel-match vs. general, contacto solo de otro hotel sin respaldo, contacto multi-hotel, empate por `orden`, pedido sin hotel) — los 6 con el resultado esperado. Las 4 cadenas SQL finales de `app.py` (incluida la de comillas escapadas `\'` en `_JOB_PEDIDO_SQL`) validadas con `EXPLAIN` contra esa base de datos.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md` (versión actual — llevaba desde v12.30.81 sin actualizar; corregido a raíz de un aviso del usuario pidiendo mantener toda la documentación al día en cada entrega, ver nota abajo), más este historial/`CHANGELOG.md`. `requirements.txt` no cambia.
+- **Nota de proceso**: el usuario pidió explícitamente que, de aquí en adelante, cada entrega revise y actualice todo archivo de documentación que lo requiera (`CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`, badge de versión, `README.md`, y cualquier otro — `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — cuando el cambio afecte a algo que documenten). Al revisar por este motivo se encontró que `README.md` llevaba 2 versiones sin actualizarse (se quedó en v12.30.81 en las entregas v12.30.82 y v12.30.83); corregido aquí. Se revisaron también `GUIA_DESPLIEGUE.md`, `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md`: ninguno documenta nada relacionado con `proveedor_email` o el hotel del pedido, así que no requieren cambios en esta entrega.
 
 ---
 
