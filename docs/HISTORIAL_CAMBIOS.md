@@ -25,6 +25,17 @@
 
 ---
 
+## 2026-09-01 — [Control Pedidos] Auditoría de rendimiento — cierre: email de respaldo del proveedor determinista con varios contactos "principal" (v12.30.82)
+
+- **Origen**: punto pendiente de la Etapa 2 de la auditoría de rendimiento (v12.30.71) — la fusión de subconsultas de `PEDIDO_SELECT` se dejó sin hacer porque un proveedor puede tener varios contactos "principal" a la vez, sin criterio decidido de a cuál dar preferencia. Víctor preguntó si ese dato se usa de verdad; confirmado que sí (ver más abajo); pidió seguir adelante ("sigue adelante, acepto tu criterio").
+- **Confirmado antes de tocar nada**: `proveedor_email` no es solo informativo — `_encolar_reclamacion_proveedor_auto()` lo usa como respaldo cuando `_get_proveedor_emails_principales()` (la función correcta, que sí tiene en cuenta el hotel) no encuentra ningún contacto aplicable. Ese respaldo decide a quién se manda un correo automático real.
+- **Cambio**: `ORDER BY orden,id` añadido a la subconsulta de `proveedor_email` en los 4 sitios donde aparece (`enviar_emails_estado()`, `_JOB_PEDIDO_SQL`, `PEDIDO_SELECT_ALERTA`, `PEDIDO_SELECT`) — elige siempre el contacto principal más antiguo con email, mismo criterio que ya usaba `_get_proveedor_emails_principales()`. Sin cambio de comportamiento para proveedores con 0 o 1 contacto principal (la mayoría); solo se vuelve predecible el caso de varios.
+- **Nota**: la fusión de subconsultas que motivó esta pregunta ya no aplica — entre v12.30.71 y esta entrega, otro cambio ya quitó `proveedor_movil`/`proveedor_contacto_nombre` de `PEDIDO_SELECT`, así que solo queda una subconsulta afectada por el "empate", sin nada más con lo que fusionarla. Este cambio es de consistencia/corrección, no de rendimiento.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-09-01 — [Control Pedidos] Reproducibilidad, Etapa 9 (última): requirements.txt fijado a versiones exactas (v12.30.81)
 
 - **Origen**: cierre del segundo punto pendiente de la auditoría general (Etapas 1-8, v12.30.73-80). `requirements.txt` usaba `>=`, con riesgo de que un deploy nuevo instalara silenciosamente una versión más reciente y rompiera algo sin cambios de código.

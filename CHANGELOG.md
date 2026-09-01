@@ -1,3 +1,21 @@
+# v12.30.82 — 1 septiembre 2026
+
+✨ Auditoría de rendimiento — cierre del punto pendiente: email de respaldo del proveedor, determinista cuando hay varios contactos "principal"
+
+**Contexto**: cierre del punto que había quedado pendiente de la Etapa 2 de la auditoría de rendimiento (v12.30.71): la fusión de subconsultas de `PEDIDO_SELECT` se descartó entonces porque un proveedor puede tener varios contactos marcados "principal" a la vez, y no había un criterio decidido de a cuál dar preferencia. Víctor preguntó primero si ese dato se usa de verdad o es solo informativo, y tras confirmar que sí tiene un uso funcional real (ver abajo), pidió seguir adelante con el criterio propuesto ("sigue adelante, acepto tu criterio").
+
+**Qué se confirmó al investigarlo**: el email de esa subconsulta (`proveedor_email`) no es solo decorativo. `_encolar_reclamacion_proveedor_auto()` lo usa como **respaldo** cuando `_get_proveedor_emails_principales()` — la función correcta, que sí tiene en cuenta el hotel y manda a TODOS los contactos principales que correspondan — no encuentra ninguno aplicable. En ese caso de respaldo (poco frecuente, pero real: decide a quién se manda un correo automático), el criterio de qué contacto "ganaba" entre varios principales era hoy arbitrario — el que Postgres encontrara primero, sin ORDER BY.
+
+**Cambio en `app.py`**: se añade `ORDER BY orden,id` a la subconsulta de `proveedor_email` (elige el contacto principal más antiguo — el primero de la ficha — que tenga email) en los 4 sitios donde aparece de forma prácticamente idéntica: la consulta de `enviar_emails_estado()`, `_JOB_PEDIDO_SQL`, `PEDIDO_SELECT_ALERTA` y `PEDIDO_SELECT`. Mismo criterio de orden que ya usa `_get_proveedor_emails_principales()` desde siempre (`ORDER BY pc.orden, pc.id`), así que ahora los dos caminos —el bueno y el de respaldo— son consistentes entre sí.
+
+**Qué NO cambia**: para el caso normal (0 o 1 contacto marcado "principal" por proveedor, la inmensa mayoría), el resultado es exactamente el mismo de siempre — solo se vuelve predecible el caso de varios principales a la vez, que antes podía variar sin ningún criterio explícito.
+
+**Fusión de subconsultas — sigue sin hacerse, y ya no aplica igual que antes**: entre esta entrega y la v12.30.71 alguien ya quitó del listado de Pedidos los otros dos campos que iban a fusionarse con este (`proveedor_movil`, `proveedor_contacto_nombre` — ya no están en `PEDIDO_SELECT`), así que la oportunidad de "fusionar 3 subconsultas en 1" que motivó originalmente esta pregunta ya no existe: solo queda una subconsulta afectada por el "empate" entre contactos principales, y esa consulta no se puede fusionar con nada porque no hay ya nada más con lo que fusionarla. Este cambio es, por tanto, de consistencia/corrección, no de rendimiento — se deja constancia por si en el futuro se retoma el tema.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Los 4 fragmentos de SQL revisados uno a uno para confirmar que el `ORDER BY orden,id` queda antes del `LIMIT 1` en los cuatro, y que ninguno cambió de significado para el caso de 0/1 contacto principal (que sigue devolviendo exactamente lo mismo).
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), más este historial/`CHANGELOG.md`.
+
 # v12.30.81 — 1 septiembre 2026
 
 ✨ Reproducibilidad (Etapa 9, última): `requirements.txt` fijado a versiones exactas
