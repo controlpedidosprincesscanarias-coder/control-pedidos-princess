@@ -882,10 +882,19 @@ tbody tr:last-child{border-bottom:none}
       <div id="login-error2" class="login-error"></div>
       <button class="login-btn" onclick="verificarCodigoLogin()">Verificar y entrar</button>
       <div style="text-align:center;margin-top:14px;">
-        <button onclick="doLogin(true)"
+        <button id="btn-reenviar-codigo" onclick="doLogin(true)"
            style="background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.55);font-size:13px;text-decoration:underline;padding:0;font-family:inherit;">
           Reenviar código
         </button>
+        <!-- (2026-09-02) Confirmación breve tras cada envío/reenvío — antes
+             el usuario no tenía ninguna señal en pantalla de que el email
+             ya se había enviado, así que ante cualquier tardanza pulsaba
+             "Reenviar código" de nuevo por impaciencia, lo que invalidaba
+             el código anterior (por diseño, ver _iniciarCooldownReenvio) y
+             generaba dos emails con códigos distintos en menos de un
+             minuto. Ver _mostrarConfirmacionReenvio() más abajo. -->
+        <div id="reenvio-confirmacion"
+             style="display:none;margin-top:6px;font-size:12px;color:#8bc98b;"></div>
       </div>
       <div style="text-align:center;margin-top:8px;">
         <button onclick="_volverLoginPaso1()"
@@ -1396,7 +1405,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.94
+          V 12.30.95
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3024,6 +3033,17 @@ async function doLogin(reenvio=false) {
           // había llegado a enviar. Ahora se avisa de inmediato.
           err2.textContent = '⚠️ No se pudo enviar el email de verificación (posible bloqueo de red/antivirus). Pulsa "Reenviar código" para reintentarlo.';
           err2.style.display = 'block';
+          // (2026-09-02) Envío fallido: NO se aplica cooldown — el propio
+          // mensaje de arriba invita a reintentar ya mismo con "Reenviar
+          // código", así que bloquearlo aquí sería contraproducente.
+        } else {
+          // (2026-09-02) Envío correcto (inicial o reenvío): cooldown de
+          // _COOLDOWN_REENVIO_SEGUNDOS en "Reenviar código" + confirmación
+          // visible, para que el usuario no vuelva a pulsarlo por
+          // impaciencia mientras el email todavía está en camino (ver
+          // comentario junto a _iniciarCooldownReenvio más abajo).
+          _iniciarCooldownReenvio();
+          _mostrarConfirmacionReenvio(reenvio);
         }
       }
       return;
@@ -3070,6 +3090,65 @@ async function _enviarCodigoVerificacion(email, subject, message) {
   return false;
 }
 
+/* (2026-09-02) Cooldown del botón "Reenviar código" — a petición de
+   Víctor, tras detectar (capturas de Gmail) dos correos de "Código de
+   verificación" con códigos distintos en menos de un minuto para el mismo
+   intento de login. Causa: cada llamada a /api/login (incluida la del
+   propio botón "Reenviar código") invalida por diseño el código anterior
+   sin usar y genera uno nuevo (ver v12.3.0 más abajo en el historial) —
+   eso es correcto y necesario, pero el botón no tenía cooldown ni el
+   usuario recibía ninguna confirmación en pantalla de que el email ya se
+   había enviado. Ante cualquier tardanza real (Gmail, EmailJS, red), el
+   usuario pulsaba "Reenviar código" por impaciencia, invalidando sin
+   querer un código que en realidad sí iba a llegar. Este bloque añade
+   un cooldown de 45s (con cuenta atrás visible) tras cada envío que sí
+   tuvo éxito, y una confirmación breve "✅ Código enviado/reenviado".
+   Si el envío FALLA (ver _enviarCodigoVerificacion), no se aplica
+   cooldown — el mensaje de error ya invita a pulsar "Reenviar código"
+   de inmediato para reintentarlo, y bloquearlo ahí sería contraproducente. */
+const _COOLDOWN_REENVIO_SEGUNDOS = 45;
+let _cooldownReenvioInterval = null;
+let _confirmacionReenvioTimeout = null;
+
+function _iniciarCooldownReenvio() {
+  const btn = document.getElementById('btn-reenviar-codigo');
+  if (!btn) return;
+  if (_cooldownReenvioInterval) clearInterval(_cooldownReenvioInterval);
+  let restante = _COOLDOWN_REENVIO_SEGUNDOS;
+  btn.disabled = true;
+  btn.style.opacity = '0.55';
+  btn.style.cursor = 'default';
+  btn.textContent = `Reenviar código (${restante}s)`;
+  _cooldownReenvioInterval = setInterval(() => {
+    restante--;
+    if (restante <= 0) {
+      _detenerCooldownReenvio();
+    } else {
+      btn.textContent = `Reenviar código (${restante}s)`;
+    }
+  }, 1000);
+}
+
+function _detenerCooldownReenvio() {
+  const btn = document.getElementById('btn-reenviar-codigo');
+  if (_cooldownReenvioInterval) { clearInterval(_cooldownReenvioInterval); _cooldownReenvioInterval = null; }
+  if (btn) {
+    btn.disabled = false;
+    btn.style.opacity = '';
+    btn.style.cursor = 'pointer';
+    btn.textContent = 'Reenviar código';
+  }
+}
+
+function _mostrarConfirmacionReenvio(reenvio) {
+  const el = document.getElementById('reenvio-confirmacion');
+  if (!el) return;
+  el.textContent = reenvio ? '✅ Código reenviado a tu email.' : '✅ Código enviado a tu email.';
+  el.style.display = 'block';
+  if (_confirmacionReenvioTimeout) clearTimeout(_confirmacionReenvioTimeout);
+  _confirmacionReenvioTimeout = setTimeout(() => { el.style.display = 'none'; }, 6000);
+}
+
 async function verificarCodigoLogin() {
   const codigo = document.getElementById('login-codigo').value.trim();
   const err = document.getElementById('login-error2');
@@ -3086,6 +3165,14 @@ function _volverLoginPaso1() {
   document.getElementById('login-paso2').style.display = 'none';
   document.getElementById('login-paso1').style.display = '';
   _loginPendienteUsername = null;
+  // (2026-09-02) Al volver atrás se descarta el intento de verificación en
+  // curso — limpiar también el cooldown/confirmación del botón "Reenviar
+  // código" para que el próximo intento de login empiece en estado limpio
+  // (sin arrastrar la cuenta atrás ni la confirmación del intento anterior).
+  _detenerCooldownReenvio();
+  const _confirmEl = document.getElementById('reenvio-confirmacion');
+  if (_confirmEl) _confirmEl.style.display = 'none';
+  if (_confirmacionReenvioTimeout) { clearTimeout(_confirmacionReenvioTimeout); _confirmacionReenvioTimeout = null; }
 }
 
 async function _entrarEnApp(r) {

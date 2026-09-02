@@ -1,3 +1,23 @@
+# v12.30.95 — 2 septiembre 2026
+
+🔐 Login → verificación por email: cooldown y confirmación en "Reenviar código", para evitar dos códigos distintos en menos de un minuto
+
+**Origen**: Víctor detectó (capturas de Gmail) que un usuario, al recibir el aviso de verificación por inactividad (correcto, 3+ días sin login), recibía dos correos de "Código de verificación" con códigos distintos en menos de un minuto.
+
+**Diagnóstico**: no era un doble-submit simultáneo (eso ya estaba protegido desde v12.3.0 con el flag `_loginEnCurso`). Cada llamada a `/api/login` — incluida la del botón "Reenviar código" — invalida por diseño el código anterior sin usar y genera uno nuevo; eso es correcto y necesario. El problema real era de UX: el botón "Reenviar código" no tenía cooldown ni el usuario recibía ninguna confirmación en pantalla de que el email ya se había enviado, así que ante cualquier tardanza real (Gmail, EmailJS, red) el usuario lo pulsaba por impaciencia, invalidando sin querer un código que sí iba a llegar — encajaba exactamente con el patrón de las capturas (dos códigos, 1 minuto de diferencia).
+
+**Cambio en `templates/index.html`**: nuevo cooldown de 45s (con cuenta atrás visible en el propio botón, "Reenviar código (45s)") tras cada envío que tuvo éxito — tanto el primer envío automático como cada reenvío manual —, más una confirmación breve "✅ Código enviado/reenviado a tu email" (se oculta sola a los 6s). Si el envío FALLA (tras los 2 intentos de `_enviarCodigoVerificacion`), no se aplica cooldown: el mensaje de error ya invita a pulsar "Reenviar código" de inmediato para reintentarlo, y bloquearlo ahí habría sido contraproducente. Nuevas funciones `_iniciarCooldownReenvio()`/`_detenerCooldownReenvio()`/`_mostrarConfirmacionReenvio()`; `_volverLoginPaso1()` limpia el cooldown/confirmación al descartar el intento en curso, para que el siguiente intento de login empiece en estado limpio.
+
+**`app.py` no cambia**: la lógica de generación/invalidación de códigos (`/api/login`) ya era correcta por diseño; el fix es puramente de frontend (evitar que el usuario dispare reenvíos innecesarios), no de backend.
+
+**Verificación**: los 9 bloques `<script>` de `templates/index.html` extraídos y verificados con `node --check`, sin errores de sintaxis (incluido el bloque que contiene `doLogin()`).  No probado en vivo contra producción (sin acceso desde este entorno) — a confirmar tras desplegar: provocar el aviso de verificación por inactividad y comprobar que "Reenviar código" queda deshabilitado con cuenta atrás tras cada envío, con el mensaje de confirmación visible.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` (no existe en este repo) — no aplica, ninguno documenta el flujo de login/verificación. `README.md` — revisado; el flujo de verificación por email nunca ha tenido una sección propia en el README (es un detalle de login, no una "vista" del sidebar), así que solo se actualiza la versión actual, sin bullet nuevo.
+
+**Entrega**: `templates/index.html`, `README.md` (versión actual), más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.30.94 — 2 septiembre 2026
 
 ✨ Correo interno de cambio de estado: el botón de descarga del PDF llega también a ENTREGA PARCIAL/ENTREGADO, con importes y días transcurridos en el texto
