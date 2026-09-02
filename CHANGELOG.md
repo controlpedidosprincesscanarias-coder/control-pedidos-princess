@@ -1,3 +1,21 @@
+# v12.30.94 — 2 septiembre 2026
+
+✨ Correo interno de cambio de estado: el botón de descarga del PDF llega también a ENTREGA PARCIAL/ENTREGADO, con importes y días transcurridos en el texto
+
+**Petición de Víctor**: 1) que el botón de descarga/visualización del PDF del pedido, ya presente en el correo interno de ENVIADO AL PROVEEDOR (v12.30.55), se incluya también cuando el cambio de estado es ENTREGA PARCIAL o ENTREGA TOTAL (ENTREGADO). 2) que el cuerpo del correo mencione, en ENTREGA PARCIAL, el importe de esa entrega y el importe que queda pendiente sobre el pedido; y en ENTREGA TOTAL, que confirme la entrega total e indique el número de días transcurridos entre el pedido, las entregas parciales y la entrega total.
+
+**Cambio en `app.py` — botón de descarga del PDF**: la condición que activaba el botón (`_enlaces_descarga_pedido_doc()` + enlace público/temporal `/descargas/adjunto/<token>`, sin login) pasa de estar limitada a `estado_nuevo == "ENVIADO AL PROVEEDOR"` a incluir también `"ENTREGA PARCIAL"` y `"ENTREGADO"`. El texto que acompaña al botón se adapta: en ENVIADO AL PROVEEDOR sigue mencionando "tramitado y enviado al proveedor"; en los otros dos estados dice simplemente "puede descargar el documento del pedido", sin esa mención. CANCELADO y DENEGADO POR DIRECCIÓN GENERAL siguen sin botón (no hay PDF nuevo que enseñar en esos casos).
+
+**Cambio en `app.py` — importes y días en el texto**: `_resumen_entregas()` calcula ahora, por cada entrada del histórico de albaranes, los días transcurridos entre `fecha_tramitacion` del pedido y la fecha de esa entrega (`dias_desde_pedido`), y a nivel de resumen añade `total_pedido`, `total_pendiente` (total del pedido menos lo recibido hasta ahora) y `dias_pedido_a_final` (días hasta la entrega marcada como final). El párrafo introductorio del correo (HTML y texto plano) pasa a ser dinámico en estos dos estados: en ENTREGA PARCIAL indica el importe de la entrega registrada y el importe pendiente sobre el total del pedido; en ENTREGADO confirma la entrega total e indica los días transcurridos desde la tramitación, mencionando el número de entregas parciales intermedias si las hubo. La tabla de histórico de entregas (`_html_bloque_entregas`/`_text_bloque_entregas`) suma una columna "Días desde pedido" por cada fila, y una línea de "Pendiente de recibir sobre el total del pedido" cuando aplica (no se muestra en ENTREGADO, donde por definición no queda nada pendiente).
+
+**Verificación**: `python3 -m py_compile app.py` sin errores de sintaxis. Lógica de cálculo de `_resumen_entregas()` (importes acumulados, pendiente, días por entrada y días hasta la entrega final) probada de forma aislada con un caso de ejemplo (pedido tramitado + 2 entregas parciales + 1 entrega final), resultados correctos. No probado en vivo contra producción (sin acceso desde este entorno) — a confirmar tras desplegar: registrar una entrega parcial y una entrega total sobre un pedido con importe y fecha de tramitación conocidos, y comprobar que el correo interno muestra el botón, los importes y los días correctos.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, ninguno documenta el contenido de este correo. `docs/hallazgo-seguridad-princess.md` no existe en este repo. `README.md` sí: versión actual y sección "Alertas y notificaciones · Admin" (nuevo bullet "Correo interno de cambio de estado").
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.30.93 — 1 septiembre 2026
 
 ✨ Admin → "EmailJS y cola de correo": 4ª cuenta de backup, misma mecánica que las otras 3

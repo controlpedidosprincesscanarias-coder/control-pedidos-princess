@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.93** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.94** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -115,6 +115,20 @@ confundirse entre sí, ver más abajo):
   importes y quién y cuándo lo autorizó, y llega igual a todos los
   destinatarios internos ya configurados (comprador, rol hotel,
   departamento y contactos adicionales).
+- **Correo interno de cambio de estado** (ENVIADO AL PROVEEDOR / ENTREGA
+  PARCIAL / ENTREGADO): además del cuadro de datos y el histórico de
+  entregas, desde 2026-08-31 incluye un botón para descargar/visualizar
+  el PDF del pedido tramitado (mismo enlace público y temporal que el
+  correo al proveedor) — hasta 2026-09-02 solo aparecía en ENVIADO AL
+  PROVEEDOR. Desde v12.30.94, ese mismo botón se muestra también en
+  ENTREGA PARCIAL y ENTREGADO, y el párrafo introductorio pasa a ser
+  dinámico: en ENTREGA PARCIAL indica el importe de la entrega
+  registrada y el importe pendiente sobre el total del pedido; en
+  ENTREGADO confirma la entrega total y el número de días transcurridos
+  desde la tramitación del pedido (contando las entregas parciales
+  intermedias si las hubo). La tabla de histórico de entregas del correo
+  suma una columna "Días desde pedido" con ese mismo dato por cada
+  entrada (parcial o final).
 - **Parámetros de alertas** (antes "Config alertas", renombrada
   2026-08-29) — umbrales de plazo de entrega, cotización, firma y
   repetición de popups. Ya NO incluye los límites de techo (ver

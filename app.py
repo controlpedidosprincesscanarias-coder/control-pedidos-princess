@@ -2180,45 +2180,83 @@ def _resumen_entregas(pedido: dict, estado_nuevo: str = None) -> dict:
     Cuando el estado de referencia es ENTREGADO, la última entrada registrada
     se marca como "es_final" (la entrega que cierra el pedido).
 
+    (2026-09-02) A petición de Víctor: además del histórico de importes, el
+    correo interno de ENTREGA PARCIAL/ENTREGADO debe poder indicar cuántos
+    días han transcurrido entre la fecha de tramitación del pedido y cada
+    entrega (parcial o final). Se añade "dias_desde_pedido" por entrada, y
+    "total_pedido"/"total_pendiente" a nivel de resumen (importe que falta
+    por recibir sobre el total del pedido, base imponible).
+
     Devuelve:
         {
-          "entregas":        [{"num","fecha_iso","fecha_es","es_final","base_imponible"}, ...],
+          "entregas":        [{"num","fecha_iso","fecha_es","es_final","base_imponible",
+                                "dias_desde_pedido"}, ...],
           "total":           int,
           "ultima_fecha_es": str|None,   # fecha de la entrega más reciente registrada
           "tiene_fechas":    bool,       # alguna entrega tiene fecha informada
           "total_recibido":  float|None, # suma de base_imponible de las entradas (None si ninguna la tiene)
+          "total_pedido":    float|None, # total del pedido (base imponible), tal cual en `pedido`
+          "total_pendiente": float|None, # total_pedido - total_recibido (None si falta algún dato)
+          "dias_pedido_a_final": int|None,  # días entre tramitación y la entrega marcada es_final
         }
     """
     entradas = _parse_albaran_entries(pedido.get("entrada_albaran_num"))
     estado_ref = estado_nuevo or pedido.get("estado")
+
+    _fecha_tram_iso = None
+    if pedido.get("fecha_tramitacion"):
+        try:
+            _fecha_tram_iso = datetime.strptime(str(pedido["fecha_tramitacion"])[:10], "%Y-%m-%d").date()
+        except Exception:
+            _fecha_tram_iso = None
+
     out = []
     total_recibido = 0.0
     hay_importe = False
+    dias_pedido_a_final = None
     for idx, e in enumerate(entradas):
         es_final = (estado_ref == "ENTREGADO" and idx == len(entradas) - 1)
         bi = e.get("base_imponible")
         if bi is not None:
             total_recibido += bi
             hay_importe = True
+        dias_desde_pedido = None
+        if _fecha_tram_iso and e["fecha_iso"]:
+            try:
+                _fe = datetime.strptime(str(e["fecha_iso"])[:10], "%Y-%m-%d").date()
+                dias_desde_pedido = (_fe - _fecha_tram_iso).days
+            except Exception:
+                dias_desde_pedido = None
+        if es_final:
+            dias_pedido_a_final = dias_desde_pedido
         out.append({
-            "num":            e["num"],
-            "fecha_iso":      e["fecha_iso"],
-            "fecha_es":       _fecha_es(e["fecha_iso"]),
-            "es_final":       es_final,
-            "base_imponible": bi,
+            "num":               e["num"],
+            "fecha_iso":         e["fecha_iso"],
+            "fecha_es":          _fecha_es(e["fecha_iso"]),
+            "es_final":          es_final,
+            "base_imponible":    bi,
+            "dias_desde_pedido": dias_desde_pedido,
         })
     fechas_validas = [e["fecha_es"] for e in out if e["fecha_es"]]
+    _total_recibido_val = round(total_recibido, 2) if hay_importe else None
+    _total_pedido_val = pedido.get("total_pedido")
+    _total_pendiente_val = None
+    if _total_pedido_val is not None and _total_recibido_val is not None:
+        _total_pendiente_val = round(_total_pedido_val - _total_recibido_val, 2)
     return {
-        "entregas":        out,
-        "total":           len(out),
-        "ultima_fecha_es": fechas_validas[-1] if fechas_validas else None,
-        "tiene_fechas":    bool(fechas_validas),
-        "total_recibido":  round(total_recibido, 2) if hay_importe else None,
+        "entregas":            out,
+        "total":               len(out),
+        "ultima_fecha_es":     fechas_validas[-1] if fechas_validas else None,
+        "tiene_fechas":        bool(fechas_validas),
+        "total_recibido":      _total_recibido_val,
+        "total_pedido":        _total_pedido_val,
+        "total_pendiente":     _total_pendiente_val,
+        "dias_pedido_a_final": dias_pedido_a_final,
     }
 
 
 def _html_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
-    """Tabla HTML con el histórico de entregas (albaranes + fechas + base imponible) para el correo interno."""
+    """Tabla HTML con el histórico de entregas (albaranes + fechas + base imponible + días desde el pedido) para el correo interno."""
     if not resumen["entregas"]:
         return ""
     filas = []
@@ -2226,10 +2264,14 @@ def _html_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
         etiqueta = "Entrega final (TOTAL)" if e["es_final"] else f"Entrega parcial {i}"
         fecha_txt = e["fecha_es"] or "fecha no indicada"
         importe_txt = _fmt_importe_es(e["base_imponible"]) + " €" if e["base_imponible"] is not None else "—"
+        # (2026-09-02) A petición de Víctor: indicar los días transcurridos
+        # entre la fecha de tramitación del pedido y cada entrega (parcial
+        # o final), para que quede constancia del plazo real de cada envío.
+        dias_txt = f"{e['dias_desde_pedido']} día(s)" if e.get("dias_desde_pedido") is not None else "—"
         estilo = ' style="background:#e8f5e9;font-weight:600"' if e["es_final"] else ''
         filas.append(
             f'<tr{estilo}><td>{i}</td><td>{etiqueta}</td>'
-            f'<td>{e["num"]}</td><td>{fecha_txt}</td><td>{importe_txt}</td></tr>'
+            f'<td>{e["num"]}</td><td>{fecha_txt}</td><td>{importe_txt}</td><td>{dias_txt}</td></tr>'
         )
     titulo = ("Histórico de entregas registradas" if estado_nuevo == "ENTREGADO"
               else "Entregas parciales registradas hasta la fecha")
@@ -2238,16 +2280,24 @@ def _html_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
     if resumen.get("total_recibido") is not None:
         total_html = (f'<p style="margin:6px 0 0"><b>Total recibido hasta la fecha (base imponible):</b> '
                        f'{_fmt_importe_es(resumen["total_recibido"])} €</p>')
+    # (2026-09-02) Importe pendiente sobre el total del pedido — solo tiene
+    # sentido mostrarlo cuando aún queda algo por recibir (no en ENTREGADO,
+    # donde el propio estado ya indica que no queda nada pendiente).
+    if estado_nuevo != "ENTREGADO" and resumen.get("total_pendiente") is not None:
+        total_html += (f'<p style="margin:2px 0 0"><b>Pendiente de recibir sobre el total del pedido '
+                        f'({_fmt_importe_es(resumen["total_pedido"])} €):</b> '
+                        f'{_fmt_importe_es(resumen["total_pendiente"])} €</p>')
     return (
         f'<p style="margin:16px 0 6px"><b>{titulo}</b> ({resumen["total"]} entrada{plural}):</p>'
         f'<table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'
-        f'<tr style="background:#f0f0f0"><th>#</th><th>Tipo</th><th>Nº Entrada DALI/SAP</th><th>Fecha</th><th>Base imp. (€)</th></tr>'
+        f'<tr style="background:#f0f0f0"><th>#</th><th>Tipo</th><th>Nº Entrada DALI/SAP</th><th>Fecha</th>'
+        f'<th>Base imp. (€)</th><th>Días desde pedido</th></tr>'
         + "".join(filas) + "</table>" + total_html + _nota_base_imponible_html()
     )
 
 
 def _text_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
-    """Bloque de texto plano con el histórico de entregas (con base imponible), para el correo interno (fallback texto)."""
+    """Bloque de texto plano con el histórico de entregas (con base imponible y días desde el pedido), para el correo interno (fallback texto)."""
     if not resumen["entregas"]:
         return ""
     titulo = ("Histórico de entregas registradas" if estado_nuevo == "ENTREGADO"
@@ -2257,9 +2307,15 @@ def _text_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
         etiqueta = "ENTREGA FINAL (TOTAL)" if e["es_final"] else f"Entrega parcial {i}"
         fecha_txt = e["fecha_es"] or "fecha no indicada"
         importe_txt = f" — {_fmt_importe_es(e['base_imponible'])} €" if e["base_imponible"] is not None else ""
-        lineas.append(f"  {i}. {etiqueta} — Nº {e['num']} — {fecha_txt}{importe_txt}")
+        dias_txt = f" — {e['dias_desde_pedido']} día(s) desde el pedido" if e.get("dias_desde_pedido") is not None else ""
+        lineas.append(f"  {i}. {etiqueta} — Nº {e['num']} — {fecha_txt}{importe_txt}{dias_txt}")
     if resumen.get("total_recibido") is not None:
         lineas.append(f"  Total recibido hasta la fecha (base imponible): {_fmt_importe_es(resumen['total_recibido'])} €")
+    if estado_nuevo != "ENTREGADO" and resumen.get("total_pendiente") is not None:
+        lineas.append(
+            f"  Pendiente de recibir sobre el total del pedido ({_fmt_importe_es(resumen['total_pedido'])} €): "
+            f"{_fmt_importe_es(resumen['total_pendiente'])} €"
+        )
     lineas.append(_nota_base_imponible_text())
     return "\n".join(lineas)
 
@@ -2926,13 +2982,18 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         # del pedido en destino?" — no, solo se había hecho para el correo al
         # proveedor (ver CHANGELOG v12.30.40); esto añade el mismo botón
         # aquí, con el mismo enlace público y temporal (sin login, ver
-        # /descargas/adjunto/<token>), solo para ENVIADO AL PROVEEDOR — igual
-        # que el correo al proveedor, no para el resto de estados de este
-        # bloque (ENTREGA PARCIAL/ENTREGADO/CANCELADO), que no tienen un PDF
-        # nuevo que enseñar en ese momento.
+        # /descargas/adjunto/<token>), inicialmente solo para ENVIADO AL
+        # PROVEEDOR — igual que el correo al proveedor.
+        # (2026-09-02) A petición de Víctor: extender el mismo botón también
+        # a ENTREGA PARCIAL y ENTREGADO (entrega total) — mismo pedido PDF,
+        # mismo enlace público/temporal, solo cambia el texto introductorio
+        # para no hablar de "enviado al proveedor" en esos dos estados. Se
+        # mantiene sin botón para CANCELADO/DENEGADO POR DIRECCION GENERAL,
+        # donde no aporta nada revisar el PDF del pedido.
         _bloque_doc_html_interno = ""
         _bloque_doc_text_interno = ""
-        if estado_nuevo == "ENVIADO AL PROVEEDOR":
+        _ESTADOS_CON_BOTON_DOC = ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL", "ENTREGADO")
+        if estado_nuevo in _ESTADOS_CON_BOTON_DOC:
             _enlaces_doc_interno = _enlaces_descarga_pedido_doc(pedido_id)
             if _enlaces_doc_interno:
                 _botones_doc_interno = "".join(
@@ -2946,14 +3007,28 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 # instrucciones pertinentes para que se puedan descargar el
                 # pedido PDF con el botón al uso" — el botón aparecía solo,
                 # sin ninguna frase que explique qué es o para qué sirve.
+                if estado_nuevo == "ENVIADO AL PROVEEDOR":
+                    _texto_intro_doc_html = (
+                        'Puede descargar el documento del pedido tramitado y enviado al proveedor '
+                        'pulsando el siguiente botón:'
+                    )
+                    _texto_intro_doc_text = (
+                        "Puede descargar el documento del pedido tramitado y enviado al proveedor "
+                        "en el siguiente enlace:"
+                    )
+                else:
+                    _texto_intro_doc_html = (
+                        'Puede descargar el documento del pedido pulsando el siguiente botón:'
+                    )
+                    _texto_intro_doc_text = (
+                        "Puede descargar el documento del pedido en el siguiente enlace:"
+                    )
                 _bloque_doc_html_interno = (
-                    '<p style="margin:14px 0 4px">Puede descargar el documento del pedido tramitado '
-                    'y enviado al proveedor pulsando el siguiente botón:</p>'
+                    f'<p style="margin:14px 0 4px">{_texto_intro_doc_html}</p>'
                     f'<div style="margin:4px 0 14px">{_botones_doc_interno}</div>'
                 )
                 _bloque_doc_text_interno = (
-                    "\nPuede descargar el documento del pedido tramitado y enviado al proveedor "
-                    "en el siguiente enlace:\n"
+                    f"\n{_texto_intro_doc_text}\n"
                     + "\n".join(f"Documento del pedido ({e['nombre']}): {e['url']}" for e in _enlaces_doc_interno)
                     + "\n"
                 )
@@ -2986,11 +3061,50 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _icono = _ICONO_ESTADO.get(estado_nuevo, "🔔")
 
         _INTRO_ESTADO = {
-            "ENTREGA PARCIAL":      "Se ha registrado una <strong>entrega parcial</strong> en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
-            "ENTREGADO":            "El pedido ha sido marcado como <strong>ENTREGADO</strong> (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
             "CANCELADO":            "El pedido ha sido <strong>CANCELADO</strong>.",
             "DENEGADO POR DIRECCION GENERAL": "El pedido ha sido <strong>DENEGADO POR DIRECCIÓN GENERAL</strong>.",
         }
+        # (2026-09-02) A petición de Víctor: el párrafo introductorio de
+        # ENTREGA PARCIAL debe indicar por qué importe es esta entrega
+        # concreta y cuánto queda pendiente sobre el total del pedido; el de
+        # ENTREGADO debe confirmar la entrega total y el nº de días
+        # transcurridos desde la tramitación del pedido, contando también
+        # las entregas parciales intermedias si las hubo. Los importes y
+        # días salen de _resumen_ent (ver _resumen_entregas más arriba).
+        _entregas_ent = _resumen_ent["entregas"]
+        _monto_esta_entrega = None
+        for _e in reversed(_entregas_ent):
+            if _e["base_imponible"] is not None:
+                _monto_esta_entrega = _e["base_imponible"]
+                break
+        if estado_nuevo == "ENTREGA PARCIAL":
+            _intro_parcial_html = "Se ha registrado una <strong>entrega parcial</strong>"
+            if _monto_esta_entrega is not None:
+                _intro_parcial_html += f" por un total de <strong>{_fmt_importe_es(_monto_esta_entrega)} €</strong>"
+            _intro_parcial_html += " en este pedido."
+            if _resumen_ent.get("total_pendiente") is not None:
+                _intro_parcial_html += (
+                    f' Queda pendiente la entrega de un total de '
+                    f'<strong>{_fmt_importe_es(_resumen_ent["total_pendiente"])} €</strong> '
+                    f'sobre el pedido adjunto (total del pedido: {_fmt_importe_es(_resumen_ent["total_pedido"])} €).'
+                )
+            _intro_parcial_html += " A continuación se detalla el histórico de entregas recibidas hasta la fecha."
+            _INTRO_ESTADO["ENTREGA PARCIAL"] = _intro_parcial_html
+        elif estado_nuevo == "ENTREGADO":
+            _intro_entregado_html = "Queda <strong>confirmada la entrega total</strong> del pedido."
+            _n_parciales = sum(1 for _e in _entregas_ent if not _e["es_final"])
+            if _resumen_ent.get("dias_pedido_a_final") is not None:
+                _intro_entregado_html += (
+                    f' Han transcurrido <strong>{_resumen_ent["dias_pedido_a_final"]} día(s)</strong> entre la '
+                    f'fecha de tramitación del pedido y la entrega total'
+                )
+                if _n_parciales:
+                    _intro_entregado_html += f", con {_n_parciales} entrega(s) parcial(es) intermedia(s)"
+                _intro_entregado_html += "."
+            _intro_entregado_html += (
+                " A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final."
+            )
+            _INTRO_ESTADO["ENTREGADO"] = _intro_entregado_html
         # (2026-08-31) A petición de Víctor: este correo interno de "ENVIADO
         # AL PROVEEDOR" cambia de enfoque — antes era un aviso genérico de
         # "cambio de estado" (con Estado anterior/Estado nuevo, ver más
@@ -3128,11 +3242,38 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         body_html_i += '</div></div>'
 
         _INTRO_ESTADO_TXT = {
-            "ENTREGA PARCIAL":      "Se ha registrado una entrega parcial en este pedido. A continuación se detalla el histórico de entregas recibidas hasta la fecha.",
-            "ENTREGADO":            "El pedido ha sido marcado como ENTREGADO (entrega total). A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final.",
             "CANCELADO":            "El pedido ha sido CANCELADO.",
             "DENEGADO POR DIRECCION GENERAL": "El pedido ha sido DENEGADO POR DIRECCIÓN GENERAL.",
         }
+        # (2026-09-02) Mismo contenido dinámico que en _INTRO_ESTADO (HTML)
+        # más arriba, en texto plano — ver comentario allí.
+        if estado_nuevo == "ENTREGA PARCIAL":
+            _intro_parcial_text = "Se ha registrado una entrega parcial"
+            if _monto_esta_entrega is not None:
+                _intro_parcial_text += f" por un total de {_fmt_importe_es(_monto_esta_entrega)} €"
+            _intro_parcial_text += " en este pedido."
+            if _resumen_ent.get("total_pendiente") is not None:
+                _intro_parcial_text += (
+                    f' Queda pendiente la entrega de un total de {_fmt_importe_es(_resumen_ent["total_pendiente"])} € '
+                    f'sobre el pedido adjunto (total del pedido: {_fmt_importe_es(_resumen_ent["total_pedido"])} €).'
+                )
+            _intro_parcial_text += " A continuación se detalla el histórico de entregas recibidas hasta la fecha."
+            _INTRO_ESTADO_TXT["ENTREGA PARCIAL"] = _intro_parcial_text
+        elif estado_nuevo == "ENTREGADO":
+            _intro_entregado_text = "Queda confirmada la entrega total del pedido."
+            _n_parciales_txt = sum(1 for _e in _entregas_ent if not _e["es_final"])
+            if _resumen_ent.get("dias_pedido_a_final") is not None:
+                _intro_entregado_text += (
+                    f' Han transcurrido {_resumen_ent["dias_pedido_a_final"]} día(s) entre la fecha de '
+                    f'tramitación del pedido y la entrega total'
+                )
+                if _n_parciales_txt:
+                    _intro_entregado_text += f", con {_n_parciales_txt} entrega(s) parcial(es) intermedia(s)"
+                _intro_entregado_text += "."
+            _intro_entregado_text += (
+                " A continuación se detalla el histórico completo de entregas, incluyendo la fecha de la entrega final."
+            )
+            _INTRO_ESTADO_TXT["ENTREGADO"] = _intro_entregado_text
         if estado_nuevo == "ENVIADO AL PROVEEDOR":
             _intro_text = (
                 f"Confirmamos que el pedido ha sido tramitado y enviado correctamente al proveedor "
