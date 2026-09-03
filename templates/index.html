@@ -850,7 +850,11 @@ tbody tr:last-child{border-bottom:none}
       </div>
       <div>
         <label class="login-field-label">Contraseña</label>
-        <input id="login-pass" class="login-input" type="password" autocomplete="current-password">
+        <div style="position:relative">
+          <input id="login-pass" class="login-input" type="password" autocomplete="current-password" style="padding-right:40px">
+          <button type="button" onclick="togglePwdVisibility('login-pass', this)" tabindex="-1" title="Mostrar/ocultar contraseña"
+             style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;color:rgba(180,150,60,0.6);padding:4px;line-height:1;">👁</button>
+        </div>
       </div>
       <div id="login-error" class="login-error"></div>
       <button class="login-btn" onclick="doLogin()">Acceder</button>
@@ -966,11 +970,19 @@ tbody tr:last-child{border-bottom:none}
       <h3 style="margin:0 0 6px;font-size:18px;">Nueva contraseña</h3>
       <p id="reset-bienvenido" style="margin:0 0 20px;color:rgba(255,255,255,.6);font-size:13px;"></p>
       <label style="font-size:12px;color:rgba(255,255,255,.6);">Nueva contraseña</label>
-      <input id="reset-nueva" class="login-input" type="password" placeholder="Mínimo 6 caracteres"
-             style="margin-top:4px;margin-bottom:8px;">
+      <div style="position:relative;margin-top:4px;margin-bottom:8px;">
+        <input id="reset-nueva" class="login-input" type="password" placeholder="Mínimo 6 caracteres"
+               style="padding-right:40px">
+        <button type="button" onclick="togglePwdVisibility('reset-nueva', this)" tabindex="-1" title="Mostrar/ocultar contraseña"
+           style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;color:rgba(180,150,60,0.6);padding:4px;line-height:1;">👁</button>
+      </div>
       <label style="font-size:12px;color:rgba(255,255,255,.6);">Repetir contraseña</label>
-      <input id="reset-confirma" class="login-input" type="password" placeholder="Repite la contraseña"
-             style="margin-top:4px;margin-bottom:12px;">
+      <div style="position:relative;margin-top:4px;margin-bottom:12px;">
+        <input id="reset-confirma" class="login-input" type="password" placeholder="Repite la contraseña"
+               style="padding-right:40px">
+        <button type="button" onclick="togglePwdVisibility('reset-confirma', this)" tabindex="-1" title="Mostrar/ocultar contraseña"
+           style="position:absolute;right:10px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;color:rgba(180,150,60,0.6);padding:4px;line-height:1;">👁</button>
+      </div>
       <div id="reset-error3" style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:10px;"></div>
       <button class="login-btn" onclick="guardarNuevaPassword()" style="width:100%;">
         Guardar contraseña
@@ -1405,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.95
+          V 12.30.96
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2227,7 +2239,7 @@ tbody tr:last-child{border-bottom:none}
           <label class="form-label" id="usr-pwd-label">Contraseña *</label>
           <div style="position:relative">
             <input class="form-control" id="usr-password" type="password" placeholder="Contraseña" autocomplete="new-password" style="padding-right:36px">
-            <button type="button" onclick="togglePwdVisibility()" title="Mostrar/ocultar"
+            <button type="button" onclick="togglePwdVisibility('usr-password', this)" title="Mostrar/ocultar"
               style="position:absolute;right:8px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;font-size:16px;color:#888">👁</button>
           </div>
         </div>
@@ -9893,9 +9905,19 @@ async function saveUsuario() {
   loadUsuarios();
 }
 
-function togglePwdVisibility() {
-  const inp = document.getElementById('usr-password');
+function togglePwdVisibility(inputId, btn) {
+  // (2026-09-02) Generalizada a petición de Víctor: antes solo servía para
+  // el campo de contraseña del modal de Usuarios (id fijo "usr-password"
+  // hardcodeado). Se reutiliza el mismo icono/comportamiento también en
+  // Login (login-pass) y en "Nueva/Repetir contraseña" del restablecimiento
+  // (reset-nueva/reset-confirma) — mismo patrón visual (👁/🙈) en los tres
+  // sitios. `inputId` es opcional por compatibilidad hacia atrás: si algún
+  // llamador antiguo no pasa argumentos, sigue afectando a "usr-password"
+  // como hacía siempre.
+  const inp = document.getElementById(inputId || 'usr-password');
+  if (!inp) return;
   inp.type = inp.type === 'password' ? 'text' : 'password';
+  if (btn) btn.textContent = inp.type === 'password' ? '👁' : '🙈';
 }
 
 function confirmarEliminarUsuario(uid, username) {

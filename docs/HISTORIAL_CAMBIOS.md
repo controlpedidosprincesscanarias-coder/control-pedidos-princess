@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-02 — [Control Pedidos] Icono para mostrar/ocultar la contraseña al escribirla, en login, restablecimiento y modal de Usuarios (v12.30.96)
+
+- **Origen**: Víctor pidió el "ojito" para poder visualizar la contraseña al escribirla.
+- **Contexto**: ese icono ya existía, pero solo en el modal de Usuarios (`usr-password`), con la función `togglePwdVisibility()` codificada específicamente para ese campo (id fijo, sin parámetros). Faltaba en el propio formulario de login y en el de restablecimiento de contraseña, que es justo donde más se necesita (contraseñas nuevas, tecleadas sin poder verificarlas).
+- **Cambio en `templates/index.html`**: `togglePwdVisibility()` se generaliza para aceptar el id del input y el botón pulsado como parámetros (`inputId`, `btn`), manteniendo compatibilidad hacia atrás (si no se le pasa nada, sigue afectando a `usr-password` como antes). Además de alternar el `type` del input entre `password`/`text`, ahora también cambia el propio icono del botón (👁 cuando está oculta, 🙈 cuando está visible), como pista visual de en qué estado se ha quedado el campo. Se añade el mismo botón-icono a `login-pass` (login) y a `reset-nueva`/`reset-confirma` (restablecimiento de contraseña), con la misma posición/estilo que ya usaba `usr-password` pero adaptado a la paleta oscura/dorada del login (`color:rgba(180,150,60,0.6)` en vez de `#888`). Los tres botones nuevos llevan `tabindex="-1"` para no interponerse en la tabulación entre "Usuario" → "Contraseña" → "Acceder" (o entre "Nueva contraseña" → "Repetir contraseña" → "Guardar"). La llamada del modal de Usuarios se actualiza a `togglePwdVisibility('usr-password', this)` para aprovechar también el cambio de icono; su aspecto no varía.
+- **`app.py` no cambia**: cambio puramente de frontend (atributo `type` del `<input>`), sin ningún dato nuevo ni distinto que viaje al servidor ni afecte a la validación de contraseñas.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Los bloques `<script>` de `templates/index.html` (extraídos con un script auxiliar) verificados con `node --check`, incluido el que contiene `togglePwdVisibility()`/`doLogin()`, sin errores de sintaxis. No probado en vivo contra producción (sin acceso desde este entorno) — a confirmar tras desplegar: pulsar el icono en los tres sitios (login, modal de Usuarios, restablecimiento) y comprobar que alterna entre contraseña oculta/visible y que el icono cambia entre 👁/🙈.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica. `docs/hallazgo-seguridad-princess.md` no existe en este repo. `README.md` — revisado; un icono en un campo de formulario no tiene entidad propia en el README, solo se actualiza la versión actual.
+- **Entrega**: `templates/index.html`, `README.md` (versión actual), más este historial/`CHANGELOG.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-02 — [Control Pedidos] Login → verificación por email: cooldown y confirmación en "Reenviar código", para evitar dos códigos distintos en menos de un minuto (v12.30.95)
 
 - **Origen**: Víctor detectó (capturas de la carpeta de enviados de Gmail) que un usuario, tras recibir correctamente el aviso de verificación por inactividad (3+ días sin login), recibía dos correos de "Código de verificación" con códigos distintos en menos de un minuto — preguntó si esto era normal.

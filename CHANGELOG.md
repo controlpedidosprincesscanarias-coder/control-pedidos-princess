@@ -1,3 +1,21 @@
+# v12.30.96 — 2 septiembre 2026
+
+👁 Icono para mostrar/ocultar la contraseña al escribirla (login, restablecimiento y modal de Usuarios)
+
+**Petición de Víctor**: añadir el "ojito" para poder ver la contraseña mientras se escribe.
+
+**Cambio en `templates/index.html`**: se generaliza `togglePwdVisibility()` (antes con el id `usr-password` hardcodeado, solo usada en el modal de Usuarios) para aceptar el id del campo y el botón como parámetros, y añadir feedback visual en el propio icono (👁 al estar oculta, 🙈 al estar visible). Se añade el mismo botón-icono, con el mismo comportamiento, en los tres campos de contraseña que aún no lo tenían: el campo "Contraseña" del login (`login-pass`), y "Nueva contraseña"/"Repetir contraseña" del flujo de restablecimiento (`reset-nueva`/`reset-confirma`). El campo `usr-password` del modal de Usuarios ya lo tenía desde antes; se actualiza su llamada para usar la función generalizada, sin cambiar su aspecto. `tabindex="-1"` en los nuevos botones para no romper el orden de tabulación entre los campos.
+
+**`app.py` no cambia**: es un cambio puramente de frontend (atributo `type` del `<input>`, alternando entre `password`/`text`), sin ningún dato nuevo ni distinto que viaje al servidor.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Los bloques `<script>` de `templates/index.html` verificados con `node --check`, incluido el que contiene `togglePwdVisibility()` y `doLogin()`. No probado en vivo contra producción (sin acceso desde este entorno) — a confirmar tras desplegar: pulsar el icono en login, en el modal de Usuarios y en el formulario de restablecimiento, y comprobar que alterna entre ●●●● y texto plano, y que el icono cambia entre 👁 y 🙈.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` (no existe en este repo) — no aplica. `README.md` — revisado; el detalle de un icono en un campo de formulario no tiene entidad propia en el README (no es una vista ni una funcionalidad nueva), solo se actualiza la versión actual.
+
+**Entrega**: `templates/index.html`, `README.md` (versión actual), más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.30.95 — 2 septiembre 2026
 
 🔐 Login → verificación por email: cooldown y confirmación en "Reenviar código", para evitar dos códigos distintos en menos de un minuto
