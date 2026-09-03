@@ -3733,10 +3733,22 @@ def _send_telegram(chat_id: str, text: str) -> dict:
     transitorio (timeout, 5xx, sin red), que sí merece reintentarse al día
     siguiente. Quien llama a esta función decide qué hacer con el flag;
     aquí solo se detecta y se etiqueta.
+
+    (v12.32.03) Si Telegram rechaza el mensaje con 400 "can't parse
+    entities" (típico cuando el texto interpolado — nombre de usuario,
+    email, etc. — contiene un `*`, `_` o `` ` `` suelto que rompe el
+    parseo de Markdown), se reintenta UNA vez enviando el mismo texto
+    sin `parse_mode`, como texto plano. Así el aviso llega igual (sin
+    negritas/cursivas en ese mensaje concreto) en vez de perderse en
+    silencio — antes este caso quedaba marcado como fallo no permanente
+    y dependía de un reintento al día siguiente que iba a fallar
+    exactamente igual, una y otra vez, por ser un problema de formato
+    y no de entrega.
     """
     import urllib.request, urllib.error
-    try:
-        payload = json.dumps({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"}).encode()
+
+    def _post(payload_dict):
+        payload = json.dumps(payload_dict).encode()
         req = urllib.request.Request(
             f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage",
             data=payload,
@@ -3744,17 +3756,32 @@ def _send_telegram(chat_id: str, text: str) -> dict:
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:
-            result = json.loads(resp.read().decode())
-            return {"ok": result.get("ok", False), "error": None, "permanente": False}
+            return json.loads(resp.read().decode())
+
+    try:
+        result = _post({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+        return {"ok": result.get("ok", False), "error": None, "permanente": False}
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
+        body_lower = body.lower()
+
+        # Fallback: error de parseo de Markdown → reintentar como texto plano
+        if e.code == 400 and "can't parse entities" in body_lower:
+            try:
+                result = _post({"chat_id": chat_id, "text": text})
+                log.warning("Telegram: fallback a texto plano tras error de Markdown para chat_id %s (motivo: %s)",
+                            chat_id, body[:200])
+                return {"ok": result.get("ok", False), "error": None, "permanente": False}
+            except Exception as e2:
+                log.error("Telegram: fallback a texto plano también falló para chat_id %s: %s", chat_id, e2)
+                # cae al tratamiento de error normal de abajo, usando la respuesta original
+
         log.error("Telegram HTTP %s para chat_id %s: %s", e.code, chat_id, body)
         # Errores 403/400 típicos de Telegram cuando NUNCA va a poder
         # entregarse reintentando: bot bloqueado, chat borrado/inexistente,
         # cuenta de usuario desactivada. Se detecta por texto porque
         # Telegram no da un código de error específico para esto, solo una
         # "description" en inglés.
-        body_lower = body.lower()
         es_permanente = e.code in (400, 403) and any(frase in body_lower for frase in (
             "bot was blocked by the user",
             "user is deactivated",
@@ -17499,9 +17526,16 @@ def api_emails_sistema_pendientes():
     /api/admin/emails-sistema-atascados). Las filas que llegan al máximo
     de intentos sin descartar manualmente quedan visibles en ese mismo
     panel, no se pierden ni se borran solas.
+    (v12.32.03) Si la conexión obtenida del pool resulta estar en modo
+    solo-lectura (visto una vez en producción: `cannot execute UPDATE in
+    a read-only transaction`, sin relación con nada que esta app
+    configure explícitamente — probablemente una conexión reciclada del
+    pool que quedó en ese estado tras un evento puntual de Supabase), se
+    descarta esa conexión del pool y se reintenta UNA vez con una nueva,
+    en vez de fallar directamente el listado completo de esa pasada.
     GET /api/emails-sistema-pendientes
     """
-    try:
+    def _listar_y_reservar():
         cur = execute(
             """
             UPDATE emails_sistema_pendientes
@@ -17525,8 +17559,27 @@ def api_emails_sistema_pendientes():
         pendientes = rows_to_list(cur.fetchall()) or []
         pendientes.sort(key=lambda p: p["id"])
         get_db().commit()
+        return pendientes
+
+    try:
+        pendientes = _listar_y_reservar()
         return jsonify({"ok": True, "pendientes": pendientes})
     except Exception as exc:
+        if "read-only transaction" in str(exc).lower():
+            log.warning("[EMAILS-SISTEMA] Conexión en modo solo-lectura, se descarta del pool y se reintenta: %s", exc)
+            try:
+                db = g.pop("db", None)
+                if db is not None and _db_pool is not None:
+                    try:
+                        db.rollback()
+                    except Exception:
+                        pass
+                    _db_pool.putconn(db, close=True)
+                pendientes = _listar_y_reservar()
+                return jsonify({"ok": True, "pendientes": pendientes})
+            except Exception as exc2:
+                log.error("[EMAILS-SISTEMA] Error listando/reservando pendientes tras reintentar: %s", exc2)
+                return jsonify({"ok": False, "error": str(exc2)}), 500
         log.error("[EMAILS-SISTEMA] Error listando/reservando pendientes: %s", exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
 

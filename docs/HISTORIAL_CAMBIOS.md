@@ -36,6 +36,68 @@
 
 ---
 
+## 2026-09-03 — [Control Pedidos] Fix: mensajes Telegram con Markdown roto ya no se pierden (fallback a texto plano) y fallo puntual de "read-only transaction" en la cola de emails de sistema ahora reintenta (v12.32.04)
+
+- **Contexto**: revisando el log de Render de hoy (a raíz de la
+  incidencia GY de v12.32.02/v12.32.03) aparecieron tres eventos
+  independientes entre sí:
+  1. `06:00` — 7 intentos seguidos de `403 Forbidden: bot was blocked
+     by the user` para un usuario (`comprascan6`).
+  2. `06:20` — `400 can't parse entities: Can't find end of the entity
+     starting at byte offset 116` en un aviso Telegram del evento
+     `solicitud_acceso`.
+  3. `16:00:11` — `[EMAILS-SISTEMA] Error listando/reservando
+     pendientes: cannot execute UPDATE in a read-only transaction`.
+- **1) Bot bloqueado (403)**: confirmado que **no es un bug de la
+  app** — ese usuario bloqueó el bot de Telegram por su lado. La app
+  ya detecta este caso como error "permanente" (no lo reintenta sin
+  sentido), pero solo el propio usuario, desbloqueando el bot desde su
+  Telegram, puede volver a recibir avisos. No se toca código para
+  esto.
+- **2) Error de parseo de Markdown (400)**: diagnosticado en
+  `_send_telegram()` (`app.py`) — los mensajes se construyen
+  interpolando datos variables (usuario, nombre, email…) directamente
+  dentro de texto con `parse_mode=Markdown`, sin escapar los
+  caracteres especiales de Markdown (`*`, `_`, `` ` ``). Si alguno de
+  esos datos trae un carácter de ese tipo suelto o sin pareja, Telegram
+  rechaza el mensaje entero con este 400 y, como el error se marcaba
+  como "no permanente", quedaba pendiente de un reintento al día
+  siguiente que iba a fallar exactamente igual (el texto roto no
+  cambia solo). **Cambio**: `_send_telegram()` ahora detecta
+  específicamente este error y reintenta UNA vez el mismo texto sin
+  `parse_mode` (como texto plano) — el aviso llega igual, aunque ese
+  mensaje concreto pierda negritas/cursivas. Al estar centralizada en
+  esta única función (usada por todos los avisos de Telegram de la
+  app — cambios de estado, alertas, solicitudes de acceso, técho de
+  gastos, etc.), el fix cubre cualquier plantilla actual y futura sin
+  tener que tocar cada punto donde se construye un mensaje.
+- **3) `read-only transaction` puntual (`/api/emails-sistema-pendientes`)**:
+  visto una única vez en el log, sin relación con nada que esta app
+  configure explícitamente (no hay ningún `SET ... READ ONLY` en el
+  código) — compatible con una conexión reciclada del pool que quedó
+  en ese estado por un evento puntual de la infraestructura de
+  Supabase. **Cambio**: el endpoint ahora detecta ese error concreto,
+  descarta del pool la conexión afectada (se cierra en vez de
+  reciclarse) y reintenta la reserva de correos pendientes UNA vez con
+  una conexión nueva, en lugar de devolver 500 directamente. Si el
+  reintento también falla, sí se devuelve error (para no enmascarar un
+  problema real y persistente).
+- **Verificación**: `python3 -m py_compile app.py` sin errores nuevos.
+  No fue posible reproducir en vivo ninguno de los dos errores (400 de
+  Markdown, read-only) desde este entorno — a confirmar tras
+  desplegar: si vuelven a aparecer, comprobar en el log las nuevas
+  líneas `Telegram: fallback a texto plano...` y `[EMAILS-SISTEMA]
+  Conexión en modo solo-lectura...` respectivamente, seguidas en ambos
+  casos de una entrega/reserva correcta.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+  `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión),
+  `README.md`, `CHANGELOG.md`, este historial. `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-03 — [Control Pedidos] Fix: un fallo al construir el correo interno de cambio de estado ya no bloquea el aviso de Telegram/popup (v12.32.03)
 
 - **Hallazgo derivado de la incidencia GY (v12.32.02)**: al valorar si,

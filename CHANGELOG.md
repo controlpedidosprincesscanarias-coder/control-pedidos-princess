@@ -1,3 +1,23 @@
+# v12.32.04 — 3 septiembre 2026
+
+📡🔁 Fix: mensajes de Telegram con `*`/`_`/`` ` `` sueltos ya no se pierden por error de parseo de Markdown, y fallo puntual de "read-only transaction" en la cola de emails de sistema ahora reintenta en vez de fallar directo
+
+**Contexto**: al revisar el log de Render de hoy (con motivo de la incidencia GY de v12.32.02/v12.32.03) aparecieron tres eventos sin relación entre sí: (1) un `403 bot was blocked by the user` — no es un bug, ese usuario bloqueó el bot por su lado y solo él puede desbloquearlo; (2) un `400 can't parse entities` en un aviso Telegram de `solicitud_acceso`; (3) un `cannot execute UPDATE in a read-only transaction` puntual en `/api/emails-sistema-pendientes`. Se corrigen los dos últimos.
+
+**1) `app.py` — `_send_telegram()`**: los mensajes se construyen interpolando datos variables (usuario, nombre, email…) dentro de texto con `parse_mode=Markdown`, sin escapar. Un `*`, `_` o `` ` `` suelto en esos datos rompe el parseo de Telegram (`can't parse entities: Can't find end of the entity...`) y el mensaje se perdía sin más — quedaba marcado como fallo "no permanente", así que ni siquiera se reintentaba con sentido (el mismo texto roto habría fallado igual el día siguiente). Ahora, si Telegram devuelve específicamente ese error, `_send_telegram()` reintenta UNA vez enviando el mismo texto sin `parse_mode` (texto plano) — el aviso llega igual, solo pierde negritas/cursivas en ese mensaje concreto. Al ser `_send_telegram()` la función central usada por todos los avisos de Telegram de la app, el fix cubre cualquier plantilla actual o futura, no solo `solicitud_acceso`.
+
+**2) `app.py` — `/api/emails-sistema-pendientes`**: visto una única vez en el log (`cannot execute UPDATE in a read-only transaction`), sin relación con nada que esta app configure explícitamente — compatible con una conexión reciclada del pool que quedó en ese estado tras un evento puntual de Supabase. El endpoint ahora detecta ese error concreto, descarta del pool la conexión afectada (`close=True`, no se recicla) y reintenta la reserva de correos pendientes UNA vez con una conexión nueva, en vez de devolver 500 directamente.
+
+**Sobre el 403 (bot bloqueado)**: no requiere ni admite cambio de código — únicamente el propio usuario, desbloqueando al bot desde su Telegram, puede recibir avisos de nuevo.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores nuevos. No probado en vivo contra producción (no hay forma de forzar el error 400/read-only desde este entorno) — a confirmar tras desplegar: si vuelve a aparecer un `can't parse entities`, comprobar en el log la línea `Telegram: fallback a texto plano...` y que el aviso llegó; si vuelve a aparecer `read-only transaction`, comprobar `[EMAILS-SISTEMA] Conexión en modo solo-lectura...` seguido de una reserva exitosa.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.03 — 3 septiembre 2026
 
 📡 Fix: un fallo al construir el correo interno de cambio de estado ya no bloquea el aviso de Telegram/popup
