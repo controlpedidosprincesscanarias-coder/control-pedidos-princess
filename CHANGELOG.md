@@ -1,3 +1,41 @@
+# v12.30.98 — 3 septiembre 2026
+
+🔕 Modal de nueva versión: solo admin ve el changelog completo, el resto de roles solo un título-resumen
+
+**Petición de Víctor**: "EL EXCESO DE INFORMACIÓN ATURDE AL USUARIO, vamos a limitar la pantalla de recarga de actualización, solo mensaje de nueva actualización (para forzar la misma) con un título resumen pero sin entrar en detalles para no aburrir, solo mostrar todo a los administradores".
+
+**Diagnóstico**: `/api/changelog` servía siempre el `CHANGELOG.md` completo (cada entrada con petición, diagnóstico, cambio técnico y verificación) a cualquier usuario logueado, sin distinguir rol — el modal de "nueva versión detectada" mostraba ese detalle íntegro a todo el mundo por igual, incluidos roles `compras`/`hotel` sin interés en los pormenores técnicos.
+
+**Cambio en `app.py`**: `/api/changelog` ahora consulta `session.get("rol")`. Si es `admin`, responde igual que antes: `{"changelog": "<CHANGELOG.md completo>"}`. Para el resto de roles, nueva función `_resumen_ultima_version_changelog()` extrae solo la cabecera de versión ("vX.Y.Z — fecha") y el título-resumen de una línea que la sigue (el emoji + frase corta), sin ninguno de los párrafos de detalle, devuelto como `{"resumen": "..."}`.
+
+**Cambio en `templates/index.html`**: el modal de nueva versión se divide en dos bloques de cuerpo — `modal-nv-body-full` (caja de "Notas de la versión" con badges, igual que antes) y `modal-nv-body-resumen` (mensaje corto sin caja de scroll ni badges). `_mostrarModalNuevaVersion()` decide cuál mostrar según si la respuesta de `/api/changelog` trae `changelog` (admin) o `resumen` (resto). Se renombra la caché en memoria de `_obtenerChangelog()`/`_changelogCache` a `_obtenerInfoVersion()`/`_versionInfoCache`, guardando ahora el objeto de respuesta completo en vez de solo el texto — mismo mecanismo de promesa compartida de antes para no duplicar peticiones si el modal se dispara desde varios puntos casi a la vez. El botón "Recargar ahora" y la cuenta atrás de 5 min no cambian: siguen siendo el único cierre posible, para cualquier rol.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores de sintaxis. Los 7 bloques `<script>` de `templates/index.html` extraídos y verificados con `node --check`, sin errores. No probado en vivo contra producción (sin acceso desde este entorno) — a confirmar tras desplegar: forzar el modal con un usuario `admin` (debe ver el changelog completo con badges) y con uno `compras`/`hotel` (debe ver solo el título-resumen, sin caja de detalle).
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, ninguno documenta este modal. `docs/hallazgo-seguridad-princess.md` no existe en este repo. `README.md` sí: versión actual y nuevo bullet "Aviso de nueva versión" en "Sistema · Admin".
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
+# v12.30.97 — 3 septiembre 2026
+
+📧 Correo interno de cambio de estado: el email2 (correo de control) de quien hace el cambio ya NO se excluye — solo se excluye el email principal
+
+**Petición de Víctor**: sobre el filtro que evita que quien realiza un cambio de estado reciba el correo interno de ese cambio — "¿Qué ocurre con el segundo correo del mismo usuario?" — pidió que ese segundo correo (`email2`) siga recibiendo siempre la info de los hoteles asignados a esa cuenta, independientemente de quién haya hecho el cambio; en caso de una cuenta con dos correos, solo se debe excluir el primero, nunca el segundo. Aclaración de Víctor: el email2 es un correo de control de esa cuenta, no una persona operando el pedido, así que no debe silenciarse solo porque coincida con quien hizo el cambio.
+
+**Diagnóstico**: en `enviar_emails_estado()`, `_emails_actor` se construía con `_emails_usuario(_actor)`, que devuelve tanto `email` como `email2` del usuario que hizo el cambio — así que al filtrar `_todos_internos` se quitaban ambos correos de esa cuenta, incluido el de control, que Víctor quiere que reciba siempre el aviso de sus hoteles asignados.
+
+**Cambio en `app.py`**: la consulta que arma `_emails_actor` pasa de `SELECT email, email2` a `SELECT email` (solo el principal), y `_emails_actor` se construye ya solo con ese valor. El resto de la función no cambia: `_todos_internos` (compradores + usuarios hotel de los hoteles del pedido, con su email y su email2 ya incluidos vía `_emails_usuario()`) sigue filtrando por `_emails_actor`, pero ahora esa lista de exclusión contiene como mucho un email por actor — el principal. El email2 de la cuenta que hizo el cambio, si coincidía con alguno de los compradores/usuarios hotel del hotel del pedido, deja de excluirse y recibe el correo con normalidad, igual que el resto de destinatarios internos.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores de sintaxis. No probado en vivo contra producción (sin acceso desde este entorno) — a confirmar tras desplegar: hacer un cambio de estado con un usuario que tenga `email2` configurado y comprobar que el correo interno llega al `email2` pero no al `email` principal de esa misma cuenta.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, ninguno documenta esta regla de exclusión. `docs/hallazgo-seguridad-princess.md` no existe en este repo. `README.md` sí: versión actual y una aclaración añadida a la sección "Correo interno de cambio de estado" (Alertas y notificaciones · Admin).
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.30.96 — 2 septiembre 2026
 
 👁 Icono para mostrar/ocultar la contraseña al escribirla (login, restablecimiento y modal de Usuarios)

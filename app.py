@@ -2649,11 +2649,21 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     # "cambio_estado_pedido" (canal aparte, no tocado aquí). Si es un
     # cambio automático, o no se sabe quién lo ha hecho, no se excluye a
     # nadie (más seguro que dejar a alguien sin avisar por error).
+    #
+    # (2026-09-03) A petición de Víctor: SOLO se excluye el email PRINCIPAL
+    # del actor, nunca su email2. El email2 es un correo de control de esa
+    # misma cuenta (recibe copia de los avisos de sus hoteles asignados sin
+    # que tenga por qué coincidir con quien está operando el pedido), así
+    # que debe seguir recibiendo siempre la info referente a esos hoteles
+    # con independencia de quién haga el cambio — incluido el caso en que
+    # el propio dueño del email2 sea quien lo hizo: entonces solo se le
+    # quita el principal y el email2 sigue en la lista.
     _emails_actor = []
     if not es_automatico and usuario_id:
-        _actor = row_to_dict(query("SELECT email, email2 FROM usuarios WHERE id=%s", (usuario_id,), one=True))
-        if _actor:
-            _emails_actor = _emails_usuario(_actor)
+        _actor = row_to_dict(query("SELECT email FROM usuarios WHERE id=%s", (usuario_id,), one=True))
+        _email_actor_principal = ((_actor or {}).get("email") or "").strip()
+        if _email_actor_principal:
+            _emails_actor = [_email_actor_principal]
 
     _todos_internos = list(dict.fromkeys(_emails_compradores + _emails_hotel_users))  # sin duplicados
     if _emails_actor:
@@ -6878,11 +6888,49 @@ def app_version():
         version_hash = "unknown"
     return jsonify({"version": version_hash})
 
+def _resumen_ultima_version_changelog(contenido: str) -> str:
+    """
+    (2026-09-03) Extrae de la entrada MÁS RECIENTE (la primera) de
+    CHANGELOG.md solo la cabecera de versión ("vX.Y.Z — fecha") y el
+    título-resumen de una línea que la sigue (el emoji + frase corta),
+    sin ninguno de los párrafos de detalle (Petición/Diagnóstico/
+    Cambio/Verificación/Entrega...) que sí ve un admin. Ver app_changelog().
+    """
+    lineas = contenido.splitlines()
+    version_linea, titulo = None, None
+    for i, linea in enumerate(lineas):
+        if linea.startswith("# "):
+            version_linea = linea[2:].strip()
+            for siguiente in lineas[i + 1:]:
+                if siguiente.strip():
+                    titulo = siguiente.strip()
+                    break
+            break
+    if version_linea and titulo:
+        return f"{version_linea}\n\n{titulo}"
+    return version_linea or "Hay una nueva versión disponible."
+
+
 @app.route("/api/changelog")
 def app_changelog():
     """
-    Devuelve el contenido del archivo CHANGELOG.md para mostrarlo en el modal
-    de nueva versión detectada en el cliente.
+    Devuelve las notas de versión para el modal de "nueva versión
+    detectada" del cliente (ver _mostrarModalNuevaVersion en
+    templates/index.html).
+
+    (2026-09-03) A petición de Víctor — "el exceso de información aturde
+    al usuario, vamos a limitar la pantalla... solo mensaje de nueva
+    actualización (para forzar la misma) con un título resumen pero sin
+    entrar en detalles... solo mostrar todo a los administradores" —:
+    el changelog COMPLETO (CHANGELOG.md entero, cada entrada con
+    petición/diagnóstico/cambio/verificación) solo se sirve cuando
+    `session.get("rol") == "admin"`, como `{"changelog": "..."}`. El
+    resto de roles (compras/hotel) recibe únicamente el título-resumen de
+    una línea de la última entrada, como `{"resumen": "..."}` — basta
+    para saber que hay una actualización y forzar la recarga, sin los
+    párrafos de detalle que antes veía todo el mundo por igual. El
+    frontend decide qué bloque del modal mostrar según cuál de las dos
+    claves recibe la respuesta.
     """
     try:
         changelog_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "CHANGELOG.md")
@@ -6892,7 +6940,10 @@ def app_changelog():
         contenido = "_No hay notas de versión disponibles._"
     except Exception as e:
         contenido = f"_Error al leer el changelog: {e}_"
-    return jsonify({"changelog": contenido})
+
+    if session.get("rol") == "admin":
+        return jsonify({"changelog": contenido})
+    return jsonify({"resumen": _resumen_ultima_version_changelog(contenido)})
 
 @app.route("/static/<path:filename>")
 def static_files(filename):

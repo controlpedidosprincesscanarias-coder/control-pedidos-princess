@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.96** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.98** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -128,7 +128,13 @@ confundirse entre sí, ver más abajo):
   desde la tramitación del pedido (contando las entregas parciales
   intermedias si las hubo). La tabla de histórico de entregas del correo
   suma una columna "Días desde pedido" con ese mismo dato por cada
-  entrada (parcial o final).
+  entrada (parcial o final). Quien realiza el cambio de estado no
+  recibe este correo con su email principal (ya sabe lo que acaba de
+  hacer), pero si esa cuenta tiene un segundo correo (`email2`,
+  Usuarios → ficha de usuario) configurado como correo de control, ese
+  segundo correo sigue recibiéndolo siempre, para los hoteles
+  asignados a la cuenta, con independencia de quién haya hecho el
+  cambio (v12.30.97).
 - **Parámetros de alertas** (antes "Config alertas", renombrada
   2026-08-29) — umbrales de plazo de entrega, cotización, firma y
   repetición de popups. Ya NO incluye los límites de techo (ver
@@ -175,6 +181,14 @@ confundirse entre sí, ver más abajo):
   2 secundaria, 3 terciaria, 4 backup) en vez de 3 — mismo mecanismo,
   con una tarjeta más que rellenar de la misma forma que las otras.
 - **Restaurar backup** — gestión de backups de la base de datos.
+- **Aviso de nueva versión** (todos los roles, al detectar un despliegue
+  nuevo en el servidor) — modal de recarga obligatoria (con cuenta atrás
+  de 5 min). Desde v12.30.98, a petición de Víctor ("el exceso de
+  información aturde al usuario"), solo el rol `admin` ve las notas de
+  versión completas (`CHANGELOG.md` con petición/diagnóstico/cambio); el
+  resto de roles ve únicamente el título-resumen de una línea de la
+  última entrada, sin entrar en detalles — en ambos casos el único botón
+  disponible sigue siendo "Recargar ahora".
 
 ### Roles de usuario
 

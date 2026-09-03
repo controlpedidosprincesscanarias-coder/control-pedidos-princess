@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.96
+          V 12.30.98
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -11458,8 +11458,8 @@ function _abrirVentanaImpresion(html) {
       </div>
     </div>
 
-    <!-- Cuerpo: changelog -->
-    <div style="padding:24px 36px 0;">
+    <!-- Cuerpo: changelog completo (SOLO admin — ver /api/changelog) -->
+    <div id="modal-nv-body-full" style="padding:24px 36px 0;display:none;">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
         <span style="width:3px;height:16px;background:linear-gradient(#c9a84c,#e8c96a);
                      border-radius:2px;display:inline-block;"></span>
@@ -11474,6 +11474,14 @@ function _abrirVentanaImpresion(html) {
              style="margin:0;font-size:.86rem;line-height:1.7;
                     font-family:'DM Sans',sans-serif;color:#1c2b45;"></div>
       </div>
+    </div>
+
+    <!-- Cuerpo: resumen breve (resto de roles — sin entrar en detalles) -->
+    <div id="modal-nv-body-resumen" style="padding:24px 36px 0;display:none;">
+      <div id="modal-nv-resumen"
+           style="background:#f4f6fa;border:1px solid #d5daea;border-radius:12px;
+                  padding:16px 20px;font-size:.92rem;line-height:1.6;
+                  font-family:'DM Sans',sans-serif;color:#1c2b45;white-space:pre-line;"></div>
     </div>
 
     <!-- Footer: botón único — no se puede cerrar sin recargar -->
@@ -11737,32 +11745,37 @@ function _renderChangelog(texto) {
   return html;
 }
 
-// ── Caché de changelog (Jul 2026) ─────────────────────────────────────────
+// ── Caché de info de versión (Jul 2026, adaptado 2026-09-03) ──────────────
 // _mostrarModalNuevaVersion() tiene varios puntos de entrada (chequeo al
 // cargar, polling periódico, refreshCurrentView...) y en la práctica podían
 // dispararse más de uno casi a la vez tras un deploy, cada uno pidiendo de
-// nuevo /api/changelog (125 KB) por su cuenta — egress duplicado sin
-// necesidad, ya que el contenido es el mismo dentro de una misma sesión
-// (solo cambia cuando hay una versión nueva de verdad, momento en el que
-// la página ya se recarga). Cacheado en memoria + una promesa compartida
-// para las llamadas que lleguen mientras la primera sigue en vuelo.
-let _changelogCache = null;
-let _changelogFetchPromise = null;
+// nuevo /api/changelog por su cuenta — egress duplicado sin necesidad, ya
+// que el contenido es el mismo dentro de una misma sesión (solo cambia
+// cuando hay una versión nueva de verdad, momento en el que la página ya
+// se recarga). Cacheado en memoria + una promesa compartida para las
+// llamadas que lleguen mientras la primera sigue en vuelo.
+//
+// (2026-09-03) Ahora se cachea el objeto de respuesta completo, no solo el
+// texto: /api/changelog devuelve {changelog: "..."} para admin (notas
+// completas) o {resumen: "..."} para el resto de roles (solo título de la
+// última entrada, sin detalles) — ver app_changelog() en app.py.
+let _versionInfoCache = null;
+let _versionInfoFetchPromise = null;
 
-async function _obtenerChangelog() {
-  if (_changelogCache !== null) return _changelogCache;
-  if (_changelogFetchPromise) return _changelogFetchPromise;
+async function _obtenerInfoVersion() {
+  if (_versionInfoCache !== null) return _versionInfoCache;
+  if (_versionInfoFetchPromise) return _versionInfoFetchPromise;
 
-  _changelogFetchPromise = fetch('/api/changelog?_=' + Date.now())
+  _versionInfoFetchPromise = fetch('/api/changelog?_=' + Date.now())
     .then(r => r.ok ? r.json() : {})
     .then(d => {
-      _changelogCache = d.changelog || 'Sin notas de versión disponibles.';
-      return _changelogCache;
+      _versionInfoCache = d || {};
+      return _versionInfoCache;
     })
-    .catch(() => 'No se pudieron cargar las notas de versión.')
-    .finally(() => { _changelogFetchPromise = null; });
+    .catch(() => ({ resumen: 'No se pudieron cargar las notas de versión.' }))
+    .finally(() => { _versionInfoFetchPromise = null; });
 
-  return _changelogFetchPromise;
+  return _versionInfoFetchPromise;
 }
 
 async function _mostrarModalNuevaVersion() {
@@ -11777,13 +11790,33 @@ async function _mostrarModalNuevaVersion() {
     _emailsSistemaPollTimer = null;
     console.warn('[VERSION] Nueva versión detectada — poller de emails de sistema detenido en esta pestaña.');
   }
-  const modal = document.getElementById('modal-nueva-version');
-  const el = document.getElementById('modal-nv-changelog');
+  const modal       = document.getElementById('modal-nueva-version');
+  const bodyFull     = document.getElementById('modal-nv-body-full');
+  const bodyResumen  = document.getElementById('modal-nv-body-resumen');
+  const elFull       = document.getElementById('modal-nv-changelog');
+  const elResumen    = document.getElementById('modal-nv-resumen');
+  // (2026-09-03) A petición de Víctor — "el exceso de información aturde
+  // al usuario" —: solo se muestran las notas completas (con badges y
+  // párrafos de detalle) cuando /api/changelog responde con `changelog`
+  // (rol admin, ver app_changelog()). Para el resto de roles la respuesta
+  // trae `resumen` (solo el título de la última entrada) y el modal se
+  // limita a ese mensaje corto, sin la caja de notas ni los badges — el
+  // objetivo es forzar la recarga sin aburrir con el detalle técnico.
   try {
-    const texto = await _obtenerChangelog();
-    el.innerHTML = _renderChangelog(texto);
+    const info = await _obtenerInfoVersion();
+    if (info.changelog) {
+      elFull.innerHTML = _renderChangelog(info.changelog);
+      bodyFull.style.display = '';
+      bodyResumen.style.display = 'none';
+    } else {
+      elResumen.textContent = info.resumen || 'Hay una nueva versión disponible.';
+      bodyResumen.style.display = '';
+      bodyFull.style.display = 'none';
+    }
   } catch(_) {
-    el.innerHTML = '<p style="color:#6b7a99;">No se pudieron cargar las notas de versión.</p>';
+    elResumen.textContent = 'Hay una nueva versión disponible.';
+    bodyResumen.style.display = '';
+    bodyFull.style.display = 'none';
   }
   modal.classList.remove('nv-hidden');
   modal.style.display = 'flex';
