@@ -1,3 +1,23 @@
+# v12.32.02 — 3 septiembre 2026
+
+🩹 Fix: el correo interno de cambio de estado automático (Comparar Pedidos + Albaranes) podía no llegar a encolarse nunca — `TypeError: unsupported operand type(s) for -: 'decimal.Decimal' and 'float'` en `_resumen_entregas()`
+
+**Incidencia de Víctor (continuación de v12.30.99)**: aun con el fix del despacho inmediato ya desplegado, los correos de los pedidos 40907/40908 (hotel GY) seguían sin llegar tras pulsar "Aplicar" en la comparación con albaranes — y el correo de resumen de esa comparación mostró "Registrados automáticamente (0)" a pesar de que ambos pedidos sí cambiaron de estado (ENTREGA PARCIAL y ENTREGADO, visibles en la Línea temporal). Además se vio brevemente un aviso en rojo en la esquina inferior derecha al confirmar.
+
+**Diagnóstico**: cruzando el log de acceso de Render con el log de aplicación se localizó el job de GY (`f01786d4…`) y, en la franja exacta de sus dos llamadas a `/aplicar` (18:20:58–18:20:59 UTC), dos líneas `ERROR [COMPARAR-ALBARANES] Error aplicando coincidencia … : unsupported operand type(s) for -: 'decimal.Decimal' and 'float'`, una por cada pedido. Causa raíz en `app.py`, `_resumen_entregas()` (línea 2245): `total_pedido` llega desde PostgreSQL como `decimal.Decimal` (columna `NUMERIC`), mientras que `total_recibido` se acumula como `float` a partir de los importes de los albaranes parseados del PDF — la resta `Decimal - float` no está soportada por Python y lanza `TypeError`. Como `_aplicar_coincidencia_albaran()` ya había hecho `commit()` del cambio de estado antes de llamar a `_notificar_cambio_estado()` → `enviar_emails_estado()` (que a su vez llama a `_resumen_entregas()` para construir el histórico de entregas del correo), el pedido quedaba correctamente actualizado en BD pero la excepción interrumpía la construcción del correo antes de llegar a encolarlo. Esa excepción, sin capturar en ese punto, subía hasta el bucle del endpoint `/aplicar`, que sí tiene un `try/except` por coincidencia — y ahí caía en `errores` en vez de `aplicadas` (de ahí el aviso rojo, y que el resumen contara 0 "Registrados automáticamente", ya que ese contador solo suma `aplicadas`).
+
+**Cambio en `app.py`**: en `_resumen_entregas()`, la resta `_total_pedido_val - _total_recibido_val` ahora convierte explícitamente `_total_pedido_val` a `float` antes de restar, evitando la mezcla de tipos `Decimal`/`float`.
+
+**Sobre los correos de 40907/40908**: no llegaron nunca a encolarse (la excepción saltaba antes de `_encolar_email_pedido_retrasado`), así que no hay nada pendiente que recuperar de la cola — con el fix desplegado, una futura comparación con el mismo tipo de coincidencia sí encolará y enviará el correo correctamente.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Reproducido el `TypeError` original a partir de los logs de Render (mensaje de error idéntico, mismas dos coincidencias `13093_336_35` y `13208_2041_41`). No probado en vivo contra producción — a confirmar tras desplegar: repetir "Comparar Pedidos + Albaranes" en un hotel con una coincidencia que cambie el estado, pulsar "Aplicar" y comprobar que no aparece aviso rojo, que el resumen cuenta el registro en "Registrados automáticamente" y que el correo interno de cambio de estado llega.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `templates/index.html` solo cambia el badge de versión. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.00 — 3 septiembre 2026
 
 🩹 Fix: hueco en blanco bajo la barra superior en EmailJS y cola de correo (y en casi todas las demás pantallas de Sistema/Datos maestros/Alertas · Admin) — un `</div>` de más cerraba el contenedor de contenido antes de tiempo

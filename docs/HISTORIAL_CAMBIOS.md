@@ -36,6 +36,68 @@
 
 ---
 
+## 2026-09-03 — [Control Pedidos] Fix: el correo interno de cambio de estado automático (Comparar Pedidos + Albaranes) podía no llegar a encolarse — `TypeError: Decimal - float` en `_resumen_entregas()` (v12.32.02)
+
+- **Incidencia real reportada por Víctor (continuación de la de v12.30.99)**:
+  con el fix del despacho inmediato de v12.30.99 ya desplegado, los
+  correos internos de los pedidos 40907/40908 (hotel GY) seguían sin
+  llegar tras confirmar "Aplicar" en "Comparar Pedidos + Albaranes",
+  aunque ambos pedidos sí quedaron correctamente actualizados (ENTREGA
+  PARCIAL y ENTREGADO, visibles en la Línea temporal). El correo de
+  resumen de esa comparación mostró además "Registrados
+  automáticamente (0)" pese a los dos cambios reales, y Víctor recordó
+  haber visto un aviso en rojo, breve, en la esquina inferior derecha
+  al confirmar los cambios.
+- **Diagnóstico**: cruzando el log de acceso de Render (que permitió
+  identificar el job de la comparación de GY, `f01786d4…`, con dos
+  llamadas a `/aplicar` a las 18:20:59 y 18:21:12 UTC) con el log de
+  aplicación, aparecieron en la franja exacta de la primera llamada dos
+  líneas `ERROR [COMPARAR-ALBARANES] Error aplicando coincidencia
+  13093_336_35` y `13208_2041_41` (los dos pedidos de GY), ambas con el
+  mismo mensaje: `unsupported operand type(s) for -: 'decimal.Decimal'
+  and 'float'`. La causa raíz está en `app.py`,
+  `_resumen_entregas()` (línea 2245): `total_pedido` llega de
+  PostgreSQL como `decimal.Decimal` (columna `NUMERIC`), mientras que
+  `total_recibido` se acumula como `float` a partir de los importes de
+  los albaranes parseados del PDF (`float()` en
+  `_parse_albaran_entries()`) — la resta directa entre ambos tipos no
+  está soportada en Python y lanza `TypeError`.
+  `_aplicar_coincidencia_albaran()` ya había hecho `commit()` del
+  cambio de estado antes de llamar a `_notificar_cambio_estado()` →
+  `enviar_emails_estado()` (que usa `_resumen_entregas()` para el
+  histórico de entregas del correo) — así que el pedido quedaba bien
+  en BD, pero la excepción cortaba la construcción del correo antes de
+  llegar a encolarlo. Sin capturar en ese punto, la excepción subía
+  hasta el bucle del endpoint `/aplicar`, que sí atrapa por
+  coincidencia y la clasificaba en `errores` en vez de `aplicadas` — de
+  ahí el aviso rojo, y que el resumen contara 0 "Registrados
+  automáticamente" (ese contador solo suma `aplicadas`).
+- **Cambio en `app.py`**: en `_resumen_entregas()`, la resta
+  `_total_pedido_val - _total_recibido_val` ahora convierte
+  explícitamente `_total_pedido_val` a `float` antes de restar,
+  eliminando la mezcla de tipos `Decimal`/`float`.
+- **Sobre los correos de 40907/40908**: no se perdieron en la cola —
+  nunca llegaron a encolarse, porque la excepción saltaba justo antes
+  de `_encolar_email_pedido_retrasado`. No hay nada que recuperar de
+  la cola para esos dos pedidos; el fix evita que vuelva a ocurrir en
+  futuras coincidencias del mismo tipo.
+- **Verificación**: `python3 -m py_compile app.py` sin errores.
+  Reproducido el `TypeError` original a partir de los logs de Render
+  (mismo mensaje de error, mismas dos coincidencias). No probado en
+  vivo contra producción — a confirmar tras desplegar: repetir
+  "Comparar Pedidos + Albaranes" en un hotel con una coincidencia que
+  cambie el estado, pulsar "Aplicar" y comprobar que no aparece el
+  aviso rojo, que el resumen cuenta el registro en "Registrados
+  automáticamente" y que el correo interno de cambio de estado llega.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+  `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión),
+  `README.md`, `CHANGELOG.md`, este historial. `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-03 — [Control Pedidos] Fix: hueco en blanco bajo la barra superior en EmailJS y cola de correo (y en las otras 10 pantallas de Sistema/Datos maestros/Alertas · Admin) — `</div>` de más cerraba `#content` antes de tiempo (v12.32.00)
 
 - **Incidencia real reportada por Víctor**: tras desplegar v12.30.99, al

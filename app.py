@@ -2242,7 +2242,7 @@ def _resumen_entregas(pedido: dict, estado_nuevo: str = None) -> dict:
     _total_pedido_val = pedido.get("total_pedido")
     _total_pendiente_val = None
     if _total_pedido_val is not None and _total_recibido_val is not None:
-        _total_pendiente_val = round(_total_pedido_val - _total_recibido_val, 2)
+        _total_pendiente_val = round(float(_total_pedido_val) - _total_recibido_val, 2)
     return {
         "entregas":            out,
         "total":               len(out),
