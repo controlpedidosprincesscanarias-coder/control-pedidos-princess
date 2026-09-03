@@ -1,3 +1,23 @@
+# v12.32.00 — 3 septiembre 2026
+
+🩹 Fix: hueco en blanco bajo la barra superior en EmailJS y cola de correo (y en casi todas las demás pantallas de Sistema/Datos maestros/Alertas · Admin) — un `</div>` de más cerraba el contenedor de contenido antes de tiempo
+
+**Incidencia de Víctor**: tras el despliegue de v12.30.99, la pantalla "EmailJS y cola de correo" se veía con un hueco en blanco grande entre la barra superior y la tarjeta de configuración. Persistía tras recarga completa (Ctrl+Shift+R), así que no era la pestaña envejecida que se sospechó al principio.
+
+**Diagnóstico**: en `templates/index.html`, justo después de cerrarse `view-proveedores` (línea 1704), sobraba un `</div>` suelto. Ese cierre de más terminaba el contenedor `#content` (que tiene `flex:1`) de forma prematura — al quedarse vacío, se expandía ocupando el espacio disponible, y ese hueco vacío es exactamente lo que se veía. Como el HTML seguía "abierto" un nivel por encima a partir de ahí, las 11 vistas siguientes en el documento (Pedidos Eliminados, Techo de Gastos, Familias de Artículos, Departamentos, Notificaciones adicionales, Integridad, Parámetros de Alertas, Avisos por Usuario, EmailJS y cola de correo, Restaurar Backup y Usuarios) quedaban colgando como hermanas de `#content` dentro de `#main`, en vez de hijas suyas — de ahí que la tarjeta real apareciera "descolgada" debajo del hueco, sin el padding habitual de 24px. Reproducido de forma determinista sirviendo el `index.html` real y cargando la vista con Playwright (capturas idénticas a la reportada); confirmado con un parser de balanceo de etiquetas que había exactamente un `</div>` de más en todo el documento, en esa línea.
+
+**Cambio en `templates/index.html`**: se elimina el `</div>` sobrante. Verificado que tras el fix las 15 vistas (`view-dashboard` a `view-usuarios`) anidan correctamente como hijas directas de `#content`, y que el balanceo de `<div>` en toda la plantilla es exacto (0 cierres de más, 0 sin cerrar).
+
+**Alcance real del bug**: no era exclusivo de EmailJS — Dashboard, Pedidos, Alertas y Proveedores no se veían afectados (siguen dentro de `#content`), pero las otras 11 vistas del admin sí tenían este mismo hueco, aunque menos perceptible en pantallas con menos contenido arriba.
+
+**Verificación**: reproducción visual antes/después con Playwright contra el `index.html` real (mismo hueco que en la captura de Víctor antes del fix, ausente después). Balanceo de `<div>` de toda la plantilla verificado por script, 0 anomalías tras el cambio. `python3 -m py_compile app.py` sin errores (no se tocó `app.py`). No probado en vivo contra producción (sin acceso desde este entorno) — a confirmar tras desplegar: abrir "EmailJS y cola de correo" y comprobar que la tarjeta aparece pegada a la barra superior sin hueco; revisar también de pasada Techo de Gastos, Familias, Departamentos, Notificaciones, Integridad, Parámetros de Alertas, Avisos, Restaurar y Usuarios.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, ninguno documenta la estructura del layout. `README.md` sí: versión actual.
+
+**Entrega**: `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.30.99 — 3 septiembre 2026
 
 📧 Fix: el correo de cambio de estado automático (Comparar Pedidos + Albaranes) podía quedarse en cola sin salir si nadie dejaba la app abierta 5 min más tras "Aplicar"

@@ -36,6 +36,80 @@
 
 ---
 
+## 2026-09-03 — [Control Pedidos] Fix: hueco en blanco bajo la barra superior en EmailJS y cola de correo (y en las otras 10 pantallas de Sistema/Datos maestros/Alertas · Admin) — `</div>` de más cerraba `#content` antes de tiempo (v12.32.00)
+
+- **Incidencia real reportada por Víctor**: tras desplegar v12.30.99, al
+  abrir "EmailJS y cola de correo" la pantalla mostraba un hueco en
+  blanco grande entre la barra superior (topbar, con el botón
+  "↻ Actualizar") y la tarjeta real de configuración (con "↻ Recargar"
+  / "💾 Guardar cambios"). Se sospechó primero de la pestaña, abierta
+  desde el día anterior — pero el hueco persistía tras una recarga
+  completa (Ctrl+Shift+R), lo que descartaba caché o estado de JS
+  envejecido y apuntaba a un fallo real en el código servido.
+- **Diagnóstico**: en `templates/index.html`, inmediatamente después de
+  cerrarse `view-proveedores` (que cierra correctamente en la línea
+  1703), quedaba un `</div>` suelto en la línea 1705 — sin explicación
+  aparente, aislado entre dos líneas en blanco. Ese cierre de más
+  terminaba el contenedor `#content` de forma prematura. Como
+  `#content{flex:1; padding:24px; display:flex; flex-direction:column}`
+  crece para ocupar el espacio disponible en el eje vertical de
+  `#main`, al quedarse sin hijos (porque las vistas siguientes ya no
+  estaban dentro) se expandía como una caja vacía — ese es exactamente
+  el hueco visible. Y como el documento seguía "abierto" un nivel de
+  más a partir de ahí, TODAS las vistas que aparecen después de
+  Proveedores en el HTML (`view-eliminados`, `view-techo`,
+  `view-familias`, `view-departamentos-email`,
+  `view-notificaciones-contactos`, `view-integridad`,
+  `view-config-alertas`, `view-config-avisos`,
+  **`view-config-emailjs`**, `view-restore`, `view-usuarios`, y los
+  modales intermedios) pasaban a ser hijas directas de `#main` en vez
+  de `#content` — de ahí que la tarjeta real de cada una de esas
+  pantallas apareciera "descolgada" justo debajo del hueco, sin el
+  padding de 24px que aporta `#content`. `showView()` seguía
+  funcionando bien a nivel lógico (oculta/muestra por `id`, sin
+  depender de la jerarquía), por lo que el contenido cargaba y era
+  interactivo con normalidad — el bug era puramente visual/estructural,
+  no funcional, lo que explica que los cambios de estado y correos
+  siguieran funcionando bien mientras la pantalla se veía "rota".
+- **Reproducción**: se sirvió el `index.html` real (sin modificar) con
+  un servidor local y se cargó la vista "EmailJS y cola de correo" con
+  Playwright, interceptando las llamadas a `/api/admin/config-alertas`
+  con datos equivalentes a los de la captura de Víctor (cuenta 2 en
+  uso, mismos Service ID/Template ID). La captura resultante reproduce
+  el hueco en blanco de forma prácticamente idéntica a la reportada.
+  Un script de balanceo de etiquetas `<div>` sobre la plantilla
+  confirmó exactamente un cierre de más en todo el documento, en la
+  línea 1705, y que sin él el balance es perfecto (0 de más, 0 sin
+  cerrar).
+- **Cambio en `templates/index.html`**: se elimina el `</div>` sobrante
+  de la línea 1705. Ningún otro cambio de marcado.
+- **Verificación tras el fix**: se repitió la reproducción con
+  Playwright contra el archivo corregido — el hueco desaparece, la
+  tarjeta de "EmailJS y cola de correo" queda pegada a la barra
+  superior con el padding normal. Se comprobó además, consultando el
+  DOM ya renderizado, que las 15 vistas (`view-dashboard` a
+  `view-usuarios`) anidan ahora como hijas directas de `#content` a la
+  misma profundidad — ninguna quedó por detrás o nesteada de más.
+  `python3 -m py_compile app.py` sin errores (no se tocó `app.py`; se
+  ejecuta igualmente porque forma parte de la rutina de verificación
+  habitual del proyecto). No probado en vivo contra producción (sin
+  acceso desde este entorno) — a confirmar tras desplegar: abrir
+  "EmailJS y cola de correo" y comprobar que no hay hueco; revisar de
+  pasada Pedidos Eliminados, Techo de Gastos, Familias de Artículos,
+  Departamentos, Notificaciones adicionales, Integridad, Parámetros de
+  Alertas, Avisos por Usuario, Restaurar Backup y Usuarios, que
+  compartían el mismo bug aunque menos perceptible en pantallas con
+  menos contenido en la parte superior.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica,
+  ninguno documenta la estructura del layout/DOM de la aplicación.
+  `README.md` sí: versión actual.
+- **Entrega**: `templates/index.html`, `README.md`, más este historial
+  y `CHANGELOG.md`. `app.py`, `models.py` y `requirements.txt` no
+  cambian.
+
+---
+
 ## 2026-09-03 — [Control Pedidos] Fix: el correo de cambio de estado automático (Comparar Pedidos + Albaranes) se quedaba en cola sin salir si nadie dejaba la app abierta 5 min más tras "Aplicar" (v12.30.99)
 
 - **Incidencia real reportada por Víctor**: hotel GY, esta tarde — al
