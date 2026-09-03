@@ -1,3 +1,25 @@
+# v12.32.05 — 3 septiembre 2026
+
+🔍📡 Nueva comprobación en Integridad: "Telegram bloqueado o inservible" — se marca sola cuando un usuario bloquea el bot (o Telegram deja de poder entregarle avisos) y desaparece sola en cuanto se desbloquea
+
+**Petición de Víctor**: a raíz del `403 bot was blocked by the user` visto en el log de hoy para un usuario, ¿se puede anotar en la pestaña Integridad cuándo un usuario bloquea su bot?
+
+**Cambio en `app.py`**:
+- Nuevas columnas `usuarios.telegram_bloqueado_en` (TIMESTAMPTZ) y `usuarios.telegram_bloqueado_motivo` (TEXT), vía migración automática (`ALTER TABLE ... ADD COLUMN IF NOT EXISTS`).
+- `_send_telegram()` (la función central de todos los envíos de Telegram de la app) ahora, cuando detecta un error `permanente=True` (bot bloqueado, cuenta desactivada, chat borrado…), llama a `_marcar_telegram_bloqueado(chat_id, motivo)`, que registra la fecha de la PRIMERA detección y el motivo más reciente. Cuando un envío a ese mismo `chat_id` vuelve a tener éxito, `_desbloquear_telegram_si_procede(chat_id)` limpia la marca sola — no requiere que un admin la resuelva a mano, solo que el usuario desbloquee el bot por su lado. Ambas funciones son "best-effort": cualquier fallo al escribir en BD se registra en el log y nunca interrumpe el envío real de Telegram.
+- `_validar_integridad_operativa()`: nueva categoría `telegram_bloqueado` en `problemas`, listando usuarios activos (compras o admin) con `telegram_bloqueado_en` no nulo.
+- Digest diario de Integridad por Telegram a los admins: nueva sección "🔴 Telegram bloqueado/inservible" (marcada como CRÍTICO, junto a "Hoteles sin comprador").
+
+**Cambio en `templates/index.html`**: nueva tarjeta en Admin → Integridad, "🔴 Telegram bloqueado o inservible" (gravedad crítica), con usuario, nombre, fecha de bloqueo y motivo devuelto por Telegram.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores nuevos. `node --check` sobre los bloques `<script>` de `templates/index.html` que contienen `loadIntegridad()` sin errores nuevos. No probado en vivo contra producción (no se puede forzar un bloqueo real de Telegram desde este entorno) — a confirmar tras desplegar: comprobar que la migración añade las dos columnas sin error, y que la fila de Integridad aparece/desaparece según se bloquee/desbloquee un usuario real.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica. `README.md` sí: versión actual. `PENDIENTES.md` sí: se añade una entrada nueva y aparte (`KeyError: 0` recurrente en `_auto_migrate()`, visto en el log de hoy, sin traceback completo suficiente para localizarlo con seguridad).
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, `PENDIENTES.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` no cambia (la migración va en `app.py`, como el resto de columnas de `usuarios`). `requirements.txt` no cambia.
+
+---
+
 # v12.32.04 — 3 septiembre 2026
 
 📡🔁 Fix: mensajes de Telegram con `*`/`_`/`` ` `` sueltos ya no se pierden por error de parseo de Markdown, y fallo puntual de "read-only transaction" en la cola de emails de sistema ahora reintenta en vez de fallar directo

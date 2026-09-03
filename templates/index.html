@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.04
+          V 12.32.05
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -9417,6 +9417,14 @@ async function loadIntegridad() {
       desc: 'Las alertas automáticas de Telegram no llegarán a este comprador.',
       renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
+    },
+    {
+      key: 'telegram_bloqueado',
+      titulo: '🔴 Telegram bloqueado o inservible',
+      gravedad: 'critico',
+      desc: 'El usuario bloqueó el bot, desactivó su cuenta o borró el chat — no recibirá avisos hasta que lo desbloquee él mismo desde su Telegram. Se marca solo (v12.32.04) y desaparece de esta lista en cuanto un envío vuelve a tener éxito.',
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td><td style="padding:6px 10px;color:var(--text-secondary)">${u.telegram_bloqueado_en ? new Date(u.telegram_bloqueado_en + 'Z').toLocaleString('es-ES') : '—'}</td><td style="padding:6px 10px;font-size:11px;color:var(--text-secondary)">${u.telegram_bloqueado_motivo || '—'}</td></tr>`,
+      cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th><th style="padding:6px 10px;text-align:left">Bloqueado desde</th><th style="padding:6px 10px;text-align:left">Motivo</th></tr>',
     },
     {
       key: 'compradores_sin_movil',

@@ -706,6 +706,13 @@ def _auto_migrate():
                 )
             """)
             cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telegram_chat_id TEXT")
+            # (v12.32.04) Marca cuándo se detectó que Telegram ya no puede
+            # entregar avisos a este usuario de forma permanente (bot
+            # bloqueado, cuenta desactivada, chat borrado...) — ver
+            # _send_telegram(). NULL = sin problema conocido. Se limpia sola
+            # en cuanto un envío a ese chat_id vuelve a tener éxito.
+            cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telegram_bloqueado_en TIMESTAMPTZ")
+            cur.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS telegram_bloqueado_motivo TEXT")
             # Añade índice único sobre hotel_id para garantizar a nivel de BD
             # que ningún hotel pueda tener más de un comprador asignado.
             # Se usa CREATE UNIQUE INDEX IF NOT EXISTS para ser idempotente.
@@ -3724,6 +3731,48 @@ def _get_usuarios_hotel_rol_telegram(hotel_codigo: str) -> list:
     ))
     return rows
 
+def _marcar_telegram_bloqueado(chat_id: str, motivo: str) -> None:
+    """
+    (v12.32.04) Registra en usuarios.telegram_bloqueado_en/_motivo que este
+    chat_id ya no puede recibir Telegram de forma permanente (bot bloqueado,
+    cuenta desactivada, chat borrado...), para que quede visible en
+    Admin → Integridad sin depender de que alguien revise los logs de Render.
+    Solo fija telegram_bloqueado_en la PRIMERA vez (para poder mostrar desde
+    cuándo lleva bloqueado); el motivo sí se actualiza siempre por si cambia.
+    Nunca debe romper el envío real de Telegram: cualquier fallo aquí se
+    registra y se ignora.
+    """
+    try:
+        execute(
+            """UPDATE usuarios
+                  SET telegram_bloqueado_en = COALESCE(telegram_bloqueado_en, NOW()),
+                      telegram_bloqueado_motivo = %s
+                WHERE telegram_chat_id = %s""",
+            (motivo[:200], chat_id)
+        )
+        get_db().commit()
+    except Exception as exc:
+        log.error("[TELEGRAM-BLOQUEO] No se pudo marcar chat_id %s como bloqueado: %s", chat_id, exc)
+
+
+def _desbloquear_telegram_si_procede(chat_id: str) -> None:
+    """
+    (v12.32.04) Si un envío a este chat_id tiene éxito, limpia cualquier
+    marca previa de bloqueo — así el aviso en Integridad desaparece solo en
+    cuanto el usuario desbloquea el bot, sin intervención manual de admin.
+    """
+    try:
+        execute(
+            """UPDATE usuarios
+                  SET telegram_bloqueado_en = NULL, telegram_bloqueado_motivo = NULL
+                WHERE telegram_chat_id = %s AND telegram_bloqueado_en IS NOT NULL""",
+            (chat_id,)
+        )
+        get_db().commit()
+    except Exception as exc:
+        log.error("[TELEGRAM-BLOQUEO] No se pudo limpiar la marca de bloqueo del chat_id %s: %s", chat_id, exc)
+
+
 def _send_telegram(chat_id: str, text: str) -> dict:
     """Envía un mensaje de Telegram al chat_id indicado. Devuelve {ok, error, permanente}.
 
@@ -3744,6 +3793,12 @@ def _send_telegram(chat_id: str, text: str) -> dict:
     y dependía de un reintento al día siguiente que iba a fallar
     exactamente igual, una y otra vez, por ser un problema de formato
     y no de entrega.
+
+    (v12.32.04) Un error `permanente=True` deja constancia en
+    usuarios.telegram_bloqueado_en/_motivo (ver _marcar_telegram_bloqueado),
+    visible en Admin → Integridad. Un envío con éxito limpia esa marca sola
+    (ver _desbloquear_telegram_si_procede) — no requiere que un admin lo
+    resuelva a mano, solo que el usuario desbloquee el bot por su lado.
     """
     import urllib.request, urllib.error
 
@@ -3760,6 +3815,8 @@ def _send_telegram(chat_id: str, text: str) -> dict:
 
     try:
         result = _post({"chat_id": chat_id, "text": text, "parse_mode": "Markdown"})
+        if result.get("ok", False):
+            _desbloquear_telegram_si_procede(chat_id)
         return {"ok": result.get("ok", False), "error": None, "permanente": False}
     except urllib.error.HTTPError as e:
         body = e.read().decode(errors="replace")
@@ -3771,6 +3828,8 @@ def _send_telegram(chat_id: str, text: str) -> dict:
                 result = _post({"chat_id": chat_id, "text": text})
                 log.warning("Telegram: fallback a texto plano tras error de Markdown para chat_id %s (motivo: %s)",
                             chat_id, body[:200])
+                if result.get("ok", False):
+                    _desbloquear_telegram_si_procede(chat_id)
                 return {"ok": result.get("ok", False), "error": None, "permanente": False}
             except Exception as e2:
                 log.error("Telegram: fallback a texto plano también falló para chat_id %s: %s", chat_id, e2)
@@ -3789,6 +3848,8 @@ def _send_telegram(chat_id: str, text: str) -> dict:
             "chat_id is empty",
             "peer_id_invalid",
         ))
+        if es_permanente:
+            _marcar_telegram_bloqueado(chat_id, body[:200])
         return {"ok": False, "error": f"HTTP {e.code}: {body[:200]}", "permanente": es_permanente}
     except Exception as e:
         log.error("Telegram error para chat_id %s: %s", chat_id, e)
@@ -15551,6 +15612,7 @@ def _validar_integridad_operativa() -> dict:
           "hoteles_sin_comprador":    [...],
           "compradores_sin_hoteles":  [...],
           "compradores_sin_telegram": [...],
+          "telegram_bloqueado":       [...],   # (v12.32.04) bot bloqueado/cuenta desactivada/chat borrado
           "compradores_sin_movil":    [...],
           "compradores_sin_email":    [...],
           "admins_sin_email":         [...],
@@ -15569,6 +15631,7 @@ def _validar_integridad_operativa() -> dict:
         "hoteles_sin_comprador":    [],
         "compradores_sin_hoteles":  [],
         "compradores_sin_telegram": [],
+        "telegram_bloqueado":       [],
         "compradores_sin_movil":    [],
         "compradores_sin_email":    [],
         "admins_sin_email":         [],
@@ -15637,6 +15700,21 @@ def _validar_integridad_operativa() -> dict:
                ORDER BY nombre"""
         ))
         problemas["compradores_sin_movil"] = sin_movil
+
+        # ── Usuarios (compras o admin) con Telegram bloqueado/inservible ──────
+        # (v12.32.04) Marcado automáticamente por _send_telegram() la primera
+        # vez que Telegram devuelve un error permanente (bot bloqueado, cuenta
+        # desactivada, chat borrado...) — ver telegram_bloqueado_en/_motivo.
+        # Se limpia solo en cuanto un envío a ese usuario vuelve a tener éxito.
+        telegram_bloqueado = rows_to_list(query(
+            """SELECT id AS usuario_id, username, nombre, rol,
+                      telegram_bloqueado_en, telegram_bloqueado_motivo
+               FROM usuarios
+               WHERE activo = 1
+                 AND telegram_bloqueado_en IS NOT NULL
+               ORDER BY telegram_bloqueado_en DESC"""
+        ))
+        problemas["telegram_bloqueado"] = telegram_bloqueado
 
         # ── Compradores sin email ─────────────────────────────────────────────
         sin_email_comp = rows_to_list(query(
@@ -16306,6 +16384,12 @@ def _job_health_check_inner(force: bool = False):
         lineas.append(f"❌ *Hoteles sin comprador ({len(probs['hoteles_sin_comprador'])})* — CRÍTICO:")
         for h in probs["hoteles_sin_comprador"]:
             lineas.append(f"  · {h['hotel_codigo']} — {h['hotel_nombre']}")
+        lineas.append("")
+
+    if probs.get("telegram_bloqueado"):
+        lineas.append(f"🔴 *Telegram bloqueado/inservible ({len(probs['telegram_bloqueado'])})* — CRÍTICO:")
+        for u in probs["telegram_bloqueado"]:
+            lineas.append(f"  · {u['nombre']} ({u['username']}) — no recibirá avisos hasta que lo desbloquee él mismo")
         lineas.append("")
 
     if probs["compradores_sin_hoteles"]:
