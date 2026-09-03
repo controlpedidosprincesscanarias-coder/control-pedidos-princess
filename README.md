@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.30.98** (ver `CHANGELOG.md` y
+> Versión actual: **v12.30.99** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -134,7 +134,24 @@ confundirse entre sí, ver más abajo):
   Usuarios → ficha de usuario) configurado como correo de control, ese
   segundo correo sigue recibiéndolo siempre, para los hoteles
   asignados a la cuenta, con independencia de quién haya hecho el
-  cambio (v12.30.97).
+  cambio (v12.30.97). Cuando el cambio de estado lo aplica el propio
+  sistema automáticamente (al confirmar "Aplicar" en "Comparar
+  Pedidos + Albaranes") en vez de una persona en ese momento, este
+  correo se envía igual — mismos destinatarios, mismo contenido —
+  con dos diferencias: no se excluye a nadie (no hay "quien hizo el
+  cambio" que ya lo sepa de antemano), y desde v12.30.99 se despacha
+  prácticamente al instante en vez de esperar los 5 min habituales
+  (el retraso existe para agrupar varias ediciones manuales seguidas
+  sobre el mismo pedido, algo que no aplica a un cambio automático) —
+  el propio botón "Aplicar" adelanta el envío igual que ya hacía
+  "Enviar resumen", sin depender de que alguien deje la app abierta
+  varios minutos más. Llega a comprador, rol hotel, departamento y
+  contactos adicionales configurados, igual que un cambio manual. En
+  el Historial de estados del pedido, este tipo de registro aparece
+  con la etiqueta "Automática — listado comparativo pedidos y
+  albaranes" en vez del nombre de quien pulsó "Aplicar", para
+  distinguirlo a simple vista de un cambio hecho a mano
+  (v12.30.16/17/18/19/99).
 - **Parámetros de alertas** (antes "Config alertas", renombrada
   2026-08-29) — umbrales de plazo de entrega, cotización, firma y
   repetición de popups. Ya NO incluye los límites de techo (ver

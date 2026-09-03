@@ -36,6 +36,164 @@
 
 ---
 
+## 2026-09-03 — [Control Pedidos] Fix: el correo de cambio de estado automático (Comparar Pedidos + Albaranes) se quedaba en cola sin salir si nadie dejaba la app abierta 5 min más tras "Aplicar" (v12.30.99)
+
+- **Incidencia real reportada por Víctor**: hotel GY, esta tarde — al
+  confirmar los cambios detectados en "Comparar Pedidos + Albaranes" y
+  pulsar "Aplicar", los pedidos 40907 y 40908 quedaron correctamente
+  actualizados (ENTREGA PARCIAL / ENTREGADO, visibles en la Línea
+  temporal como "Automática — listado comparativo pedidos y
+  albaranes" a las 19:20), pero el correo interno de ese cambio de
+  estado no llegó — comprobado en la carpeta de Enviados de Gmail
+  (`in:sent`), donde solo aparecían los correos de resumen de la
+  comparación de varios hoteles (asunto "Comparación pedidos+albaranes
+  XX: ..."), no los de cambio de estado por pedido (asunto "[Control
+  Pedidos] GY · Pedido 40907 → ...").
+- **Diagnóstico — dos fallos combinados, siguiendo el rastro de la
+  verificación de ayer (ver entrada anterior de hoy, sin cambio de
+  código)**:
+  1. `enviar_emails_estado()` encola el correo interno de cualquier
+     cambio de estado — manual o automático — con un retraso fijo de
+     300s (`_encolar_email_pedido_retrasado`, `visible_en = NOW() +
+     300s`). Ese retraso existe para agrupar varias ediciones manuales
+     SEGUIDAS sobre el mismo pedido en un único correo (evitar spam de
+     un correo por cada guardado rápido) — pero un cambio automático de
+     `_aplicar_coincidencia_albaran()` es una única escritura
+     determinista por pedido, no hay nada que agrupar.
+  2. El correo NO tiene SMTP propio: lo despacha el navegador de
+     cualquier sesión admin/compras abierta, vía
+     `_enviarEmailsSistemaPendientes()` — un sondeo automático cada 5
+     min (`_startEmailsSistemaPolling`) más una "primera pasada
+     inmediata" al abrir la app. El botón "Enviar resumen" YA disparaba
+     un despacho inmediato extra nada más encolarse (para no depender
+     del sondeo de 5 min, ver comentario en
+     `enviarResumenComparacionAlbaranes()`), pero el botón "Aplicar" NO
+     lo hacía. Combinado con el punto 1 (visible_en 5 min en el
+     futuro), si la sesión que pulsó "Aplicar" se cerraba antes de que
+     pasaran esos 5 minutos — plausible a última hora de la tarde — el
+     correo se quedaba en la cola (`emails_sistema_pendientes`, visible
+     en Admin → EmailJS → "Cola de correos de sistema pendientes"), sin
+     enviarse, hasta que alguien volviera a abrir la app más tarde.
+- **Cambio en `app.py`**: en `enviar_emails_estado()`, nueva variable
+  `_retraso_email_estado = 2 if es_automatico else 300`, pasada como
+  `retraso_segundos` en los dos encolados existentes
+  (`_encolar_email_pedido_retrasado`, tanto el correo a proveedor como
+  el interno). Con `es_automatico=True` (el caso de
+  `_aplicar_coincidencia_albaran()`) el correo queda visible para
+  envío casi de inmediato, igual que el correo de resumen. Los cambios
+  de estado manuales no se tocan: siguen con los 300s de siempre.
+- **Cambio en `templates/index.html`**: `_procesarResultadoAplicarAlbaran()`
+  (llamada tras "Aplicar"/"Aplicar seleccionadas") dispara
+  `_enviarEmailsSistemaPendientes()` cuando `aplicadas.length > 0` —
+  mismo patrón exacto que ya usaban `enviarResumenComparacionPdf()` y
+  `enviarResumenComparacionAlbaranes()`: adelanta el despacho desde el
+  propio navegador que acaba de aplicar los cambios, en vez de esperar
+  al sondeo de 5 min. Con el retraso ya casi nulo del punto anterior,
+  esta llamada encuentra el correo ya visible y lo envía en el acto.
+- **Verificación**: `python3 -m py_compile app.py` sin errores de
+  sintaxis nuevos (persiste un `SyntaxWarning` preexistente en un
+  docstring con `\.`, no relacionado). Los 9 bloques `<script>` de
+  `templates/index.html` extraídos y verificados con `node --check`
+  (el único bloque que da error es una plantilla HTML embebida ajena a
+  JS real, ya fallaba igual antes de este cambio). No probado en vivo
+  contra producción (sin acceso desde este entorno) — a confirmar tras
+  desplegar: repetir "Comparar Pedidos + Albaranes" con algún pedido
+  que cambie de estado, pulsar "Aplicar", y comprobar en Enviados que
+  el correo "[Control Pedidos] ... → ..." llega en segundos, sin
+  necesidad de esperar ni de mantener la pestaña abierta 5 min más. Si
+  quedó algún correo de la incidencia de hoy (pedidos 40907/40908)
+  todavía en la cola sin marcar `enviado`, seguirá ahí — revisar Admin
+  → EmailJS → "Cola de correos de sistema pendientes": con la app
+  abierta unos segundos ya debería despacharse solo (o usar
+  "↻ Reactivar" si aparece como parado).
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, ninguno
+  documenta el mecanismo de retraso/despacho de esta cola.
+  `docs/hallazgo-seguridad-princess.md` no existe en este repo.
+  `README.md` sí — versión actual y aclaración ampliada en "Correo
+  interno de cambio de estado" sobre el despacho casi inmediato en
+  cambios automáticos.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este
+  historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no
+  cambian.
+
+---
+
+## 2026-09-03 — [Control Pedidos] Verificación: los cambios de estado automáticos de "Comparar Pedidos + Albaranes" SÍ disparan el correo interno configurado, igual que un cambio manual (sin cambio de código)
+
+- **Pregunta de Víctor**: cuando la comparación de listados ("Comparar
+  listado PDF (SAP)", con o sin el cruce de albaranes de DALI) aplica
+  cambios de estado automáticos en los pedidos, ¿se envían los correos
+  internos configurados avisando de ese cambio de estado? ¿Debería
+  funcionar igual que si lo hace un usuario humano?
+- **Revisado en el código, sin necesidad de ningún cambio — ya funciona
+  así por diseño desde v12.30.16/17/18/19**:
+  - La comparación de **un solo PDF** ("Comparar listado PDF (SAP)",
+    sin marcar la casilla de albaranes) — `_comparar_listado_pdf_logica()`
+    — es de solo lectura salvo tres campos puramente informativos
+    (`total_pedido`, base imponible de la última entrada, y
+    `fecha_tramitacion` solo si estaba vacía): **nunca toca `estado`
+    ni dispara ninguna notificación**, por diseño explícito (así lo
+    documenta su propio docstring). El estado que se ve en pantalla en
+    esa comparación es solo una deducción para mostrar en la tabla, no
+    se guarda.
+  - Cuando además se marca "+ Comparar también con el listado de
+    Albaranes registrados en DALI", las coincidencias propuestas
+    **nunca se aplican solas al comparar** — hace falta que el
+    administrador pulse "Aplicar" (o "Aplicar todas") sobre las que
+    confirma, endpoint `/api/pedidos/comparar-listado-albaranes/<job_id>/aplicar`.
+  - Al aplicar una coincidencia que sí implica un cambio de estado
+    (ENTREGA PARCIAL o ENTREGADO), `_aplicar_coincidencia_albaran()`
+    llama a `_notificar_cambio_estado(..., es_automatico=True)`, exactamente
+    la misma función central que usan todos los cambios de estado
+    manuales (`update_pedido`, flujo hotel, aprobar/denegar
+    expediente). Esa función llama, en este orden, a
+    `enviar_emails_estado()` (correo interno, y correo a proveedor si
+    aplica) y a `_telegram_cambio_estado()` (Telegram/popup
+    inmediato).
+  - `enviar_emails_estado()` encola el correo interno con el mismo
+    mecanismo que un cambio manual — `_encolar_email_pedido_retrasado()`,
+    cola con 5 minutos de retraso y antirrepetición, despachada por el
+    poller de cualquier sesión admin/compras con la app abierta (no
+    hace falta SMTP propio) — a los mismos destinatarios (comprador,
+    rol hotel, correo de departamento y contactos adicionales
+    configurados en Administrador → Notificaciones). ENTREGA PARCIAL y
+    ENTREGADO están dentro de `ESTADOS_EMAIL_INTERNO` (`models.py`),
+    así que el correo se dispara igual que para cualquier otro estado
+    de esa lista.
+  - Única diferencia real frente a un cambio manual: con
+    `es_automatico=True`, `enviar_emails_estado()` **no excluye a
+    nadie** de la lista de destinatarios (un cambio manual sí excluye
+    el email principal de quien lo hizo, desde v12.30.18/19/97) — esto
+    es intencional y viene de una petición explícita de Víctor de
+    2026-08-19 (v12.30.18): *"si el cambio es automático entonces sí
+    correo a ambas partes"*. Y en el Historial de estados del pedido,
+    el registro se guarda con la etiqueta fija "Automática — listado
+    comparativo pedidos y albaranes" en vez del nombre de quien pulsó
+    "Aplicar" (v12.30.17), para que se distinga a simple vista de un
+    cambio hecho a mano — pero el correo en sí llega igual.
+  - Conclusión: **sí, funciona igual que si lo hiciera un usuario
+    humano** (mismos destinatarios — de hecho ninguno excluido —,
+    mismo contenido, mismo mecanismo de envío), con la única salvedad
+    de que el registro queda etiquetado como automático para
+    trazabilidad.
+- **No se ha tocado ningún archivo de código** (`app.py`,
+  `templates/index.html`, `models.py`) — no había ningún fallo que
+  corregir. Se documenta esta verificación aquí para dejar constancia
+  de la pregunta y la respuesta, y se añade una aclaración en
+  `README.md` (sección "Correo interno de cambio de estado") sobre el
+  comportamiento en cambios automáticos.
+- **Revisión de otros documentos (norma 5)**: `CHANGELOG.md` — se
+  añade la misma nota. `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`,
+  `INSTRUCCIONES_RESTAURACION.md` — no aplica, no documentan este
+  comportamiento. `docs/hallazgo-seguridad-princess.md` no existe en
+  este repo.
+- **Entrega**: `README.md`, más esta nota en `docs/HISTORIAL_CAMBIOS.md`
+  y `CHANGELOG.md`. `app.py`, `templates/index.html`, `models.py` y
+  `requirements.txt` no cambian — la versión sigue en **v12.30.98**.
+
+---
+
 ## 2026-09-03 — [Control Pedidos] Modal de nueva versión: solo admin ve el changelog completo, el resto de roles solo un título-resumen (v12.30.98)
 
 - **Origen**: Víctor pidió limitar la pantalla de recarga de actualización — "el exceso de información aturde al usuario" — para que solo muestre un mensaje de nueva actualización con un título resumen, sin entrar en detalles, y que el detalle completo se reserve para los administradores.

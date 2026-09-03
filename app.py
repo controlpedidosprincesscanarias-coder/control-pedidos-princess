@@ -2577,6 +2577,16 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
       momento (p. ej. _aplicar_coincidencia_albaran(), al confirmar una
       coincidencia de "Comparar Pedidos + Albaranes") — se manda SIEMPRE
       a todos los internos, igual que antes, sin excluir a nadie.
+      (2026-09-03) Además, con es_automatico=True el correo se encola con
+      un retraso mínimo (2s) en vez de los 300s (5 min) de un cambio
+      manual — ver _retraso_email_estado más abajo: el retraso largo
+      existe para agrupar varias ediciones manuales SEGUIDAS sobre el
+      mismo pedido en un único correo, algo que no aplica a un cambio
+      automático (una única escritura determinista por pedido). Motivo
+      del cambio: un cambio automático (hotel GY) se quedó en la cola sin
+      enviarse porque nadie dejó la app abierta 5 minutos más tras pulsar
+      "Aplicar" — a diferencia del correo de resumen de la comparación,
+      que si despacha la cola de inmediato desde el propio navegador.
 
     Devuelve: [] siempre — se mantiene por compatibilidad con los callers
     (create_pedido / update_pedido), que incluyen el valor en su respuesta
@@ -2586,6 +2596,29 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     _enviarEmailsSistemaPendientes).
     """
     pendientes = []
+
+    # (2026-09-03) A petición de Víctor, tras detectar que los dos correos
+    # internos de un cambio automático (hotel GY, "Comparar Pedidos +
+    # Albaranes") no llegaron: el retraso de 300s (5 min) con el que se
+    # encolan estos correos (ver _encolar_email_pedido_retrasado) existe
+    # para agrupar varios cambios de estado SEGUIDOS sobre el MISMO pedido
+    # hechos a mano (varios guardados rápidos) en un único correo — no
+    # tiene sentido aplicado a un cambio automático, que es una única
+    # escritura determinista por pedido en el momento de pulsar "Aplicar".
+    # Además, a diferencia del correo de resumen de la comparación (que sí
+    # dispara un despacho inmediato desde el propio navegador nada más
+    # encolarse, ver enviarResumenComparacionAlbaranes() en
+    # templates/index.html), el botón "Aplicar" no lo hacía — así que,
+    # combinado con el retraso de 5 min, si nadie dejaba la app abierta
+    # con sesión de admin/compras al menos 5 minutos más tras pulsar
+    # "Aplicar" (p. ej. por ser fin de jornada), el correo se quedaba en
+    # la cola sin enviarse hasta que alguien volviera a abrir la app —
+    # visible como pendiente en Admin → EmailJS → "Cola de correos de
+    # sistema pendientes", nunca perdido, pero sin salir de verdad. Con
+    # `es_automatico=True` el retraso baja a prácticamente cero (mismo
+    # criterio que el correo de resumen, sin delay) — ver uso más abajo,
+    # en el encolado del correo a proveedor y del correo interno.
+    _retraso_email_estado = 2 if es_automatico else 300
 
     pedido = row_to_dict(query(
         """SELECT p.*, h.nombre as hotel_nombre, h.codigo as hotel_codigo,
@@ -2873,6 +2906,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 asunto=subject,
                 cuerpo_html=body_html,
                 cuerpo_text=body_text,
+                retraso_segundos=_retraso_email_estado,
             )
 
     # ── Correo interno (ENVIADO AL PROVEEDOR, ENTREGA PARCIAL, ENTREGADO, CANCELADO) ──
@@ -3357,6 +3391,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
             cc_emails=",".join(_todos_internos[1:]),
             marca_comunicado_ab=_incluye_ab_email,
             marca_comunicado_jefe_dep=_incluye_jefe_depto_email,
+            retraso_segundos=_retraso_email_estado,
         )
 
     return pendientes

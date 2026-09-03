@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.30.98
+          V 12.30.99
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -7256,6 +7256,17 @@ function _procesarResultadoAplicarAlbaran(d) {
   if (errores.length) msg += `⛔ ${errores.length} con error — revisa manualmente.`;
   toast(msg.trim() || 'Sin cambios que aplicar', errores.length ? 'error' : 'success');
   _renderCompararAlbaranesResultado(_cmpAlbResultado);
+  // (2026-09-03) Si hubo cambios de estado que dispararon correo interno,
+  // no esperar al sondeo de 5 min (_startEmailsSistemaPolling) — mismo
+  // motivo y mismo mecanismo que enviarResumenComparacionAlbaranes():
+  // adelanta el despacho desde el propio navegador que acaba de aplicar
+  // los cambios. El backend ya encola estos correos con un retraso
+  // mínimo (2s, ver _retraso_email_estado en enviar_emails_estado()),
+  // así que en el momento en que llega aquí ya están visibles para
+  // enviar. Antes esta llamada no existía y, si nadie dejaba la app
+  // abierta 5 minutos más, el correo se quedaba en cola sin salir
+  // (incidencia real: hotel GY, pedidos 40907/40908, 2026-09-03).
+  if (aplicadas.length) _enviarEmailsSistemaPendientes();
 }
 
 async function aplicarUnaCoincidenciaAlbaran(clave) {

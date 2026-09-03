@@ -1,3 +1,35 @@
+# v12.30.99 — 3 septiembre 2026
+
+📧 Fix: el correo de cambio de estado automático (Comparar Pedidos + Albaranes) podía quedarse en cola sin salir si nadie dejaba la app abierta 5 min más tras "Aplicar"
+
+**Incidencia de Víctor**: hotel GY — al confirmar cambios en "Comparar Pedidos + Albaranes" y pulsar "Aplicar", los pedidos 40907/40908 quedaron bien actualizados (visibles en la Línea temporal), pero el correo interno de ese cambio no llegó (comprobado en Enviados de Gmail).
+
+**Diagnóstico**: dos fallos combinados. (1) El correo interno de un cambio automático se encolaba con el mismo retraso de 5 min que uno manual (pensado para agrupar varias ediciones manuales seguidas, algo que no aplica a una escritura automática única). (2) El botón "Aplicar" no disparaba un despacho inmediato de la cola de correos, a diferencia del botón "Enviar resumen" que sí lo hacía — así que si la sesión se cerraba antes de esos 5 min, el correo quedaba pendiente hasta que alguien reabriera la app.
+
+**Cambio en `app.py`**: `enviar_emails_estado()` reduce el retraso de encolado a 2s cuando `es_automatico=True` (antes 300s, igual que un cambio manual).
+
+**Cambio en `templates/index.html`**: tras "Aplicar" (con al menos una coincidencia aplicada), se dispara `_enviarEmailsSistemaPendientes()` de inmediato — mismo patrón ya usado por "Enviar resumen".
+
+**Verificación**: `python3 -m py_compile app.py` sin errores nuevos. `node --check` sobre los bloques `<script>` de `templates/index.html` sin errores nuevos. No probado en vivo contra producción — a confirmar tras desplegar: repetir la comparación con un pedido que cambie de estado y comprobar que el correo llega en segundos tras pulsar "Aplicar".
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica. `README.md` sí — versión actual y aclaración ampliada sobre el despacho casi inmediato en cambios automáticos.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
+# Verificación — 3 septiembre 2026 (sin cambio de código, versión era v12.30.98 en el momento de esta nota)
+
+🔍 Confirmado: los cambios de estado automáticos de "Comparar Pedidos + Albaranes" SÍ envían el correo interno configurado, igual que un cambio manual
+
+**Pregunta de Víctor**: al aplicar los resultados de la comparación de listados, cuando el sistema cambia el estado de un pedido automáticamente, ¿se envían los correos internos configurados avisando de ese cambio? ¿Debería funcionar igual que si lo hiciera un usuario humano?
+
+**Respuesta, revisando el código (nada que corregir, ya funciona así por diseño desde v12.30.16–19)**: la comparación de un solo PDF nunca cambia el estado ni notifica nada (solo rellena datos informativos). Solo cuando se cruza también con los albaranes de DALI y el administrador confirma "Aplicar" sobre una coincidencia que cambia el estado (a ENTREGA PARCIAL o ENTREGADO), `_aplicar_coincidencia_albaran()` llama a la misma función central de notificación (`_notificar_cambio_estado` → `enviar_emails_estado` + `_telegram_cambio_estado`) que cualquier cambio manual, con `es_automatico=True`. El correo interno se encola con el mismo mecanismo de siempre (cola con 5 min de retraso) a los mismos destinatarios — de hecho a MÁS destinatarios, porque un cambio automático no excluye a nadie (un cambio manual sí excluye a quien lo hizo). Único diferenciador: en el Historial de estados queda etiquetado "Automática — listado comparativo pedidos y albaranes" en vez del nombre de un usuario, para trazabilidad — pero el correo llega igual.
+
+**Entrega**: `README.md` (aclaración en "Correo interno de cambio de estado"), más esta nota y la entrada detallada en `docs/HISTORIAL_CAMBIOS.md`. `app.py`, `templates/index.html`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.30.98 — 3 septiembre 2026
 
 🔕 Modal de nueva versión: solo admin ve el changelog completo, el resto de roles solo un título-resumen
