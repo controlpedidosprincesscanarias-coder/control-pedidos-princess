@@ -1,3 +1,21 @@
+# v12.32.03 — 3 septiembre 2026
+
+📡 Fix: un fallo al construir el correo interno de cambio de estado ya no bloquea el aviso de Telegram/popup
+
+**Hallazgo de Víctor**: al preguntar si, aparte del correo de los pedidos 40907/40908 (hotel GY), algo más se había visto afectado por el bug de v12.32.02, se revisó el flujo completo de `_notificar_cambio_estado()` — sin acceso en ese momento al Telegram del hotel para confirmarlo directamente.
+
+**Diagnóstico**: `_notificar_cambio_estado()` llamaba en secuencia a `enviar_emails_estado()` y, solo si esa llamada terminaba sin excepción, a `_telegram_cambio_estado()`. Como el `TypeError` de v12.32.02 saltaba **dentro** de `enviar_emails_estado()` (al construir el correo interno, vía `_resumen_entregas()`), la excepción se propagaba antes de llegar a la línea del Telegram — es decir, para los pedidos 40907/40908 el aviso de Telegram/popup probablemente tampoco llegó a dispararse, no solo el correo. No fue posible confirmarlo a posteriori por falta de acceso al Telegram de ese hotel en el momento de la revisión.
+
+**Cambio en `app.py`**: `_notificar_cambio_estado()` ahora envuelve la llamada a `enviar_emails_estado()` en un `try/except` — si falla, se registra el error en el log (`[NOTIFICAR-CAMBIO-ESTADO]`) y se continúa igualmente con `_telegram_cambio_estado()`; al final, si hubo excepción en el correo, se relanza para que el caller (p. ej. el bucle de `comparar_listado_albaranes_aplicar`) la siga tratando exactamente igual que antes (aviso en rojo, coincidencia no contada como "aplicada"). Con este cambio, un fallo en la construcción del correo ya no puede silenciar también el aviso de Telegram.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores nuevos. No probado en vivo contra producción — a confirmar tras desplegar: forzar (o esperar) un fallo real en la construcción del correo interno y comprobar en el log que aparece `[NOTIFICAR-CAMBIO-ESTADO] Fallo construyendo/encolando el correo interno...` seguido igualmente del envío de Telegram.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.02 — 3 septiembre 2026
 
 🩹 Fix: el correo interno de cambio de estado automático (Comparar Pedidos + Albaranes) podía no llegar a encolarse nunca — `TypeError: unsupported operand type(s) for -: 'decimal.Decimal' and 'float'` en `_resumen_entregas()`

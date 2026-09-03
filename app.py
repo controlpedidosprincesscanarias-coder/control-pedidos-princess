@@ -4209,6 +4209,7 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
     Llama en orden a:
       1. enviar_emails_estado       → correo al proveedor y/o internos
       2. _telegram_cambio_estado    → mensaje Telegram inmediato (sin alerta temporal)
+    Desde v12.32.03, el paso 2 se ejecuta siempre, aunque el paso 1 falle.
 
     Uso en update_pedido — tanto flujo normal como flujo hotel:
 
@@ -4232,14 +4233,39 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
     lado (comprador/hotel) se excluye del correo interno porque es quien ha
     hecho el cambio. No afecta al Telegram/popup de _telegram_cambio_estado,
     que sigue igual (canal aparte, no filtrado por quién hizo el cambio).
+
+    (v12.32.03) El Telegram/popup se dispara SIEMPRE, incluso si falla la
+    construcción/encolado del correo interno — antes, una excepción dentro
+    de enviar_emails_estado() cortaba la ejecución de esta función antes de
+    llegar a _telegram_cambio_estado(), dejando también sin Telegram un
+    cambio de estado que sí se había aplicado en BD (ver incidencia GY,
+    pedidos 40907/40908, v12.32.02: el correo fallaba por un TypeError
+    Decimal/float en _resumen_entregas(), y como consecuencia el Telegram
+    tampoco se llegaba a enviar). El error del correo se relanza al final
+    para que el caller lo siga tratando exactamente igual que hasta ahora
+    (aviso en rojo, coincidencia no contada como "aplicada" en
+    comparar-listado-albaranes).
     """
-    pendientes = enviar_emails_estado(db, pedido_id, estado_nuevo, estado_antes,
-                                       usuario_nombre=usuario_nombre, usuario_id=usuario_id,
-                                       es_automatico=es_automatico)
+    _email_exc = None
+    pendientes = []
+    try:
+        pendientes = enviar_emails_estado(db, pedido_id, estado_nuevo, estado_antes,
+                                           usuario_nombre=usuario_nombre, usuario_id=usuario_id,
+                                           es_automatico=es_automatico)
+    except Exception as exc:
+        _email_exc = exc
+        log.error("[NOTIFICAR-CAMBIO-ESTADO] Fallo construyendo/encolando el correo interno "
+                  "del pedido %s (estado %s): %s — se continúa igualmente con Telegram/popup",
+                  pedido_id, estado_nuevo, exc)
+
     _telegram_cambio_estado(db, pedido_id, estado_nuevo, estado_antes,
                              usuario_nombre=usuario_nombre,
                              es_cambio_manual=True,
                              es_automatico=es_automatico)
+
+    if _email_exc is not None:
+        raise _email_exc
+
     return pendientes
 
 

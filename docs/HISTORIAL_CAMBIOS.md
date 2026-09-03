@@ -36,6 +36,49 @@
 
 ---
 
+## 2026-09-03 — [Control Pedidos] Fix: un fallo al construir el correo interno de cambio de estado ya no bloquea el aviso de Telegram/popup (v12.32.03)
+
+- **Hallazgo derivado de la incidencia GY (v12.32.02)**: al valorar si,
+  además del correo de los pedidos 40907/40908, algo más se había visto
+  afectado, se revisó el flujo completo de `_notificar_cambio_estado()`
+  — sin poder confirmarlo de forma directa por no tener en ese momento
+  acceso al Telegram del hotel GY.
+- **Diagnóstico**: `_notificar_cambio_estado()` llama en secuencia a (1)
+  `enviar_emails_estado()` y (2) `_telegram_cambio_estado()`, pero sin
+  ningún `try/except` entre ambas — si la primera lanza una excepción
+  (como el `TypeError: Decimal - float` de v12.32.02, que salta dentro
+  de `enviar_emails_estado()` al construir el correo interno vía
+  `_resumen_entregas()`), la función corta ahí mismo y nunca llega a
+  ejecutar la segunda. Es decir: para los pedidos 40907/40908, además
+  del correo, muy probablemente tampoco se disparó el aviso de
+  Telegram/popup inmediato, aunque no fue posible confirmarlo con
+  certeza a posteriori.
+- **Cambio en `app.py`**: `_notificar_cambio_estado()` envuelve ahora la
+  llamada a `enviar_emails_estado()` en un `try/except`. Si falla, se
+  registra el error con `log.error("[NOTIFICAR-CAMBIO-ESTADO] ...")` y
+  se sigue ejecutando `_telegram_cambio_estado()` de todas formas; al
+  terminar, si hubo una excepción al construir el correo, se relanza
+  para que el caller (p. ej. el bucle por-coincidencia de
+  `comparar_listado_albaranes_aplicar`) siga clasificando ese caso como
+  "error" exactamente igual que hasta ahora — este cambio no afecta a
+  esa clasificación, solo garantiza que el Telegram/popup no dependa
+  del éxito del correo.
+- **Verificación**: `python3 -m py_compile app.py` sin errores nuevos.
+  No probado en vivo contra producción — a confirmar tras desplegar:
+  provocar (o esperar) un fallo real al construir el correo interno de
+  un cambio de estado y comprobar que, pese a ello, el Telegram/popup
+  sí llega, junto con la línea de log
+  `[NOTIFICAR-CAMBIO-ESTADO] Fallo construyendo/encolando el correo
+  interno...`.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+  `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión),
+  `README.md`, `CHANGELOG.md`, este historial. `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-03 — [Control Pedidos] Fix: el correo interno de cambio de estado automático (Comparar Pedidos + Albaranes) podía no llegar a encolarse — `TypeError: Decimal - float` en `_resumen_entregas()` (v12.32.02)
 
 - **Incidencia real reportada por Víctor (continuación de la de v12.30.99)**:
