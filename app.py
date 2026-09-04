@@ -10985,6 +10985,22 @@ def _extraer_listado_detallado_completo(pdf_bytes: bytes) -> dict:
                     if m_final and m_final.group(1) not in headers_vistos_pagina:
                         pedido_actual = m_final.group(1)
                         _pedido(pedido_actual)
+
+                # (2026-09-04, v12.32.21) pdfplumber va acumulando objetos
+                # cacheados de cada página (extract_text/extract_tables) que
+                # no se liberan solos hasta cerrar el PDF entero — con un
+                # listado de varios cientos de páginas eso agota la memoria
+                # del proceso (confirmado empíricamente con un PDF real de
+                # 739 páginas: sin este flush_cache() el proceso moría por
+                # OOM/timeout a mitad de lectura; con él, 2m35s sin
+                # problema). Ya se aplicaba en los parsers de Albaranes
+                # (v12.32.19/20) pero se quedó fuera de esta función, la más
+                # antigua de las tres y la única que procesa PDFs de varios
+                # meses de golpe si alguien no sigue la recomendación de
+                # subir tramos quincenales — de ahí el job "perdido" que
+                # reportó Víctor: el proceso entero se reinicia (se pierde
+                # _PDF_JOBS, en memoria) a mitad de la subida.
+                pagina.flush_cache()
     except Exception as exc:
         log.error("[LISTADO-DETALLADO] Error leyendo el PDF: %s", exc)
         raise RuntimeError(f"No se pudo leer el PDF: {exc}")

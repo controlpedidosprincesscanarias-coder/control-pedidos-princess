@@ -1,3 +1,25 @@
+# v12.32.21 — 4 septiembre 2026
+
+Corrección de memoria: "Actualizar departamentos y líneas" podía tirar el servidor entero (y con él, el job en curso) al subir un listado detallado de varios meses
+
+**Aviso de Víctor, recién desplegada la v12.32.20**: al subir un listado de tres meses de golpe, tras un rato salió el aviso "El job no existe o ha caducado"; probó también con el quincenal de mayo y le dio el mismo error. Pegó además el log de Render, que mostraba un reinicio completo del proceso (auto-migración, scheduler, gunicorn arrancando de cero) justo entre dos consultas del mismo job.
+
+**Diagnóstico**: `_extraer_listado_detallado_completo()` (el lector de "Actualizar departamentos y líneas", v12.32.16/18) es el único de los tres parsers de PDF grandes de la app que se había quedado sin el `pagina.flush_cache()` que ya llevan los otros dos desde que se detectó este mismo problema con el listado de Albaranes (v12.32.19/20) — pdfplumber no libera solo la memoria cacheada de cada página según va leyendo, así que un PDF de varios cientos de páginas la va acumulando sin soltarla hasta cerrar el fichero entero. Confirmado con el PDF real de tres meses que subió Víctor (739 páginas): **sin** el `flush_cache()`, el proceso de prueba llega a ~6,1 GB de memoria y el sistema operativo lo mata (confirmado con `dmesg`: `oom-kill`) antes de terminar de leerlo — en Render, matar el proceso así se lleva por delante el job en memoria (`_PDF_JOBS`) y de ahí el "no existe o ha caducado" al consultar su estado, y probablemente también explica que el intento siguiente (el quincenal de mayo) fallase igual: no porque el quincenal en sí pese demasiado, sino porque cayó justo mientras el servidor se estaba reiniciando por el intento anterior. **Con** el `flush_cache()` añadido, el mismo PDF de 739 páginas termina de leerse entero, con un pico de memoria de ~3,2 GB — bastante menos, aunque para un PDF de varios meses sigue siendo un consumo alto (de ahí que el aviso del propio modal ya recomendara subir tramos quincenales en vez del PDF completo; con listados de 60-115 páginas como los que usa Víctor habitualmente, el consumo de memoria escala hacia abajo en proporción, muy por debajo de ese pico).
+
+**Cambio en `app.py`**: una única línea (`pagina.flush_cache()`, al final de cada vuelta del bucle de páginas) en `_extraer_listado_detallado_completo()` — mismo sitio y mismo criterio que ya llevan `_extraer_albaranes_detallado_completo()` y `_extraer_albaran_confirmacion_individual()`. No cambia ningún resultado ni formato de datos, solo libera memoria página a página en vez de acumularla.
+
+**Cambio en `templates/index.html`**: solo el número de versión del badge (norma 4) — sin cambios de interfaz.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Prueba empírica A/B con el PDF real de tres meses de Víctor (739 páginas), aislando la función tal cual queda en `app.py`: sin el fix, el proceso muere por OOM a los ~6,1 GB sin terminar de leer el PDF (confirmado por `dmesg`); con el fix, termina en 192s con un pico de ~3,2 GB, 2.018 pedidos y 17.272 líneas extraídas correctamente. **No se ha podido probar en vivo contra Render** (no hay acceso desde aquí a esa instancia ni a su límite de memoria real) — al desplegar, conviene: (1) repetir la subida del quincenal de mayo suelto (sin haber subido antes nada más grande en la misma sesión) y comprobar que termina bien — si esto también fallara de forma aislada, sería una causa distinta a investigar; (2) para el histórico de varios meses, seguir subiendo por tramos quincenales como ya recomienda el propio modal, en vez de un PDF de varios meses de una vez, aunque ahora aguante más que antes.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica (corrección interna de memoria, sin cambios de despliegue, configuración ni datos). `README.md` sí: versión actual.
+
+**Sigue pendiente**: confirmar en Render que la subida quincenal ya no falla de forma aislada; si Víctor necesita subir tramos de varios meses de una vez con cierta frecuencia, valorar más adelante bajar aún más el consumo de memoria (p. ej. liberando también objetos intermedios de `extract_text()`) o subir el límite de memoria de la instancia de Render.
+
+**Entrega**: `app.py`, `templates/index.html` (solo versión), `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.20 — 4 septiembre 2026
 
 Segundo paso del cruce Pedidos↔Albaranes: un tier "confirmado" (no solo sugerido) en "Sugerencias de Albarán", alimentado por el PDF de confirmación de un albarán suelto y por el nº de albarán ya registrado a mano en el propio pedido
