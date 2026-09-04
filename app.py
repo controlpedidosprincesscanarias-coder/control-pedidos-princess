@@ -1320,6 +1320,31 @@ def _auto_migrate():
                 UPDATE config_alertas SET label = %s WHERE clave = %s
             """, ('Enviar avisos automáticos por email (reclamación a proveedor y avisos internos) cuando corresponda',
                   'activar_reclamacion_proveedor_auto'))
+            # ── v12.32.17 — Pausa total del job diario de alertas ──────────────
+            # A petición de Víctor: al ir a subir de golpe muchas quincenas
+            # históricas (departamentos vía listado detallado, y/o listados
+            # simplificados de meses atrás vía "Comparar listado PDF") para
+            # actualizar el flujo anual completo desde el 01-01-2026, tiene
+            # sentido rellenar de golpe fecha_tramitacion/total_pedido/
+            # departamento de muchísimos pedidos antiguos a la vez — y el job
+            # diario (_job_alertas_diarias_inner) podría reaccionar a ese
+            # aluvión de datos "recién completados" disparando avisos por
+            # Telegram a compradores, reclamaciones automáticas por email a
+            # proveedores y avisos de firma pendiente, todos de golpe, para
+            # pedidos que en realidad ya llevan meses cerrados. Este
+            # interruptor —Activo por defecto ('0', desactivado)— para el
+            # job ENTERO en un único punto (ver el guardián al principio de
+            # _job_alertas_diarias_inner) mientras dura la actualización
+            # masiva; al reactivarlo, el job simplemente vuelve a evaluar el
+            # estado real de cada pedido en ese momento, sin nada que
+            # "recuperar" ni arrastrar de mientras estuvo pausado.
+            cur.execute("""
+                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (clave) DO NOTHING
+            """, ('pausa_avisos_automaticos', '0', 'bool',
+                  '🚨 PAUSAR el job diario de alertas (Telegram + email a compradores y proveedores) — usar solo durante una actualización masiva de datos históricos, y recordar reactivarlo después',
+                  'global', 0))
             # ── v12.5.0 — Repetición de popups en Agenda por tipo de alerta ────
             # Controla, para cada estado de pedido, si el popup en Organizador
             # Princess se repite mientras el pedido siga en alerta y cada
@@ -4808,6 +4833,7 @@ def get_config() -> dict:
         "plazo_parcial_aviso_dias_antes": 3,
         "plazo_parcial_urgente_ciclo": 2,
         "activar_reclamacion_proveedor_auto": 0,
+        "pausa_avisos_automaticos": 0,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_max_pedidos_familia": 1, "techo_max_mes_familia": 0, "techo_pct_amarillo": 60,
         "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
@@ -5235,6 +5261,20 @@ def _job_alertas_diarias():
         _flush_egress_bytes()
 
 def _job_alertas_diarias_inner():
+    # (2026-09-04, v12.32.17) Pausa total, a petición de Víctor: mientras
+    # sube en bloque datos históricos (departamentos vía listado detallado
+    # y/o listados simplificados de meses atrás), Config Alertas →
+    # "PAUSAR el job diario de alertas" corta el job ENTERO aquí mismo,
+    # antes de tocar nada — ni Telegram a compradores, ni reclamación
+    # automática por email a proveedores, ni aviso de firma pendiente (los
+    # tres salen de este job, ver el comentario del guardián de fin de
+    # semana un poco más abajo). No hay nada que "recuperar" al reactivarlo:
+    # el job simplemente vuelve a evaluar el estado real de cada pedido en
+    # ese momento, exactamente igual que si hubiera estado corriendo mientras
+    # tanto pero sin que ningún pedido calificara para aviso.
+    if bool(int(get_config().get("pausa_avisos_automaticos", 0) or 0)):
+        log.info("[SCHEDULER] Job de alertas diarias EN PAUSA (Config Alertas → pausa_avisos_automaticos) — no se evalúa ni se envía nada")
+        return
     # (2026-08-02) Fin de semana: no se envía nada — ni reclamación al
     # proveedor, ni Telegram, ni popup de main_agenda (los tres salen de
     # este mismo job, vía _enviar_telegram_compradores /
@@ -10662,15 +10702,28 @@ def _extraer_departamentos_listado_detallado(pdf_bytes: bytes) -> dict:
 
 def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: bytes) -> dict:
     """
-    (2026-09-04, v12.32.16) Lee el Listado de Pedidos DETALLADO de SAP (con
-    _extraer_departamentos_listado_detallado(), pdfplumber) y actualiza SOLO
-    la columna `departamento_sap_codigo` de `sap_pedidos_listado`, para cada
-    pedido que YA tiene una fila guardada allí (de una subida anterior del
-    listado RESUMIDO — ver _guardar_listado_sap_importado()). NUNCA toca
-    ninguna otra columna (importe_base_txt, importe_recibido_txt, etc.) —
+    (2026-09-04, v12.32.16 → ampliada en v12.32.17) Lee el Listado de
+    Pedidos DETALLADO de SAP (con _extraer_departamentos_listado_detallado(),
+    pdfplumber) y actualiza SOLO la columna `departamento_sap_codigo` de
+    `sap_pedidos_listado`, para cada pedido que YA tiene una fila guardada
+    allí (de una subida anterior del listado RESUMIDO — ver
+    _guardar_listado_sap_importado()). NUNCA toca ninguna otra columna de
+    `sap_pedidos_listado` (importe_base_txt, importe_recibido_txt, etc.) —
     ver el porqué junto a _PATRON_LISTADO_SIMPLIFICADO, más arriba en el
     archivo: esos campos deben seguir viniendo siempre del listado resumido,
     nunca reconstruirse desde el detallado.
+
+    (2026-09-04, v12.32.17) Además, para cada pedido que YA está dado de
+    alta en la app (a mano o automáticamente desde SAP) y todavía NO tiene
+    ningún departamento asignado, se le asigna aquí mismo — antes esto solo
+    pasaba en el backfill retroactivo de _auto_migrate() (una vez por
+    arranque de la app), lo que habría obligado a Víctor a esperar/forzar un
+    redeploy después de cada tanda de listados detallados que fuera subiendo
+    al actualizar el histórico anual. Mismo criterio de siempre: solo si el
+    pedido no tiene YA un departamento (nunca se pisa uno existente, puesto
+    a mano o por una subida anterior), y es un simple UPDATE de un campo
+    informativo — no cambia `estado` ni `fecha_tramitacion`, así que NUNCA
+    dispara ningún email ni aviso Telegram por sí solo.
 
     Los pedidos del PDF detallado que todavía no tienen fila en
     `sap_pedidos_listado` (porque nunca se subió el listado resumido con
@@ -10694,6 +10747,7 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
         )
 
     actualizados = 0
+    pedidos_completados = 0
     sin_departamento_en_pdf = 0
     no_encontrados_en_listado = 0
     codigos_no_mapeados = set()
@@ -10717,6 +10771,22 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
             (codigo, hotel_id, num_sap)
         )
         actualizados += 1
+
+        # (2026-09-04, v12.32.17) Propagación inmediata al pedido ya dado de
+        # alta — ver docstring. `pedido_num` se compara tal cual (sin
+        # normalizar ceros a la izquierda), mismo criterio que ya usa el
+        # backfill de _auto_migrate() para este mismo cruce.
+        dep_nombre = _SAP_DEPARTAMENTO_MAP.get(codigo)
+        if dep_nombre:
+            dep_row = query("SELECT id FROM departamentos WHERE nombre=%s", (dep_nombre,), one=True)
+            if dep_row:
+                cur_dep = execute(
+                    "UPDATE pedidos SET departamento_id=%s "
+                    "WHERE hotel_id=%s AND pedido_num=%s AND departamento_id IS NULL",
+                    (dep_row["id"], hotel_id, num_sap)
+                )
+                if cur_dep.rowcount:
+                    pedidos_completados += cur_dep.rowcount
     if actualizados:
         get_db().commit()
 
@@ -10724,6 +10794,7 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
         "ok": True,
         "total_pdf": len(departamentos),
         "actualizados": actualizados,
+        "pedidos_completados": pedidos_completados,
         "sin_departamento_en_pdf": sin_departamento_en_pdf,
         "no_encontrados_en_listado": no_encontrados_en_listado,
         "codigos_sap_no_mapeados": sorted(codigos_no_mapeados),

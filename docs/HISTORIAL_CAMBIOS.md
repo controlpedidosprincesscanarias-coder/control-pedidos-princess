@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] Actualización histórica masiva sin riesgo de avisos en cadena — pausa global de alertas + el departamento se propaga al pedido al momento (v12.32.17)
+
+- **Petición de Víctor**, al ir a subir quincenas del listado detallado desde el 01-01-2026: (1) si el orden de subida importa o hay que cubrir primero los pedidos ya auto-creados; (2) poder pausar avisos/correos internos/correos a proveedores durante la actualización masiva, porque temía que "actualizar departamentos" disparase correos de pedidos ya entregados.
+- **Sobre el orden**: no importa — el emparejamiento es por número de pedido, no por fecha; solo hace falta que el listado resumido de ese periodo ya tenga fila guardada (siempre cierto para los pedidos auto-creados, que nacen de esa misma tabla). Si falta para algún pedido manual, el resumen de la subida lo avisa aparte y basta con repetirla más tarde.
+- **Hallazgo corregido en la misma entrega**: `_actualizar_departamentos_desde_listado_detallado()` (v12.32.16) solo rellenaba `sap_pedidos_listado.departamento_sap_codigo` — el departamento del pedido YA dado de alta en la app solo se completaba en el backfill de `_auto_migrate()`, que corre una vez por despliegue. Con el plan de Víctor de subir muchas quincenas sueltas en el tiempo, eso habría requerido un redeploy tras cada tanda. **Cambio en `app.py`**: ahora, tras guardar el código en `sap_pedidos_listado`, si el pedido correspondiente ya existe y no tiene departamento, se le asigna al momento (nunca pisa uno ya puesto; no cambia `estado` ni `fecha_tramitacion`, así que no dispara ningún email/aviso). El resumen de cada subida informa también cuántos pedidos ya dados de alta se completaron.
+- **Cambio en `app.py`**: nueva clave `pausa_avisos_automaticos` en `config_alertas` (visible en Administrador → Parámetros de alertas, sin cambios de interfaz — el panel ya lee la tabla de forma genérica), comprobada al principio de `_job_alertas_diarias_inner()`: si está activa, corta el job entero — ni Telegram a compradores, ni reclamación automática por email a proveedores, ni aviso de firma pendiente. Al reactivarla, el job vuelve a evaluar el estado real de cada pedido sin nada que "recuperar".
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. No probado en vivo — a confirmar tras desplegar: activar la pausa antes de subir el histórico, revisar el resumen de cada subida, y desactivarla al terminar.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] Departamento automático del Listado de Pedidos SAP — vía el listado DETALLADO, en flujo aparte, sin tocar importe/estado (v12.32.16)
 
 - **Petición de Víctor**, adjuntando dos exportaciones reales de SAP: la que ya se usa (GY, simplificada — una línea por pedido) y una segunda (GY1, detallada — una línea por artículo, con el departamento solicitante) — preguntó si la segunda podría sustituir a la primera para aplicar automáticamente el departamento.
