@@ -1,3 +1,21 @@
+# v12.32.14 — 4 septiembre 2026
+
+🚨 URGENTE — la corrección retroactiva de v12.32.13 nunca llegó a ejecutarse: movida al principio de `_auto_migrate()` para garantizar que se aplique
+
+**Detectado por Víctor**, con una captura de la Línea temporal tras desplegar y arrancar ya con la v12.32.13: los pedidos afectados seguían mostrando el nombre del admin (no el automático) y sin ningún registro de corrección de estado — es decir, la corrección retroactiva descrita en la v12.32.13 no se había aplicado, pese a estar ya en producción.
+
+**Causa raíz**: `_auto_migrate()` es una única función con 111+ sentencias de migración, casi todas SIN try/except propio, envuelta en un único try/except general que, ante el primer fallo de cualquiera de ellas, aborta el resto de la función entera con `log.warning("Auto-migración omitida: ...")` — sin llegar nunca a las sentencias que vengan después en el código. La corrección retroactiva de v12.32.13 se colocó justo antes de `db.close()`, es decir, al final de todo: si CUALQUIER sentencia anterior de las 111+ fallaba en ese despliegue concreto (algo ajeno a este cambio), el bloque de corrección simplemente nunca se ejecutaba. Este es el mismo patrón de fallo que ya está documentado en el propio código desde agosto de 2026 para un bug real anterior con RLS de Supabase, que se corrigió entonces con la misma solución.
+
+**Cambio en `app.py`**: el bloque de corrección retroactiva (nombre "automático" + recálculo de estado + purga de reclamaciones sin enviar) se mueve al principio de `_auto_migrate()`, justo después del bloque de RLS — la misma "zona segura" donde ya vive el resto de correcciones que deben garantizarse en cada arranque pase lo que pase más abajo. No cambia ni una línea de la LÓGICA de la corrección en sí (sigue siendo exactamente la de v12.32.13), solo su posición dentro de la función.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Confirmado que no queda ningún duplicado del bloque ni resto huérfano en su ubicación anterior. No se ha podido probar en vivo — **al desplegar, revisar la Línea temporal / el listado de pedidos y confirmar que los pedidos que aparecían en las capturas de Víctor ya muestran el nombre automático y, si correspondía, el estado corregido**; si tras este despliegue algo sigue sin corregirse, lo siguiente a revisar son los logs de arranque en busca de "Auto-migración omitida" para localizar qué otra sentencia está fallando antes de este punto.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.13 — 4 septiembre 2026
 
 🚨 URGENTE — Crear pedidos desde SAP: corregido el estado inicial mal calculado (v12.32.11), que disparaba reclamaciones reales a proveedores de pedidos ya entregados

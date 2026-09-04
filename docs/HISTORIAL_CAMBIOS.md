@@ -36,6 +36,17 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] URGENTE: la corrección retroactiva de v12.32.13 nunca se ejecutó — movida al principio de `_auto_migrate()` (v12.32.14)
+
+- **Detectado por Víctor**: tras desplegar y arrancar con v12.32.13, la Línea temporal seguía mostrando los pedidos afectados con el nombre del admin y sin ningún registro de corrección de estado — la corrección retroactiva no se había aplicado.
+- **Causa raíz**: `_auto_migrate()` tiene 111+ sentencias sin try/except propio dentro de un único try/except general — un fallo en cualquiera de ellas aborta toda la función a partir de ahí. La corrección de v12.32.13 se colocó al final, justo antes de `db.close()`, así que si algo anterior fallaba en ese arranque concreto, nunca llegaba a ejecutarse. Mismo patrón de fallo ya documentado en el código para un bug real de RLS en agosto de 2026, corregido entonces igual.
+- **Cambio en `app.py`**: el bloque de corrección se mueve al principio de `_auto_migrate()`, justo tras el bloque de RLS — misma lógica exacta que en v12.32.13, solo cambia su posición para garantizar que se ejecute siempre.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; confirmado que no queda ningún duplicado ni resto huérfano en la ubicación anterior. No probado en vivo — a confirmar tras desplegar revisando la Línea temporal de los pedidos afectados.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] URGENTE: corregido el estado mal calculado al crear pedidos desde SAP — disparaba reclamaciones reales a proveedores ya entregados (v12.32.13)
 
 - **Petición de Víctor**, con capturas: los pedidos creados por la nueva automatización (v12.32.11) salían todos en "ENVIADO AL PROVEEDOR" en vez del estado real que ya mostraba el listado SAP, y eso disparó reclamaciones automáticas REALES a proveedores de pedidos ya entregados ("me están tupiendo a llamadas"). Además pidió que la trazabilidad de estas altas usara el nombre automático fijo, no el del admin.
