@@ -18,6 +18,17 @@ pytz==2026.3.post1
 Pillow==12.3.0
 requests==2.34.2
 pypdf==6.16.2
+# (2026-09-04, v12.32.16) pdfplumber: para leer el Listado de Pedidos
+# DETALLADO de SAP como tabla real (pypdf desordena las columnas en este
+# formato — ver comentario junto a _parsear_listado_pedidos_detallado() en
+# app.py). Versiones fijadas contra lo instalado en este entorno de
+# desarrollo, NO contra un log de build de Render real — a diferencia del
+# resto de este archivo, esto SÍ hay que volver a fijar con el log de
+# build del primer deploy que incluya este cambio (ver nota de cabecera).
+pdfplumber==0.11.9
+pdfminer.six==20251230
+pypdfium2==5.7.1
+cryptography==46.0.7
 
 # ── Transitivas (dependencias de las de arriba) — fijadas también   ──
 # ── para que el deploy instale SIEMPRE lo mismo, no solo lo directo ──

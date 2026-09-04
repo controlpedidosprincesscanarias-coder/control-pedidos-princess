@@ -167,6 +167,52 @@ def _comprimir_respuesta_gzip(response):
     response.headers["Content-Length"] = str(response.content_length)
     return response
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Mapeo Departamento SAP → Departamento de la app (v12.32.16)
+# ═══════════════════════════════════════════════════════════════════════════
+# (2026-09-04) A petición de Víctor: al pasar del "Listado de Pedidos"
+# simplificado de SAP (una línea por pedido) al "Listado de Pedidos"
+# detallado (línea a línea por artículo), cada línea trae el departamento
+# solicitante con un código numérico de SAP (8 dígitos) + su nombre en
+# SAP — que NO coincide 1:1 con el catálogo `departamentos` de la app.
+# Decidido con Víctor, código a código, tras revisar los 11 códigos que
+# aparecen en un listado real de varios meses:
+#   - Los que ya tienen nombre idéntico en la app se mapean directos
+#     (ECONOMATO, COCINA, RECEPCION, PISOS, ANIMACION).
+#   - "COCINA PERSONAL" → COCINA (mismo departamento).
+#   - "SERVICIO TECNICO" → SSTT (mismo departamento, nombre abreviado en la app).
+#   - "RESTAURANTE / ... BODEGA (Food Market)" → RESTAURANTE & BARES (el
+#     departamento combinado ya existente, a petición explícita de Víctor).
+#   - "BAR SALON (Discoteca, ...)" → BARES.
+#   - "LAVANDERIA / LENCERIA" y "UNIFORMES PERSONAL" no tenían equivalente
+#     en el catálogo — se crean como departamentos nuevos (ver más abajo en
+#     _auto_migrate() y en models.py/SQL_STATEMENTS para instalaciones
+#     nuevas).
+# El valor de cada entrada es el nombre EXACTO tal cual está (o se crea) en
+# la tabla `departamentos`. Constante a nivel de módulo, definida ANTES de
+# _auto_migrate(), porque hace falta tanto dentro de esa función —que se
+# ejecuta en el momento de importar el archivo, antes de que el resto del
+# módulo esté cargado (ver la lección de v12.32.15, unas líneas más abajo:
+# un simple diccionario aquí no tiene ese problema, a diferencia de llamar
+# a una función definida más abajo)— como en el resto de funciones de este
+# archivo que procesan el listado SAP, ejecutadas mucho más tarde. Un
+# código de SAP que no aparezca aquí (departamento nuevo que Víctor no haya
+# visto/decidido todavía) simplemente no rellena departamento_id — nunca se
+# inventa una correspondencia.
+_SAP_DEPARTAMENTO_MAP = {
+    "00000001": "ECONOMATO",
+    "00000010": "COCINA",
+    "00000015": "COCINA",               # COCINA PERSONAL
+    "00000100": "RESTAURANTE & BARES",  # RESTAURANTE / BODEGA (Food Market)
+    "00000301": "BARES",                # BAR SALON (Discoteca, Princess)
+    "00000701": "RECEPCION",
+    "00000702": "LAVANDERIA / LENCERIA",
+    "00000706": "PISOS",
+    "00000720": "ANIMACION",
+    "00000800": "SSTT",                 # SERVICIO TECNICO
+    "00000810": "UNIFORMES PERSONAL",
+}
+
 def _auto_migrate():
     """Añade columnas/tablas nuevas de forma idempotente."""
     try:
@@ -316,9 +362,32 @@ def _auto_migrate():
                     return "Entregado"
                 return "Entrega parcial"
 
+            # (2026-09-04, v12.32.16) A petición de Víctor: aplicar también
+            # de forma automática el departamento solicitante, ahora que el
+            # "Listado de Pedidos" detallado de SAP lo trae por línea de
+            # artículo (ver _SAP_DEPARTAMENTO_MAP arriba y
+            # _extraer_departamentos_listado_detallado() más abajo en el
+            # archivo).
+            # Dos cosas tienen que existir ANTES del bucle de corrección de
+            # más abajo, que las necesita — colocadas aquí, cada una con su
+            # propio try/except, por la misma razón de siempre: un fallo en
+            # cualquier otra sentencia de _auto_migrate() no debe impedir
+            # que esto se aplique.
+            try:
+                cur.execute("ALTER TABLE sap_pedidos_listado ADD COLUMN IF NOT EXISTS departamento_sap_codigo TEXT")
+            except Exception as exc_col:
+                log.warning(f"No se pudo añadir sap_pedidos_listado.departamento_sap_codigo: {exc_col}")
+            try:
+                cur.execute(
+                    "INSERT INTO departamentos (nombre) VALUES (%s), (%s) ON CONFLICT DO NOTHING",
+                    ("LAVANDERIA / LENCERIA", "UNIFORMES PERSONAL")
+                )
+            except Exception as exc_dep:
+                log.warning(f"No se pudieron crear los departamentos nuevos (LAVANDERIA / LENCERIA, UNIFORMES PERSONAL): {exc_dep}")
+
             try:
                 cur.execute("""
-                    SELECT DISTINCT p.id, p.hotel_id, p.pedido_num, p.estado
+                    SELECT DISTINCT p.id, p.hotel_id, p.pedido_num, p.estado, p.departamento_id
                     FROM pedidos p
                     JOIN historial_estados h ON h.pedido_id = p.id
                     WHERE h.nota LIKE 'Pedido creado automáticamente desde el listado SAP%'
@@ -376,6 +445,33 @@ def _auto_migrate():
                             "AND evento_codigo='reclamacion_proveedor_auto' AND enviado=FALSE",
                             (_p["id"],)
                         )
+                        # 4) (v12.32.16) Departamento — solo si el pedido
+                        # todavía no tiene uno asignado (si alguien ya lo
+                        # completó a mano mientras tanto, no se pisa). Sale
+                        # del listado SAP guardado — si ese listado todavía
+                        # no tiene el departamento (porque Víctor no ha
+                        # vuelto a subir el nuevo Listado detallado desde
+                        # que se creó este pedido), simplemente no hay nada
+                        # que corregir todavía: se completará solo la
+                        # próxima vez que arranque la app después de subir
+                        # ese listado, sin necesitar ninguna acción manual.
+                        if not _p.get("departamento_id") and _p.get("pedido_num"):
+                            cur.execute(
+                                "SELECT departamento_sap_codigo FROM sap_pedidos_listado "
+                                "WHERE hotel_id=%s AND pedido_num_sap=%s",
+                                (_p["hotel_id"], _p["pedido_num"])
+                            )
+                            _fila_dep = cur.fetchone()
+                            _dep_codigo = _fila_dep.get("departamento_sap_codigo") if _fila_dep else None
+                            _dep_nombre = _SAP_DEPARTAMENTO_MAP.get(_dep_codigo) if _dep_codigo else None
+                            if _dep_nombre:
+                                cur.execute("SELECT id FROM departamentos WHERE nombre=%s", (_dep_nombre,))
+                                _dep_row = cur.fetchone()
+                                if _dep_row:
+                                    cur.execute(
+                                        "UPDATE pedidos SET departamento_id=%s WHERE id=%s AND departamento_id IS NULL",
+                                        (_dep_row["id"], _p["id"])
+                                    )
                     except Exception as exc_p:
                         log.warning(f"[CREAR-DESDE-SAP-FIX] No se pudo corregir el pedido id={_p.get('id')}: {exc_p}")
                 if _corregidos_estado:
@@ -1942,12 +2038,18 @@ def _auto_migrate():
             # — quiere poder subir el listado de SAP (que cubre varios meses)
             # una vez, y a partir de ahí ir pasando solo el listado de
             # Albaranes para ir cruzando y cerrando información. Esta tabla
-            # guarda, por hotel, la última línea conocida de cada pedido del
-            # "Listado de Pedidos" simplificado de SAP — los mismos 10 campos
-            # que ya extraía _PATRON_LISTADO_SIMPLIFICADO de cada subida — para
-            # que _comparar_listado_albaranes_logica() pueda reconstruirlos sin
-            # tener que volver a leer un PDF. Ver _guardar_listado_sap_importado()
-            # / _cargar_listado_sap_guardado(). Cada subida nueva del PDF de SAP
+            # guarda, por hotel, la última línea agregada conocida de cada
+            # pedido del "Listado de Pedidos" (resumido) de SAP — los mismos
+            # campos que ya extrae _PATRON_LISTADO_SIMPLIFICADO de cada
+            # subida (desde v12.32.16 incluye también, aparte, el
+            # departamento solicitante — columna departamento_sap_codigo más
+            # abajo — rellenado por una subida independiente del listado
+            # DETALLADO, ver _extraer_departamentos_listado_detallado() /
+            # _actualizar_departamentos_desde_listado_detallado()) — para
+            # que _comparar_listado_albaranes_logica() pueda
+            # reconstruirlos sin tener que volver a leer un PDF. Ver
+            # _guardar_listado_sap_importado() / _cargar_listado_sap_guardado().
+            # Cada subida nueva del PDF de SAP
             # FUSIONA (upsert por hotel_id+pedido_num_sap) en vez de reemplazar
             # — los pedidos ya guardados que no aparezcan en un PDF más
             # reciente se mantienen tal cual, nunca se borran solos aquí.
@@ -1965,6 +2067,7 @@ def _auto_migrate():
                     estado_sap           TEXT,
                     importe_recibido_txt    TEXT,
                     importe_pendiente_txt   TEXT,
+                    departamento_sap_codigo TEXT,
                     creado_en            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     actualizado_en       TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
@@ -9939,19 +10042,22 @@ def comparar_listado_pdf():
     debajo de cualquier timeout). El resultado real se consulta aparte,
     vía polling, con GET /api/pedidos/comparar-listado-pdf/<job_id>.
 
-    (2026-08-11) Se lee el "Listado de Pedidos" SIMPLIFICADO que exporta
-    SAP (uno por hotel) — una tabla de una línea por pedido, sin el
-    detalle de artículos del listado completo (mucho más ligero: unas
-    pocas páginas en vez de cientos). Cada línea tiene el formato fijo:
-    "NNNNNNNN Pedido DD/MM/AAAA HH:MM:SS DD/MM/AAAA DD/MM/AAAA PROVEEDOR
-    IMPORTE_BASE IMPORTE_RECIBIDO IMPORTE_PENDIENTE Abierto|Cerrado ..."
-    es decir: Nº pedido, fecha y hora de realización, fecha de pedido,
-    fecha de entrega indicada, proveedor, importe (base imponible),
-    importe recibido, un importe pendiente que no se usa aquí, y el
-    estado del pedido en SAP. Se extraen todos los números de pedido del
-    PDF (con pypdf, sin necesidad de ningún binario del sistema — más
-    portable que pdftotext/poppler en un despliegue de Render estándar) y
-    se comparan contra pedido_num en esta app para ese hotel, para
+    (2026-09-04, v12.32.16) Este endpoint SIGUE leyendo el "Listado de
+    Pedidos" SIMPLIFICADO de SAP (una línea por pedido, sin detalle de
+    artículos, vía _PATRON_LISTADO_SIMPLIFICADO) — se evaluó sustituirlo por
+    el listado DETALLADO (una línea por artículo, que además trae el
+    departamento solicitante) pero se descartó: reconstruir
+    importe_recibido/importe_pendiente sumando cantidad×precio de cada
+    línea del detallado NO cuadra siempre al céntimo con lo que reporta SAP
+    (verificado contra datos reales — ~2% de una muestra de 409 pedidos
+    salían mal clasificados como "Entrega parcial" en vez de "Entregado", o
+    viceversa: el mismo tipo de fallo que ya causó el incidente de
+    v12.32.13). El listado detallado sí se usa, pero SOLO para el
+    departamento, a través de un flujo de subida aparte (ver
+    _extraer_departamentos_listado_detallado() /
+    _actualizar_departamentos_desde_listado_detallado()) que nunca toca
+    importe_recibido/pendiente. Se extraen y agregan todos los pedidos del
+    PDF y se comparan contra pedido_num en esta app para ese hotel, para
     detectar compras que se hicieron en SAP pero nunca se dieron de alta
     aquí para su seguimiento.
 
@@ -10218,6 +10324,104 @@ def _ejecutar_comparacion_pdf_bg(job_id, hotel_id, pdf_bytes):
                 if job_id in _PDF_JOBS:
                     _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
 
+# ═══════════════════════════════════════════════════════════════════════════
+# Actualizar departamentos desde el Listado de Pedidos DETALLADO (v12.32.16)
+# ═══════════════════════════════════════════════════════════════════════════
+# (2026-09-04) A petición de Víctor: aplicar automáticamente el departamento
+# solicitante de cada pedido, que el listado RESUMIDO de SAP (arriba) no
+# trae pero el listado DETALLADO sí (una línea por artículo, con
+# departamento en la última columna). Flujo TOTALMENTE independiente de
+# "Comparar listado PDF": no compara nada contra los pedidos de la app, ni
+# toca importe_base/recibido/pendiente — solo enriquece con el departamento
+# las filas de `sap_pedidos_listado` que ya existan (de una subida anterior
+# del listado resumido). Mismo patrón de job en segundo plano que el resto
+# de esta zona (_PDF_JOBS), porque incluso con los listados quincenales que
+# recomienda usar Víctor (60-115 páginas) pdfplumber tarda del orden de
+# 30-60s — de sobra para superar el timeout del proxy si fuera síncrono.
+
+@app.route("/api/pedidos/actualizar-departamentos-listado", methods=["POST"])
+@login_required
+def actualizar_departamentos_listado():
+    """
+    Sube el "Listado de Pedidos" DETALLADO de SAP (una línea por artículo
+    dentro de cada pedido, con el departamento solicitante en la última
+    columna) y actualiza departamento_sap_codigo en `sap_pedidos_listado`
+    para cada pedido que ya tenga una fila guardada allí. Pensado para
+    subirse periódicamente (Víctor lo hace en listados quincenales, para
+    que pdfplumber no tarde varios minutos con un PDF de varios meses) —
+    ver _actualizar_departamentos_desde_listado_detallado().
+
+    POST /api/pedidos/actualizar-departamentos-listado
+    form-data: hotel_id, file (el PDF detallado)
+    → 202 {"ok": true, "job_id": "..."}
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+
+    hotel_id_raw = request.form.get("hotel_id")
+    if not hotel_id_raw:
+        return jsonify({"error": "Falta indicar el hotel"}), 400
+    try:
+        hotel_id = int(hotel_id_raw)
+    except ValueError:
+        return jsonify({"error": "Hotel no válido"}), 400
+    if "file" not in request.files:
+        return jsonify({"error": "No se ha adjuntado ningún archivo"}), 400
+    archivo = request.files["file"]
+    if not archivo.filename or not archivo.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "El archivo debe ser un PDF"}), 400
+
+    pdf_bytes = archivo.read()
+    if not pdf_bytes:
+        return jsonify({"error": "El archivo está vacío"}), 400
+
+    import time as _time_dep
+    job_id = secrets.token_hex(16)
+    with _PDF_JOBS_LOCK:
+        limite = _time_dep.time() - 1800
+        for jid in [j for j, v in _PDF_JOBS.items() if v.get("creado_en", 0) < limite]:
+            del _PDF_JOBS[jid]
+        _PDF_JOBS[job_id] = {
+            "status": "processing", "creado_en": _time_dep.time(),
+            "hotel_id": hotel_id, "usuario_id": session.get("user_id"),
+        }
+
+    hilo = threading.Thread(
+        target=_ejecutar_actualizacion_departamentos_bg,
+        args=(job_id, hotel_id, pdf_bytes),
+        daemon=True,
+    )
+    hilo.start()
+    return jsonify({"ok": True, "job_id": job_id}), 202
+
+@app.route("/api/pedidos/actualizar-departamentos-listado/<job_id>", methods=["GET"])
+@login_required
+def actualizar_departamentos_listado_estado(job_id):
+    """Consulta del resultado de un job lanzado por actualizar_departamentos_listado()."""
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    with _PDF_JOBS_LOCK:
+        job = dict(_PDF_JOBS.get(job_id) or {})
+    if not job:
+        return jsonify({"error": "El job no existe o ha caducado — vuelve a subir el PDF"}), 404
+    job.pop("creado_en", None)
+    return jsonify(job)
+
+def _ejecutar_actualizacion_departamentos_bg(job_id, hotel_id, pdf_bytes):
+    """Mismo patrón que _ejecutar_comparacion_pdf_bg() — corre en un hilo
+    aparte con su propio contexto de aplicación."""
+    with app.app_context():
+        try:
+            resultado = _actualizar_departamentos_desde_listado_detallado(hotel_id, pdf_bytes)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "done", "resultado": resultado}
+        except Exception as exc:
+            log.error("[ACTUALIZAR-DEPARTAMENTOS] Error en job %s: %s", job_id, exc)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
+
 def _parse_importe_es(s: str):
     """
     (2026-08-11) Convierte un importe con formato español ('2.852,10',
@@ -10325,6 +10529,19 @@ def _estado_aparente_entrega(importe_recibido: float, importe_pendiente: float) 
 # igual si hay espacio, y no rompe si no lo hay. Verificado contra el
 # mismo listado real con pypdf 3.17.4 y con pypdf 6.15.0 (221/221 en
 # ambos casos).
+#
+# (2026-09-04, v12.32.16) SIGUE SIENDO la fuente de importe_base/
+# recibido/pendiente/estado_sap — a pesar de que ahora también existe un
+# Listado de Pedidos DETALLADO (ver _extraer_departamentos_listado_detallado()
+# más abajo), con línea por artículo y departamento solicitante. Se
+# intentó reconstruir importe_recibido/pendiente sumando cantidad ×
+# precio de cada línea del listado detallado, y NO cuadra siempre al
+# céntimo con lo que reporta este listado simplificado (verificado contra
+# datos reales: ~2% de los pedidos de una muestra de 409 salían mal
+# clasificados como "Entrega parcial" en vez de "Entregado", o viceversa
+# — el mismo tipo de fallo que ya causó el problema real de v12.32.13, por
+# eso NO se sustituye esto). El listado detallado se usa EXCLUSIVAMENTE
+# para el departamento (dato que este listado simplificado no trae).
 _NUM_ES = r'-?\d{1,3}(?:\.\d{3})*,\d{2}'
 _PATRON_LISTADO_SIMPLIFICADO = re.compile(
     r'(\d{6,})\s*Pedido\s*'                       # Nº pedido
@@ -10337,6 +10554,181 @@ _PATRON_LISTADO_SIMPLIFICADO = re.compile(
     r'(' + _NUM_ES + r')\s*'                      # importe recibido
     r'(' + _NUM_ES + r')'                         # importe pendiente (8ª columna — usada en _estado_aparente_entrega)
 )
+
+# (2026-09-04, v12.32.16) Cabecera de cada pedido en el Listado DETALLADO:
+# "NNNNNNNN - Pedido DD/MM/AAAA HH:MM:SS (PROVEEDOR [Teléfono:... [Fax:...]])"
+_PATRON_CABECERA_PEDIDO_DETALLADO = re.compile(
+    r'^(\d{6,})\s*-\s*Pedido\s+(\d{2}/\d{2}/\d{4})\s+(\d{1,2}:\d{2}:\d{2})\s*\((.+)\)\s*$'
+)
+
+
+def _extraer_departamentos_listado_detallado(pdf_bytes: bytes) -> dict:
+    """
+    (2026-09-04, v12.32.16) Lee el Listado de Pedidos DETALLADO de SAP —
+    línea por artículo dentro de cada pedido, en vez de línea por pedido —
+    ÚNICAMENTE para sacar el departamento solicitante (13ª columna de cada
+    línea de artículo), que el listado simplificado no trae. Devuelve
+    {pedido_num_sap: código_departamento_sap}. No calcula ni toca importes
+    (ver la nota junto a _PATRON_LISTADO_SIMPLIFICADO de por qué: sumar
+    cantidad × precio por línea no siempre reproduce al céntimo el importe
+    recibido/pendiente real que reporta SAP).
+
+    Por qué pdfplumber y no pypdf (como el resto de lectores de PDF de
+    esta app): este listado es una tabla de verdad (13 columnas por línea
+    de artículo), y pypdf.extract_text() no reconstruye el orden visual de
+    las columnas de una tabla — solo funciona bien con el listado
+    simplificado porque ahí cada pedido es una sola línea de texto
+    corrida. pdfplumber sí reconstruye la tabla completa según la posición
+    real de cada celda.
+
+    El departamento se toma de la PRIMERA línea de artículo de cada pedido
+    — verificado sobre un listado real de 2.138 pedidos que son siempre
+    iguales en todas las líneas de un mismo pedido (0 excepciones).
+
+    Cabecera "huérfana" (2026-09-04): cuando la cabecera de un pedido cae
+    justo en la última línea de una página y sus artículos empiezan en la
+    página siguiente, `extract_tables()` la pierde (no forma tabla con
+    nada en esa página) — comprobado con un listado real: pasaba en 1 de
+    cada ~7 páginas. Se compensa mirando también, al final de cada
+    página, si su última línea de texto plano es una cabecera que no se
+    vio ya como fila de tabla — si es así, se registra igual, para que
+    sus artículos (ya en la página siguiente) tengan dónde asociarse.
+
+    Aviso de rendimiento: un listado de varios meses puede tener varios
+    cientos de páginas — la reconstrucción de tabla de pdfplumber es
+    bastante más lenta que la lectura de texto plano de pypdf (del orden
+    de medio segundo por página). Por eso Víctor pasó a subir listados
+    quincenales en vez de uno de varios meses, y por eso esta función solo
+    debe llamarse desde el flujo en segundo plano (_PDF_JOBS), nunca
+    síncrona dentro de una petición normal.
+    """
+    import pdfplumber
+    import io
+
+    departamentos = {}
+    pedido_actual = None
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for pagina in pdf.pages:
+                try:
+                    texto_pagina = pagina.extract_text() or ""
+                except Exception:
+                    texto_pagina = ""
+                try:
+                    tablas = pagina.extract_tables()
+                except Exception as exc_pagina:
+                    log.warning("[LISTADO-DETALLADO] Página ilegible, se omite: %s", exc_pagina)
+                    tablas = []
+
+                headers_vistos_pagina = set()
+                for tabla in tablas:
+                    for fila in tabla:
+                        if not fila or not fila[0]:
+                            continue
+                        primera = fila[0].strip()
+                        # Fila de cabecera de pedido: única celda no vacía.
+                        if all(c is None for c in fila[1:]):
+                            m = _PATRON_CABECERA_PEDIDO_DETALLADO.match(primera)
+                            if m:
+                                pedido_actual = m.group(1)
+                                headers_vistos_pagina.add(pedido_actual)
+                                departamentos.setdefault(pedido_actual, None)
+                            continue
+                        # Fila de artículo: "Artículo", código, descripción,
+                        # unidad, cant.pedida, cant.recibida, cant.pendiente,
+                        # fecha_pedido, fecha_entrega, precio, descuento,
+                        # importe, "CÓDIGO - Departamento" (13ª columna).
+                        if primera == "Artículo" and pedido_actual and len(fila) >= 13:
+                            if departamentos.get(pedido_actual):
+                                continue  # ya se tiene, de la primera línea
+                            dept_raw = (fila[12] or "").strip()
+                            if dept_raw:
+                                departamentos[pedido_actual] = dept_raw.split(" - ")[0].strip()
+
+                # Cabecera huérfana al final de página (ver docstring).
+                lineas = [l for l in texto_pagina.splitlines() if l.strip()]
+                if lineas:
+                    m_final = _PATRON_CABECERA_PEDIDO_DETALLADO.match(lineas[-1].strip())
+                    if m_final and m_final.group(1) not in headers_vistos_pagina:
+                        pedido_actual = m_final.group(1)
+                        departamentos.setdefault(pedido_actual, None)
+    except Exception as exc:
+        log.error("[LISTADO-DETALLADO] Error leyendo el PDF: %s", exc)
+        raise RuntimeError(f"No se pudo leer el PDF: {exc}")
+
+    return departamentos
+
+
+def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: bytes) -> dict:
+    """
+    (2026-09-04, v12.32.16) Lee el Listado de Pedidos DETALLADO de SAP (con
+    _extraer_departamentos_listado_detallado(), pdfplumber) y actualiza SOLO
+    la columna `departamento_sap_codigo` de `sap_pedidos_listado`, para cada
+    pedido que YA tiene una fila guardada allí (de una subida anterior del
+    listado RESUMIDO — ver _guardar_listado_sap_importado()). NUNCA toca
+    ninguna otra columna (importe_base_txt, importe_recibido_txt, etc.) —
+    ver el porqué junto a _PATRON_LISTADO_SIMPLIFICADO, más arriba en el
+    archivo: esos campos deben seguir viniendo siempre del listado resumido,
+    nunca reconstruirse desde el detallado.
+
+    Los pedidos del PDF detallado que todavía no tienen fila en
+    `sap_pedidos_listado` (porque nunca se subió el listado resumido con
+    ese número de pedido) se cuentan aparte en el resultado pero NO se
+    insertan — más sencillo y sin riesgo de dejar filas "huérfanas" con
+    importe en blanco que luego aparezcan como pedidos válidos en
+    "Comparar listado PDF"/"Crear pedidos desde SAP". Su departamento se
+    rellenará solo la próxima vez que se suba este mismo listado detallado
+    (o uno que los incluya), una vez ya exista la fila.
+
+    También se avisa de cualquier código de departamento de SAP que no
+    esté en _SAP_DEPARTAMENTO_MAP — para que un departamento nuevo en SAP
+    no se quede silenciosamente sin aplicar.
+    """
+    departamentos = _extraer_departamentos_listado_detallado(pdf_bytes)
+    if not departamentos:
+        raise RuntimeError(
+            "No se ha reconocido ningún pedido en el PDF — "
+            "¿es el \"Listado de Pedidos\" detallado de SAP, con el formato habitual "
+            "(cabecera de pedido seguida de una línea por artículo, con departamento)?"
+        )
+
+    actualizados = 0
+    sin_departamento_en_pdf = 0
+    no_encontrados_en_listado = 0
+    codigos_no_mapeados = set()
+
+    for num_sap, codigo in departamentos.items():
+        if not codigo:
+            sin_departamento_en_pdf += 1
+            continue
+        if codigo not in _SAP_DEPARTAMENTO_MAP:
+            codigos_no_mapeados.add(codigo)
+        fila = query(
+            "SELECT id FROM sap_pedidos_listado WHERE hotel_id=%s AND pedido_num_sap=%s",
+            (hotel_id, num_sap), one=True
+        )
+        if not fila:
+            no_encontrados_en_listado += 1
+            continue
+        execute(
+            "UPDATE sap_pedidos_listado SET departamento_sap_codigo=%s, actualizado_en=NOW() "
+            "WHERE hotel_id=%s AND pedido_num_sap=%s",
+            (codigo, hotel_id, num_sap)
+        )
+        actualizados += 1
+    if actualizados:
+        get_db().commit()
+
+    return {
+        "ok": True,
+        "total_pdf": len(departamentos),
+        "actualizados": actualizados,
+        "sin_departamento_en_pdf": sin_departamento_en_pdf,
+        "no_encontrados_en_listado": no_encontrados_en_listado,
+        "codigos_sap_no_mapeados": sorted(codigos_no_mapeados),
+    }
+
 
 def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     """Lógica pura de extracción+comparación — separada de la vista Flask
@@ -10379,24 +10771,38 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
          "para los pedidos antiguos que nunca tuvieron el PDF oficial
          individual adjuntado".
     """
+    from pypdf import PdfReader
+    import io
+
     try:
-        from pypdf import PdfReader
-        import io
         reader = PdfReader(io.BytesIO(pdf_bytes))
         texto = ""
         for pagina in reader.pages:
             texto += (pagina.extract_text() or "") + "\n"
     except Exception as exc:
-        log.error("[COMPARAR-PDF] Error leyendo el PDF: %s", exc)
+        log.exception("[COMPARAR-LISTADO-PDF] Error leyendo el PDF: %s", exc)
         raise RuntimeError(f"No se pudo leer el PDF: {exc}")
 
-    encontrados_pdf = _PATRON_LISTADO_SIMPLIFICADO.findall(texto)
-    if not encontrados_pdf:
+    # (2026-09-04, v12.32.16) Se sigue leyendo con pypdf + _PATRON_LISTADO_SIMPLIFICADO
+    # (el listado RESUMIDO de SAP) — NO con pdfplumber/el listado detallado —
+    # porque importe_recibido/importe_pendiente (y por tanto entrega_estado)
+    # tienen que salir de aquí tal cual los reporta SAP, no reconstruirse
+    # sumando líneas de artículo del detallado (verificado que no siempre
+    # cuadra al céntimo — ver el comentario junto a _PATRON_LISTADO_SIMPLIFICADO
+    # más arriba). El listado detallado se usa EXCLUSIVAMENTE para el
+    # departamento, aparte — ver _extraer_departamentos_listado_detallado().
+    encontrados_regex = _PATRON_LISTADO_SIMPLIFICADO.findall(texto)
+    if not encontrados_regex:
         raise RuntimeError(
             "No se ha reconocido ningún pedido en el PDF — "
-            "¿es el \"Listado de Pedidos\" simplificado de SAP, con el formato habitual "
-            "(Nº pedido, fechas, proveedor, importes y estado en una sola línea por pedido)?"
+            "¿es el \"Listado de Pedidos\" (resumido) de SAP, con el formato habitual?"
         )
+    # 11º campo (departamento_sap_codigo) a None: este listado resumido no lo
+    # trae. Se rellena aparte, sin tocar estos campos, subiendo el Listado de
+    # Pedidos detallado (ver _actualizar_departamentos_desde_listado_detallado
+    # más abajo) — _guardar_listado_sap_importado() nunca pisa un
+    # departamento ya guardado con un None de una subida del listado resumido.
+    encontrados_pdf = [fila + (None,) for fila in encontrados_regex]
 
     # (2026-09-04) A petición de Víctor: cada vez que se lee un Listado de
     # Pedidos de SAP —desde esta comparación de un solo PDF o desde
@@ -10473,7 +10879,7 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     vistos = set()
     for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
          fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt,
-         importe_pendiente_txt) in encontrados_pdf:
+         importe_pendiente_txt, _departamento_sap_codigo) in encontrados_pdf:
         if num_sap in vistos:
             continue
         vistos.add(num_sap)
@@ -10629,12 +11035,24 @@ def _parsear_fecha_es_a_iso(fecha_ddmmyyyy):
 # (SAP) —que cubre varios meses— UNA vez, y a partir de ahí ir pasando solo
 # el "Listado de Albaranes" (DALI) para ir cruzando y cerrando información,
 # sin tener que volver a adjuntar el PDF de SAP en cada comparación. Estas
-# tres funciones guardan/leen, por hotel, las mismas 10 columnas que ya
-# extrae `_PATRON_LISTADO_SIMPLIFICADO.findall()` de un PDF recién subido —
-# así `_comparar_listado_pdf_logica()`/`_comparar_listado_albaranes_logica()`
+# tres funciones guardan/leen, por hotel, tuplas de 11 campos — los mismos
+# 10 que siempre extrajo `_PATRON_LISTADO_SIMPLIFICADO.findall()` del
+# listado RESUMIDO de SAP, más un 11º (departamento_sap_codigo).
+#
+# (2026-09-04, v12.32.16) Ese 11º campo NUNCA sale de aquí: quien parsea el
+# listado resumido (_comparar_listado_pdf_logica, _comparar_listado_albaranes_logica)
+# lo pone siempre a None, porque el listado resumido no trae departamento —
+# solo el listado DETALLADO lo trae, y ese se lee aparte, con su propio
+# parser (_extraer_departamentos_listado_detallado()) y su propia función de
+# guardado (_actualizar_departamentos_desde_listado_detallado()), que hace
+# un UPDATE dirigido solo a esta columna. Por eso _guardar_listado_sap_importado()
+# usa COALESCE en el UPSERT: un None de una subida del listado resumido
+# nunca borra un departamento ya guardado por una subida anterior del
+# detallado. Así `_comparar_listado_pdf_logica()`/`_comparar_listado_albaranes_logica()`
 # pueden trabajar exactamente igual reciban un PDF nuevo o reconstruyan las
 # mismas tuplas desde `sap_pedidos_listado`, sin duplicar ninguna lógica de
-# más abajo.
+# más abajo, y sin arriesgar el importe_recibido/pendiente (ver el porqué
+# junto a _PATRON_LISTADO_SIMPLIFICADO, más arriba en el archivo).
 
 def _guardar_listado_sap_importado(hotel_id: int, encontrados: list) -> int:
     """
@@ -10646,19 +11064,26 @@ def _guardar_listado_sap_importado(hotel_id: int, encontrados: list) -> int:
     nº de filas guardadas/actualizadas. No lanza excepción si falla (mismo
     criterio que el resto de escrituras "silenciosas" de esta zona): un
     fallo aquí no debe impedir que la comparación en curso siga adelante.
+
+    (2026-09-04, v12.32.16) `departamento_sap_codigo` (11º campo de cada
+    tupla de `encontrados`) es la única excepción al "se actualiza con el
+    dato más reciente": si llega None (listado resumido, que no trae
+    departamento) se conserva el valor ya guardado en vez de borrarlo — ver
+    el COALESCE en el UPSERT de abajo, y el comentario más arriba.
     """
     if not encontrados:
         return 0
     try:
         for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
              fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt,
-             importe_pendiente_txt) in encontrados:
+             importe_pendiente_txt, departamento_sap_codigo) in encontrados:
             execute(
                 """INSERT INTO sap_pedidos_listado
                        (hotel_id, pedido_num_sap, fecha_hora_fecha, fecha_hora_hora,
                         importe_base_txt, proveedor_raw, fecha_pedido, fecha_entrega,
-                        estado_sap, importe_recibido_txt, importe_pendiente_txt, actualizado_en)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
+                        estado_sap, importe_recibido_txt, importe_pendiente_txt,
+                        departamento_sap_codigo, actualizado_en)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
                    ON CONFLICT (hotel_id, pedido_num_sap) DO UPDATE SET
                        fecha_hora_fecha     = EXCLUDED.fecha_hora_fecha,
                        fecha_hora_hora      = EXCLUDED.fecha_hora_hora,
@@ -10669,10 +11094,11 @@ def _guardar_listado_sap_importado(hotel_id: int, encontrados: list) -> int:
                        estado_sap           = EXCLUDED.estado_sap,
                        importe_recibido_txt = EXCLUDED.importe_recibido_txt,
                        importe_pendiente_txt = EXCLUDED.importe_pendiente_txt,
+                       departamento_sap_codigo = COALESCE(EXCLUDED.departamento_sap_codigo, sap_pedidos_listado.departamento_sap_codigo),
                        actualizado_en       = NOW()""",
                 (hotel_id, num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt,
                  proveedor_raw, fecha_pedido, fecha_entrega, estado_sap,
-                 importe_recibido_txt, importe_pendiente_txt)
+                 importe_recibido_txt, importe_pendiente_txt, departamento_sap_codigo)
             )
         get_db().commit()
         return len(encontrados)
@@ -10683,16 +11109,20 @@ def _guardar_listado_sap_importado(hotel_id: int, encontrados: list) -> int:
 
 def _cargar_listado_sap_guardado(hotel_id: int) -> list:
     """
-    Reconstruye la misma lista de tuplas de 10 campos que devolvería
-    `_PATRON_LISTADO_SIMPLIFICADO.findall()` sobre un PDF recién subido,
-    pero a partir de lo que ya se guardó para este hotel en una subida
-    anterior (ver _guardar_listado_sap_importado). Lista vacía si nunca se
-    guardó nada para este hotel.
+    Reconstruye la misma lista de tuplas de 11 campos que produce
+    `_comparar_listado_pdf_logica()` al leer un PDF recién subido (10 campos
+    del listado resumido de SAP + departamento_sap_codigo, que puede venir
+    de una subida posterior del listado detallado — ver
+    _actualizar_departamentos_desde_listado_detallado), pero a partir de lo
+    que ya se guardó para este hotel en una subida anterior (ver
+    _guardar_listado_sap_importado). Lista vacía si nunca se guardó nada
+    para este hotel.
     """
     filas = rows_to_list(query(
         """SELECT pedido_num_sap, fecha_hora_fecha, fecha_hora_hora,
                   importe_base_txt, proveedor_raw, fecha_pedido, fecha_entrega,
-                  estado_sap, importe_recibido_txt, importe_pendiente_txt
+                  estado_sap, importe_recibido_txt, importe_pendiente_txt,
+                  departamento_sap_codigo
            FROM sap_pedidos_listado
            WHERE hotel_id=%s
            ORDER BY pedido_num_sap""",
@@ -10701,7 +11131,8 @@ def _cargar_listado_sap_guardado(hotel_id: int) -> list:
     return [
         (f["pedido_num_sap"], f["fecha_hora_fecha"], f["fecha_hora_hora"],
          f["importe_base_txt"], f["proveedor_raw"], f["fecha_pedido"], f["fecha_entrega"],
-         f["estado_sap"], f["importe_recibido_txt"], f["importe_pendiente_txt"])
+         f["estado_sap"], f["importe_recibido_txt"], f["importe_pendiente_txt"],
+         f["departamento_sap_codigo"])
         for f in filas
     ]
 
@@ -10773,11 +11204,19 @@ def _pedidos_sap_no_registrados(hotel_id: int) -> list:
     ))
     nums_app = {_normalizar_pedido_num(p["pedido_num"]) for p in pedidos_app}
 
+    # (2026-09-04, v12.32.16) Departamentos, para resolver el código SAP de
+    # cada pedido a un departamento de la app — ver _SAP_DEPARTAMENTO_MAP.
+    # Esto es lo que después usa crear_pedidos_desde_sap() para rellenar
+    # solo el departamento del pedido al darlo de alta automáticamente, a
+    # petición de Víctor.
+    deptos_cat = rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1"))
+    deptos_id_por_nombre = {d["nombre"]: d["id"] for d in deptos_cat}
+
     resultado = []
     vistos = set()
     for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
          fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt,
-         importe_pendiente_txt) in encontrados:
+         importe_pendiente_txt, departamento_sap_codigo) in encontrados:
         if num_sap in vistos:
             continue
         vistos.add(num_sap)
@@ -10792,6 +11231,8 @@ def _pedidos_sap_no_registrados(hotel_id: int) -> list:
         importe_base      = _parse_importe_es(importe_base_txt)
         importe_recibido  = _parse_importe_es(importe_recibido_txt)
         importe_pendiente = _parse_importe_es(importe_pendiente_txt)
+        departamento_nombre = _SAP_DEPARTAMENTO_MAP.get(departamento_sap_codigo)
+        departamento_id = deptos_id_por_nombre.get(departamento_nombre) if departamento_nombre else None
 
         resultado.append({
             "pedido_num_sap":         num_sap,
@@ -10805,6 +11246,8 @@ def _pedidos_sap_no_registrados(hotel_id: int) -> list:
             "importe_pendiente":      importe_pendiente,
             "estado_sap":             estado_sap,
             "entrega_estado":         _entrega_estado(importe_base, importe_recibido),
+            "departamento_id":        departamento_id,
+            "departamento_nombre":    departamento_nombre,
         })
     return resultado
 
@@ -10924,13 +11367,22 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes, pdf2_bytes: by
     # Listado de Pedidos usado en esta comparación.
     listado_sap_info = None
     if pdf1_bytes:
+        # (2026-09-04, v12.32.16) Sigue leyéndose con _leer_texto()/pypdf +
+        # _PATRON_LISTADO_SIMPLIFICADO — el listado RESUMIDO, no el
+        # detallado — por el mismo motivo que _comparar_listado_pdf_logica()
+        # más arriba: importe_recibido/pendiente tienen que salir tal cual
+        # los reporta SAP, no reconstruirse desde el detallado. El 11º campo
+        # (departamento_sap_codigo) se pone a None: este listado no lo trae
+        # (ver _guardar_listado_sap_importado, que nunca deja que ese None
+        # borre un departamento ya guardado desde el listado detallado).
         texto1 = _leer_texto(pdf1_bytes, "pedidos")
-        encontrados_pdf1 = _PATRON_LISTADO_SIMPLIFICADO.findall(texto1)
-        if not encontrados_pdf1:
+        encontrados_regex1 = _PATRON_LISTADO_SIMPLIFICADO.findall(texto1)
+        if not encontrados_regex1:
             raise RuntimeError(
                 "No se ha reconocido ningún pedido en el primer PDF — "
-                "¿es el \"Listado de Pedidos\" simplificado de SAP?"
+                "¿es el \"Listado de Pedidos\" (resumido) de SAP?"
             )
+        encontrados_pdf1 = [fila + (None,) for fila in encontrados_regex1]
         # Se guarda aquí mismo (no se deja solo en manos de la llamada a
         # _comparar_listado_pdf_logica() de auditoria_pdf1, más abajo) para
         # que quede persistido incluso si esa auditoría fallara por
@@ -10989,7 +11441,12 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes, pdf2_bytes: by
     vistos1 = set()
     for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
          fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt,
-         importe_pendiente_txt) in encontrados_pdf1:
+         importe_pendiente_txt, _departamento_sap_codigo) in encontrados_pdf1:
+        # (2026-09-04, v12.32.16) El departamento de este listado no se usa
+        # aquí — este cruce ya tiene su propio departamento, más fiable,
+        # sacado directamente del Listado de Albaranes (_match_departamento_prefijo,
+        # más abajo). Se desempaqueta igualmente para mantener la misma
+        # forma de tupla de 11 campos que el resto de funciones de esta zona.
         if num_sap in vistos1:
             continue
         vistos1.add(num_sap)
@@ -11646,6 +12103,15 @@ def crear_pedidos_desde_sap():
     para no duplicar un pedido_num si alguien lo dio de alta a mano
     mientras tanto (ver _pedidos_sap_no_registrados()).
 
+    DEPARTAMENTO (v12.32.16) — a petición de Víctor, ahora que el Listado
+    de Pedidos detallado de SAP trae el departamento solicitante por línea
+    de artículo: `departamento_id` ya no se deja siempre vacío, se rellena
+    con el departamento resuelto por _pedidos_sap_no_registrados() (código
+    SAP → departamento de la app, ver _SAP_DEPARTAMENTO_MAP). Si el
+    departamento de SAP no tiene correspondencia conocida en el catálogo,
+    o el listado guardado todavía no lo trae, se deja vacío igual que
+    antes — nunca se inventa uno.
+
     POST /api/pedidos/crear-desde-sap
     body JSON: {"hotel_id": int, "pedidos_num_sap": ["12345", ...]}
     → {"ok": true, "creados": [...], "omitidos": [...], "errores": [...]}
@@ -11728,7 +12194,7 @@ def crear_pedidos_desde_sap():
                 ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (
-                norden, hotel_id, None,
+                norden, hotel_id, fila.get("departamento_id"),
                 None, None, fecha_tramitacion,
                 fila["pedido_num_sap"], None, None,
                 False,

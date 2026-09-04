@@ -323,7 +323,8 @@ SQL_STATEMENTS = [
     INSERT INTO departamentos (nombre) VALUES
         ('PISOS'), ('RESTAURANTE'), ('RESTAURANTE & BARES'), ('BARES'),
         ('COCINA'), ('SSTT'), ('ECONOMATO'), ('RECEPCION'),
-        ('ANIMACION'), ('ADMINISTRACION'), ('DIRECCION'), ('RRHH')
+        ('ANIMACION'), ('ADMINISTRACION'), ('DIRECCION'), ('RRHH'),
+        ('LAVANDERIA / LENCERIA'), ('UNIFORMES PERSONAL')
     ON CONFLICT DO NOTHING
     """,
     """

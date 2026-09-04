@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.15
+          V 12.32.16
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1575,6 +1575,7 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
           <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
           <button class="btn btn-sm" id="btn-comparar-listado-pdf" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCompararListado()">📄 Comparar listado PDF</button>
+          <button class="btn btn-sm" id="btn-actualizar-departamentos" style="background:#6f42c1;color:#fff;border:none" onclick="abrirModalActualizarDepartamentos()">🏷️ Departamentos (SAP detallado)</button>
         </div>
         <div class="search-chips" id="pedidos-chips">
           <span class="search-chips-label">Busca por:</span>
@@ -2914,6 +2915,64 @@ tbody tr:last-child{border-bottom:none}
   </div>
 </div>
 
+<!--
+   MODAL ACTUALIZAR DEPARTAMENTOS (Listado de Pedidos DETALLADO de SAP) — v12.32.16
+   (2026-09-04) A petición de Víctor: el listado RESUMIDO de SAP (arriba,
+   "Comparar listado PDF") no trae el departamento solicitante de cada
+   pedido, pero el listado DETALLADO sí (una línea por artículo, con el
+   departamento en la última columna). Este flujo es independiente de
+   "Comparar listado PDF": no compara nada contra los pedidos de la app, ni
+   toca importe/estado — solo enriquece con el departamento los pedidos que
+   ya estén guardados en sap_pedidos_listado (de una subida anterior del
+   listado resumido). Recomendado subir el listado detallado en tramos
+   quincenales (Víctor), no el PDF completo de varios meses, para que
+   pdfplumber no tarde varios minutos.
+-->
+<div class="modal-overlay" id="modal-actualizar-departamentos">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header">
+      <div class="modal-title">🏷️ Actualizar departamentos (Listado detallado SAP)</div>
+      <button class="close-btn" onclick="closeModal('modal-actualizar-departamentos')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="dep-list-form">
+        <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
+          Sube el "Listado de Pedidos" <strong>detallado</strong> que exporta SAP para un hotel
+          (una línea por artículo dentro de cada pedido, con el departamento solicitante en la
+          última columna). Se actualiza el departamento SOLO de los pedidos que ya estén
+          guardados aquí de una subida anterior del listado <strong>resumido</strong>
+          ("Comparar listado PDF") — nunca se toca el importe ni el estado de entrega, que siguen
+          saliendo siempre del listado resumido. Recomendado: sube tramos quincenales en vez del
+          PDF completo de varios meses, para que la lectura no tarde varios minutos.
+        </div>
+        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;align-items:end">
+          <div class="form-group">
+            <label class="form-label">Hotel <span style="color:#e74c3c">*</span></label>
+            <select class="form-control" id="dep-list-hotel"><option value="">— Selecciona —</option></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Listado de Pedidos detallado (SAP) <span style="color:#e74c3c">*</span></label>
+            <input class="form-control" type="file" id="dep-list-file" accept="application/pdf">
+          </div>
+        </div>
+        <div style="margin-top:16px;text-align:right">
+          <button class="btn btn-gold" id="btn-dep-list-actualizar" onclick="actualizarDepartamentosListado()">Actualizar departamentos</button>
+        </div>
+      </div>
+
+      <div id="dep-list-loading" class="loading" style="display:none">Leyendo el listado detallado…</div>
+
+      <div id="dep-list-resultado" style="display:none;margin-top:10px">
+        <div id="dep-list-resumen" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+        <div id="dep-list-avisos" style="margin-top:10px;font-size:.82rem;color:var(--text-secondary)"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-actualizar-departamentos')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL IMPORTAR PROVEEDORES ─────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-import-prov">
   <div class="modal" style="max-width:480px">
@@ -3256,6 +3315,9 @@ async function _entrarEnApp(r) {
   // (2026-08-10) Comparar listado PDF: solo admin (igual que el backend)
   const btnCompararPdf = document.getElementById('btn-comparar-listado-pdf');
   if (btnCompararPdf) btnCompararPdf.style.display = G.rol === 'admin' ? '' : 'none';
+  // (2026-09-04) Actualizar departamentos (listado detallado): solo admin, mismo criterio
+  const btnActualizarDeptos = document.getElementById('btn-actualizar-departamentos');
+  if (btnActualizarDeptos) btnActualizarDeptos.style.display = G.rol === 'admin' ? '' : 'none';
   await loadMaestros();
   // ── Detección de versión nueva al iniciar sesión ────────────────────────
   // FLUJO A (nueva sesión / login):
@@ -7042,6 +7104,116 @@ async function _pollCompararListadoPdf(jobId, intentos) {
   _cargarPedidosPendientesCrearSap();
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Actualizar departamentos (Listado de Pedidos DETALLADO de SAP) — v12.32.16
+   Flujo independiente de "Comparar listado PDF": solo rellena el
+   departamento de pedidos ya guardados en sap_pedidos_listado, sin tocar
+   importe/estado (ver _actualizar_departamentos_desde_listado_detallado en
+   app.py, y el porqué de mantenerlos separados).
+═══════════════════════════════════════════════════════════════════════ */
+function abrirModalActualizarDepartamentos() {
+  const sel = document.getElementById('dep-list-hotel');
+  sel.innerHTML = '<option value="">— Selecciona —</option>';
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  document.getElementById('dep-list-form').style.display = '';
+  document.getElementById('dep-list-loading').style.display = 'none';
+  document.getElementById('dep-list-resultado').style.display = 'none';
+  document.getElementById('dep-list-file').value = '';
+  openModal('modal-actualizar-departamentos');
+}
+
+async function actualizarDepartamentosListado() {
+  const hotelId = val('dep-list-hotel');
+  const file = document.getElementById('dep-list-file').files[0];
+  if (!hotelId) { toast('Selecciona un hotel', 'error'); return; }
+  if (!file) { toast('Selecciona el listado de pedidos detallado (SAP)', 'error'); return; }
+
+  document.getElementById('dep-list-form').style.display = 'none';
+  document.getElementById('dep-list-loading').style.display = '';
+  document.getElementById('dep-list-resultado').style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('hotel_id', hotelId);
+  fd.append('file', file);
+
+  // Mismo patrón de job en segundo plano que "Comparar listado PDF" — un
+  // listado detallado, incluso quincenal, puede tardar 30-60s con
+  // pdfplumber, más que el timeout de algún punto intermedio si fuera
+  // síncrono.
+  let jobId;
+  try {
+    const r = await fetch('/api/pedidos/actualizar-departamentos-listado', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error actualizando los departamentos', 'error');
+      document.getElementById('dep-list-form').style.display = '';
+      document.getElementById('dep-list-loading').style.display = 'none';
+      return;
+    }
+    jobId = d.job_id;
+  } catch (e) {
+    toast('Error actualizando los departamentos: ' + e.message, 'error');
+    document.getElementById('dep-list-form').style.display = '';
+    document.getElementById('dep-list-loading').style.display = 'none';
+    return;
+  }
+  _pollActualizarDepartamentos(jobId, 0);
+}
+
+async function _pollActualizarDepartamentos(jobId, intentos) {
+  if (intentos > 150) {
+    toast('La actualización está tardando demasiado — inténtalo de nuevo en unos minutos', 'error');
+    document.getElementById('dep-list-form').style.display = '';
+    document.getElementById('dep-list-loading').style.display = 'none';
+    return;
+  }
+  let d;
+  try {
+    const r = await fetch(`/api/pedidos/actualizar-departamentos-listado/${jobId}`, { credentials: 'same-origin' });
+    d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error actualizando los departamentos', 'error');
+      document.getElementById('dep-list-form').style.display = '';
+      document.getElementById('dep-list-loading').style.display = 'none';
+      return;
+    }
+  } catch (e) {
+    setTimeout(() => _pollActualizarDepartamentos(jobId, intentos + 1), 2000);
+    return;
+  }
+
+  if (d.status === 'processing') {
+    setTimeout(() => _pollActualizarDepartamentos(jobId, intentos + 1), 2000);
+    return;
+  }
+  if (d.status === 'error') {
+    toast(d.error || 'Error actualizando los departamentos', 'error');
+    document.getElementById('dep-list-form').style.display = '';
+    document.getElementById('dep-list-loading').style.display = 'none';
+    return;
+  }
+  // status === 'done'
+  const res = d.resultado || {};
+  document.getElementById('dep-list-loading').style.display = 'none';
+  document.getElementById('dep-list-resultado').style.display = '';
+  const pill = (txt, bg, color) => `<span style="background:${bg};color:${color};font-weight:700;
+    padding:4px 10px;border-radius:6px;font-size:.82rem">${txt}</span>`;
+  document.getElementById('dep-list-resumen').innerHTML = `
+    ${pill(`${res.total_pdf ?? 0} pedido(s) en el PDF`, '#eef1f7', '#1a3a6b')}
+    ${pill(`${res.actualizados ?? 0} departamento(s) actualizado(s)`, '#d4edda', '#155724')}
+    ${(res.no_encontrados_en_listado || 0) > 0 ? pill(`${res.no_encontrados_en_listado} sin listado resumido todavía`, '#fff3cd', '#856404') : ''}
+    ${(res.sin_departamento_en_pdf || 0) > 0 ? pill(`${res.sin_departamento_en_pdf} sin departamento en el PDF`, '#f8f9fa', '#666') : ''}
+  `;
+  let avisos = '';
+  if ((res.no_encontrados_en_listado || 0) > 0) {
+    avisos += `<p>${res.no_encontrados_en_listado} pedido(s) del PDF detallado todavía no tienen fila guardada — sube (o vuelve a subir) el listado <strong>resumido</strong> con "Comparar listado PDF" para esos pedidos, y luego repite esta actualización.</p>`;
+  }
+  if (res.codigos_sap_no_mapeados && res.codigos_sap_no_mapeados.length) {
+    avisos += `<p>⚠️ Código(s) de departamento de SAP sin mapear a un departamento de la app: <strong>${res.codigos_sap_no_mapeados.join(', ')}</strong> — avisa para añadirlos.</p>`;
+  }
+  document.getElementById('dep-list-avisos').innerHTML = avisos;
+}
+
 function _renderCompararPdfResultado() {
   const d = _cmpPdfResultado;
   if (!d) return;
@@ -7983,6 +8155,8 @@ function calcDias(s) {
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
     const btnCompararPdf2 = document.getElementById('btn-comparar-listado-pdf');
     if (btnCompararPdf2) btnCompararPdf2.style.display = G.rol === 'admin' ? '' : 'none';
+    const btnActualizarDeptos2 = document.getElementById('btn-actualizar-departamentos');
+    if (btnActualizarDeptos2) btnActualizarDeptos2.style.display = G.rol === 'admin' ? '' : 'none';
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     _checkIntegridadBadge();  // badge silencioso en sidebar para admin
