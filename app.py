@@ -248,10 +248,36 @@ def _auto_migrate():
             # con la anon key), así que activar RLS sin ninguna política es
             # 100% seguro para el funcionamiento — simplemente cierra el
             # acceso público accidental por ese otro camino.
-            for _tabla_rls in ("egress_tracking", "db_size_tracking", "db_vacuum_log", "agente_heartbeat",
-                                "expediente_exceso", "proveedor_contacto_hoteles", "bridge_popup_visto"):
+            #
+            # (2026-09-04, v12.32.25) Hasta aquí, esta lista era una tupla de
+            # nombres a mano — mantenimiento manual, así que cada tabla
+            # nueva que se creaba en _auto_migrate() o en models.py se
+            # quedaba fuera hasta que alguien se acordara de añadirla (así
+            # se quedaron fuera, entre otras, sap_pedidos_listado,
+            # sap_pedidos_lineas y sap_albaranes_lineas — reportadas por
+            # Víctor con el aviso real del Security Advisor). Al revisar el
+            # alcance real del problema se encontraron 21 tablas más creadas
+            # en app.py y las tablas originales del esquema (`pedidos`,
+            # `usuarios`, `proveedores`, `hoteles`... de models.py) en la
+            # misma situación — nunca han tenido RLS activado. Se sustituye
+            # la lista fija por una consulta que activa RLS en TODA tabla
+            # del esquema public que todavía no lo tenga, sin necesidad de
+            # nombrarlas una a una ni de acordarse de añadir las que se
+            # creen en el futuro.
+            try:
+                cur.execute("""
+                    SELECT c.relname
+                    FROM pg_class c
+                    JOIN pg_namespace n ON n.oid = c.relnamespace
+                    WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relrowsecurity
+                """)
+                _tablas_sin_rls = [fila[0] for fila in cur.fetchall()]
+            except Exception as e:
+                log.warning(f"No se pudo listar las tablas sin RLS: {e}")
+                _tablas_sin_rls = []
+            for _tabla_rls in _tablas_sin_rls:
                 try:
-                    cur.execute(f"ALTER TABLE IF EXISTS {_tabla_rls} ENABLE ROW LEVEL SECURITY")
+                    cur.execute(f'ALTER TABLE IF EXISTS "{_tabla_rls}" ENABLE ROW LEVEL SECURITY')
                 except Exception as e:
                     log.warning(f"No se pudo activar RLS en {_tabla_rls}: {e}")
 

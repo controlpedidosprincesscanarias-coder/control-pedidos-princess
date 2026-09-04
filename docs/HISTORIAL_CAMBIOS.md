@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] Seguridad: RLS activado en TODAS las tablas del esquema public sin él — no solo las 3 del Security Advisor, otras ~37 más en la misma situación desde su creación (v12.32.25)
+
+- **Aviso de Víctor**: 3 filas del linter de seguridad de Supabase ("RLS Disabled in Public", ERROR) para `sap_pedidos_lineas`, `sap_pedidos_listado` y `sap_albaranes_lineas`.
+- **Alcance real**: `_auto_migrate()` ya activaba RLS en un puñado de tablas desde agosto (lista fija, mismo razonamiento: la app nunca usa PostgREST, solo conexión directa con `DATABASE_URL`, así que activar RLS sin política es seguro y cierra un acceso público innecesario) — pero esa lista se mantenía a mano y cada tabla nueva se quedaba fuera hasta acordarse de añadirla. Revisado el alcance completo: 21 tablas más creadas en `app.py` y las tablas ORIGINALES del esquema (`pedidos`, `usuarios`, `proveedores`, `hoteles`, `historial_estados`, `departamentos`, `pedidos_eliminados`, `emails_log`...) llevan en la misma situación desde el origen del proyecto. El Security Advisor probablemente marca bastantes más errores de los 3 pegados aquí.
+- **Cambio en `app.py`**: la lista fija de `_auto_migrate()` se sustituye por una consulta a `pg_class`/`pg_namespace` que detecta dinámicamente TODA tabla `public` sin RLS y le activa `ENABLE ROW LEVEL SECURITY` una a una — sin nombrarlas, y sin volver a necesitar acordarse de las que se creen en el futuro. Mismo sitio (al principio de `_auto_migrate()`) y mismo criterio de seguridad de siempre.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Probado de extremo a extremo contra un PostgreSQL 16 real aislado (no producción): la consulta detecta bien las tablas sin RLS, el `ALTER TABLE` es idempotente, con RLS activado y sin política un rol sin privilegios de propietario deja de ver filas (aunque tenga `SELECT` concedido) — simulando el rol `anon` de PostgREST —, y el propietario de la tabla (equivalente a como se conecta esta app) sigue viendo y modificando todo con normalidad. No probado contra producción — a confirmar tras desplegar: volver a correr el Security Advisor de Supabase y comprobar que el aviso desaparece para todas las tablas.
+- **Sigue pendiente**: confirmar en el Security Advisor que no queda ninguna tabla marcada; valorar en el futuro políticas de RLS reales para algún caso concreto (no hace falta hoy, nada usa PostgREST).
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html` (solo versión), `README.md`, más este historial/`CHANGELOG.md`. `GUIA_DESPLIEGUE.md`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] Reincorporado el rechazo de listados de SAP demasiado grandes para el plan Free de Render — se había quedado fuera del historial oficial por un cruce de numeración (v12.32.24)
 
 - **Aviso de numeración**: este cambio llegó primero como una entrega aparte con el número provisional "v12.32.22", justo cuando en paralelo otra sesión hacía la auditoría de documentación que acabó ocupando ese mismo número en el historial oficial (ver v12.32.22 más abajo). Al retomar el trabajo sobre el zip más reciente (v12.32.23), este cambio de memoria no estaba en el `app.py` — se reincorpora aquí sin ninguna modificación de contenido, solo con el número correcto de la serie (v12.32.24), para que no quede ninguna versión "fantasma" fuera de este historial.
