@@ -1,3 +1,29 @@
+# v12.32.22 — 4 septiembre 2026
+
+📋 Auditoría completa a petición de Víctor: cerrado el `Decimal/float` fantasma de `PENDIENTES.md` (confirmado por log de Render que no es una recurrencia real) + README puesto al día con todo lo añadido desde v12.32.05 + 2 correcciones cosméticas
+
+**Petición de Víctor**: auditar el zip desplegado (v12.32.21) — verificar que todo está en su sitio, que no falta ningún archivo, y que la documentación está correctamente actualizada.
+
+**Resultado de la auditoría** — estructura y código: los 21 archivos completos (nada falta ni sobra frente al repo base), `app.py` compila sin errores, `templates/index.html` con balance correcto de `<div>` (958/958) y de `<script>` reales (9/9), versión consistente en badge/README/CHANGELOG, y verificados EN CÓDIGO (no solo en el CHANGELOG) los fixes de v12.32.06/15/19-21 (`KeyError: 0`, `NameError`, los tres `flush_cache()`). Se encontraron 4 puntos de documentación a corregir, los 4 resueltos en esta entrega:
+
+**1) `PENDIENTES.md` — entrada obsoleta desde v12.32.06, cerrada.** La entrada sobre un supuesto "nuevo" `TypeError: Decimal - float` en `[COMPARAR-ALBARANES]` (18:20:58/18:20:59, coincidencias `13093_336_35`/`13208_2041_41`) usaba EXACTAMENTE los mismos timestamps y códigos de coincidencia que el incidente original de los pedidos 40907/40908 de GY, ya corregido en v12.32.02/03 — no una recurrencia nueva, sino el mismo log histórico pegado de nuevo por error en algún momento. Confirmado con Víctor revisando el log de Render (Logs → buscar `COMPARAR-ALBARANES`, últimos 7 días): únicamente aparecen esas dos líneas del 3 de septiembre, ninguna posterior al despliegue del fix. Se retira la entrada de `PENDIENTES.md`.
+
+**2) `README.md` — puesto al día con todo lo añadido desde v12.32.05, nunca reflejado ahí.** Cada entrega desde entonces solo actualizaba la línea de versión, sin el bullet descriptivo correspondiente (a diferencia de la disciplina seguida hasta v12.30.99). Añadido: bullet de "Comparar Pedidos + Albaranes (SAP)" completo (creación automática de pedidos desde SAP v12.32.11/12/13, botón "Departamentos (SAP detallado)" v12.32.19, Sugerencias de Albarán confirmadas v12.32.20); nota de "un único documento" en Presupuesto dentro del bullet de Pedidos (v12.32.08); y nota de "Telegram bloqueado o inservible" dentro del bullet de Integridad (v12.32.05).
+
+**3) `README.md` — corregida contradicción interna.** El bullet de "EmailJS y cola de correo" empezaba diciendo "las 3 cuentas EmailJS" pero el mismo párrafo explicaba más abajo que son 4 desde v12.30.93 (el código, correctamente, ya usa 4). Corregido a "4 cuentas" en la frase de apertura.
+
+**4) `requirements.txt` — corregido comentario con nombre de función obsoleto.** Referenciaba `_parsear_listado_pedidos_detallado()`, que no existe con ese nombre; la función real es `_extraer_listado_detallado_completo()`.
+
+**Nota aparte, no corregida en esta entrega** (alcance mayor, requiere confirmación de Víctor antes de acometerla): "Comparar Pedidos + Albaranes (SAP)" es una funcionalidad mucho más antigua (desde v12.30.x) que tampoco tenía bullet propio en el README hasta ahora — se documentó de forma resumida en el punto 2 de arriba, centrada en lo añadido recientemente, pero un repaso completo de toda esa familia de funciones (incluyendo el flujo básico de comparación, anterior a septiembre) queda pendiente de valorar si merece más detalle.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores (sin cambios en este archivo, se re-verifica por rutina). Sin cambios en `templates/index.html` más allá del badge de versión, ni en `models.py`.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, ninguno documenta estas funciones ni requiere cambios de despliegue.
+
+**Entrega**: `README.md`, `PENDIENTES.md`, `requirements.txt`, `templates/index.html` (solo versión), más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `app.py` y `models.py` no cambian.
+
+---
+
 # v12.32.21 — 4 septiembre 2026
 
 Corrección de memoria: "Actualizar departamentos y líneas" podía tirar el servidor entero (y con él, el job en curso) al subir un listado detallado de varios meses

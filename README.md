@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.21** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.22** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -72,12 +72,32 @@ confundirse entre sí, ver más abajo):
 
 **Principal** (todos los roles)
 - **Pedidos** — alta, edición, cambio de estado y seguimiento de pedidos
-  por hotel y proveedor.
+  por hotel y proveedor. El apartado "Presupuesto" admite un único
+  documento de apoyo (PDF, Word o correo) — desde v12.32.08, intentar
+  adjuntar un segundo muestra un aviso flotante explicando que hay que
+  quitar el actual primero.
 - **Alertas** — avisos de plazos de entrega vencidos o próximos a vencer.
 
 **Gestión** (admin + compras, y Proveedores también hotel)
 - **Proveedores** — ficha de proveedores, contactos múltiples por
   proveedor, asignación a hoteles.
+- **Comparar Pedidos + Albaranes (SAP)** — cruce entre los pedidos de
+  la app y los listados PDF de SAP (Listado de Pedidos y, opcionalmente,
+  Listado de Albaranes) para detectar altas y cambios de estado
+  pendientes. Los pedidos que SAP ya tiene y la app todavía no se
+  pueden seleccionar y crear automáticamente con un clic (v12.32.11) —
+  con el estado inicial real de SAP (Enviado al proveedor / Entrega
+  parcial / Entregado, según corresponda, en vez de asumir siempre
+  "Enviado al proveedor") y trazabilidad marcada como automática, no
+  con el nombre del admin; solo se ofrece al procesar el Listado de
+  Pedidos, nunca al comparar solo Albaranes (v12.32.12/13). El botón
+  "🏷️ Departamentos (SAP detallado)" (v12.32.19), a partir de un
+  segundo listado SAP más detallado, rellena automáticamente el
+  departamento solicitante de los pedidos ya dados de alta. Las
+  "Sugerencias de Albarán" distinguen desde v12.32.20 un nivel
+  "confirmado" (a partir de un PDF de confirmación de un albarán suelto,
+  o del número de albarán ya anotado a mano en el pedido) de las
+  sugerencias por proveedor + artículo.
 - **Pedidos eliminados** — papelera / auditoría de pedidos borrados.
 - **Techo de gastos** — resumen mensual de consumo de techo por hotel
   (semáforo verde/amarillo/rojo/azul), desglose por familia de
@@ -170,10 +190,15 @@ confundirse entre sí, ver más abajo):
   hoteles.
 
 **Sistema · Admin**
-- **Integridad** — comprobaciones de consistencia de datos.
+- **Integridad** — comprobaciones de consistencia de datos. Incluye,
+  desde v12.32.05, "Telegram bloqueado o inservible": se marca sola
+  cuando Telegram deja de poder entregar avisos a un usuario (bot
+  bloqueado, cuenta desactivada, chat borrado) y desaparece sola en
+  cuanto vuelve a recibir uno con éxito — no requiere que un admin la
+  resuelva a mano, solo que el usuario desbloquee el bot por su lado.
 - **EmailJS y cola de correo** (movida aquí el 2026-08-29 desde
   "Parámetros de alertas", donde estaba mezclada con umbrales de alerta
-  sin relación con esto) — credenciales y rotación automática de las 3
+  sin relación con esto) — credenciales y rotación automática de las 4
   cuentas EmailJS, cupo consumido, y la cola de correos de sistema
   pendientes de enviar (con la opción de descartar/reactivar a mano una
   fila atascada). Mismo endpoint de siempre (`/api/admin/config-alertas`),

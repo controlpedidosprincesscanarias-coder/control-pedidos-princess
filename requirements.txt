@@ -20,7 +20,7 @@ requests==2.34.2
 pypdf==6.16.2
 # (2026-09-04, v12.32.16) pdfplumber: para leer el Listado de Pedidos
 # DETALLADO de SAP como tabla real (pypdf desordena las columnas en este
-# formato — ver comentario junto a _parsear_listado_pedidos_detallado() en
+# formato — ver comentario junto a _extraer_listado_detallado_completo() en
 # app.py). Versiones fijadas contra lo instalado en este entorno de
 # desarrollo, NO contra un log de build de Render real — a diferencia del
 # resto de este archivo, esto SÍ hay que volver a fijar con el log de
