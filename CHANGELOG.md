@@ -1,3 +1,27 @@
+# v12.32.18 — 4 septiembre 2026
+
+Primer paso de "trazabilidad casi perfecta": se guarda ya el contenido línea a línea de cada pedido del Listado de Pedidos DETALLADO, en la misma subida que rellena el departamento
+
+**Petición de Víctor**, tras desplegar v12.32.17 y antes de lanzarse con la actualización histórica desde el 01-01-2026: preguntó si, ya que su idea de guardar el contenido línea a línea de cada pedido (para cruzarlo más adelante con los Albaranes a nivel de referencia — pospuesta como proyecto aparte, ver v12.32.16) usa el MISMO listado detallado que acaba de subir para el departamento, no sería mejor construir primero ese guardado y hacer el histórico en un único pase, en vez de subir los mismos PDF dos veces (una ahora solo por departamento, otra más adelante para las líneas). Se le confirmó que es viable — pero acotado: solo la parte del listado DETALLADO se beneficia de ir junta (departamento + líneas comparten PDF); la parte del listado RESUMIDO (crear pedidos que faltan, importe/estado) no depende de esto y puede empezar ya, en paralelo. Preguntado el alcance de esta primera entrega (solo guardar los datos / guardar + pantalla para verlas / ir directo al proyecto completo de cruce con Albaranes), Víctor eligió la opción recomendada: solo guardar los datos por ahora, sin ninguna pantalla ni comparación todavía — eso se diseña más adelante, cuando se retome el proyecto de Albaranes.
+
+**Cambio en `app.py`**:
+- Nueva tabla `sap_pedidos_lineas` (`hotel_id`, `pedido_num_sap`, `codigo_articulo`, `descripcion`, `unidad`, `cantidad_pedida_txt`, `cantidad_recibida_txt`, `cantidad_pendiente_txt`, `fecha_pedido`, `fecha_entrega`, `precio_txt`, `descuento_pct_txt`, `importe_linea_txt`, `departamento_sap_codigo`) — sin `UNIQUE` en `(hotel_id, pedido_num_sap, codigo_articulo)`: verificado contra datos reales que un mismo artículo puede aparecer en más de una línea del mismo pedido (p. ej. una entrega partida en dos líneas — 16 de 485 pedidos de la muestra de prueba). Cada subida del listado detallado BORRA e inserta de nuevo todas las líneas de cada pedido que aparezca en el PDF, así que una repetición o corrección del mismo listado nunca deja líneas duplicadas ni obsoletas.
+- `_extraer_departamentos_listado_detallado()` (v12.32.16) se sustituye por `_extraer_listado_detallado_completo()`, que hace la MISMA pasada única por el PDF (con el mismo arreglo de "cabecera huérfana" de v12.32.16) pero devuelve además las 11 columnas completas de cada línea de artículo, no solo el departamento — evita tener que leer el PDF dos veces (una por departamento, otra por líneas), lo que habría doblado el tiempo de lectura de un listado ya de por sí lento (pdfplumber, 30-60s por quincena).
+- `_actualizar_departamentos_desde_listado_detallado()` gana un tercer paso: para cada pedido del PDF, guarda sus líneas en `sap_pedidos_lineas` — a diferencia del departamento (que exige que el pedido ya tenga fila en `sap_pedidos_listado`, del listado resumido), las líneas se guardan para CUALQUIER pedido del PDF detallado, sin esa dependencia. El resumen de cada subida informa ahora también cuántas líneas y de cuántos pedidos se guardaron.
+- Endpoint `POST /api/pedidos/actualizar-departamentos-listado` sin cambios de firma — mismo job en segundo plano, ahora hace también el guardado de líneas.
+
+**Cambio en `templates/index.html`**: el botón y el modal pasan a llamarse "Departamentos y líneas (SAP detallado)"; el texto del modal explica las dos cosas que hace la subida; el resumen del resultado añade un indicador de líneas guardadas.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; `node --check` sobre los bloques `<script>` de `templates/index.html` sin errores. Probada la extracción real (fuera de la app) contra los dos listados quincenales de mayo de Víctor: 485 pedidos, 4.234 líneas en total, ninguna línea sin código de artículo, 0 pedidos sin departamento resuelto; el pedido 39177 vuelve a salir con sus dos líneas (247,50 € + 6,40 €) sumando exactamente 253,90 €, el mismo valor de referencia verificado en v12.32.16. No se ha podido probar en vivo el guardado en `sap_pedidos_lineas` contra producción desde aquí — al desplegar, conviene subir un listado detallado real y comprobar en BD (o pedirlo por aquí) que las líneas quedan guardadas para algún pedido conocido.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+
+**Sigue pendiente, a petición de Víctor** (sin cambios de plan, solo una entrega más cerca): la comparación de estas líneas contra el Listado de Albaranes a nivel de referencia (ENTRADA PARCIAL/TOTAL por artículo) — proyecto aparte, todavía por diseñar cuando Víctor lo retome.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.17 — 4 septiembre 2026
 
 Actualización histórica masiva del listado SAP sin riesgo de avisos en cadena — pausa global del job de alertas + el departamento se propaga al pedido ya dado de alta al momento (no solo al redesplegar)

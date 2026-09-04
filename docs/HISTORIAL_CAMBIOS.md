@@ -36,6 +36,19 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] Primer paso de "trazabilidad casi perfecta" — se guarda el contenido línea a línea del Listado de Pedidos DETALLADO, en la misma subida que rellena el departamento (v12.32.18)
+
+- **Petición de Víctor**: antes de lanzarse con el histórico desde el 01-01-2026, preguntó si —ya que su idea de guardar el contenido línea a línea (pospuesta como proyecto aparte en v12.32.16) usa el mismo listado detallado que el departamento— convenía construir eso primero y hacer el histórico en un único pase, en vez de subir los mismos PDF dos veces.
+- **Respuesta**: viable, pero acotado — solo la parte del listado DETALLADO se beneficia de ir junta; la parte del RESUMIDO (crear pedidos que faltan, importe/estado) no depende de esto y puede empezar ya en paralelo. Preguntado el alcance de esta entrega, Víctor eligió la opción recomendada: solo guardar los datos, sin ninguna pantalla ni comparación todavía.
+- **Cambio en `app.py`**: tabla nueva `sap_pedidos_lineas` (código, descripción, unidad, cantidades pedida/recibida/pendiente, fechas, precio, descuento, importe, departamento) — sin `UNIQUE` por artículo, porque un mismo artículo puede aparecer en más de una línea del mismo pedido (verificado: 16/485 pedidos de prueba); cada subida borra e inserta de nuevo las líneas de cada pedido, evitando duplicados. `_extraer_departamentos_listado_detallado()` (v12.32.16) se sustituye por `_extraer_listado_detallado_completo()`, que en la MISMA pasada por el PDF devuelve también las 11 columnas completas de cada línea (no solo el departamento), evitando doblar el tiempo de lectura. `_actualizar_departamentos_desde_listado_detallado()` gana un tercer paso que guarda las líneas de cada pedido del PDF — sin depender de que el pedido ya tenga fila en `sap_pedidos_listado` (a diferencia del departamento). El resumen de cada subida informa también cuántas líneas se guardaron.
+- **Cambio en `templates/index.html`**: botón/modal renombrados a "Departamentos y líneas (SAP detallado)"; resumen del resultado con indicador de líneas guardadas.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Probada la extracción real contra los dos quincenales de mayo de Víctor: 485 pedidos, 4.234 líneas, 0 sin código de artículo, 0 sin departamento resuelto; el pedido 39177 vuelve a sumar exactamente 253,90 € entre sus dos líneas. No probado en vivo el guardado en BD — a confirmar tras desplegar.
+- **Sigue pendiente**, sin cambios de plan: la comparación de estas líneas contra el Listado de Albaranes a nivel de referencia — proyecto aparte, todavía por diseñar.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] Actualización histórica masiva sin riesgo de avisos en cadena — pausa global de alertas + el departamento se propaga al pedido al momento (v12.32.17)
 
 - **Petición de Víctor**, al ir a subir quincenas del listado detallado desde el 01-01-2026: (1) si el orden de subida importa o hay que cubrir primero los pedidos ya auto-creados; (2) poder pausar avisos/correos internos/correos a proveedores durante la actualización masiva, porque temía que "actualizar departamentos" disparase correos de pedidos ya entregados.

@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.17
+          V 12.32.18
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1575,7 +1575,7 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
           <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
           <button class="btn btn-sm" id="btn-comparar-listado-pdf" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCompararListado()">📄 Comparar listado PDF</button>
-          <button class="btn btn-sm" id="btn-actualizar-departamentos" style="background:#6f42c1;color:#fff;border:none" onclick="abrirModalActualizarDepartamentos()">🏷️ Departamentos (SAP detallado)</button>
+          <button class="btn btn-sm" id="btn-actualizar-departamentos" style="background:#6f42c1;color:#fff;border:none" onclick="abrirModalActualizarDepartamentos()">🏷️ Departamentos y líneas (SAP detallado)</button>
         </div>
         <div class="search-chips" id="pedidos-chips">
           <span class="search-chips-label">Busca por:</span>
@@ -2931,7 +2931,7 @@ tbody tr:last-child{border-bottom:none}
 <div class="modal-overlay" id="modal-actualizar-departamentos">
   <div class="modal" style="max-width:640px">
     <div class="modal-header">
-      <div class="modal-title">🏷️ Actualizar departamentos (Listado detallado SAP)</div>
+      <div class="modal-title">🏷️ Actualizar departamentos y líneas (Listado detallado SAP)</div>
       <button class="close-btn" onclick="closeModal('modal-actualizar-departamentos')">✕</button>
     </div>
     <div class="modal-body">
@@ -2939,11 +2939,14 @@ tbody tr:last-child{border-bottom:none}
         <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
           Sube el "Listado de Pedidos" <strong>detallado</strong> que exporta SAP para un hotel
           (una línea por artículo dentro de cada pedido, con el departamento solicitante en la
-          última columna). Se actualiza el departamento SOLO de los pedidos que ya estén
-          guardados aquí de una subida anterior del listado <strong>resumido</strong>
-          ("Comparar listado PDF") — nunca se toca el importe ni el estado de entrega, que siguen
-          saliendo siempre del listado resumido. Recomendado: sube tramos quincenales en vez del
-          PDF completo de varios meses, para que la lectura no tarde varios minutos.
+          última columna). Dos cosas, ambas de solo lectura frente al resto de la app: se
+          actualiza el departamento SOLO de los pedidos que ya estén guardados aquí de una
+          subida anterior del listado <strong>resumido</strong> ("Comparar listado PDF"), y se
+          guarda el contenido línea a línea de cada pedido (código, cantidades, fechas, precio,
+          importe) para poder cruzarlo más adelante con los Albaranes. Nunca se toca el importe
+          total ni el estado de entrega, que siguen saliendo siempre del listado resumido.
+          Recomendado: sube tramos quincenales en vez del PDF completo de varios meses, para que
+          la lectura no tarde varios minutos.
         </div>
         <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;align-items:end">
           <div class="form-group">
@@ -7202,6 +7205,7 @@ async function _pollActualizarDepartamentos(jobId, intentos) {
     ${pill(`${res.total_pdf ?? 0} pedido(s) en el PDF`, '#eef1f7', '#1a3a6b')}
     ${pill(`${res.actualizados ?? 0} departamento(s) actualizado(s)`, '#d4edda', '#155724')}
     ${(res.pedidos_completados || 0) > 0 ? pill(`${res.pedidos_completados} pedido(s) ya dado(s) de alta completado(s) con departamento`, '#d4edda', '#155724') : ''}
+    ${pill(`${res.lineas_guardadas ?? 0} línea(s) guardada(s) (${res.pedidos_con_lineas ?? 0} pedido(s))`, '#e7e0f7', '#4d2f8f')}
     ${(res.no_encontrados_en_listado || 0) > 0 ? pill(`${res.no_encontrados_en_listado} sin listado resumido todavía`, '#fff3cd', '#856404') : ''}
     ${(res.sin_departamento_en_pdf || 0) > 0 ? pill(`${res.sin_departamento_en_pdf} sin departamento en el PDF`, '#f8f9fa', '#666') : ''}
   `;
