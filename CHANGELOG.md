@@ -1,3 +1,65 @@
+# v12.32.08 — 3 septiembre 2026
+
+✨ Apartado Presupuesto: ahora solo admite un documento de apoyo — PDF, Word o correo, nunca más de uno — con aviso flotante detallado si se intenta adjuntar un segundo
+
+**Petición de Víctor**: "al crear un nuevo pedido necesito que en el apartado presupuesto, el sistema permita cargar un PDF, Word o correo electrónico, pero solo uno de estos, si pone uno ya no puede poner el otro. Avisar con un mensaje flotante cuando intenté poner más de un archivo con esta información bien detallada y profesional, utilizar el que tenemos configurado para esto, como el que salta cuando un usuario no admin intenta entrar en un apartado admin".
+
+**Situación anterior**: el apartado de Presupuesto (`presupuesto_doc`) admitía, como `solicitud_doc` y `firma_techo_doc`, hasta `MAX_DOCUMENTOS_POR_APARTADO` (3) documentos (PDF/Word) **y**, a la vez, `MAX_CORREOS_POR_APARTADO` (1) correo — es decir, hasta 4 archivos combinados. El selector de archivo además tenía `multiple`, así que se podían escoger varios de golpe en un mismo diálogo.
+
+**Cambio en `templates/index.html`**:
+- Selector de archivo de Presupuesto: se quita el atributo `multiple` — el diálogo del sistema ya solo deja elegir un archivo.
+- `subirAdjuntos()`: nueva comprobación específica para `tipo === 'presupuesto_doc'`, antes de lanzar cualquier subida — si ya hay un adjunto en la lista o se han seleccionado varios archivos a la vez, se cancela y se muestra `showFormAlert(...)`, el mismo aviso flotante (con título, mensaje y detalle) que ya usa el resto del formulario para validaciones y que sigue el mismo patrón visual que el aviso de "Acceso restringido" al entrar en un apartado de admin sin permiso (`_showSbAccessToast`) — más visible que el toast de esquina. El mensaje indica claramente que solo se admite un archivo y qué hacer (eliminar el actual antes de subir otro).
+
+**Cambio en `app.py` (`upload_adjunto`)**: la comprobación real, que no se puede saltar aunque se llame a la API directamente sin pasar por el formulario. Para `tipo == "presupuesto_doc"` se cuenta cualquier adjunto ya existente de ese tipo — documento o correo, da igual cuál — y se rechaza el segundo con un 400 y un mensaje explicando que hay que eliminar el actual primero. `solicitud_doc` y `firma_techo_doc` no cambian: siguen admitiendo documento + correo a la vez, como hasta ahora.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre los bloques `<script>` que contienen `subirAdjuntos`, sin errores. No probado en vivo contra producción (sin backend/BD disponible desde aquí) — a confirmar tras desplegar: adjuntar un PDF al presupuesto de un pedido guardado, intentar adjuntar un Word o un correo justo después y comprobar que aparece el aviso flotante sin llegar a subirse; eliminar el PDF y comprobar que entonces sí se puede adjuntar el nuevo.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica, ninguno documenta las reglas de cantidad de adjuntos por apartado. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
+# v12.32.07 — 3 septiembre 2026
+
+🩹 Fix: al crear un pedido nuevo justo después de cerrar uno con "Techo de gastos" activado, la casilla y los campos de techo se quedaban marcados con los valores del pedido anterior
+
+**Petición de Víctor**: "cuando se crea un pedido nuevo y se activa techo de gastos, al cerrarlo y hacer un nuevo pedido, arrastra los valores de techo de gastos y los activa directamente, esto no es correcto".
+
+**Diagnóstico**: `openPedidoModal(id)` solo rellena la casilla "Este pedido computa para el techo de gasto mensual" y sus campos (familia, importe) dentro del bloque `if (id) {...}` — es decir, únicamente al **editar** un pedido existente. Al crear uno nuevo (`id` es `null`), ese bloque no se ejecuta, así que la casilla, la familia y el importe dependían por completo de que `clearPedidoForm()` los reseteara — y `clearPedidoForm()` sí resetea el resto de checkboxes del formulario (tarifa acordada, cancelado, AB/jefe de departamento/rotura/ampliación) pero nunca tocaba `p-sujeto-techo` ni sus campos. Resultado: el checkbox y los valores de familia/importe se quedaban tal cual estaban en el DOM desde la última vez que se abrió el modal — si venían de un pedido con techo activado, el pedido nuevo salía con el techo ya marcado y los mismos datos, sin que el usuario lo hubiera pedido. Al guardar, `savePedido()` lee esos mismos campos del DOM sin comprobar si el usuario los tocó realmente, así que el pedido nuevo se guardaba computando para el techo de gastos por error.
+
+**Cambio en `templates/index.html`**:
+- `clearPedidoForm()`: ahora también desmarca `p-sujeto-techo`, oculta `techo-fields`, vacía `p-familia`/`p-importe` y oculta la vista previa (`techo-preview`).
+- `openPedidoModal()`: la lista de adjuntos de la firma de techo (`firma-techo`) tenía el mismo problema — no estaba en el bloque "Limpiar adjuntos" (a diferencia de pedido/presupuesto/imagen/solicitud/VB/tramitación), así que también podía quedarse visible del pedido anterior. Añadida a esa limpieza.
+
+**Verificación**: `node --check` sobre los bloques `<script>` que contienen `clearPedidoForm`/`openPedidoModal`, sin errores nuevos. `python3 -m py_compile app.py` sin errores (no se ha tocado `app.py`, el bug era puramente de estado del formulario en el frontend). No probado en vivo contra producción (no hay entorno con backend/BD disponible desde aquí) — a confirmar tras desplegar: activar "Techo de gastos" en un pedido con familia e importe, cerrar el modal (guardando o cancelando), pulsar "Nuevo pedido" y comprobar que la casilla aparece desmarcada, los campos vacíos y no hay adjuntos de firma de techo visibles.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica (bug reportado y corregido en la misma entrega, sin quedar pendiente). `README.md` sí: versión actual.
+
+**Entrega**: `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
+# v12.32.06 — 3 septiembre 2026
+
+🩹🔍 Fix: `KeyError: 0` recurrente en Auto-migración (causa raíz confirmada y corregida) + logging con traceback completo para poder localizar el `Decimal`/`float` de `[COMPARAR-ALBARANES]`
+
+**Petición de Víctor**: preguntó qué arreglos quedan pendientes y pegó nuevas líneas de log del día de hoy: el `KeyError: 0` de Auto-migración repitiéndose varias veces (17:33 a 21:38) y dos nuevas apariciones del `TypeError: unsupported operand type(s) for -: 'decimal.Decimal' and 'float'` en `[COMPARAR-ALBARANES]` (18:20:58 y 18:20:59, coincidencias `13093_336_35` y `13208_2041_41`). También preguntó por qué no ve la nueva tarjeta "Telegram bloqueado" en Integridad.
+
+**Sobre "Telegram bloqueado" en Integridad**: la comprobación de la v12.32.05 está funcionando correctamente — ahora mismo no hay ningún usuario con `telegram_bloqueado_en` activo, así que la categoría cuenta 0 problemas y, como el resto de categorías de Integridad cuando no tienen incidencias, se pliega dentro de la línea verde "✅ Sin problemas en: ..." en vez de mostrarse como tarjeta propia (comportamiento ya existente para todas las categorías, no específico de esta). De hecho el propio texto "Telegram bloqueado o inservible" aparece en esa línea verde en las capturas que mandó Víctor — es la prueba de que la comprobación sí se está ejecutando.
+
+**1) `app.py` — `KeyError: 0` en `_auto_migrate()` (causa raíz localizada y corregida)**: la conexión que usa `_auto_migrate()` abre su cursor con `cursor_factory=RealDictCursor`, así que `cur.fetchone()` devuelve un diccionario indexado por NOMBRE de columna (`RealDictRow`), no una tupla posicional. Dos sentencias de la seeding de `notificaciones_config` usaban `cur.fetchone()[0]` para leer un `COUNT(*)` — sobre un `RealDictRow` eso intenta buscar la clave entera `0`, que no existe, y lanza justo `KeyError: 0`. Es el mismo patrón de bug que ya estaba defensivamente cubierto en otros dos puntos de la misma función (`row[0] if isinstance(row, tuple) else row['n']`), y coincide con la hipótesis que ya recogía `PENDIENTES.md`. Corregido en ambas sentencias: se pide el conteo con alias explícito (`SELECT COUNT(*) AS n ...`) y se lee por ese nombre (`cur.fetchone()["n"]`) en vez de por posición. Como estas sentencias no estaban envueltas en su propio `try/except`, el fallo interrumpía todas las sentencias de migración posteriores de esa misma ejecución de `_auto_migrate()` — con el fix, esas dos sentencias (y todas las que venían después) ya se aplican con normalidad.
+
+**2) `app.py` — logging con traceback para `[COMPARAR-ALBARANES]`**: el `Decimal`/`float` conocido (pedidos GY 40907/40908) ya se corrigió en `_resumen_entregas()` en v12.32.02/v12.32.03 con un `float()` explícito — así que esta nueva recurrencia es, aparentemente, un punto distinto todavía sin localizar. Los tres puntos donde esta zona captura excepciones (`_leer_texto()`, `_ejecutar_comparacion_albaranes_bg()` y el bucle de `comparar_listado_albaranes_aplicar()` — este último es donde ocurre exactamente el error que reportó Víctor) registraban el fallo con `log.error(..., exc)`, que solo deja el mensaje (`str(exc)`) sin traceback — por eso, pese a repetirse varias veces, nunca ha sido posible ver en qué línea exacta ocurre. Cambiados los tres a `log.exception(...)`, igual que ya hace correctamente el handler de "Auto-migración" — la próxima vez que se repita, el log de Render traerá el traceback completo (archivo y línea exactos) y se podrá corregir la causa de raíz, no solo detectarla.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. No se ha tocado ninguna sentencia SQL de negocio ni el comportamiento visible de la app — solo la forma de leer un resultado ya correcto (`KeyError: 0`) y el nivel de detalle del logging (`Decimal`/`float`). No probado en vivo contra producción — a confirmar tras desplegar: comprobar que el log de Auto-migración deja de repetir `KeyError: 0` en los próximos arranques/reinicios, y que si vuelve a aparecer `[COMPARAR-ALBARANES] Error aplicando coincidencia`, el log ahora sí trae el traceback completo con archivo y línea.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, ninguno documenta `_auto_migrate()` ni el logging de comparación de albaranes. `README.md` sí: versión actual. `PENDIENTES.md` sí: se retira la entrada del `KeyError: 0` (ya resuelta) y se añade una nueva y aparte para el `Decimal`/`float` de `[COMPARAR-ALBARANES]`, documentando que el logging ya está preparado para localizarlo en su próxima aparición.
+
+**Entrega**: `app.py`, `templates/index.html` (badge de versión), `README.md`, `PENDIENTES.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.05 — 3 septiembre 2026
 
 🔍📡 Nueva comprobación en Integridad: "Telegram bloqueado o inservible" — se marca sola cuando un usuario bloquea el bot (o Telegram deja de poder entregarle avisos) y desaparece sola en cuanto se desbloquea

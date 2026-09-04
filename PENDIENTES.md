@@ -8,35 +8,34 @@
 
 ---
 
-## 2026-09-03 — Investigar `KeyError: 0` recurrente en `_auto_migrate()`
+## 2026-09-03 — Localizar el `TypeError: Decimal - float` que se repite en `[COMPARAR-ALBARANES] Error aplicando coincidencia`
 
-**Origen**: detectado al revisar el log de Render del día de hoy (no
-reportado explícitamente por Víctor, aparece solo en el log). La línea
-`log.exception("Auto-migración — traceback completo del fallo:")`
-(`app.py`, dentro del `except` de `_auto_migrate()`) se dispara
-repetidamente a lo largo del día — 17:33, 18:50, 19:32, 20:09, 20:35,
-21:22 — siempre con el mismo error de fondo: `KeyError: 0`.
+**Origen**: log de Render de hoy, dos apariciones seguidas (18:20:58 y
+18:20:59), coincidencias `13093_336_35` y `13208_2041_41`:
+`unsupported operand type(s) for -: 'decimal.Decimal' and 'float'`.
 
-**Por qué no se ha corregido todavía**: el fragmento de log pegado solo
-trae la cabecera (`Traceback (most recent call last):`) y la última
-línea (`KeyError: 0`), sin el resto del traceback (archivo y número de
-línea exactos) — y `_auto_migrate()` es una función de ~1550 líneas
-con más de 100 sentencias de migración, así que sin esa localización
-exacta no es seguro adivinar cuál falla y aplicar un fix a ciegas.
+**Por qué no se ha corregido todavía**: el único punto conocido de esta
+clase de fallo en esta misma cadena de llamadas
+(`_notificar_cambio_estado` → `enviar_emails_estado` →
+`_resumen_entregas()`) ya se corrigió en v12.32.02/v12.32.03 con un
+`float()` explícito (`app.py`, línea ~2252) — así que la recurrencia de
+hoy es, aparentemente, un `Decimal`/`float` **distinto**, en otro punto
+todavía sin identificar de esa misma cadena (o de otra). El handler que
+registraba el error solo usaba `log.error("...: %s", exc)`, que deja
+únicamente el mensaje (`str(exc)`) sin traceback — así que nunca ha
+sido posible ver en qué archivo/línea ocurre exactamente.
 
-**Qué hace falta para abordarlo**:
-1. El traceback completo de una de esas ejecuciones (Render → Logs,
-   buscar `Auto-migración — traceback completo del fallo` y copiar las
-   líneas siguientes hasta `KeyError: 0` inclusive — normalmente
-   4-8 líneas con la ruta de `app.py` y el número de línea exacto).
-2. Con eso, localizar la sentencia (probablemente un
-   `cur.fetchone()[0]` o similar acceso posicional sobre un resultado
-   `RealDictRow`, que no soporta índices enteros y lanza justo
-   `KeyError: 0`) y corregirla.
+**Qué se ha hecho ya (2026-09-03, v12.32.06)**: se cambiaron a
+`log.exception(...)` los tres puntos de captura de esta zona
+(`_leer_texto()`, `_ejecutar_comparacion_albaranes_bg()` y el bucle de
+`comparar_listado_albaranes_aplicar()`, donde ocurre exactamente este
+error) para que la PRÓXIMA vez que se repita, el log de Render traiga
+el traceback completo con archivo y número de línea exactos. Esto no
+corrige la causa — solo la hace localizable.
 
-**Nota aparte**: como `_auto_migrate()` solo registra el fallo con
-`log.warning`/`log.exception` y sigue sin interrumpir el arranque
-("Auto-migración omitida"), esto no ha causado ningún problema visible
-hasta ahora — pero al repetirse en cada arranque/reinicio del proceso,
-esa sentencia de migración concreta nunca llega a aplicarse.
+**Qué hace falta para abordarlo**: la próxima vez que aparezca
+`[COMPARAR-ALBARANES] Error aplicando coincidencia ...`, copiar del log
+de Render las líneas siguientes (ahora sí incluirán el traceback
+completo con `File "app.py", line N`) y pasarlas para localizar y
+corregir la conversión de tipos que falta.
 

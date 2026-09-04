@@ -36,6 +36,77 @@
 
 ---
 
+## 2026-09-03 — [Control Pedidos] Presupuesto: solo un documento de apoyo (PDF, Word o correo) con aviso flotante si se intenta un segundo (v12.32.08)
+
+- **Petición de Víctor**: en el apartado Presupuesto quiere permitir adjuntar un PDF, un Word o un correo, pero solo uno de los tres — y que al intentar poner un segundo salte un aviso flotante detallado y profesional, con el mismo estilo que el aviso de "Acceso restringido" cuando un rol sin permiso entra en un apartado de admin.
+- **Antes**: Presupuesto admitía, como Solicitud y Firma de techo, hasta 3 documentos + 1 correo a la vez (4 archivos combinados), y el selector permitía elegir varios de golpe.
+- **Cambio en `templates/index.html`**: se quita `multiple` del selector de archivo de Presupuesto; `subirAdjuntos()` comprueba, solo para este apartado, si ya hay un adjunto o se han elegido varios archivos a la vez, y si es así cancela la subida y muestra `showFormAlert(...)` — el mismo patrón visual que `_showSbAccessToast` ("Acceso restringido"), con título, mensaje y detalle de qué hacer.
+- **Cambio en `app.py` (`upload_adjunto`)**: comprobación real en el backend — para `presupuesto_doc` se cuenta cualquier adjunto ya existente (documento o correo) y se rechaza el segundo con un 400 y mensaje claro. Solicitud y Firma de techo no cambian.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sobre los bloques `<script>` de `subirAdjuntos`, sin errores. No probado en vivo contra producción — a confirmar tras desplegar.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
+## 2026-09-03 — [Control Pedidos] Fix: "Nuevo pedido" arrastraba el Techo de gastos del pedido anterior (v12.32.07)
+
+- **Petición de Víctor**: al activar "Techo de gastos" en un pedido, cerrarlo y crear uno nuevo, la casilla y los valores (familia, importe) del pedido anterior seguían ahí y el techo quedaba activado sin querer.
+- **Diagnóstico**: `openPedidoModal()` solo rellena la casilla y campos de techo al **editar** (`if (id) {...}`); en un pedido nuevo dependía de `clearPedidoForm()`, que resetea el resto de checkboxes del formulario pero nunca tocaba `p-sujeto-techo` ni sus campos — se quedaban con lo último que hubiera en el DOM. Al guardar, el pedido nuevo se registraba computando para el techo por error.
+- **Cambio en `templates/index.html`**:
+  - `clearPedidoForm()`: desmarca `p-sujeto-techo`, oculta `techo-fields` y `techo-preview`, vacía familia/importe.
+  - `openPedidoModal()`: se añade `firma-techo` a la limpieza de adjuntos (le faltaba, mismo problema con los documentos de apoyo a la firma de techo).
+- **Verificación**: `node --check` sobre los bloques `<script>` afectados, sin errores. No probado en vivo contra producción (sin backend/BD disponible desde aquí) — a confirmar tras desplegar: activar techo con familia/importe, cerrar el pedido, abrir uno nuevo y comprobar que sale todo limpio.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica (encontrado y corregido en la misma entrega). `README.md` sí: versión actual.
+- **Entrega**: `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
+## 2026-09-03 — [Control Pedidos] Fix `KeyError: 0` en Auto-migración (causa raíz) + logging con traceback completo para el `Decimal`/`float` de Comparar-Albaranes (v12.32.06)
+
+- **Petición de Víctor**: preguntó qué arreglos quedan pendientes,
+  pegando log del día con el `KeyError: 0` de Auto-migración repitiéndose
+  varias veces y dos nuevas apariciones del `TypeError: Decimal - float`
+  en `[COMPARAR-ALBARANES]`; también preguntó por qué no ve la tarjeta
+  "Telegram bloqueado" en Integridad.
+- **Sobre Integridad**: la comprobación de la v12.32.05 funciona
+  correctamente — 0 problemas ahora mismo, por eso se pliega en la línea
+  verde "✅ Sin problemas en: ..." (igual que cualquier otra categoría
+  sin incidencias) en vez de aparecer como tarjeta propia; el propio
+  texto "Telegram bloqueado o inservible" ya aparece ahí en sus capturas.
+- **Cambio en `app.py`**:
+  - `KeyError: 0` en `_auto_migrate()`: causa raíz localizada — dos
+    sentencias de seeding de `notificaciones_config` leían
+    `cur.fetchone()[0]`, pero esa conexión usa `cursor_factory=
+    RealDictCursor` (resultado indexado por nombre de columna, no por
+    posición). Corregido aliasando `SELECT COUNT(*) AS n ...` y leyendo
+    `cur.fetchone()["n"]`. Mismo patrón de bug ya cubierto
+    defensivamente en otros dos puntos de la función; coincide con la
+    hipótesis que recogía `PENDIENTES.md`.
+  - `[COMPARAR-ALBARANES]`: el `Decimal`/`float` conocido (GY
+    40907/40908) ya se corrigió en `_resumen_entregas()` en
+    v12.32.02/.03, así que esta recurrencia es un punto distinto sin
+    localizar. Los tres handlers de esta zona (`_leer_texto()`,
+    `_ejecutar_comparacion_albaranes_bg()` y el bucle de
+    `comparar_listado_albaranes_aplicar()`) pasan de `log.error()` a
+    `log.exception()`, para que la próxima aparición traiga el
+    traceback completo (archivo y línea) y se pueda corregir la causa,
+    no solo detectarla.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. No
+  probado en vivo contra producción — a confirmar tras desplegar:
+  comprobar que Auto-migración deja de repetir `KeyError: 0`, y que si
+  vuelve a aparecer el error de Comparar-Albaranes, el log ya trae
+  traceback completo.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `INSTRUCCIONES_RESTAURACION.md` — no aplica. `README.md` sí: versión
+  actual. `PENDIENTES.md` sí: se retira la entrada del `KeyError: 0`
+  (resuelta) y se añade una nueva para el `Decimal`/`float` de
+  Comparar-Albaranes, con el logging ya preparado para localizarlo.
+- **Entrega**: `app.py`, `templates/index.html` (badge de versión),
+  `README.md`, `PENDIENTES.md`, más este historial/`CHANGELOG.md`.
+  `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-03 — [Control Pedidos] Nueva comprobación en Integridad: "Telegram bloqueado o inservible" — se marca sola y se limpia sola (v12.32.05)
 
 - **Petición de Víctor**: a raíz del `403 bot was blocked by the user`

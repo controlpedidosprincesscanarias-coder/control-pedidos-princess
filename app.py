@@ -1615,8 +1615,22 @@ def _auto_migrate():
             # versión) — así el día 1 nadie deja de recibir nada: se copia tal
             # cual quién recibía qué antes, y a partir de ahora ya es editable
             # desde Administrador → Configuración de Avisos sin tocar código.
-            cur.execute("SELECT COUNT(*) FROM notificaciones_config")
-            if cur.fetchone()[0] == 0:
+            # (2026-09-03) `cur.fetchone()[0]` — a petición de Víctor, causa
+            # real y confirmada del "KeyError: 0" que se repetía en el log de
+            # Auto-migración varias veces al día. Esta conexión abre su
+            # cursor con `cursor_factory=RealDictCursor` (ver el `psycopg2.
+            # connect()` al principio de _auto_migrate()), así que
+            # `cur.fetchone()` no devuelve una tupla posicional sino un dict
+            # (RealDictRow) con clave por NOMBRE de columna — indexar por
+            # `[0]` intenta buscar la clave entera 0, que no existe, de ahí
+            # el "KeyError: 0" (nunca llegaba con más detalle al log porque
+            # ninguna de las dos sentencias de aquí tiene su propio
+            # try/except — la excepción se propagaba hasta el except general
+            # de toda la función, que aborta TODO lo que viene después en
+            # _auto_migrate() esa misma ejecución). Se soluciona pidiendo la
+            # cuenta con un alias explícito y leyéndola por ese nombre.
+            cur.execute("SELECT COUNT(*) AS n FROM notificaciones_config")
+            if cur.fetchone()["n"] == 0:
                 log.info("[NOTIF-CONFIG] Sembrando notificaciones_config desde el modelo anterior…")
                 # 'cambio_estado_pedido' — antes: compradores del hotel (Telegram)
                 cur.execute("""
@@ -1654,11 +1668,13 @@ def _auto_migrate():
             # ya NO está vacía, así que el "if _n == 0" de arriba no volvería a
             # ejecutarse — y estos tres eventos nuevos se quedarían sin
             # sembrar. Se comprueba por código de evento, no por tabla vacía.
+            # (2026-09-03) Mismo arreglo que la sentencia de arriba — RealDictCursor,
+            # no una tupla posicional, así que se lee por el alias "n".
             cur.execute(
-                "SELECT COUNT(*) FROM notificaciones_config WHERE evento_codigo IN "
+                "SELECT COUNT(*) AS n FROM notificaciones_config WHERE evento_codigo IN "
                 "('techo_mensual_comprador','techo_nuevo_pedido_comprador','familia_repetida_comprador')"
             )
-            if cur.fetchone()[0] == 0:
+            if cur.fetchone()["n"] == 0:
                 log.info("[NOTIF-CONFIG] Sembrando fase 2 (techo + familia repetida) desde el modelo anterior…")
                 cur.execute("""
                     INSERT INTO notificaciones_config (evento_codigo, hotel_id, usuario_id, telegram, popup)
@@ -10391,7 +10407,15 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
                 texto += (pagina.extract_text() or "") + "\n"
             return texto
         except Exception as exc:
-            log.error("[COMPARAR-ALBARANES] Error leyendo PDF (%s): %s", etiqueta, exc)
+            # (2026-09-03) log.exception() en vez de log.error() — a
+            # petición de Víctor, tras no poder localizar un
+            # "unsupported operand type(s) for -: 'decimal.Decimal' and
+            # 'float'" recurrente en el hermano de más abajo (aplicar
+            # coincidencia) porque el log solo traía str(exc), sin
+            # traceback ni número de línea. Mismo arreglo aquí por
+            # consistencia — de producirse un fallo leyendo el PDF, el
+            # log de Render ahora sí traería archivo/línea exactos.
+            log.exception("[COMPARAR-ALBARANES] Error leyendo PDF (%s): %s", etiqueta, exc)
             raise RuntimeError(f"No se pudo leer el PDF de {etiqueta}: {exc}")
 
     texto1 = _leer_texto(pdf1_bytes, "pedidos")
@@ -10890,7 +10914,11 @@ def _ejecutar_comparacion_albaranes_bg(job_id, hotel_id, pdf1_bytes, pdf2_bytes)
                 if job_id in _PDF_JOBS:
                     _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "done", "resultado": resultado}
         except Exception as exc:
-            log.error("[COMPARAR-ALBARANES] Error en job %s: %s", job_id, exc)
+            # (2026-09-03) log.exception() en vez de log.error() — ver
+            # comentario junto al de _aplicar_coincidencia_albaran() más
+            # abajo: mismo motivo, para poder localizar exactamente dónde
+            # falla si se repite.
+            log.exception("[COMPARAR-ALBARANES] Error en job %s: %s", job_id, exc)
             with _PDF_JOBS_LOCK:
                 if job_id in _PDF_JOBS:
                     _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
@@ -11019,7 +11047,26 @@ def comparar_listado_albaranes_aplicar(job_id):
             else:
                 sin_cambios.append({"clave": c["clave"], "descripcion": etiqueta, "motivo": res["motivo_sin_cambios"]})
         except Exception as exc:
-            log.error("[COMPARAR-ALBARANES] Error aplicando coincidencia %s: %s", c.get("clave"), exc)
+            # (2026-09-03) log.exception() en vez de log.error() — a
+            # petición de Víctor, que reportó un "unsupported operand
+            # type(s) for -: 'decimal.Decimal' and 'float'" recurrente
+            # aquí (18:20:58 y 18:20:59 del mismo día, coincidencias
+            # 13093_336_35 y 13208_2041_41). El único sitio conocido de
+            # este tipo de fallo en esta misma cadena de llamadas
+            # (_notificar_cambio_estado → enviar_emails_estado →
+            # _resumen_entregas) ya se corrigió en v12.32.02/.03 con un
+            # float() explícito (ver el docstring de
+            # _notificar_cambio_estado más arriba) — así que este es
+            # aparentemente un Decimal/float DISTINTO, en otro punto
+            # todavía sin identificar de esa misma cadena. Sin
+            # `exc_info`, `log.error()` solo deja `str(exc)` — el mensaje
+            # del error, pero no el traceback — así que nunca ha sido
+            # posible ver en qué línea exacta ocurre. `log.exception()`
+            # vuelca aquí el traceback completo (archivo + número de
+            # línea), igual que ya se hizo para el fallo de
+            # "Auto-migración" — la próxima vez que se repita, el log de
+            # Render sí traerá dónde localizarlo exactamente.
+            log.exception("[COMPARAR-ALBARANES] Error aplicando coincidencia %s: %s", c.get("clave"), exc)
             errores.append({"clave": c.get("clave"), "error": str(exc)})
 
     # Guarda lo aplicado en el propio job, para que enviar-resumen() pueda
@@ -15242,9 +15289,41 @@ def upload_adjunto(pid):
         if mime == "application/octet-stream" and ext not in EXT_CORREO | EXT_DOC:
             return jsonify({"ok": False, "error": "Extensión de archivo no reconocida"}), 400
 
+        # Límite de tamaño según el tipo de archivo — igual para los tres tipos.
         if es_correo:
             if len(datos) > MAX_BYTES_CORREO:
                 return jsonify({"ok": False, "error": f"El correo supera el límite de {MAX_BYTES_CORREO // (1024*1024)} MB para este apartado"}), 400
+        else:
+            if len(datos) > MAX_BYTES_DOCUMENTO:
+                return jsonify({"ok": False, "error": f"El documento supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB para este apartado"}), 400
+
+        if tipo == "presupuesto_doc":
+            # (2026-09-03) A petición de Víctor: a diferencia de
+            # solicitud_doc/firma_techo_doc (que sí admiten documento +
+            # correo a la vez, cada uno con su propio límite —
+            # MAX_DOCUMENTOS_POR_APARTADO / MAX_CORREOS_POR_APARTADO), el
+            # apartado de Presupuesto admite un ÚNICO archivo de apoyo en
+            # total: un PDF, un Word O un correo — nunca más de uno,
+            # combinando los tres. Se cuenta cualquier adjunto ya existente
+            # de este tipo (documento o correo, da igual cuál) y se
+            # rechaza el segundo con un mensaje explicando que hay que
+            # eliminar el actual antes de sustituirlo por otro. El
+            # frontend ya avisa de esto con un mensaje flotante antes de
+            # intentar subir nada (ver subirAdjuntos() en
+            # templates/index.html) — esta comprobación en el backend es
+            # la que de verdad lo impide, para cubrir también una llamada
+            # directa a la API sin pasar por el formulario.
+            n_existentes = query(
+                "SELECT COUNT(*) AS n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='presupuesto_doc'",
+                (pid,), one=True
+            )["n"]
+            if n_existentes >= 1:
+                return jsonify({
+                    "ok": False,
+                    "error": "El presupuesto solo admite un documento de apoyo: un PDF, un Word o un correo "
+                             "electrónico — nunca más de uno. Elimine el que ya está adjunto antes de subir otro."
+                }), 400
+        elif es_correo:
             n_correos = query(
                 "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo=%s AND es_correo",
                 (pid, tipo), one=True
@@ -15252,8 +15331,6 @@ def upload_adjunto(pid):
             if n_correos and n_correos["n"] >= MAX_CORREOS_POR_APARTADO:
                 return jsonify({"ok": False, "error": f"Ya existe un correo adjunto en este apartado. Máximo {MAX_CORREOS_POR_APARTADO}. Elimínelo antes de subir uno nuevo."}), 400
         else:
-            if len(datos) > MAX_BYTES_DOCUMENTO:
-                return jsonify({"ok": False, "error": f"El documento supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB para este apartado"}), 400
             n_docs = query(
                 "SELECT COUNT(*) as n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo=%s AND NOT es_correo",
                 (pid, tipo), one=True

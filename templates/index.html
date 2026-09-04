@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.05
+          V 12.32.08
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2426,8 +2426,8 @@ tbody tr:last-child{border-bottom:none}
           </label>
           <div id="presupuesto-fields-wrap">
             <input class="form-control monospace" id="p-presup">
-            <label class="adj-fecha-btn" id="lbl-presup-doc" title="Adjuntar documento o correo al presupuesto" style="margin-top:6px">
-              <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" multiple style="display:none"
+            <label class="adj-fecha-btn" id="lbl-presup-doc" title="Adjuntar documento o correo al presupuesto — solo se admite uno (PDF, Word o correo)" style="margin-top:6px">
+              <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" style="display:none"
                      onchange="subirAdjuntos(this,'presupuesto_doc')">
               📎 Adjuntar doc. / correo
             </label>
@@ -4823,6 +4823,11 @@ async function openPedidoModal(id=null) {
   renderAdjuntosFecha('solicitud', []);
   renderAdjuntosFecha('vb', []);
   renderAdjuntosFecha('tramit', []);
+  // (2026-09-03) "firma-techo" faltaba en esta lista — mismo bug que el
+  // checkbox/campos de techo (ver comentario en clearPedidoForm()): al
+  // abrir un pedido nuevo tras uno con techo activado, la lista de
+  // adjuntos de la firma de techo del pedido anterior se quedaba visible.
+  renderAdjuntosFecha('firma-techo', []);
 
   if (id) {
     const d = await api(`/api/pedidos/${id}`);
@@ -5072,6 +5077,43 @@ async function subirAdjuntos(input, tipo) {
     toast('Guarda el pedido primero antes de adjuntar archivos', 'error');
     input.value = '';
     return;
+  }
+
+  // (2026-09-03) A petición de Víctor: el apartado de Presupuesto solo
+  // admite UN documento de apoyo en total — PDF, Word o correo
+  // electrónico, nunca más de uno combinando los tres. El backend ya lo
+  // impone de verdad (ver upload_adjunto() en app.py), pero se avisa aquí
+  // también, con el mismo aviso flotante que usa el resto del formulario
+  // para validaciones (showFormAlert — el mismo patrón visual que el
+  // aviso de "Acceso restringido" cuando un rol sin permiso intenta
+  // entrar en un apartado de admin), para no llegar a lanzar la subida y
+  // que el usuario entienda de inmediato qué ha pasado y qué hacer.
+  if (tipo === 'presupuesto_doc') {
+    const yaHayAdjunto = document.getElementById('adj-presupuesto-list').children.length > 0;
+    if (yaHayAdjunto) {
+      input.value = '';
+      showFormAlert(
+        'El presupuesto solo admite un documento de apoyo — un PDF, un Word o un correo electrónico — y ya hay uno adjunto.',
+        {
+          title:   '⚠️ Solo se permite un archivo en Presupuesto',
+          detail:  'Para sustituirlo, elimine primero el documento actual (✕ en la lista de adjuntos) y después adjunte el nuevo.',
+          duracion: 7000,
+        }
+      );
+      return;
+    }
+    if (archivos.length > 1) {
+      input.value = '';
+      showFormAlert(
+        'El presupuesto solo admite un documento de apoyo — un PDF, un Word o un correo electrónico — y ha seleccionado varios archivos a la vez.',
+        {
+          title:   '⚠️ Solo se permite un archivo en Presupuesto',
+          detail:  'Seleccione un único archivo: PDF, Word (.doc/.docx) o correo (.eml/.msg).',
+          duracion: 7000,
+        }
+      );
+      return;
+    }
   }
 
   const label = input.closest('label');
@@ -5666,6 +5708,21 @@ function clearPedidoForm() {
   document.getElementById('p-proveedor-input').value = '';
   document.getElementById('prov-dropdown').style.display = 'none';
   ['p-ab','p-jefe','p-rotura','p-ampliacion'].forEach(id=>document.getElementById(id).checked=false);
+  // (2026-09-03) Resetear "Techo de gastos" — a petición de Víctor, que
+  // reportó que al cerrar un pedido con el techo activado y abrir uno
+  // nuevo, la casilla seguía marcada y arrastraba la familia/importe del
+  // pedido anterior. Causa: esta función resetea el resto de checkboxes
+  // del formulario (tarifa acordada, cancelado, ab/jefe/rotura/ampliación)
+  // pero nunca tocaba "p-sujeto-techo" ni sus campos — openPedidoModal()
+  // solo rellena techo-fields cuando edita un pedido existente
+  // (`if (sujetoTecho)`), así que en un pedido nuevo el checkbox y los
+  // campos se quedaban tal cual estaban en el DOM desde la última vez que
+  // se abrió el modal.
+  document.getElementById('p-sujeto-techo').checked = false;
+  document.getElementById('techo-fields').style.display = 'none';
+  setVal('p-familia', '');
+  setVal('p-importe', '');
+  document.getElementById('techo-preview').style.display = 'none';
 }
 
 function actualizarFechaEntregaPrevista() {
