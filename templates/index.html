@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.26
+          V 12.32.27
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -7352,12 +7352,16 @@ async function _pollActualizarDepartamentos(jobId, intentos) {
     ${pill(`${res.actualizados ?? 0} departamento(s) actualizado(s)`, '#d4edda', '#155724')}
     ${(res.pedidos_completados || 0) > 0 ? pill(`${res.pedidos_completados} pedido(s) ya dado(s) de alta completado(s) con departamento`, '#d4edda', '#155724') : ''}
     ${pill(`${res.lineas_guardadas ?? 0} línea(s) guardada(s) (${res.pedidos_con_lineas ?? 0} pedido(s))`, '#e7e0f7', '#4d2f8f')}
+    ${(res.pedidos_nuevos_en_listado_sap || 0) > 0 ? pill(`${res.pedidos_nuevos_en_listado_sap} pedido(s) nuevo(s) registrado(s) desde el detallado (sin resumido)`, '#5b3a99', '#fff') : ''}
     ${(res.no_encontrados_en_listado || 0) > 0 ? pill(`${res.no_encontrados_en_listado} sin listado resumido todavía`, '#fff3cd', '#856404') : ''}
     ${(res.sin_departamento_en_pdf || 0) > 0 ? pill(`${res.sin_departamento_en_pdf} sin departamento en el PDF`, '#f8f9fa', '#666') : ''}
   `;
   let avisos = '';
+  if ((res.pedidos_nuevos_en_listado_sap || 0) > 0) {
+    avisos += `<p>Se han registrado ${res.pedidos_nuevos_en_listado_sap} pedido(s) que solo aparecían en este listado detallado (nunca se había subido el resumido con ellos) — ya están disponibles en "📄 Comparar listado PDF" y en "Crear pedidos desde SAP" para darlos de alta. Su importe quedará vacío hasta que se suba el listado resumido correspondiente (o se calcule de forma aproximada — ver próxima entrega).</p>`;
+  }
   if ((res.no_encontrados_en_listado || 0) > 0) {
-    avisos += `<p>${res.no_encontrados_en_listado} pedido(s) del PDF detallado todavía no tienen fila guardada — sube (o vuelve a subir) el listado <strong>resumido</strong> con "Comparar listado PDF" para esos pedidos, y luego repite esta actualización.</p>`;
+    avisos += `<p>${res.no_encontrados_en_listado} pedido(s) del PDF detallado no se han podido registrar en el listado SAP — revisa los logs del servidor.</p>`;
   }
   if (res.codigos_sap_no_mapeados && res.codigos_sap_no_mapeados.length) {
     avisos += `<p>⚠️ Código(s) de departamento de SAP sin mapear a un departamento de la app: <strong>${res.codigos_sap_no_mapeados.join(', ')}</strong> — avisa para añadirlos.</p>`;

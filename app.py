@@ -10984,6 +10984,20 @@ def _extraer_listado_detallado_completo(pdf_bytes: bytes) -> dict:
     páginas, doblar la lectura con pdfplumber habría doblado también el
     tiempo de esta operación, ya de por sí la más lenta de la app.
 
+    (2026-09-04, v12.32.27) Se añaden "proveedor_raw", "fecha_hora_fecha" y
+    "fecha_hora_hora" a nivel de pedido — de la propia cabecera "NNNNNNNN -
+    Pedido DD/MM/AAAA HH:MM:SS (PROVEEDOR Teléfono:... [Fax:...])", igual
+    que ya hace _PATRON_LISTADO_SIMPLIFICADO con el listado RESUMIDO, para
+    poder identificar el pedido (proveedor + fecha) sin depender de haber
+    subido también el RESUMIDO — a petición de Víctor, que quiere poder
+    trabajar únicamente con los dos listados DETALLADO (Pedidos y
+    Albaranes). El proveedor viene siempre pegado a "Teléfono:" (y a veces
+    "Fax:") sin separador — se recorta ahí; verificado sobre 2.018
+    cabeceras reales, 100% con este formato exacto. Ver
+    _actualizar_departamentos_desde_listado_detallado(), que usa estos
+    campos para dar de alta en `sap_pedidos_listado` los pedidos que el
+    RESUMIDO nunca llegó a traer.
+
     Por qué pdfplumber y no pypdf (como el resto de lectores de PDF de
     esta app): este listado es una tabla de verdad (13 columnas por línea
     de artículo), y pypdf.extract_text() no reconstruye el orden visual de
@@ -11016,7 +11030,10 @@ def _extraer_listado_detallado_completo(pdf_bytes: bytes) -> dict:
     pedido_actual = None
 
     def _pedido(num):
-        return resultado.setdefault(num, {"departamento_sap_codigo": None, "lineas": []})
+        return resultado.setdefault(num, {
+            "departamento_sap_codigo": None, "lineas": [],
+            "proveedor_raw": None, "fecha_hora_fecha": None, "fecha_hora_hora": None,
+        })
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
@@ -11043,7 +11060,10 @@ def _extraer_listado_detallado_completo(pdf_bytes: bytes) -> dict:
                             if m:
                                 pedido_actual = m.group(1)
                                 headers_vistos_pagina.add(pedido_actual)
-                                _pedido(pedido_actual)
+                                info_cab = _pedido(pedido_actual)
+                                info_cab["fecha_hora_fecha"] = m.group(2)
+                                info_cab["fecha_hora_hora"] = m.group(3)
+                                info_cab["proveedor_raw"] = m.group(4).split("Teléfono:")[0].strip()
                             continue
                         # Fila de artículo: "Artículo", código, descripción,
                         # unidad, cant.pedida, cant.recibida, cant.pendiente,
@@ -11076,7 +11096,10 @@ def _extraer_listado_detallado_completo(pdf_bytes: bytes) -> dict:
                     m_final = _PATRON_CABECERA_PEDIDO_DETALLADO.match(lineas_pag[-1].strip())
                     if m_final and m_final.group(1) not in headers_vistos_pagina:
                         pedido_actual = m_final.group(1)
-                        _pedido(pedido_actual)
+                        info_cab = _pedido(pedido_actual)
+                        info_cab["fecha_hora_fecha"] = m_final.group(2)
+                        info_cab["fecha_hora_hora"] = m_final.group(3)
+                        info_cab["proveedor_raw"] = m_final.group(4).split("Teléfono:")[0].strip()
 
                 # (2026-09-04, v12.32.21) pdfplumber va acumulando objetos
                 # cacheados de cada página (extract_text/extract_tables) que
@@ -11147,6 +11170,33 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
     También se avisa de cualquier código de departamento de SAP que no
     esté en _SAP_DEPARTAMENTO_MAP — para que un departamento nuevo en SAP
     no se quede silenciosamente sin aplicar.
+
+    (2026-09-04, v12.32.27) ALTA DE PEDIDOS QUE EL RESUMIDO NUNCA TRAJO —
+    a petición de Víctor ("YO PENSABA QUE CON LOS DOS LISTADOS DETALLADOS
+    PEDIDOS Y ALBARANES YA PODIAMOS HACER TODO EL TRABAJO... SIN NECESIDAD
+    DE SUBIRLOS Y COMPARARLOS A LA VEZ"): antes, un pedido que solo
+    aparecía en el listado DETALLADO (nunca en el RESUMIDO) no dejaba
+    ningún rastro en `sap_pedidos_listado` — sencillamente no tenía fila,
+    y por tanto nunca se ofrecía en "Comparar listado PDF" ni en "Crear
+    pedidos desde SAP". Ahora, para cada pedido del PDF detallado que
+    TODAVÍA no tiene fila en `sap_pedidos_listado`, se crea una fila nueva
+    con lo que el detallado sí trae (proveedor, fecha/hora de la cabecera,
+    fecha de pedido y de entrega de su primera línea, departamento) —
+    dejando SIEMPRE en NULL el importe (base/recibido/pendiente) y el
+    estado SAP, que el detallado no reporta: ver la nota junto a
+    _PATRON_LISTADO_SIMPLIFICADO de por qué esos campos siguen viniendo
+    exclusivamente del RESUMIDO (sumar líneas no cuadra siempre al
+    céntimo). Un pedido sin importe se resuelve como "No entregado" en
+    _entrega_estado() — es decir, se ofrecerá para crear con estado
+    inicial ENVIADO AL PROVEEDOR, nunca se inventa un estado de entrega
+    sin datos reales.
+
+    Con `ON CONFLICT (hotel_id, pedido_num_sap) DO NOTHING`: si el pedido
+    YA tiene fila (porque el RESUMIDO sí lo trajo, aunque solo sea una
+    vez), esta alta nunca la toca — el RESUMIDO sigue siendo la única
+    fuente que puede actualizar proveedor/fechas/importe de una fila ya
+    existente (ver _guardar_listado_sap_importado). Esto solo rellena el
+    hueco de los pedidos que el RESUMIDO nunca reportó.
     """
     listado = _extraer_listado_detallado_completo(pdf_bytes)
     if not listado:
@@ -11163,10 +11213,31 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
     codigos_no_mapeados = set()
     pedidos_con_lineas = 0
     lineas_guardadas = 0
+    pedidos_nuevos_en_listado_sap = 0
 
     for num_sap, info in listado.items():
         codigo = info.get("departamento_sap_codigo")
         lineas = info.get("lineas") or []
+
+        # ── 0 (v12.32.27): alta en sap_pedidos_listado de los pedidos que el
+        # RESUMIDO nunca trajo — ver docstring. No pisa ninguna fila ya
+        # existente (ON CONFLICT DO NOTHING): el RESUMIDO sigue siendo la
+        # única fuente que actualiza proveedor/fechas/importe de una fila
+        # ya presente.
+        primera_linea = lineas[0] if lineas else {}
+        cur_nuevo = execute(
+            """INSERT INTO sap_pedidos_listado
+                   (hotel_id, pedido_num_sap, fecha_hora_fecha, fecha_hora_hora,
+                    proveedor_raw, fecha_pedido, fecha_entrega, departamento_sap_codigo,
+                    actualizado_en)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s, NOW())
+               ON CONFLICT (hotel_id, pedido_num_sap) DO NOTHING""",
+            (hotel_id, num_sap, info.get("fecha_hora_fecha"), info.get("fecha_hora_hora"),
+             info.get("proveedor_raw"), primera_linea.get("fecha_pedido"), primera_linea.get("fecha_entrega"),
+             codigo)
+        )
+        if cur_nuevo.rowcount:
+            pedidos_nuevos_en_listado_sap += 1
 
         # ── 1 y 2: departamento (sap_pedidos_listado + pedidos.departamento_id) ──
         if not codigo:
@@ -11227,7 +11298,7 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
             pedidos_con_lineas += 1
             lineas_guardadas += len(lineas)
 
-    if actualizados or lineas_guardadas:
+    if actualizados or lineas_guardadas or pedidos_nuevos_en_listado_sap:
         get_db().commit()
 
     return {
@@ -11240,6 +11311,7 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
         "codigos_sap_no_mapeados": sorted(codigos_no_mapeados),
         "pedidos_con_lineas": pedidos_con_lineas,
         "lineas_guardadas": lineas_guardadas,
+        "pedidos_nuevos_en_listado_sap": pedidos_nuevos_en_listado_sap,
     }
 
 
