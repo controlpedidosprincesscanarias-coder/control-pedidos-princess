@@ -36,6 +36,40 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] README: completado el bullet de "Comparar Pedidos + Albaranes (SAP)" con el flujo base, no solo lo añadido en septiembre (v12.32.23)
+
+- **Contexto**: en la auditoría de v12.32.22 se documentó en el README
+  lo añadido a esta función desde v12.32.05, pero se dejó
+  explícitamente pendiente el flujo BASE de la comparación (Listado de
+  Pedidos vs. pedidos de la app, y el cruce opcional con Albaranes) —
+  funcionalidad más antigua (2026-08-06 y 2026-08-15) que nunca había
+  tenido bullet propio. Víctor pidió completarlo también.
+- **Cambio en `README.md`**: el bullet se reescribe completo, en base
+  a la lectura directa del código (`_comparar_listado_pdf_logica()`,
+  `_comparar_listado_albaranes_logica()`, y el modal correspondiente en
+  `templates/index.html`), no solo del CHANGELOG histórico. Cubre: qué
+  compara y qué rellena solo el Listado de Pedidos simplificado (sin
+  pedir confirmación, sin cambiar estado); la exclusión de proveedores
+  no sujetos a seguimiento; el guardado por hotel desde v12.32.10; el
+  criterio de coincidencia y el comportamiento de "+ Comparar con
+  Albaranes" (propone, nunca aplica solo; qué dispara un cambio de
+  estado aplicado así; tratamiento de empates; nivel "confirmado" de
+  v12.32.20); la creación automática de pedidos desde SAP y el botón de
+  Departamentos SAP detallado (ya presentes desde v12.32.22, integrados
+  en el nuevo texto); y el correo de resumen de cada comparación.
+- **Verificación**: cambio puramente de documentación, sin tocar
+  `app.py` ni `templates/index.html` más allá del badge de versión.
+  Repasado contra el código real de las dos funciones de comparación y
+  el modal, para no describir nada que no esté implementado tal cual.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, cambio
+  puramente descriptivo.
+- **Entrega**: `README.md`, `templates/index.html` (solo versión), más
+  este historial/`CHANGELOG.md`. `app.py`, `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] Auditoría completa a petición de Víctor: cerrado el `Decimal/float` fantasma de `PENDIENTES.md` + README puesto al día + 2 correcciones cosméticas (v12.32.22)
 
 - **Petición de Víctor**: auditar el zip desplegado (v12.32.21) —

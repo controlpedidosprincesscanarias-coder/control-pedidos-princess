@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.22** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.23** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -81,23 +81,59 @@ confundirse entre sí, ver más abajo):
 **Gestión** (admin + compras, y Proveedores también hotel)
 - **Proveedores** — ficha de proveedores, contactos múltiples por
   proveedor, asignación a hoteles.
-- **Comparar Pedidos + Albaranes (SAP)** — cruce entre los pedidos de
-  la app y los listados PDF de SAP (Listado de Pedidos y, opcionalmente,
-  Listado de Albaranes) para detectar altas y cambios de estado
-  pendientes. Los pedidos que SAP ya tiene y la app todavía no se
-  pueden seleccionar y crear automáticamente con un clic (v12.32.11) —
-  con el estado inicial real de SAP (Enviado al proveedor / Entrega
-  parcial / Entregado, según corresponda, en vez de asumir siempre
-  "Enviado al proveedor") y trazabilidad marcada como automática, no
-  con el nombre del admin; solo se ofrece al procesar el Listado de
-  Pedidos, nunca al comparar solo Albaranes (v12.32.12/13). El botón
-  "🏷️ Departamentos (SAP detallado)" (v12.32.19), a partir de un
-  segundo listado SAP más detallado, rellena automáticamente el
-  departamento solicitante de los pedidos ya dados de alta. Las
-  "Sugerencias de Albarán" distinguen desde v12.32.20 un nivel
-  "confirmado" (a partir de un PDF de confirmación de un albarán suelto,
-  o del número de albarán ya anotado a mano en el pedido) de las
-  sugerencias por proveedor + artículo.
+- **Comparar Pedidos + Albaranes (SAP)** (admin, botón "📄 Comparar
+  listado PDF" — base desde 2026-08-06, ampliada desde entonces) — la
+  herramienta admite subir hasta dos PDF que exporta SAP para un hotel:
+  - **Listado de Pedidos** (simplificado, una línea por pedido, siempre
+    obligatorio salvo la excepción de más abajo): se comparan todos los
+    números de pedido contra los ya dados de alta en la app, para
+    detectar compras hechas en SAP sin registrar aquí, y se deduce el
+    estado de entrega de cada uno (Entregado / Entrega parcial / No
+    entregado) comparando importe del pedido vs. importe recibido. De
+    paso, sin pedir confirmación (no cambia estado ni dispara avisos):
+    rellena `Total Pedido`, la base imponible de la última entrada ya
+    registrada, y la fecha de tramitación si estaba vacía. Los
+    proveedores marcados como "no sujetos a seguimiento" (ficha de
+    Proveedores — pensado para alimentación/bebida) quedan excluidos
+    del todo. Desde v12.32.10, este listado se guarda por hotel al
+    subirlo, así que las comparaciones siguientes con Albaranes pueden
+    omitirlo y reutilizar el último guardado.
+  - **+ Comparar también con el listado de Albaranes** (casilla
+    opcional, DALI, desde 2026-08-15): cruza el importe YA RECIBIDO de
+    cada pedido que SAP marca Entregado/Entrega parcial con el importe
+    de cada albarán del segundo PDF — al coincidir proveedor e importe,
+    propone (nunca aplica solo) registrar fecha de tramitación, número
+    de entrada del albarán y cambio de estado; hay que confirmar cada
+    coincidencia con "Aplicar" antes de que se guarde nada. Un cambio de
+    estado aplicado así dispara el mismo correo interno y aviso de
+    Telegram/popup que un cambio manual (con los mismos destinatarios;
+    solo cambia que no se excluye a nadie, y que el correo se despacha
+    casi al instante en vez de esperar los 5 min habituales), y queda
+    marcado en el Historial de estados como "Automática — listado
+    comparativo pedidos y albaranes" en vez del nombre de quien pulsó
+    "Aplicar". Empates (mismo proveedor+importe con más de un candidato)
+    nunca se autorregistran — quedan para decisión manual. Desde
+    v12.32.20, además de esas sugerencias por proveedor+importe, hay un
+    nivel "confirmado" que no depende de coincidir por importe: a partir
+    de un PDF de confirmación de un albarán suelto (que SAP sí puede
+    imprimir para un único albarán, con el pedido asociado ya indicado),
+    o directamente del número de albarán que ya se hubiera anotado a
+    mano en el propio pedido al registrar una entrega.
+  - Los pedidos que SAP ya tiene y la app todavía no se pueden
+    seleccionar y crear automáticamente con un clic (v12.32.11) — con el
+    estado inicial real de SAP (no siempre "Enviado al proveedor") y
+    trazabilidad marcada como automática, no con el nombre del admin;
+    esta opción solo se ofrece al procesar el Listado de Pedidos, nunca
+    al comparar solo Albaranes (v12.32.12/13).
+  - Botón aparte "🏷️ Departamentos (SAP detallado)" (v12.32.19): a
+    partir de un segundo tipo de listado SAP, más detallado (una línea
+    por artículo, con el departamento solicitante), rellena
+    automáticamente el departamento de los pedidos que ya tienen fila
+    guardada del listado simplificado — nunca toca importe ni estado, y
+    nunca da de alta pedidos nuevos.
+  - Cada comparación puede enviarse como correo de resumen a los
+    destinatarios configurados, con el detalle de pedidos sin dar de
+    alta, registrados automáticamente y pendientes de revisar a mano.
 - **Pedidos eliminados** — papelera / auditoría de pedidos borrados.
 - **Techo de gastos** — resumen mensual de consumo de techo por hotel
   (semáforo verde/amarillo/rojo/azul), desglose por familia de

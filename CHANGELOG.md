@@ -1,3 +1,23 @@
+# v12.32.23 — 4 septiembre 2026
+
+📋 README: completado el bullet de "Comparar Pedidos + Albaranes (SAP)" con el flujo base (desde 2026-08-06/08-15), no solo lo añadido en septiembre
+
+**Contexto**: en la auditoría de v12.32.22 se documentó en el README lo añadido a esta función desde v12.32.05 (creación automática de pedidos desde SAP, botón Departamentos SAP detallado, Sugerencias de Albarán confirmadas), pero se dejó explícitamente pendiente el flujo BASE de la comparación (Listado de Pedidos vs. pedidos de la app, y el cruce opcional con Albaranes) — una funcionalidad bastante más antigua (2026-08-06 y 2026-08-15) que nunca había tenido bullet propio en el README. Víctor pidió completarlo también.
+
+**Cambio en `README.md`**: el bullet "Comparar Pedidos + Albaranes (SAP)" se reescribe completo, en base a la lectura directa del código (`_comparar_listado_pdf_logica()`, `_comparar_listado_albaranes_logica()`, y el modal correspondiente en `templates/index.html`), no solo del CHANGELOG histórico:
+- El Listado de Pedidos simplificado: qué compara, qué deduce (estado de entrega), qué rellena solo sin pedir confirmación (Total Pedido, base imponible de la última entrada, fecha de tramitación si estaba vacía), la exclusión de proveedores no sujetos a seguimiento, y el guardado por hotel desde v12.32.10 que permite omitirlo en comparaciones siguientes.
+- La casilla "+ Comparar también con Albaranes": el criterio de coincidencia (proveedor + importe YA RECIBIDO), que propone pero nunca aplica solo (requiere "Aplicar" por coincidencia), qué dispara un cambio de estado aplicado así (mismo correo/Telegram que uno manual, con las dos diferencias ya documentadas en el bullet de Alertas y notificaciences), el tratamiento de empates, y el nivel "confirmado" de v12.32.20.
+- La creación automática de pedidos desde SAP (v12.32.11/12/13) y el botón de Departamentos SAP detallado (v12.32.19), ya presentes desde v12.32.22, se conservan e integran en el nuevo texto.
+- Mención del correo de resumen de cada comparación (existente desde el origen de la función, tampoco documentado hasta ahora).
+
+**Verificación**: cambio puramente de documentación, sin tocar `app.py` ni `templates/index.html` más allá del badge de versión (norma 4). Repasado el texto contra el código real de las dos funciones de comparación y el modal, para no describir nada que no esté implementado tal cual.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, cambio puramente descriptivo sin impacto en despliegue ni pendientes.
+
+**Entrega**: `README.md`, `templates/index.html` (solo versión), más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.22 — 4 septiembre 2026
 
 📋 Auditoría completa a petición de Víctor: cerrado el `Decimal/float` fantasma de `PENDIENTES.md` (confirmado por log de Render que no es una recurrencia real) + README puesto al día con todo lo añadido desde v12.32.05 + 2 correcciones cosméticas
