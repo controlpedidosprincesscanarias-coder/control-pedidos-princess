@@ -265,13 +265,21 @@ def _auto_migrate():
             # nombrarlas una a una ni de acordarse de añadir las que se
             # creen en el futuro.
             try:
+                # (2026-09-04, v12.32.26) `fila[0]` — mismo "KeyError: 0" ya
+                # documentado más abajo (v12.32.06, notificaciones_config):
+                # esta conexión abre el cursor con `cursor_factory=RealDictCursor`
+                # (ver el `psycopg2.connect()` al principio de esta función),
+                # así que `cur.fetchall()` devuelve dicts por NOMBRE de
+                # columna, no tuplas posicionales — indexar por `[0]` busca
+                # la clave entera 0, que no existe. Se lee por el nombre real
+                # de la columna (`relname`) en vez de por posición.
                 cur.execute("""
                     SELECT c.relname
                     FROM pg_class c
                     JOIN pg_namespace n ON n.oid = c.relnamespace
                     WHERE n.nspname = 'public' AND c.relkind = 'r' AND NOT c.relrowsecurity
                 """)
-                _tablas_sin_rls = [fila[0] for fila in cur.fetchall()]
+                _tablas_sin_rls = [fila["relname"] for fila in cur.fetchall()]
             except Exception as e:
                 log.warning(f"No se pudo listar las tablas sin RLS: {e}")
                 _tablas_sin_rls = []

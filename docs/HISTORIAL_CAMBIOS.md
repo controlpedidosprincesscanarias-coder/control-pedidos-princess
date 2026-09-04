@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] Corregido bug real de la v12.32.25: el fix de RLS no activaba nada — mismo "KeyError: 0" de RealDictCursor ya documentado en agosto, reintroducido esta vez por mí (v12.32.26)
+
+- **Qué pasó**: nada más desplegarse la v12.32.25, el log mostró `WARNING No se pudo listar las tablas sin RLS: 0` — la consulta que debía detectar las tablas sin RLS falló y la lista quedó vacía, así que esa entrega no activó RLS en ninguna tabla. No afectó a nada más (fallo de post-procesado en Python, no de la sentencia SQL), pero el problema de seguridad seguía sin resolverse en producción.
+- **Causa**: la conexión de `_auto_migrate()` usa `cursor_factory=RealDictCursor` (cada fila es un diccionario por nombre de columna, no una tupla) — ya documentado en un comentario de v12.32.06 unas líneas más abajo en la misma función, a raíz de un `KeyError: 0` real anterior. El código de v12.32.25 hacía `fila[0]`, que busca la clave entera 0 en un diccionario y no existe — de ahí el `KeyError: 0` (y `str(KeyError(0))` es literalmente "0", el mensaje que salió en el log). La v12.32.25 sí se probó contra un PostgreSQL real, pero solo por `psql` — confirma que la SQL es correcta, pero nunca habría revelado este fallo, que es de cómo psycopg2 entrega las filas, no de la sentencia SQL.
+- **Cambio en `app.py`**: `fila[0]` → `fila["relname"]`. Ningún otro cambio de lógica.
+- **Verificación**: esta vez con `psycopg2` real y `cursor_factory=RealDictCursor` (no solo `psql`) contra un PostgreSQL 16 aislado: reproducido el fallo exacto de la v12.32.25 (`KeyError(0)`, `str(e) == "0"`, igual que el log de Render); con el fix, la consulta detecta bien las tablas sin RLS, `ENABLE ROW LEVEL SECURITY` se aplica en todas, y una segunda pasada confirma que no queda ninguna. `python3 -m py_compile app.py` sin errores. No probado contra producción — a confirmar tras desplegar: que el log de arranque ya no muestre ese aviso, y volver a correr el Security Advisor de Supabase.
+- **Lección, ya anotada dos veces en este archivo**: cualquier código nuevo en `_auto_migrate()` debe leer filas por nombre de columna (`fila["columna"]`), nunca por posición — y probar una consulta solo con `psql` no basta para detectar este tipo de fallo, hace falta probarla con el mismo cliente/`cursor_factory` que usa la app.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html` (solo versión), `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] Seguridad: RLS activado en TODAS las tablas del esquema public sin él — no solo las 3 del Security Advisor, otras ~37 más en la misma situación desde su creación (v12.32.25)
 
 - **Aviso de Víctor**: 3 filas del linter de seguridad de Supabase ("RLS Disabled in Public", ERROR) para `sap_pedidos_lineas`, `sap_pedidos_listado` y `sap_albaranes_lineas`.

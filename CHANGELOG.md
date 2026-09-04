@@ -1,3 +1,23 @@
+# v12.32.26 — 4 septiembre 2026
+
+Corregido bug real de la v12.32.25: el fix de RLS no activaba nada — mismo "KeyError: 0" de RealDictCursor ya documentado en agosto para otra sentencia, esta vez introducido por mí sin volver a mirar esa nota
+
+**Qué pasó**: nada más desplegarse la v12.32.25, el log de Render mostró `WARNING No se pudo listar las tablas sin RLS: 0` — la consulta que debía detectar las tablas sin RLS falló y la lista quedó vacía, así que la propia entrega que decía cerrar el hueco de seguridad **no activó RLS en ninguna tabla** esa ejecución. La app no se cayó ni afectó a nada más (el fallo es de un post-procesado en Python, no de la sentencia SQL en sí, así que el resto de `_auto_migrate()` y el arranque siguieron con normalidad), pero el problema de fondo (RLS desactivado) seguía sin resolverse en producción pese a la entrega anterior.
+
+**Causa — un bug ya documentado en este mismo `app.py`, que no volví a repasar antes de escribir código nuevo cerca**: la conexión de `_auto_migrate()` abre su cursor con `cursor_factory=RealDictCursor` (para que cada fila salga como diccionario por nombre de columna, no como tupla), tal y como ya explica un comentario de v12.32.06 unas líneas más abajo en esta misma función, a raíz de un `KeyError: 0` real que entonces también costó investigar. El código nuevo de v12.32.25 hacía `fila[0]` para leer el nombre de la tabla — busca la clave entera `0` en un diccionario, que no existe, de ahí el `KeyError: 0` (y `str(KeyError(0))` es literalmente `"0"`, el mensaje que salió en el log). La entrega anterior SÍ se probó contra un PostgreSQL real antes de enviarse, pero solo por `psql` (línea de comandos) — eso confirma que la consulta SQL en sí es correcta, pero no habría revelado nunca este fallo, que es de cómo psycopg2 entrega las filas a Python, no de la sentencia SQL.
+
+**Cambio en `app.py`**: `fila[0]` → `fila["relname"]` (se lee la columna por su nombre real, como ya hace el resto de `_auto_migrate()` desde que se corrigió el mismo problema en v12.32.06). Ningún otro cambio de lógica.
+
+**Verificación — esta vez contra el mismo tipo de conexión que usa la app, no solo `psql`**: se instaló `psycopg2` y se reprodujo el bloque exacto de `_auto_migrate()` contra un PostgreSQL 16 real y aislado, abriendo la conexión con `cursor_factory=RealDictCursor` (igual que hace `app.py`) en vez de con `psql`. Con el código de la v12.32.25 tal cual, se reprodujo el fallo exacto: `KeyError(0)`, con `str(e) == "0"` — el mismo mensaje que salió en el log de Render. Con el fix (`fila["relname"]`), la consulta detecta correctamente las tablas sin RLS, `ENABLE ROW LEVEL SECURITY` se aplica sobre cada una, y una segunda pasada de la misma consulta confirma que no queda ninguna tabla sin RLS. `python3 -m py_compile app.py` sin errores. No se ha podido probar contra la base de producción — al desplegar, conviene revisar el log de arranque y comprobar que YA NO aparece el aviso "No se pudo listar las tablas sin RLS", y volver a correr el Security Advisor de Supabase para confirmar que el aviso "RLS Disabled in Public" desaparece de verdad esta vez.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+
+**Lección para el futuro, ya anotada dos veces en este mismo archivo (v12.32.06 y ahora)**: cualquier código nuevo que lea filas de una conexión de `_auto_migrate()` debe indexarlas por nombre de columna (`fila["columna"]`), nunca por posición (`fila[0]`) — esta conexión usa `RealDictCursor` en toda la función. Y probar una consulta nueva solo con `psql` no basta para detectar este tipo de fallo: hace falta probarla con el mismo cliente y `cursor_factory` que usa la app de verdad.
+
+**Entrega**: `app.py`, `templates/index.html` (solo versión), `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.25 — 4 septiembre 2026
 
 Seguridad: RLS activado en TODAS las tablas del esquema public que aún no lo tenían — no solo las 3 que reportó el Security Advisor, sino otras ~37 que llevaban el mismo hueco desde su creación
