@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.19
+          V 12.32.20
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1578,6 +1578,7 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-sm" id="btn-actualizar-departamentos" style="background:#6f42c1;color:#fff;border:none" onclick="abrirModalActualizarDepartamentos()">🏷️ Departamentos y líneas (SAP detallado)</button>
           <button class="btn btn-sm" id="btn-importar-albaranes" style="background:#20805c;color:#fff;border:none" onclick="abrirModalImportarAlbaranes()">📥 Importar Albaranes (SAP detallado)</button>
           <button class="btn btn-sm" id="btn-sugerencias-albaran" style="background:#b8860b;color:#fff;border:none" onclick="abrirModalSugerenciasAlbaran()">🔍 Sugerencias de Albarán</button>
+          <button class="btn btn-sm" id="btn-confirmar-albaran" style="background:#5b3a99;color:#fff;border:none" onclick="abrirModalConfirmarAlbaran()">📎 Confirmar un albarán suelto</button>
         </div>
         <div class="search-chips" id="pedidos-chips">
           <span class="search-chips-label">Busca por:</span>
@@ -3064,6 +3065,56 @@ tbody tr:last-child{border-bottom:none}
   </div>
 </div>
 
+<!-- ── MODAL CONFIRMAR UN ALBARÁN SUELTO ────────────────────────────────
+   (2026-09-04, v12.32.20) Sube el PDF de confirmación de UN albarán
+   suelto que imprime el programa de almacén (el único documento de SAP
+   que trae de forma directa el pedido asociado, campo "Pedido/s") — para
+   el caso puntual en que un albarán dé dudas y las sugerencias por
+   proveedor+artículo del listado en bloque no basten. Al guardarlo, ese
+   albarán pasa a salir como "confirmado" (no solo sugerido) en
+   "Sugerencias de Albarán" para el pedido correspondiente.
+-->
+<div class="modal-overlay" id="modal-confirmar-albaran">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-header">
+      <div class="modal-title">📎 Confirmar un albarán suelto</div>
+      <button class="close-btn" onclick="closeModal('modal-confirmar-albaran')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="conf-alb-form">
+        <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
+          Para el caso puntual en que un albarán dé dudas: sube el PDF de confirmación de
+          <strong>ese único albarán</strong> (el volcado de pantalla del programa de almacén, con el
+          campo "Pedido/s") — el programa de almacén no deja imprimir este documento por meses o
+          proveedores, solo de uno en uno. Al guardarlo, queda marcado como <strong>confirmado</strong>
+          (no una simple sugerencia) para el pedido que indique el PDF, y sustituye a cualquier
+          versión anterior guardada de ese mismo albarán.
+        </div>
+        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;align-items:end">
+          <div class="form-group">
+            <label class="form-label">Hotel <span style="color:#e74c3c">*</span></label>
+            <select class="form-control" id="conf-alb-hotel"><option value="">— Selecciona —</option></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">PDF del albarán <span style="color:#e74c3c">*</span></label>
+            <input class="form-control" type="file" id="conf-alb-file" accept="application/pdf">
+          </div>
+        </div>
+        <div style="margin-top:16px;text-align:right">
+          <button class="btn btn-gold" id="btn-conf-alb-importar" onclick="confirmarAlbaranSuelto()">Confirmar albarán</button>
+        </div>
+      </div>
+
+      <div id="conf-alb-loading" class="loading" style="display:none">Leyendo el PDF del albarán…</div>
+
+      <div id="conf-alb-resultado" style="display:none;margin-top:10px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-confirmar-albaran')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL IMPORTAR PROVEEDORES ─────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-import-prov">
   <div class="modal" style="max-width:480px">
@@ -3414,6 +3465,8 @@ async function _entrarEnApp(r) {
   if (btnImportarAlb) btnImportarAlb.style.display = G.rol === 'admin' ? '' : 'none';
   const btnSugerenciasAlb = document.getElementById('btn-sugerencias-albaran');
   if (btnSugerenciasAlb) btnSugerenciasAlb.style.display = G.rol === 'admin' ? '' : 'none';
+  const btnConfirmarAlb = document.getElementById('btn-confirmar-albaran');
+  if (btnConfirmarAlb) btnConfirmarAlb.style.display = G.rol === 'admin' ? '' : 'none';
   await loadMaestros();
   // ── Detección de versión nueva al iniciar sesión ────────────────────────
   // FLUJO A (nueva sesión / login):
@@ -7466,6 +7519,31 @@ async function buscarSugerenciasAlbaran() {
     }
 
     let html = `<p style="font-size:.85rem;color:var(--text-secondary)">Proveedor: <strong>${d.proveedor}</strong></p>`;
+
+    // (2026-09-04, v12.32.20) "Confirmados": albarán(es) que no son una
+    // sugerencia por proveedor+artículo, sino una asociación directa —
+    // porque vinieron del PDF de confirmación de un albarán suelto, o
+    // porque ya estaban registrados a mano en el propio pedido
+    // (entrada_albaran_num). Se muestran aparte, antes de la tabla de
+    // sugerencias por línea.
+    if (d.confirmados && d.confirmados.length) {
+      const fuenteTxt = f => f === 'pdf_individual'
+        ? 'PDF de confirmación del albarán'
+        : 'registrado en el pedido (nº de albarán al pasar a entrega)';
+      html += `<div style="background:#eef7ee;border:1px solid #cfe8cf;border-radius:8px;padding:10px 12px;margin-bottom:14px">
+        <div style="font-weight:700;color:#1e6b1e;margin-bottom:6px">🔒 Albarán(es) confirmado(s) para este pedido</div>`;
+      d.confirmados.forEach(c => {
+        html += `<div style="margin-bottom:8px">
+          <div style="font-size:.85rem">
+            Albarán <strong>${c.albaran_id}</strong>${c.albaran_ref ? ` (${c.albaran_ref})` : ''}
+            — ${c.lineas.length} línea(s)${c.suma_importe_lineas != null ? `, suma ${c.suma_importe_lineas.toFixed(2)} €` : ''}
+            <span style="color:#666;font-size:.78rem"> · fuente: ${fuenteTxt(c.fuente)}</span>
+          </div>
+        </div>`;
+      });
+      html += `</div>`;
+    }
+
     html += `<table class="table" style="width:100%;font-size:.82rem"><thead><tr>
       <th>Código</th><th>Descripción</th><th>Cant. recibida</th><th>Albarán(es) candidato(s)</th>
     </tr></thead><tbody>`;
@@ -7475,7 +7553,7 @@ async function buscarSugerenciasAlbaran() {
         candTxt = '<span style="color:#999">— sin candidato —</span>';
       } else {
         candTxt = l.candidatos.map(c => {
-          const marca = c.coincide_exacto ? '✅' : '❔';
+          const marca = c.confirmado ? '🔒' : (c.coincide_exacto ? '✅' : '❔');
           return `${marca} Albarán ${c.albaran_id} (${c.albaran_ref || ''}): ${c.cantidad_txt}`;
         }).join('<br>');
       }
@@ -7488,13 +7566,75 @@ async function buscarSugerenciasAlbaran() {
     });
     html += `</tbody></table>
       <p style="font-size:.78rem;color:var(--text-secondary);margin-top:8px">
-        ✅ = coincide exacta en cantidad · ❔ = candidato del mismo proveedor+artículo pero cantidad distinta ·
-        filas resaltadas = más de un candidato, revisar cuál corresponde.
+        🔒 = albarán confirmado (PDF de confirmación o registrado en el pedido) · ✅ = coincide exacta
+        en cantidad · ❔ = candidato del mismo proveedor+artículo pero cantidad distinta ·
+        filas resaltadas = más de un candidato sin confirmar, revisar cuál corresponde.
       </p>`;
     document.getElementById('sug-alb-resultado').innerHTML = html;
   } catch (e) {
     document.getElementById('sug-alb-loading').style.display = 'none';
     document.getElementById('sug-alb-resultado').innerHTML = `<p style="color:#e74c3c">Error buscando sugerencias: ${e.message}</p>`;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Confirmar un albarán suelto — v12.32.20
+   Sube el PDF de confirmación de UN albarán (único documento de SAP que
+   trae de forma directa el pedido asociado) — se procesa de forma
+   síncrona (no hay job en segundo plano, es un PDF de una página). Ver
+   _importar_albaran_confirmacion() en app.py.
+═══════════════════════════════════════════════════════════════════════ */
+function abrirModalConfirmarAlbaran() {
+  const sel = document.getElementById('conf-alb-hotel');
+  sel.innerHTML = '<option value="">— Selecciona —</option>';
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  document.getElementById('conf-alb-form').style.display = '';
+  document.getElementById('conf-alb-loading').style.display = 'none';
+  document.getElementById('conf-alb-resultado').style.display = 'none';
+  document.getElementById('conf-alb-file').value = '';
+  openModal('modal-confirmar-albaran');
+}
+
+async function confirmarAlbaranSuelto() {
+  const hotelId = val('conf-alb-hotel');
+  const file = document.getElementById('conf-alb-file').files[0];
+  if (!hotelId) { toast('Selecciona un hotel', 'error'); return; }
+  if (!file) { toast('Selecciona el PDF del albarán', 'error'); return; }
+
+  document.getElementById('conf-alb-form').style.display = 'none';
+  document.getElementById('conf-alb-loading').style.display = '';
+  document.getElementById('conf-alb-resultado').style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('hotel_id', hotelId);
+  fd.append('file', file);
+
+  try {
+    const r = await fetch('/api/albaranes/importar-confirmacion', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const d = await r.json();
+    document.getElementById('conf-alb-loading').style.display = 'none';
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error confirmando el albarán', 'error');
+      document.getElementById('conf-alb-form').style.display = '';
+      return;
+    }
+    document.getElementById('conf-alb-resultado').style.display = '';
+    const pill = (txt, bg, color) => `<span style="background:${bg};color:${color};font-weight:700;
+      padding:4px 10px;border-radius:6px;font-size:.82rem">${txt}</span>`;
+    let html = `<div style="display:flex;gap:10px;flex-wrap:wrap">
+      ${pill(`✅ Albarán ${d.albaran_id}${d.albaran_ref ? ' (' + d.albaran_ref + ')' : ''} confirmado`, '#d4edda', '#155724')}
+      ${pill(`Pedido SAP: ${d.pedido_num_sap_confirmado}`, '#e7e0f7', '#4d2f8f')}
+      ${pill(`${d.lineas_guardadas ?? 0} línea(s) guardada(s)`, '#eef1f7', '#1a3a6b')}
+    </div>`;
+    if (d.otros_pedidos_en_el_pdf && d.otros_pedidos_en_el_pdf.length) {
+      html += `<p style="margin-top:10px;color:#856404">⚠️ El PDF menciona otro(s) pedido(s) además del usado (${d.otros_pedidos_en_el_pdf.join(', ')}) — este caso no se ha visto todavía con datos reales; revisa a mano si corresponde también a este albarán.</p>`;
+    }
+    html += `<p style="margin-top:10px;font-size:.82rem;color:var(--text-secondary)">Ya puedes consultar este pedido en "🔍 Sugerencias de Albarán" — este albarán saldrá marcado como confirmado.</p>`;
+    document.getElementById('conf-alb-resultado').innerHTML = html;
+  } catch (e) {
+    document.getElementById('conf-alb-loading').style.display = 'none';
+    document.getElementById('conf-alb-form').style.display = '';
+    toast('Error confirmando el albarán: ' + e.message, 'error');
   }
 }
 
@@ -8445,6 +8585,8 @@ function calcDias(s) {
     if (btnImportarAlb2) btnImportarAlb2.style.display = G.rol === 'admin' ? '' : 'none';
     const btnSugerenciasAlb2 = document.getElementById('btn-sugerencias-albaran');
     if (btnSugerenciasAlb2) btnSugerenciasAlb2.style.display = G.rol === 'admin' ? '' : 'none';
+    const btnConfirmarAlb2 = document.getElementById('btn-confirmar-albaran');
+    if (btnConfirmarAlb2) btnConfirmarAlb2.style.display = G.rol === 'admin' ? '' : 'none';
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     _checkIntegridadBadge();  // badge silencioso en sidebar para admin

@@ -2155,30 +2155,54 @@ def _auto_migrate():
             # deje filas duplicadas.
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS sap_albaranes_lineas (
-                    id                 SERIAL PRIMARY KEY,
-                    hotel_id           INTEGER NOT NULL REFERENCES hoteles(id),
-                    periodo_desde      TEXT,
-                    periodo_hasta      TEXT,
-                    proveedor_codigo   TEXT,
-                    proveedor_nombre   TEXT,
-                    albaran_id         TEXT,
-                    albaran_ref        TEXT,
-                    familia_codigo     TEXT,
-                    familia_nombre     TEXT,
-                    codigo_articulo    TEXT,
-                    descripcion        TEXT,
-                    unidad             TEXT,
-                    formato            TEXT,
-                    cantidad_txt       TEXT,
-                    precio_txt         TEXT,
-                    descuento_pct_txt  TEXT,
-                    importe_txt        TEXT,
-                    creado_en          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    id                          SERIAL PRIMARY KEY,
+                    hotel_id                    INTEGER NOT NULL REFERENCES hoteles(id),
+                    periodo_desde               TEXT,
+                    periodo_hasta               TEXT,
+                    proveedor_codigo            TEXT,
+                    proveedor_nombre            TEXT,
+                    albaran_id                  TEXT,
+                    albaran_ref                 TEXT,
+                    familia_codigo              TEXT,
+                    familia_nombre              TEXT,
+                    codigo_articulo             TEXT,
+                    descripcion                 TEXT,
+                    unidad                      TEXT,
+                    formato                     TEXT,
+                    cantidad_txt                TEXT,
+                    precio_txt                  TEXT,
+                    descuento_pct_txt           TEXT,
+                    importe_txt                 TEXT,
+                    pedido_num_sap_confirmado   TEXT,
+                    creado_en                   TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
             cur.execute("""
                 CREATE INDEX IF NOT EXISTS sap_albaranes_lineas_hotel_codigo_idx
                     ON sap_albaranes_lineas (hotel_id, codigo_articulo)
+            """)
+            # (2026-09-04, v12.32.20) `pedido_num_sap_confirmado` — columna
+            # añadida a una tabla que ya podía existir desde v12.32.19, así
+            # que además de ir en el CREATE TABLE de arriba (instalaciones
+            # nuevas) hace falta este ALTER idempotente para las que ya la
+            # tenían creada sin ella. Se rellena SOLO al importar el PDF de
+            # confirmación de un albarán suelto (ver
+            # _importar_albaran_confirmacion()), que es el único documento
+            # de SAP que trae el número de pedido asociado a un albarán
+            # directamente — nunca se adivina ni se calcula.
+            try:
+                cur.execute(
+                    "ALTER TABLE sap_albaranes_lineas ADD COLUMN IF NOT EXISTS pedido_num_sap_confirmado TEXT"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo añadir la columna sap_albaranes_lineas.pedido_num_sap_confirmado: {e}")
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS sap_albaranes_lineas_hotel_albaranid_idx
+                    ON sap_albaranes_lineas (hotel_id, albaran_id)
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS sap_albaranes_lineas_pedido_confirmado_idx
+                    ON sap_albaranes_lineas (hotel_id, pedido_num_sap_confirmado)
             """)
         db.close()
         log.info("Auto-migración OK")
@@ -10648,6 +10672,50 @@ def sugerencias_albaran_pedido(pedido_id):
         return jsonify({"error": f"No se pudieron calcular sugerencias: {exc}"}), 500
     return jsonify(resultado)
 
+@app.route("/api/albaranes/importar-confirmacion", methods=["POST"])
+@login_required
+def importar_confirmacion_albaran():
+    """
+    (2026-09-04, v12.32.20) Sube el PDF de confirmación de UN albarán
+    suelto (el volcado de pantalla del programa de almacén, imprimible
+    solo de uno en uno) y guarda sus líneas en `sap_albaranes_lineas` con
+    el pedido asociado directamente confirmado — ver
+    _importar_albaran_confirmacion(). Un único PDF de una página, así que
+    a diferencia de los listados en bloque se procesa aquí mismo, sin job
+    en segundo plano.
+
+    POST /api/albaranes/importar-confirmacion
+    form-data: hotel_id, file (el PDF de un albarán suelto)
+    → {"ok": true, "albaran_id": ..., "pedido_num_sap_confirmado": ..., ...}
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+
+    hotel_id_raw = request.form.get("hotel_id")
+    if not hotel_id_raw:
+        return jsonify({"error": "Falta indicar el hotel"}), 400
+    try:
+        hotel_id = int(hotel_id_raw)
+    except ValueError:
+        return jsonify({"error": "Hotel no válido"}), 400
+    if "file" not in request.files:
+        return jsonify({"error": "No se ha adjuntado ningún archivo"}), 400
+    archivo = request.files["file"]
+    if not archivo.filename or not archivo.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "El archivo debe ser un PDF"}), 400
+    pdf_bytes = archivo.read()
+    if not pdf_bytes:
+        return jsonify({"error": "El archivo está vacío"}), 400
+
+    try:
+        resultado = _importar_albaran_confirmacion(hotel_id, pdf_bytes)
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 400
+    except Exception as exc:
+        log.error("[CONFIRMACION-ALBARAN] Error importando: %s", exc)
+        return jsonify({"error": f"No se pudo importar el PDF: {exc}"}), 500
+    return jsonify(resultado)
+
 def _parse_importe_es(s: str):
     """
     (2026-08-11) Convierte un importe con formato español ('2.852,10',
@@ -11273,7 +11341,7 @@ def _sugerencias_albaran_pedido(pedido_id: int) -> dict:
                      ambiguo: bool}, ... ]}
     """
     pedido = query(
-        "SELECT id, hotel_id, pedido_num, proveedor_id FROM pedidos WHERE id=%s",
+        "SELECT id, hotel_id, pedido_num, proveedor_id, entrada_albaran_num FROM pedidos WHERE id=%s",
         (pedido_id,), one=True
     )
     if not pedido:
@@ -11311,6 +11379,73 @@ def _sugerencias_albaran_pedido(pedido_id: int) -> dict:
                      "Pedidos detallado (botón \"Departamentos y líneas\") para el periodo que incluya este pedido.",
         }
 
+    # ── Confirmados (2026-09-04, v12.32.20) ──────────────────────────────────
+    # Dos fuentes DIRECTAS, nunca inferidas por proveedor+artículo, de qué
+    # albarán corresponde a este pedido — a petición de Víctor:
+    #   (a) el PDF de confirmación de un albarán suelto que SAP sí deja
+    #       imprimir con el pedido asociado (ver
+    #       _importar_albaran_confirmacion() / pedido_num_sap_confirmado),
+    #   (b) el nº de albarán que ya se registra a mano en el propio pedido
+    #       al pasarlo a Entrega parcial/Total (`entrada_albaran_num`) —
+    #       confirmado por Víctor que es el "número de asiento DALI/SAP",
+    #       el mismo que `sap_albaranes_lineas.albaran_id` (con o sin ceros
+    #       a la izquierda, de ahí _normalizar_num_albaran()).
+    # Cuando alguna de las dos aparece, es la respuesta definitiva — las
+    # sugerencias por proveedor+artículo de más abajo pasan a ser solo un
+    # apoyo para las líneas que ese albarán confirmado no cubra.
+    pedido_num_norm = _normalizar_pedido_num(pedido["pedido_num"])
+    albaran_ids_confirmados = {}  # albaran_id (tal cual en BD) -> fuente
+
+    filas_confirmadas_pdf = rows_to_list(query(
+        "SELECT DISTINCT albaran_id FROM sap_albaranes_lineas "
+        "WHERE hotel_id=%s AND pedido_num_sap_confirmado IS NOT NULL AND albaran_id IS NOT NULL",
+        (pedido["hotel_id"],)
+    ))
+    for f in filas_confirmadas_pdf:
+        # Reconsulta acotada al albarán candidato, para comparar el pedido
+        # confirmado con normalización de ceros a la izquierda sin tener
+        # que traer aquí todas las líneas de todos los albaranes del hotel.
+        fila_pdf = query(
+            "SELECT pedido_num_sap_confirmado FROM sap_albaranes_lineas "
+            "WHERE hotel_id=%s AND albaran_id=%s AND pedido_num_sap_confirmado IS NOT NULL LIMIT 1",
+            (pedido["hotel_id"], f["albaran_id"]), one=True
+        )
+        if fila_pdf and _normalizar_pedido_num(fila_pdf["pedido_num_sap_confirmado"]) == pedido_num_norm:
+            albaran_ids_confirmados[f["albaran_id"]] = "pdf_individual"
+
+    entradas_registradas = _parse_albaran_entries(pedido.get("entrada_albaran_num"))
+    if entradas_registradas:
+        albaranes_disponibles = rows_to_list(query(
+            "SELECT DISTINCT albaran_id FROM sap_albaranes_lineas WHERE hotel_id=%s AND albaran_id IS NOT NULL",
+            (pedido["hotel_id"],)
+        ))
+        idx_norm_disponibles = {}
+        for a in albaranes_disponibles:
+            idx_norm_disponibles.setdefault(_normalizar_num_albaran(a["albaran_id"]), a["albaran_id"])
+        for entrada in entradas_registradas:
+            albaran_id_real = idx_norm_disponibles.get(_normalizar_num_albaran(entrada["num"]))
+            if albaran_id_real and albaran_id_real not in albaran_ids_confirmados:
+                albaran_ids_confirmados[albaran_id_real] = "albaran_registrado_en_pedido"
+
+    confirmados = []
+    for albaran_id, fuente in albaran_ids_confirmados.items():
+        lineas_alb = rows_to_list(query(
+            "SELECT albaran_ref, codigo_articulo, descripcion, cantidad_txt, importe_txt "
+            "FROM sap_albaranes_lineas WHERE hotel_id=%s AND albaran_id=%s",
+            (pedido["hotel_id"], albaran_id)
+        ))
+        suma_importe = sum(_parse_importe_es(l["importe_txt"]) for l in lineas_alb) if lineas_alb else None
+        confirmados.append({
+            "fuente": fuente,
+            "albaran_id": albaran_id,
+            "albaran_ref": lineas_alb[0]["albaran_ref"] if lineas_alb else None,
+            "suma_importe_lineas": suma_importe,
+            "lineas": [
+                {"codigo_articulo": l["codigo_articulo"], "descripcion": l["descripcion"], "cantidad_txt": l["cantidad_txt"]}
+                for l in lineas_alb
+            ],
+        })
+
     codigos = sorted({l["codigo_articulo"] for l in lineas_pedido if l["codigo_articulo"]})
     candidatos_bruto = rows_to_list(query(
         "SELECT proveedor_nombre, codigo_articulo, albaran_id, albaran_ref, cantidad_txt "
@@ -11337,18 +11472,167 @@ def _sugerencias_albaran_pedido(pedido_id: int) -> dict:
                 "albaran_ref": c["albaran_ref"],
                 "cantidad_txt": c["cantidad_txt"],
                 "coincide_exacto": abs(cant_alb - cant_rec) < 0.01,
+                "confirmado": c["albaran_id"] in albaran_ids_confirmados,
             })
-        # Los candidatos con coincidencia exacta primero, para que salten a la vista.
-        cands_out.sort(key=lambda x: not x["coincide_exacto"])
+        # Los confirmados primero, luego coincidencia exacta, para que salten a la vista.
+        cands_out.sort(key=lambda x: (not x["confirmado"], not x["coincide_exacto"]))
         resultado_lineas.append({
             "codigo_articulo": l["codigo_articulo"],
             "descripcion": l["descripcion"],
             "cantidad_recibida_txt": l["cantidad_recibida_txt"],
             "candidatos": cands_out,
-            "ambiguo": len(cands_out) > 1,
+            "ambiguo": len(cands_out) > 1 and not any(c["confirmado"] for c in cands_out),
         })
 
-    return {"aplica": True, "proveedor": proveedor["nombre"], "lineas": resultado_lineas}
+    return {"aplica": True, "proveedor": proveedor["nombre"], "confirmados": confirmados, "lineas": resultado_lineas}
+
+
+# (2026-09-04, v12.32.20) Cabecera de metadatos del PDF de confirmación de
+# UN albarán suelto (el volcado de pantalla del programa de almacén,
+# imprimible solo de uno en uno — no en bloque por mes/proveedor, a
+# diferencia del Listado de Albaranes). Formato "Pedido/s":
+# "NNNNNNNN - Pedido DD/MM/AAAA HH:MM:SS" — puede haber más de uno (de ahí
+# el "/s"), aunque no se ha visto ningún ejemplo real con más de uno.
+_PATRON_PEDIDO_EN_CONFIRMACION_ALBARAN = re.compile(
+    r'(\d{6,})\s*-\s*Pedido\s+\d{2}/\d{2}/\d{4}\s+\d{1,2}:\d{2}:\d{2}'
+)
+
+def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes) -> dict:
+    """
+    (2026-09-04, v12.32.20) Lee el PDF de confirmación de UN albarán suelto
+    (a petición de Víctor, para resolver a mano un caso puntual donde el
+    cruce por proveedor+artículo del Listado de Albaranes en bloque no
+    basta) — es el ÚNICO documento de SAP que trae de forma directa el
+    número de pedido asociado a un albarán, en el campo "Pedido/s".
+
+    Devuelve:
+      {"albaran_id": str|None, "albaran_ref": str|None,
+       "proveedor_codigo": str|None, "proveedor_nombre": str|None,
+       "pedidos_num_sap": [str, ...], "fecha_albaran": str|None,
+       "lineas": [ {codigo_articulo, descripcion, unidad, cantidad_txt,
+                     precio_txt, importe_txt}, ... ]}
+
+    Un PDF que no tenga el campo "Pedido/s" reconocible, o sin ninguna
+    línea de artículo, se trata como error — no tiene sentido guardarlo
+    sin la asociación que es la razón de ser de esta función.
+    """
+    import pdfplumber, io
+
+    metadatos = {}
+    lineas = []
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for pagina in pdf.pages:
+                try:
+                    tablas = pagina.extract_tables()
+                except Exception:
+                    tablas = []
+                for tabla in tablas:
+                    if not tabla:
+                        continue
+                    primera_fila = tabla[0]
+                    if primera_fila and (primera_fila[0] or "").strip() == "Tipo":
+                        # Tabla de líneas de artículo: Tipo, Código, Descripción,
+                        # Unidad, Cantidad, Regalo, Precio, % Dto, Imp %, Importe, ...
+                        for fila in tabla[1:]:
+                            if not fila or (fila[0] or "").strip() != "Artículo":
+                                continue
+                            lineas.append({
+                                "codigo_articulo": (fila[1] or "").strip() or None,
+                                "descripcion":      (fila[2] or "").strip() or None,
+                                "unidad":           (fila[3] or "").strip() or None,
+                                "cantidad_txt":     (fila[4] or "").strip() or None,
+                                "precio_txt":       (fila[6] or "").strip() or None,
+                                "importe_txt":      (fila[9] or "").strip() or None,
+                            })
+                        continue
+                    # Tabla de metadatos: filas [clave, valor]
+                    for fila in tabla:
+                        if not fila or len(fila) < 2:
+                            continue
+                        clave = (fila[0] or "").strip()
+                        valor = (fila[1] or "").strip()
+                        if clave and valor:
+                            metadatos[clave] = valor
+                pagina.flush_cache()
+    except Exception as exc:
+        log.error("[CONFIRMACION-ALBARAN] Error leyendo el PDF: %s", exc)
+        raise RuntimeError(f"No se pudo leer el PDF: {exc}")
+
+    pedido_raw = metadatos.get("Pedido/s") or ""
+    pedidos_num_sap = _PATRON_PEDIDO_EN_CONFIRMACION_ALBARAN.findall(pedido_raw)
+    if not pedidos_num_sap:
+        raise RuntimeError(
+            "No se ha reconocido ningún pedido asociado en el campo \"Pedido/s\" del PDF — "
+            "¿es el volcado de un albarán suelto del programa de almacén, con ese campo?"
+        )
+    if not lineas:
+        raise RuntimeError("No se ha reconocido ninguna línea de artículo en el PDF.")
+
+    prov_raw = metadatos.get("Proveedor") or ""
+    prov_partes = prov_raw.split(" - ", 1)
+    proveedor_codigo = prov_partes[0].strip() if prov_partes and prov_partes[0].strip() else None
+    proveedor_nombre = prov_partes[1].strip() if len(prov_partes) > 1 else (prov_raw or None)
+
+    return {
+        "albaran_id": metadatos.get("Código"),
+        "albaran_ref": metadatos.get("Albarán Proveedor"),
+        "proveedor_codigo": proveedor_codigo,
+        "proveedor_nombre": proveedor_nombre,
+        "pedidos_num_sap": pedidos_num_sap,
+        "fecha_albaran": metadatos.get("Fecha Albarán"),
+        "lineas": lineas,
+    }
+
+
+def _importar_albaran_confirmacion(hotel_id: int, pdf_bytes: bytes) -> dict:
+    """
+    (2026-09-04, v12.32.20) Guarda en `sap_albaranes_lineas` las líneas del
+    PDF de confirmación de un albarán suelto, con `pedido_num_sap_confirmado`
+    relleno — a diferencia de `_importar_albaranes_listado()` (el listado en
+    bloque), aquí SÍ sabemos con certeza a qué pedido pertenece, porque el
+    propio PDF lo dice. Si el albarán ya existía guardado (de una subida
+    anterior de este mismo PDF, o porque también apareció en el listado en
+    bloque), se reemplaza por esta versión — más fiable, al traer la
+    confirmación directa del pedido.
+    """
+    datos = _extraer_albaran_confirmacion_individual(pdf_bytes)
+    albaran_id = datos["albaran_id"]
+    if not albaran_id:
+        raise RuntimeError("El PDF no trae el campo \"Código\" (identificador del albarán) — no se puede guardar sin él.")
+
+    if len(datos["pedidos_num_sap"]) > 1:
+        log.warning(
+            "[CONFIRMACION-ALBARAN] Albarán %s asociado a más de un pedido (%s) — se guardan todas las líneas "
+            "marcadas con el primero; caso no visto todavía con datos reales, revisar si ocurre.",
+            albaran_id, datos["pedidos_num_sap"]
+        )
+    pedido_num_sap_confirmado = datos["pedidos_num_sap"][0]
+
+    execute("DELETE FROM sap_albaranes_lineas WHERE hotel_id=%s AND albaran_id=%s", (hotel_id, albaran_id))
+    for ln in datos["lineas"]:
+        execute(
+            """INSERT INTO sap_albaranes_lineas
+                   (hotel_id, proveedor_codigo, proveedor_nombre, albaran_id, albaran_ref,
+                    codigo_articulo, descripcion, unidad, cantidad_txt, precio_txt, importe_txt,
+                    pedido_num_sap_confirmado)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (hotel_id, datos["proveedor_codigo"], datos["proveedor_nombre"], albaran_id, datos["albaran_ref"],
+             ln.get("codigo_articulo"), ln.get("descripcion"), ln.get("unidad"), ln.get("cantidad_txt"),
+             ln.get("precio_txt"), ln.get("importe_txt"), pedido_num_sap_confirmado)
+        )
+    get_db().commit()
+
+    return {
+        "ok": True,
+        "albaran_id": albaran_id,
+        "albaran_ref": datos["albaran_ref"],
+        "proveedor_nombre": datos["proveedor_nombre"],
+        "pedido_num_sap_confirmado": pedido_num_sap_confirmado,
+        "otros_pedidos_en_el_pdf": datos["pedidos_num_sap"][1:],
+        "lineas_guardadas": len(datos["lineas"]),
+    }
 
 
 def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
