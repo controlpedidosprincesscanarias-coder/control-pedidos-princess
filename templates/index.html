@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.18
+          V 12.32.19
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1576,6 +1576,8 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
           <button class="btn btn-sm" id="btn-comparar-listado-pdf" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCompararListado()">📄 Comparar listado PDF</button>
           <button class="btn btn-sm" id="btn-actualizar-departamentos" style="background:#6f42c1;color:#fff;border:none" onclick="abrirModalActualizarDepartamentos()">🏷️ Departamentos y líneas (SAP detallado)</button>
+          <button class="btn btn-sm" id="btn-importar-albaranes" style="background:#20805c;color:#fff;border:none" onclick="abrirModalImportarAlbaranes()">📥 Importar Albaranes (SAP detallado)</button>
+          <button class="btn btn-sm" id="btn-sugerencias-albaran" style="background:#b8860b;color:#fff;border:none" onclick="abrirModalSugerenciasAlbaran()">🔍 Sugerencias de Albarán</button>
         </div>
         <div class="search-chips" id="pedidos-chips">
           <span class="search-chips-label">Busca por:</span>
@@ -2976,6 +2978,92 @@ tbody tr:last-child{border-bottom:none}
   </div>
 </div>
 
+<!-- ── MODAL IMPORTAR ALBARANES (SAP detallado) ─────────────────────────
+   (2026-09-04, v12.32.19) Guarda el "Listado de Albaranes de Compra" de
+   SAP tal cual, línea a línea, en sap_albaranes_lineas — sin tocar
+   pedidos ni importes. Sirve de base para "Sugerencias de Albarán". Este
+   listado NO trae el número de pedido SAP (handicap conocido del
+   programa de almacén), así que el cruce se hace luego, por proveedor +
+   código de artículo, al pedir sugerencias para un pedido concreto.
+-->
+<div class="modal-overlay" id="modal-importar-albaranes">
+  <div class="modal" style="max-width:640px">
+    <div class="modal-header">
+      <div class="modal-title">📥 Importar listado de Albaranes (SAP detallado)</div>
+      <button class="close-btn" onclick="closeModal('modal-importar-albaranes')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="alb-list-form">
+        <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
+          Sube el "Listado de Albaranes de Compra" que exporta SAP para un hotel (jerárquico:
+          Proveedor → Albarán → Familia → Subfamilia → Artículo). Se guarda tal cual, de solo
+          lectura frente al resto de la app — no toca pedidos, importes ni estados de entrega.
+          Al volver a subir un listado del mismo periodo (detectado en la cabecera del PDF), se
+          reemplazan las filas ya guardadas de ese periodo, para no duplicar.
+        </div>
+        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;align-items:end">
+          <div class="form-group">
+            <label class="form-label">Hotel <span style="color:#e74c3c">*</span></label>
+            <select class="form-control" id="alb-list-hotel"><option value="">— Selecciona —</option></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Listado de Albaranes (SAP) <span style="color:#e74c3c">*</span></label>
+            <input class="form-control" type="file" id="alb-list-file" accept="application/pdf">
+          </div>
+        </div>
+        <div style="margin-top:16px;text-align:right">
+          <button class="btn btn-gold" id="btn-alb-list-importar" onclick="importarListadoAlbaranes()">Importar listado</button>
+        </div>
+      </div>
+
+      <div id="alb-list-loading" class="loading" style="display:none">Leyendo el listado de Albaranes…</div>
+
+      <div id="alb-list-resultado" style="display:none;margin-top:10px">
+        <div id="alb-list-resumen" style="display:flex;gap:10px;flex-wrap:wrap"></div>
+        <div id="alb-list-avisos" style="margin-top:10px;font-size:.82rem;color:var(--text-secondary)"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-importar-albaranes')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── MODAL SUGERENCIAS DE ALBARÁN ─────────────────────────────────────
+   (2026-09-04, v12.32.19) Para un pedido concreto (de un proveedor
+   "sujeto a seguimiento"), muestra con qué línea(s) de albarán ya
+   importadas podría corresponder cada artículo del pedido — cruzando por
+   proveedor + código de artículo. Es una SUGERENCIA para revisar a
+   mano, nunca una asociación automática: no escribe nada en el pedido.
+-->
+<div class="modal-overlay" id="modal-sugerencias-albaran">
+  <div class="modal" style="max-width:700px">
+    <div class="modal-header">
+      <div class="modal-title">🔍 Sugerencias de Albarán para un pedido</div>
+      <button class="close-btn" onclick="closeModal('modal-sugerencias-albaran')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
+        Escribe el número de pedido SAP. Se compara, artículo a artículo, con los albaranes ya
+        importados del mismo proveedor — son sugerencias para revisar a mano, no una asociación
+        automática ni definitiva.
+      </div>
+      <div class="form-grid" style="grid-template-columns:2fr 1fr;gap:14px;align-items:end">
+        <div class="form-group">
+          <label class="form-label">Nº de pedido SAP</label>
+          <input class="form-control" type="text" id="sug-alb-pedido-num" placeholder="p. ej. 00038482">
+        </div>
+        <button class="btn btn-gold" onclick="buscarSugerenciasAlbaran()">Buscar</button>
+      </div>
+      <div id="sug-alb-loading" class="loading" style="display:none">Buscando sugerencias…</div>
+      <div id="sug-alb-resultado" style="margin-top:14px"></div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-sugerencias-albaran')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL IMPORTAR PROVEEDORES ─────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-import-prov">
   <div class="modal" style="max-width:480px">
@@ -3321,6 +3409,11 @@ async function _entrarEnApp(r) {
   // (2026-09-04) Actualizar departamentos (listado detallado): solo admin, mismo criterio
   const btnActualizarDeptos = document.getElementById('btn-actualizar-departamentos');
   if (btnActualizarDeptos) btnActualizarDeptos.style.display = G.rol === 'admin' ? '' : 'none';
+  // (2026-09-04) Importar Albaranes / Sugerencias de Albarán: solo admin, mismo criterio
+  const btnImportarAlb = document.getElementById('btn-importar-albaranes');
+  if (btnImportarAlb) btnImportarAlb.style.display = G.rol === 'admin' ? '' : 'none';
+  const btnSugerenciasAlb = document.getElementById('btn-sugerencias-albaran');
+  if (btnSugerenciasAlb) btnSugerenciasAlb.style.display = G.rol === 'admin' ? '' : 'none';
   await loadMaestros();
   // ── Detección de versión nueva al iniciar sesión ────────────────────────
   // FLUJO A (nueva sesión / login):
@@ -7219,6 +7312,192 @@ async function _pollActualizarDepartamentos(jobId, intentos) {
   document.getElementById('dep-list-avisos').innerHTML = avisos;
 }
 
+/* ═══════════════════════════════════════════════════════════════════════
+   Importar Albaranes (Listado de Albaranes de Compra de SAP) — v12.32.19
+   Guarda sap_albaranes_lineas tal cual, de solo lectura frente al resto
+   de la app — ver _importar_albaranes_listado() en app.py.
+═══════════════════════════════════════════════════════════════════════ */
+function abrirModalImportarAlbaranes() {
+  const sel = document.getElementById('alb-list-hotel');
+  sel.innerHTML = '<option value="">— Selecciona —</option>';
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  document.getElementById('alb-list-form').style.display = '';
+  document.getElementById('alb-list-loading').style.display = 'none';
+  document.getElementById('alb-list-resultado').style.display = 'none';
+  document.getElementById('alb-list-file').value = '';
+  openModal('modal-importar-albaranes');
+}
+
+async function importarListadoAlbaranes() {
+  const hotelId = val('alb-list-hotel');
+  const file = document.getElementById('alb-list-file').files[0];
+  if (!hotelId) { toast('Selecciona un hotel', 'error'); return; }
+  if (!file) { toast('Selecciona el listado de Albaranes (SAP)', 'error'); return; }
+
+  document.getElementById('alb-list-form').style.display = 'none';
+  document.getElementById('alb-list-loading').style.display = '';
+  document.getElementById('alb-list-resultado').style.display = 'none';
+
+  const fd = new FormData();
+  fd.append('hotel_id', hotelId);
+  fd.append('file', file);
+
+  let jobId;
+  try {
+    const r = await fetch('/api/albaranes/importar-listado', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error importando el listado de Albaranes', 'error');
+      document.getElementById('alb-list-form').style.display = '';
+      document.getElementById('alb-list-loading').style.display = 'none';
+      return;
+    }
+    jobId = d.job_id;
+  } catch (e) {
+    toast('Error importando el listado de Albaranes: ' + e.message, 'error');
+    document.getElementById('alb-list-form').style.display = '';
+    document.getElementById('alb-list-loading').style.display = 'none';
+    return;
+  }
+  _pollImportarAlbaranes(jobId, 0);
+}
+
+async function _pollImportarAlbaranes(jobId, intentos) {
+  if (intentos > 150) {
+    toast('La importación está tardando demasiado — inténtalo de nuevo en unos minutos', 'error');
+    document.getElementById('alb-list-form').style.display = '';
+    document.getElementById('alb-list-loading').style.display = 'none';
+    return;
+  }
+  let d;
+  try {
+    const r = await fetch(`/api/albaranes/importar-listado/${jobId}`, { credentials: 'same-origin' });
+    d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error importando el listado de Albaranes', 'error');
+      document.getElementById('alb-list-form').style.display = '';
+      document.getElementById('alb-list-loading').style.display = 'none';
+      return;
+    }
+  } catch (e) {
+    setTimeout(() => _pollImportarAlbaranes(jobId, intentos + 1), 2000);
+    return;
+  }
+
+  if (d.status === 'processing') {
+    setTimeout(() => _pollImportarAlbaranes(jobId, intentos + 1), 2000);
+    return;
+  }
+  if (d.status === 'error') {
+    toast(d.error || 'Error importando el listado de Albaranes', 'error');
+    document.getElementById('alb-list-form').style.display = '';
+    document.getElementById('alb-list-loading').style.display = 'none';
+    return;
+  }
+  // status === 'done'
+  const res = d.resultado || {};
+  document.getElementById('alb-list-loading').style.display = 'none';
+  document.getElementById('alb-list-resultado').style.display = '';
+  const pill = (txt, bg, color) => `<span style="background:${bg};color:${color};font-weight:700;
+    padding:4px 10px;border-radius:6px;font-size:.82rem">${txt}</span>`;
+  document.getElementById('alb-list-resumen').innerHTML = `
+    ${pill(`${res.total_filas ?? 0} línea(s) importada(s)`, '#d4edda', '#155724')}
+    ${pill(`${res.proveedores_distintos ?? 0} proveedor(es)`, '#eef1f7', '#1a3a6b')}
+    ${res.periodo_reconocido ? pill(`Periodo: ${res.periodo_desde} — ${res.periodo_hasta}`, '#e7e0f7', '#4d2f8f') : pill('Periodo no reconocido en la cabecera', '#fff3cd', '#856404')}
+    ${(res.filas_borradas_reemplazadas || 0) > 0 ? pill(`${res.filas_borradas_reemplazadas} línea(s) anterior(es) del mismo periodo reemplazada(s)`, '#f8f9fa', '#666') : ''}
+  `;
+  let avisos = '';
+  if (!res.periodo_reconocido) {
+    avisos += `<p>⚠️ No se ha reconocido el periodo en la cabecera del PDF — las líneas se han añadido sin borrar nada anterior, para no arriesgarse a borrar datos de otro periodo por error. Si repites esta subida, puede que se dupliquen líneas.</p>`;
+  }
+  document.getElementById('alb-list-avisos').innerHTML = avisos;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Sugerencias de Albarán para un pedido — v12.32.19
+   Cruza sap_pedidos_lineas x sap_albaranes_lineas por proveedor+código de
+   artículo (ver _sugerencias_albaran_pedido en app.py). Es una sugerencia
+   de revisión manual, nunca escribe nada en el pedido.
+═══════════════════════════════════════════════════════════════════════ */
+function abrirModalSugerenciasAlbaran() {
+  document.getElementById('sug-alb-pedido-num').value = '';
+  document.getElementById('sug-alb-loading').style.display = 'none';
+  document.getElementById('sug-alb-resultado').innerHTML = '';
+  openModal('modal-sugerencias-albaran');
+}
+
+async function buscarSugerenciasAlbaran() {
+  const num = (document.getElementById('sug-alb-pedido-num').value || '').trim();
+  if (!num) { toast('Escribe un número de pedido', 'error'); return; }
+
+  document.getElementById('sug-alb-loading').style.display = '';
+  document.getElementById('sug-alb-resultado').innerHTML = '';
+
+  try {
+    // 1) Resolver el id interno del pedido a partir del nº SAP (búsqueda
+    //    exacta sobre el resultado de /api/pedidos?q=..., que ya filtra
+    //    por pedido_num ILIKE).
+    const rBusq = await fetch(`/api/pedidos?q=${encodeURIComponent(num)}&page_size=25`, { credentials: 'same-origin' });
+    const dBusq = await rBusq.json();
+    const candidatos = (dBusq.pedidos || []).filter(p => (p.pedido_num || '').replace(/^0+/, '') === num.replace(/^0+/, ''));
+    if (!candidatos.length) {
+      document.getElementById('sug-alb-loading').style.display = 'none';
+      document.getElementById('sug-alb-resultado').innerHTML = `<p style="color:#856404">No se encuentra ningún pedido dado de alta en la app con ese número — ¿está creado ya? (Admin → Pedidos → Crear pedidos desde SAP, si viene del listado resumido pero aún no está de alta.)</p>`;
+      return;
+    }
+    const pedido = candidatos[0];
+
+    // 2) Sugerencias para ese pedido.
+    const r = await fetch(`/api/pedidos/${pedido.id}/sugerencias-albaran`, { credentials: 'same-origin' });
+    const d = await r.json();
+    document.getElementById('sug-alb-loading').style.display = 'none';
+
+    if (!d.aplica) {
+      document.getElementById('sug-alb-resultado').innerHTML = `<p style="color:#856404">${d.motivo || 'No aplica para este pedido.'}</p>`;
+      return;
+    }
+    if (d.aviso) {
+      document.getElementById('sug-alb-resultado').innerHTML = `<p style="color:#856404">${d.aviso}</p>`;
+      return;
+    }
+    if (!d.lineas || !d.lineas.length) {
+      document.getElementById('sug-alb-resultado').innerHTML = `<p>Sin líneas que mostrar para este pedido.</p>`;
+      return;
+    }
+
+    let html = `<p style="font-size:.85rem;color:var(--text-secondary)">Proveedor: <strong>${d.proveedor}</strong></p>`;
+    html += `<table class="table" style="width:100%;font-size:.82rem"><thead><tr>
+      <th>Código</th><th>Descripción</th><th>Cant. recibida</th><th>Albarán(es) candidato(s)</th>
+    </tr></thead><tbody>`;
+    d.lineas.forEach(l => {
+      let candTxt;
+      if (!l.candidatos.length) {
+        candTxt = '<span style="color:#999">— sin candidato —</span>';
+      } else {
+        candTxt = l.candidatos.map(c => {
+          const marca = c.coincide_exacto ? '✅' : '❔';
+          return `${marca} Albarán ${c.albaran_id} (${c.albaran_ref || ''}): ${c.cantidad_txt}`;
+        }).join('<br>');
+      }
+      html += `<tr${l.ambiguo ? ' style="background:#fff8e6"' : ''}>
+        <td>${l.codigo_articulo || ''}</td>
+        <td>${l.descripcion || ''}</td>
+        <td>${l.cantidad_recibida_txt || ''}</td>
+        <td>${candTxt}</td>
+      </tr>`;
+    });
+    html += `</tbody></table>
+      <p style="font-size:.78rem;color:var(--text-secondary);margin-top:8px">
+        ✅ = coincide exacta en cantidad · ❔ = candidato del mismo proveedor+artículo pero cantidad distinta ·
+        filas resaltadas = más de un candidato, revisar cuál corresponde.
+      </p>`;
+    document.getElementById('sug-alb-resultado').innerHTML = html;
+  } catch (e) {
+    document.getElementById('sug-alb-loading').style.display = 'none';
+    document.getElementById('sug-alb-resultado').innerHTML = `<p style="color:#e74c3c">Error buscando sugerencias: ${e.message}</p>`;
+  }
+}
+
 function _renderCompararPdfResultado() {
   const d = _cmpPdfResultado;
   if (!d) return;
@@ -8162,6 +8441,10 @@ function calcDias(s) {
     if (btnCompararPdf2) btnCompararPdf2.style.display = G.rol === 'admin' ? '' : 'none';
     const btnActualizarDeptos2 = document.getElementById('btn-actualizar-departamentos');
     if (btnActualizarDeptos2) btnActualizarDeptos2.style.display = G.rol === 'admin' ? '' : 'none';
+    const btnImportarAlb2 = document.getElementById('btn-importar-albaranes');
+    if (btnImportarAlb2) btnImportarAlb2.style.display = G.rol === 'admin' ? '' : 'none';
+    const btnSugerenciasAlb2 = document.getElementById('btn-sugerencias-albaran');
+    if (btnSugerenciasAlb2) btnSugerenciasAlb2.style.display = G.rol === 'admin' ? '' : 'none';
     await loadMaestros();
     showView('dashboard', document.querySelector('[data-view="dashboard"]'));
     _checkIntegridadBadge();  // badge silencioso en sidebar para admin

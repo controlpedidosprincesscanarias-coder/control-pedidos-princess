@@ -2138,6 +2138,48 @@ def _auto_migrate():
                 CREATE INDEX IF NOT EXISTS sap_pedidos_lineas_hotel_pedido_idx
                     ON sap_pedidos_lineas (hotel_id, pedido_num_sap)
             """)
+            # (2026-09-04, v12.32.19) Contenido línea a línea del Listado de
+            # ALBARANES DETALLADO de SAP — a petición de Víctor, para poder
+            # sugerir con qué albarán(es) se corresponde cada línea de un
+            # pedido (ver _extraer_albaranes_detallado_completo() /
+            # _importar_albaranes_listado() / endpoint de sugerencias más
+            # abajo). Esta lista NO trae el número de pedido SAP (handicap
+            # conocido del programa de almacén, confirmado con Víctor), así
+            # que el cruce con `sap_pedidos_lineas` se hace en el momento de
+            # la consulta por (proveedor, código de artículo) — nunca al
+            # guardar. Sin UNIQUE: un mismo artículo puede repetirse en
+            # varios albaranes del mismo proveedor dentro del periodo. Cada
+            # subida borra las filas de ese mismo hotel+periodo (detectado
+            # en la cabecera del PDF, "Período desde ... hasta ...") antes de
+            # volver a insertar, para que repetir o corregir un listado no
+            # deje filas duplicadas.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sap_albaranes_lineas (
+                    id                 SERIAL PRIMARY KEY,
+                    hotel_id           INTEGER NOT NULL REFERENCES hoteles(id),
+                    periodo_desde      TEXT,
+                    periodo_hasta      TEXT,
+                    proveedor_codigo   TEXT,
+                    proveedor_nombre   TEXT,
+                    albaran_id         TEXT,
+                    albaran_ref        TEXT,
+                    familia_codigo     TEXT,
+                    familia_nombre     TEXT,
+                    codigo_articulo    TEXT,
+                    descripcion        TEXT,
+                    unidad             TEXT,
+                    formato            TEXT,
+                    cantidad_txt       TEXT,
+                    precio_txt         TEXT,
+                    descuento_pct_txt  TEXT,
+                    importe_txt        TEXT,
+                    creado_en          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE INDEX IF NOT EXISTS sap_albaranes_lineas_hotel_codigo_idx
+                    ON sap_albaranes_lineas (hotel_id, codigo_articulo)
+            """)
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -10506,6 +10548,106 @@ def _ejecutar_actualizacion_departamentos_bg(job_id, hotel_id, pdf_bytes):
                 if job_id in _PDF_JOBS:
                     _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
 
+@app.route("/api/albaranes/importar-listado", methods=["POST"])
+@login_required
+def importar_listado_albaranes():
+    """
+    (2026-09-04, v12.32.19) Sube el "Listado de Albaranes de Compra" de
+    SAP (jerárquico: Proveedor → Albarán → Familia → Subfamilia →
+    Artículo) y lo guarda tal cual en `sap_albaranes_lineas`, de cara a
+    poder sugerir después con qué albarán se corresponde cada línea de un
+    pedido — ver _sugerencias_albaran_pedido(). No toca pedidos, importes
+    ni estados de entrega.
+
+    POST /api/albaranes/importar-listado
+    form-data: hotel_id, file (el PDF de Albaranes)
+    → 202 {"ok": true, "job_id": "..."}
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+
+    hotel_id_raw = request.form.get("hotel_id")
+    if not hotel_id_raw:
+        return jsonify({"error": "Falta indicar el hotel"}), 400
+    try:
+        hotel_id = int(hotel_id_raw)
+    except ValueError:
+        return jsonify({"error": "Hotel no válido"}), 400
+    if "file" not in request.files:
+        return jsonify({"error": "No se ha adjuntado ningún archivo"}), 400
+    archivo = request.files["file"]
+    if not archivo.filename or not archivo.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "El archivo debe ser un PDF"}), 400
+
+    pdf_bytes = archivo.read()
+    if not pdf_bytes:
+        return jsonify({"error": "El archivo está vacío"}), 400
+
+    import time as _time_alb
+    job_id = secrets.token_hex(16)
+    with _PDF_JOBS_LOCK:
+        limite = _time_alb.time() - 1800
+        for jid in [j for j, v in _PDF_JOBS.items() if v.get("creado_en", 0) < limite]:
+            del _PDF_JOBS[jid]
+        _PDF_JOBS[job_id] = {
+            "status": "processing", "creado_en": _time_alb.time(),
+            "hotel_id": hotel_id, "usuario_id": session.get("user_id"),
+        }
+
+    hilo = threading.Thread(
+        target=_ejecutar_importacion_albaranes_bg,
+        args=(job_id, hotel_id, pdf_bytes),
+        daemon=True,
+    )
+    hilo.start()
+    return jsonify({"ok": True, "job_id": job_id}), 202
+
+@app.route("/api/albaranes/importar-listado/<job_id>", methods=["GET"])
+@login_required
+def importar_listado_albaranes_estado(job_id):
+    """Consulta del resultado de un job lanzado por importar_listado_albaranes()."""
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    with _PDF_JOBS_LOCK:
+        job = dict(_PDF_JOBS.get(job_id) or {})
+    if not job:
+        return jsonify({"error": "El job no existe o ha caducado — vuelve a subir el PDF"}), 404
+    job.pop("creado_en", None)
+    return jsonify(job)
+
+def _ejecutar_importacion_albaranes_bg(job_id, hotel_id, pdf_bytes):
+    """Mismo patrón que _ejecutar_actualizacion_departamentos_bg() — corre
+    en un hilo aparte con su propio contexto de aplicación."""
+    with app.app_context():
+        try:
+            resultado = _importar_albaranes_listado(hotel_id, pdf_bytes)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "done", "resultado": resultado}
+        except Exception as exc:
+            log.error("[IMPORTAR-ALBARANES] Error en job %s: %s", job_id, exc)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
+
+@app.route("/api/pedidos/<int:pedido_id>/sugerencias-albaran", methods=["GET"])
+@login_required
+def sugerencias_albaran_pedido(pedido_id):
+    """
+    (2026-09-04, v12.32.19) Sugerencias (no vinculantes) de con qué
+    albarán(es) ya subidos podría corresponder cada línea de este pedido —
+    ver _sugerencias_albaran_pedido(). Solo lectura, no cambia nada del
+    pedido.
+
+    GET /api/pedidos/<id>/sugerencias-albaran
+    """
+    try:
+        resultado = _sugerencias_albaran_pedido(pedido_id)
+    except Exception as exc:
+        log.error("[SUGERENCIAS-ALBARAN] Error con pedido %s: %s", pedido_id, exc)
+        return jsonify({"error": f"No se pudieron calcular sugerencias: {exc}"}), 500
+    return jsonify(resultado)
+
 def _parse_importe_es(s: str):
     """
     (2026-08-11) Convierte un importe con formato español ('2.852,10',
@@ -10923,6 +11065,290 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
         "pedidos_con_lineas": pedidos_con_lineas,
         "lineas_guardadas": lineas_guardadas,
     }
+
+
+# (2026-09-04, v12.32.19) El cruce Pedidos↔Albaranes reutiliza
+# _normalizar_nombre_proveedor() (definida más arriba, 2026-08-06) — ya
+# existía para emparejar el texto libre de los listados de SAP contra el
+# catálogo de proveedores (quita acentos/puntuación y formas societarias
+# como "SL"/"SA" al final), exactamente lo que hace falta aquí también
+# para comparar el proveedor del Listado de Pedidos con el del Listado de
+# Albaranes. Se descarta definir una versión propia para no duplicar
+# criterios de normalización que tendrían que mantenerse sincronizados.
+
+# (2026-09-04, v12.32.19) Cabecera de periodo del Listado de Albaranes de
+# Compra de SAP: "Período desde DD/MM/AAAA hasta DD/MM/AAAA".
+_PATRON_PERIODO_ALBARANES = re.compile(
+    r'Per[ií]odo\s+desde\s+(\d{2}/\d{2}/\d{4})\s+hasta\s+(\d{2}/\d{2}/\d{4})'
+)
+
+def _extraer_albaranes_detallado_completo(pdf_bytes: bytes) -> dict:
+    """
+    (2026-09-04, v12.32.19) Lee el "Listado de Albaranes de Compra" de SAP
+    — organizado de forma jerárquica por Proveedor → Albarán → Familia →
+    Subfamilia → Artículo, MUY distinto en estructura al Listado de
+    Pedidos — y devuelve un dict:
+      {"periodo_desde": "DD/MM/AAAA"|None, "periodo_hasta": "DD/MM/AAAA"|None,
+       "filas": [ {proveedor_codigo, proveedor_nombre, albaran_id,
+                    albaran_ref, familia_codigo, familia_nombre,
+                    codigo_articulo, descripcion, unidad, formato,
+                    cantidad_txt, precio_txt, descuento_pct_txt,
+                    importe_txt}, ... ]}
+
+    IMPORTANTE — confirmado con Víctor (2026-09-04): este listado NO trae
+    en ningún sitio el número de pedido SAP (handicap del programa de
+    almacén). Por eso esta función se limita a extraer los datos tal cual
+    vienen; el cruce con los pedidos (por proveedor + código de artículo)
+    se hace aparte, en el momento de pedir sugerencias para un pedido
+    concreto — ver _sugerencias_albaran_pedido().
+    """
+    import pdfplumber, io
+
+    filas = []
+    periodo_desde = periodo_hasta = None
+    prov_cod = prov_nom = None
+    alb_id = alb_ref = None
+    fam_cod = fam_nom = None
+
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for i, pagina in enumerate(pdf.pages):
+                if periodo_desde is None:
+                    try:
+                        texto = pagina.extract_text() or ""
+                    except Exception:
+                        texto = ""
+                    m_per = _PATRON_PERIODO_ALBARANES.search(texto)
+                    if m_per:
+                        periodo_desde, periodo_hasta = m_per.group(1), m_per.group(2)
+
+                try:
+                    tablas = pagina.extract_tables()
+                except Exception as exc_pagina:
+                    log.warning("[LISTADO-ALBARANES] Página ilegible, se omite: %s", exc_pagina)
+                    tablas = []
+
+                for tabla in tablas:
+                    for fila in tabla:
+                        if not fila:
+                            continue
+                        vals = [(idx, c) for idx, c in enumerate(fila) if c not in (None, "")]
+                        if not vals:
+                            continue
+                        idx0, primera = vals[0]
+                        primera = primera.strip()
+                        if primera.startswith("Proveedor:"):
+                            m = re.match(r'Proveedor:\s*(\d+)\s*-\s*(.+)', primera)
+                            if m:
+                                prov_cod, prov_nom = m.group(1).strip(), m.group(2).strip()
+                            continue
+                        if primera.startswith("Albarán:"):
+                            m = re.match(r'Albar[aá]n:\s*(\S+)\s*-\s*(.+)', primera)
+                            if m:
+                                alb_id, alb_ref = m.group(1).strip(), m.group(2).strip()
+                            continue
+                        if primera.startswith("Familia:"):
+                            resto = primera.split(":", 1)[1].strip()
+                            partes = resto.split(" - ", 1)
+                            fam_cod = partes[0].strip() if partes else None
+                            fam_nom = partes[1].strip() if len(partes) > 1 else None
+                            continue
+                        if primera.startswith("Subfamilia:") or primera.startswith("Total "):
+                            continue
+                        if primera == "Artículo" and len(fila) >= idx0 + 9:
+                            filas.append({
+                                "proveedor_codigo": prov_cod,
+                                "proveedor_nombre": prov_nom,
+                                "albaran_id": alb_id,
+                                "albaran_ref": alb_ref,
+                                "familia_codigo": fam_cod,
+                                "familia_nombre": fam_nom,
+                                "codigo_articulo": (fila[idx0 + 1] or "").strip() or None,
+                                "descripcion":      (fila[idx0 + 2] or "").strip() or None,
+                                "unidad":           (fila[idx0 + 3] or "").strip() or None,
+                                "formato":          (fila[idx0 + 4] or "").strip() or None,
+                                "cantidad_txt":     (fila[idx0 + 5] or "").strip() or None,
+                                "precio_txt":       (fila[idx0 + 6] or "").strip() or None,
+                                "descuento_pct_txt": (fila[idx0 + 7] or "").strip() or None,
+                                "importe_txt":      (fila[idx0 + 8] or "").strip() or None,
+                            })
+                pagina.flush_cache()
+    except Exception as exc:
+        log.error("[LISTADO-ALBARANES] Error leyendo el PDF: %s", exc)
+        raise RuntimeError(f"No se pudo leer el PDF: {exc}")
+
+    return {"periodo_desde": periodo_desde, "periodo_hasta": periodo_hasta, "filas": filas}
+
+
+def _importar_albaranes_listado(hotel_id: int, pdf_bytes: bytes) -> dict:
+    """
+    (2026-09-04, v12.32.19) Guarda en `sap_albaranes_lineas` el contenido
+    del Listado de Albaranes de Compra de SAP para un hotel — solo
+    lectura frente al resto de la app, no toca pedidos ni su estado.
+    Detecta el periodo cubierto por el PDF (cabecera "Período desde ...
+    hasta ...") y, si lo reconoce, borra antes las filas ya guardadas de
+    ese mismo hotel+periodo, para que volver a subir el mismo listado (o
+    una corrección) no deje filas duplicadas. Si no reconoce el periodo
+    (formato de cabecera distinto al esperado), no borra nada — inserta
+    sin más y lo avisa en el resultado, para no arriesgarse a borrar datos
+    de otro periodo por error.
+    """
+    datos = _extraer_albaranes_detallado_completo(pdf_bytes)
+    filas = datos.get("filas") or []
+    if not filas:
+        raise RuntimeError(
+            "No se ha reconocido ninguna línea de artículo en el PDF — "
+            "¿es el \"Listado de Albaranes de Compra\" de SAP, con el formato habitual "
+            "(Proveedor → Albarán → Familia → Subfamilia → Artículo)?"
+        )
+
+    periodo_desde = datos.get("periodo_desde")
+    periodo_hasta = datos.get("periodo_hasta")
+    periodo_reconocido = bool(periodo_desde and periodo_hasta)
+
+    filas_borradas = 0
+    if periodo_reconocido:
+        cur_del = execute(
+            "DELETE FROM sap_albaranes_lineas WHERE hotel_id=%s AND periodo_desde=%s AND periodo_hasta=%s",
+            (hotel_id, periodo_desde, periodo_hasta)
+        )
+        filas_borradas = cur_del.rowcount or 0
+
+    proveedores_vistos = set()
+    familias_vistas = set()
+    for f in filas:
+        execute(
+            """INSERT INTO sap_albaranes_lineas
+                   (hotel_id, periodo_desde, periodo_hasta, proveedor_codigo, proveedor_nombre,
+                    albaran_id, albaran_ref, familia_codigo, familia_nombre, codigo_articulo,
+                    descripcion, unidad, formato, cantidad_txt, precio_txt, descuento_pct_txt, importe_txt)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (hotel_id, periodo_desde, periodo_hasta, f.get("proveedor_codigo"), f.get("proveedor_nombre"),
+             f.get("albaran_id"), f.get("albaran_ref"), f.get("familia_codigo"), f.get("familia_nombre"),
+             f.get("codigo_articulo"), f.get("descripcion"), f.get("unidad"), f.get("formato"),
+             f.get("cantidad_txt"), f.get("precio_txt"), f.get("descuento_pct_txt"), f.get("importe_txt"))
+        )
+        if f.get("proveedor_nombre"):
+            proveedores_vistos.add(f["proveedor_nombre"])
+        if f.get("familia_nombre"):
+            familias_vistas.add(f["familia_nombre"])
+
+    get_db().commit()
+
+    return {
+        "ok": True,
+        "periodo_desde": periodo_desde,
+        "periodo_hasta": periodo_hasta,
+        "periodo_reconocido": periodo_reconocido,
+        "total_filas": len(filas),
+        "filas_borradas_reemplazadas": filas_borradas,
+        "proveedores_distintos": len(proveedores_vistos),
+        "familias_distintas": len(familias_vistas),
+    }
+
+
+def _sugerencias_albaran_pedido(pedido_id: int) -> dict:
+    """
+    (2026-09-04, v12.32.19) Para un pedido dado, propone con qué línea(s)
+    de albarán ya guardadas en `sap_albaranes_lineas` podría corresponder
+    cada línea de artículo del pedido (guardadas en `sap_pedidos_lineas`
+    al subir el Listado de Pedidos detallado) — cruzando por proveedor
+    (normalizado, ver _normalizar_nombre_proveedor) + código de artículo,
+    que es lo único que ambos listados tienen en común (el de Albaranes no
+    trae el número de pedido SAP). Es una SUGERENCIA para que la revise
+    una persona, no una asociación automática ni definitiva — nunca
+    escribe nada, ni cambia estado ni importe de ningún pedido.
+
+    Solo tiene sentido para pedidos cuyo proveedor esté marcado
+    `sujeto_seguimiento` en el catálogo (ver Admin → Proveedores) — el
+    resto (alimentación, bebidas, limpieza...) queda fuera del alcance de
+    esta app y no se evalúa, para no generar ruido con proveedores que
+    nunca se van a revisar aquí.
+
+    Devuelve:
+      {"aplica": bool, "motivo": str|None, "proveedor": str|None,
+       "lineas": [ {codigo_articulo, descripcion, cantidad_recibida_txt,
+                     candidatos: [{albaran_id, albaran_ref, cantidad_txt,
+                                    coincide_exacto: bool}, ...],
+                     ambiguo: bool}, ... ]}
+    """
+    pedido = query(
+        "SELECT id, hotel_id, pedido_num, proveedor_id FROM pedidos WHERE id=%s",
+        (pedido_id,), one=True
+    )
+    if not pedido:
+        return {"aplica": False, "motivo": "Pedido no encontrado."}
+
+    if not pedido["proveedor_id"]:
+        return {"aplica": False, "motivo": "Este pedido no tiene proveedor identificado en el catálogo (Admin → Proveedores)."}
+
+    proveedor = query(
+        "SELECT nombre, sujeto_seguimiento FROM proveedores WHERE id=%s",
+        (pedido["proveedor_id"],), one=True
+    )
+    if not proveedor:
+        return {"aplica": False, "motivo": "El proveedor de este pedido ya no existe en el catálogo."}
+
+    if not proveedor["sujeto_seguimiento"]:
+        return {
+            "aplica": False,
+            "motivo": f"«{proveedor['nombre']}» no está marcado como \"sujeto a seguimiento\" — "
+                      f"queda fuera del alcance de esta app (p. ej. alimentación, bebida o limpieza). "
+                      f"Puedes marcarlo en Admin → Proveedores si debería seguirse aquí.",
+        }
+
+    lineas_pedido = rows_to_list(query(
+        "SELECT codigo_articulo, descripcion, cantidad_recibida_txt "
+        "FROM sap_pedidos_lineas WHERE hotel_id=%s AND pedido_num_sap=%s",
+        (pedido["hotel_id"], pedido["pedido_num"])
+    ))
+    if not lineas_pedido:
+        return {
+            "aplica": True,
+            "proveedor": proveedor["nombre"],
+            "lineas": [],
+            "aviso": "Todavía no hay líneas guardadas para este pedido — sube primero el Listado de "
+                     "Pedidos detallado (botón \"Departamentos y líneas\") para el periodo que incluya este pedido.",
+        }
+
+    codigos = sorted({l["codigo_articulo"] for l in lineas_pedido if l["codigo_articulo"]})
+    candidatos_bruto = rows_to_list(query(
+        "SELECT proveedor_nombre, codigo_articulo, albaran_id, albaran_ref, cantidad_txt "
+        "FROM sap_albaranes_lineas WHERE hotel_id=%s AND codigo_articulo = ANY(%s)",
+        (pedido["hotel_id"], codigos)
+    )) if codigos else []
+
+    prov_norm_pedido = _normalizar_nombre_proveedor(proveedor["nombre"])
+    idx_candidatos = {}
+    for c in candidatos_bruto:
+        if _normalizar_nombre_proveedor(c["proveedor_nombre"]) != prov_norm_pedido:
+            continue
+        idx_candidatos.setdefault(c["codigo_articulo"], []).append(c)
+
+    resultado_lineas = []
+    for l in lineas_pedido:
+        cant_rec = _parse_importe_es(l["cantidad_recibida_txt"])
+        cands = idx_candidatos.get(l["codigo_articulo"], [])
+        cands_out = []
+        for c in cands:
+            cant_alb = _parse_importe_es(c["cantidad_txt"])
+            cands_out.append({
+                "albaran_id": c["albaran_id"],
+                "albaran_ref": c["albaran_ref"],
+                "cantidad_txt": c["cantidad_txt"],
+                "coincide_exacto": abs(cant_alb - cant_rec) < 0.01,
+            })
+        # Los candidatos con coincidencia exacta primero, para que salten a la vista.
+        cands_out.sort(key=lambda x: not x["coincide_exacto"])
+        resultado_lineas.append({
+            "codigo_articulo": l["codigo_articulo"],
+            "descripcion": l["descripcion"],
+            "cantidad_recibida_txt": l["cantidad_recibida_txt"],
+            "candidatos": cands_out,
+            "ambiguo": len(cands_out) > 1,
+        })
+
+    return {"aplica": True, "proveedor": proveedor["nombre"], "lineas": resultado_lineas}
 
 
 def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
