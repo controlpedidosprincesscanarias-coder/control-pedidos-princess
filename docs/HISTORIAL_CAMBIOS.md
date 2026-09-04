@@ -36,6 +36,20 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] Reincorporado el rechazo de listados de SAP demasiado grandes para el plan Free de Render — se había quedado fuera del historial oficial por un cruce de numeración (v12.32.24)
+
+- **Aviso de numeración**: este cambio llegó primero como una entrega aparte con el número provisional "v12.32.22", justo cuando en paralelo otra sesión hacía la auditoría de documentación que acabó ocupando ese mismo número en el historial oficial (ver v12.32.22 más abajo). Al retomar el trabajo sobre el zip más reciente (v12.32.23), este cambio de memoria no estaba en el `app.py` — se reincorpora aquí sin ninguna modificación de contenido, solo con el número correcto de la serie (v12.32.24), para que no quede ninguna versión "fantasma" fuera de este historial.
+- **Contexto original** (recordado aquí para que el historial quede completo): Víctor reportó que un listado detallado de SAP de tres meses (739 páginas) hacía fallar "Actualizar departamentos y líneas" con "El job no existe o ha caducado"; el panel de eventos de Render confirmó "Ran out of memory (used over 512MB)" en el plan Free. El `flush_cache()` de v12.32.21 ya ayudaba pero no bastaba (pico de ~3,2 GB para ese PDF, muy por encima de los 512 MB reales) — y el reinicio del proceso por OOM se lleva por delante el servicio ENTERO para todos los usuarios, no solo el job de quien subió el PDF.
+- **Cambio en `app.py`**: `_contar_paginas_pdf()` (pypdf, cuenta 739 páginas en ~0,07s sin leer el contenido) y `_rechazo_pdf_demasiado_grande()`, que rechaza con un 400 claro cualquier PDF de más de 200 páginas (`_LIMITE_PAGINAS_PDF_LISTADO_GRANDE`) antes de crear el job. Aplicado en `actualizar-departamentos-listado` y `albaranes/importar-listado`.
+- **Cambio en `GUIA_DESPLIEGUE.md`**: nota junto a la del Start Command (v12.29.78) sobre el límite de 512 MB del plan Free y el límite de 200 páginas nuevo.
+- **Cambio en `templates/index.html`**: solo el número de versión del badge.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Comparado byte a byte contra el `app.py` de la entrega provisional "v12.32.22": idéntico salvo el número de versión en los comentarios. No probado en vivo contra Render — a confirmar tras desplegar.
+- **Sigue pendiente**: lo mismo que en la entrega original (subir plan de Render o bajar más el consumo de memoria si hiciera falta subir tramos de más de 200 páginas con frecuencia). Recomendación de proceso: confirmar el último número de versión usado antes de numerar una entrega nueva cuando haya más de un trabajo en marcha sobre el proyecto.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md` sí (ver arriba). `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html` (solo versión), `README.md`, `GUIA_DESPLIEGUE.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] README: completado el bullet de "Comparar Pedidos + Albaranes (SAP)" con el flujo base, no solo lo añadido en septiembre (v12.32.23)
 
 - **Contexto**: en la auditoría de v12.32.22 se documentó en el README

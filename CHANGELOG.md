@@ -1,3 +1,27 @@
+# v12.32.24 — 4 septiembre 2026
+
+Reincorporado el rechazo inmediato de listados de SAP con demasiadas páginas para el plan Free de Render (512 MB) — se había quedado fuera del historial oficial por un cruce de numeración con la auditoría de documentación
+
+**Aviso importante sobre numeración de versiones**: esta entrega llegó como una entrega aparte, con el número "v12.32.22", justo cuando en paralelo (otra sesión, a petición también de Víctor) se estaba haciendo la auditoría de documentación que acabó ocupando ese mismo número v12.32.22 en el `CHANGELOG.md`/`docs/HISTORIAL_CAMBIOS.md` que Víctor tenía como referencia real. Al pedir Víctor "sigamos sobre este zip" con el estado más reciente (v12.32.23, la auditoría + el complemento de README), el cambio de memoria de aquella entrega paralela — el rechazo de PDFs de más de 200 páginas — se había quedado fuera: el código de `app.py` de v12.32.23 no lo incluía. Se reincorpora aquí, tal cual, ya con el número correcto de la serie oficial (v12.32.24) para que no quede ninguna versión "fantasma" fuera del historial. El contenido de este cambio es exactamente el mismo que se entregó (y se explicó a Víctor) bajo el nombre provisional "v12.32.22": nada distinto, solo la numeración correcta.
+
+**Contexto original del cambio** (recordado aquí para que quede completo en el historial oficial): Víctor reportó que al subir un listado detallado de SAP de tres meses (739 páginas) a "Actualizar departamentos y líneas", tras un rato salía "El job no existe o ha caducado"; lo mismo le pasó después con un listado quincenal. El panel de eventos de Render confirmó la causa: *"Instance failed: ... Ran out of memory (used over 512MB)"* — el servicio está en el plan **Free de Render (512 MB de RAM)**. El fix de memoria de v12.32.21 (`pagina.flush_cache()`) ya estaba aplicado y ayuda, pero no basta por sí solo: el mismo PDF de 739 páginas, incluso con ese fix, llega a un pico de ~3,2 GB en pruebas — muy por encima de los 512 MB reales. Cuando el proceso se queda sin memoria así, Render reinicia el servicio ENTERO, no solo el job en curso: la app deja de responder unos segundos para TODOS los usuarios, no solo para quien subió el PDF.
+
+**Cambio en `app.py`**: `_contar_paginas_pdf()` (usa `pypdf.PdfReader`, que solo lee el árbol de páginas del PDF, no su contenido — cuenta un PDF de 739 páginas en ~0,07s, verificado) y `_rechazo_pdf_demasiado_grande()`, que la usa para devolver un error 400 claro y accionable ("divide este listado en tramos más pequeños...") si el PDF supera `_LIMITE_PAGINAS_PDF_LISTADO_GRANDE` (200 páginas — por encima de un quincenal normal de 60-115 páginas, por debajo del PDF de tres meses que se ha visto fallar). Se aplica en `POST /api/pedidos/actualizar-departamentos-listado` y `POST /api/albaranes/importar-listado`, antes de crear el job en `_PDF_JOBS`, para que el rechazo sea inmediato. No se toca "Comparar listado PDF" (parser ligero, texto plano) ni "Confirmar un albarán suelto" (siempre 1 página).
+
+**Cambio en `GUIA_DESPLIEGUE.md`**: nota junto a la ya existente del Start Command (v12.29.78, mismo síntoma "El job no existe o ha caducado" pero causa distinta) explicando el límite de 512 MB del plan Free, el límite de 200 páginas nuevo, y que subir tramos más grandes con frecuencia requeriría subir el plan de Render, no solo tocar el límite.
+
+**Cambio en `templates/index.html`**: solo el número de versión del badge (norma 4) — el mensaje de error nuevo lo muestra el mismo `toast()` que ya usan estos dos formularios para cualquier otro error, sin cambios de interfaz.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Contra el PDF real de tres meses de Víctor: `_contar_paginas_pdf()` detecta correctamente 739 páginas en 0,07s. Comparado byte a byte el `app.py` resultante contra el de aquella entrega provisional "v12.32.22": idéntico salvo el número de versión citado en los comentarios — no se ha reintroducido nada distinto de lo ya explicado a Víctor entonces. No se ha podido probar en vivo contra Render — a confirmar tras desplegar: (1) volver a subir el PDF de tres meses y comprobar que ahora da un error inmediato y claro; (2) subir el quincenal de mayo en solitario y comprobar que sigue funcionando con normalidad.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md` sí (ver arriba). `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+
+**Sigue pendiente**: lo mismo que ya quedaba pendiente en la entrega original — si Víctor necesita subir con frecuencia tramos de más de 200 páginas de una vez, valorar entre subir el plan de Render o invertir en bajar más el consumo de memoria del parser. **Recomendación de proceso, para evitar este mismo cruce de numeración en el futuro**: cuando haya más de una entrega en marcha a la vez sobre este proyecto (distintas sesiones o personas), conviene confirmar el último número de versión ya usado antes de numerar una entrega nueva, en vez de asumir el siguiente correlativo sin comprobar.
+
+**Entrega**: `app.py`, `templates/index.html` (solo versión), `README.md`, `GUIA_DESPLIEGUE.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.23 — 4 septiembre 2026
 
 📋 README: completado el bullet de "Comparar Pedidos + Albaranes (SAP)" con el flujo base (desde 2026-08-06/08-15), no solo lo añadido en septiembre

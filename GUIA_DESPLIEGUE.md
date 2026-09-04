@@ -111,6 +111,29 @@ momento, sin desplegar nada.
    > `SECRET_KEY` debe coincidir entre ambos servicios, la sesión se
    > valida con la misma cookie.)
 
+   > ℹ️ **v12.32.21/24 — mismo síntoma ("El job no existe o ha
+   > caducado"), causa distinta: memoria, no health check.** El plan
+   > **Free de Render son 512 MB de RAM** para todo el proceso. Subir un
+   > PDF de SAP demasiado grande (probado: un listado detallado de tres
+   > meses, 739 páginas) a "Actualizar departamentos y líneas" o
+   > "Importar Albaranes" agota esa memoria — confirmado en el panel de
+   > eventos de Render como *"Instance failed: ... Ran out of memory
+   > (used over 512MB)"` — y Render reinicia el servicio ENTERO, no solo
+   > el job: mientras se recupera, la app deja de responder para TODOS
+   > los usuarios, no solo para quien subió el PDF. La v12.32.21 redujo
+   > el consumo de memoria de ese lector (`pagina.flush_cache()` en
+   > pdfplumber, ya usado en los lectores de Albaranes desde antes), pero
+   > no basta por sí sola con un PDF de varios cientos de páginas en un
+   > plan de 512 MB. La v12.32.24 añadió un límite duro de 200 páginas
+   > (`_LIMITE_PAGINAS_PDF_LISTADO_GRANDE` en `app.py`): un PDF más
+   > grande se rechaza al instante con un aviso claro, sin llegar a
+   > gastar memoria de verdad. Los listados quincenales que ya recomienda
+   > el propio formulario (60-115 páginas) quedan muy por debajo de ese
+   > límite y no se ven afectados. Si en el futuro hiciera falta subir
+   > tramos más grandes con frecuencia, la opción de fondo es **subir el
+   > plan de Render** (más RAM) — subir solo el límite de páginas sin más
+   > RAM real detrás volvería a arriesgarse al mismo reinicio para todos.
+
 4. En **Environment → Add Environment Variable**, añade estas variables
    (lista sincronizada con `render.yaml` — si añades una variable nueva
    ahí, añádela también aquí):

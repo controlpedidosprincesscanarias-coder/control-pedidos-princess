@@ -10037,6 +10037,58 @@ def update_proveedor(pid):
 _PDF_JOBS = {}
 _PDF_JOBS_LOCK = threading.Lock()
 
+# (2026-09-04, v12.32.24) Límite defensivo de páginas para los listados
+# grandes de SAP (Actualizar departamentos y líneas / Importar Albaranes) —
+# a raíz de que Víctor confirmó en Render (plan Free, 512 MB) que subir un
+# listado de tres meses (739 páginas) hace que el proceso se quede sin
+# memoria y se reinicie SOLO ("Ran out of memory (used over 512MB)" en el
+# panel de eventos de Render), llevándose por delante el job en curso — de
+# ahí el "El job no existe o ha caducado" al consultar el resultado — y con
+# él, momentáneamente, la app entera para TODOS los usuarios, no solo para
+# quien subió el PDF. Probado en un entorno sin límite de memoria: incluso
+# con el flush_cache() añadido en v12.32.21, ese PDF de 739 páginas llega a
+# un pico de ~3,2 GB — muy por encima de los 512 MB reales de la instancia.
+# Los listados quincenales que ya recomienda el propio formulario (60-115
+# páginas) llevan meses funcionando bien ahí mismo. Se fija un límite de
+# páginas conservador — bastante por encima de un quincenal normal,
+# bastante por debajo de lo que se ha visto fallar — para cortar la subida
+# ANTES de gastar memoria de verdad, con un aviso claro en vez de reventar
+# el proceso para todo el mundo.
+_LIMITE_PAGINAS_PDF_LISTADO_GRANDE = 200
+
+def _contar_paginas_pdf(pdf_bytes: bytes) -> int:
+    """Cuenta las páginas de un PDF sin procesar su contenido — solo lee el
+    árbol de páginas (pypdf), a diferencia de pdfplumber.extract_text() /
+    extract_tables(), que sí cargan y procesan cada página. Barato incluso
+    para un PDF de varios cientos de páginas: sirve para rechazar un PDF
+    demasiado grande ANTES de lanzar el job en segundo plano que lo leería
+    de verdad."""
+    from pypdf import PdfReader
+    import io
+    return len(PdfReader(io.BytesIO(pdf_bytes)).pages)
+
+def _rechazo_pdf_demasiado_grande(pdf_bytes: bytes):
+    """Si el PDF supera _LIMITE_PAGINAS_PDF_LISTADO_GRANDE, devuelve la
+    respuesta Flask de error lista para retornar desde el endpoint; si no,
+    devuelve None. Un fallo al contar páginas (PDF raro pero por lo demás
+    procesable) no bloquea la subida — se deja intentar igual."""
+    try:
+        num_paginas = _contar_paginas_pdf(pdf_bytes)
+    except Exception:
+        return None
+    if num_paginas > _LIMITE_PAGINAS_PDF_LISTADO_GRANDE:
+        return jsonify({
+            "error": (
+                f"Este PDF tiene {num_paginas} páginas — por encima del límite de "
+                f"{_LIMITE_PAGINAS_PDF_LISTADO_GRANDE} que soporta este servidor sin arriesgarse a "
+                f"quedarse sin memoria (el servicio entero tendría que reiniciarse, perdiendo el "
+                f"progreso y afectando de paso a todos los usuarios mientras se recupera). Divide "
+                f"este listado en tramos más pequeños (p. ej. quincenales, como ya recomienda este "
+                f"formulario) y súbelos uno a uno."
+            )
+        }), 400
+    return None
+
 def _normalizar_pedido_num(s):
     """
     (2026-08-06) Normaliza un Nº de pedido para comparar el listado de SAP
@@ -10524,6 +10576,9 @@ def actualizar_departamentos_listado():
     pdf_bytes = archivo.read()
     if not pdf_bytes:
         return jsonify({"error": "El archivo está vacío"}), 400
+    rechazo = _rechazo_pdf_demasiado_grande(pdf_bytes)
+    if rechazo:
+        return rechazo
 
     import time as _time_dep
     job_id = secrets.token_hex(16)
@@ -10606,6 +10661,9 @@ def importar_listado_albaranes():
     pdf_bytes = archivo.read()
     if not pdf_bytes:
         return jsonify({"error": "El archivo está vacío"}), 400
+    rechazo = _rechazo_pdf_demasiado_grande(pdf_bytes)
+    if rechazo:
+        return rechazo
 
     import time as _time_alb
     job_id = secrets.token_hex(16)
