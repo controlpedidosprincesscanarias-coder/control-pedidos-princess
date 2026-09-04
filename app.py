@@ -1797,6 +1797,111 @@ def _auto_migrate():
                 CREATE UNIQUE INDEX IF NOT EXISTS sap_pedidos_listado_hotel_pedido_uk
                     ON sap_pedidos_listado (hotel_id, pedido_num_sap)
             """)
+
+            # ── Corrección retroactiva: altas automáticas desde SAP con
+            # estado mal calculado (bug de v12.32.11, corregido en v12.32.13)
+            # ────────────────────────────────────────────────────────────
+            # (2026-09-04) Víctor reportó, con capturas reales, que TODOS
+            # los pedidos creados por "Crear pedidos automáticamente"
+            # (v12.32.11) salían en estado "ENVIADO AL PROVEEDOR" aunque el
+            # propio listado SAP ya los marcara como Entregados/Entrega
+            # parcial — y que, al llevar una fecha_tramitacion real (a
+            # veces de varios meses atrás, tal cual el listado SAP), el job
+            # diario de alertas los interpretaba como pedidos muy
+            # retrasados sin respuesta y disparaba reclamaciones
+            # automáticas REALES al proveedor, además de avisos internos:
+            # "esto ocasiona envio de reclamaciones a los proveedores sin
+            # necesidad ... me están tupiendo a llamadas". Corregido en
+            # crear_pedidos_desde_sap() (ver docstring, CORRECCIÓN
+            # v12.32.13) para las creaciones futuras; este bloque repara
+            # los pedidos que ya se crearon mal ANTES de ese arreglo:
+            #   1. Nombre de "creado por" en el pedido, y de
+            #      historial_estados, corregido al texto automático fijo
+            #      (_NOMBRE_AUTO_SAP) en vez del nombre del admin que pulsó
+            #      el botón — mismo criterio que _aplicar_coincidencia_albaran
+            #      ("LOS EJECUTADOS AUTOMATICAMENTE DEBERIAN SALIR ASI
+            #      DEFINIDOS Y NO CON NOMBRE DE USUARIO"). Se aplica
+            #      siempre, sea cual sea el estado actual del pedido — es
+            #      un hecho histórico (quién lo creó) que no cambia aunque
+            #      alguien lo haya editado después.
+            #   2. Estado del pedido, recalculado desde el propio listado
+            #      SAP guardado (misma _entrega_estado() que usa la
+            #      auditoría) — SOLO si el pedido sigue exactamente en
+            #      "ENVIADO AL PROVEEDOR" tal cual se creó: si un humano ya
+            #      lo tocó a mano mientras tanto (p. ej. porque atendió una
+            #      llamada y lo corrigió él mismo), no se pisa ese trabajo.
+            #   3. Cualquier reclamación automática todavía SIN enviar
+            #      (emails_sistema_pendientes, enviado=FALSE) para esos
+            #      pedidos se elimina de la cola — las que ya se enviaron
+            #      no se pueden deshacer, pero se evita que salga ninguna
+            #      más de las que quedaran pendientes.
+            # Idempotente: cada UPDATE va guardado con su propia condición
+            # de "solo si hace falta", así que volver a ejecutar esto en
+            # cada arranque no repite trabajo ni vuelve a escribir nada una
+            # vez corregido.
+            try:
+                _NOMBRE_AUTO_SAP = "Automática — alta desde listado de pedidos SAP"
+                cur.execute("""
+                    SELECT DISTINCT p.id, p.hotel_id, p.pedido_num, p.estado
+                    FROM pedidos p
+                    JOIN historial_estados h ON h.pedido_id = p.id
+                    WHERE h.nota LIKE 'Pedido creado automáticamente desde el listado SAP%'
+                """)
+                _afectados = cur.fetchall()
+                _corregidos_estado = 0
+                for _p in _afectados:
+                    # 1) Nombre de "creado por" — hecho histórico, siempre
+                    # correcto de aplicar pase lo que pase con el estado.
+                    cur.execute(
+                        "UPDATE pedidos SET creado_por_nombre=%s WHERE id=%s AND creado_por_nombre != %s",
+                        (_NOMBRE_AUTO_SAP, _p["id"], _NOMBRE_AUTO_SAP)
+                    )
+                    cur.execute(
+                        "UPDATE historial_estados SET usuario_nombre=%s "
+                        "WHERE pedido_id=%s AND nota LIKE 'Pedido creado automáticamente desde el listado SAP%%' "
+                        "AND usuario_nombre != %s",
+                        (_NOMBRE_AUTO_SAP, _p["id"], _NOMBRE_AUTO_SAP)
+                    )
+                    # 2) Estado — solo si nadie lo ha tocado desde el alta.
+                    if _p["estado"] == "ENVIADO AL PROVEEDOR" and _p.get("pedido_num"):
+                        cur.execute(
+                            "SELECT importe_base_txt, importe_recibido_txt FROM sap_pedidos_listado "
+                            "WHERE hotel_id=%s AND pedido_num_sap=%s",
+                            (_p["hotel_id"], _p["pedido_num"])
+                        )
+                        _fila_sap = cur.fetchone()
+                        if _fila_sap:
+                            _importe_base     = _parse_importe_es(_fila_sap.get("importe_base_txt"))
+                            _importe_recibido = _parse_importe_es(_fila_sap.get("importe_recibido_txt"))
+                            _entrega = _entrega_estado(_importe_base, _importe_recibido)
+                            _estado_correcto = {"Entregado": "ENTREGADO", "Entrega parcial": "ENTREGA PARCIAL"}.get(_entrega)
+                            if _estado_correcto:
+                                cur.execute(
+                                    "UPDATE pedidos SET estado=%s, modificado_por_nombre=%s, modificado_en=NOW() "
+                                    "WHERE id=%s AND estado='ENVIADO AL PROVEEDOR'",
+                                    (_estado_correcto, _NOMBRE_AUTO_SAP, _p["id"])
+                                )
+                                cur.execute(
+                                    "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_nombre,nota) "
+                                    "VALUES (%s,%s,%s,%s,%s)",
+                                    (_p["id"], "ENVIADO AL PROVEEDOR", _estado_correcto, _NOMBRE_AUTO_SAP,
+                                     "Corrección automática (v12.32.13): el estado inicial del alta desde SAP se "
+                                     "calculó mal en v12.32.11 (siempre 'Enviado al proveedor') y se recalcula "
+                                     "aquí a partir del listado SAP guardado")
+                                )
+                                _corregidos_estado += 1
+                    # 3) Reclamaciones automáticas todavía sin enviar para
+                    # este pedido — se purgan de la cola en cualquier caso.
+                    cur.execute(
+                        "DELETE FROM emails_sistema_pendientes WHERE pedido_id=%s "
+                        "AND evento_codigo='reclamacion_proveedor_auto' AND enviado=FALSE",
+                        (_p["id"],)
+                    )
+                if _corregidos_estado:
+                    log.info("[CREAR-DESDE-SAP-FIX] Estado corregido en %d pedido(s) creados automáticamente desde SAP (v12.32.13).",
+                              _corregidos_estado)
+            except Exception as exc:
+                log.warning(f"No se pudo ejecutar la corrección retroactiva de pedidos creados desde SAP (v12.32.13): {exc}")
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -11402,12 +11507,8 @@ def crear_pedidos_desde_sap():
     guardado — no hace falta volver a subir ningún PDF aquí.
 
     Tres decisiones tomadas con Víctor (AskUserQuestion, 2026-09-04):
-      1. El estado inicial es SIEMPRE "ENVIADO AL PROVEEDOR", nunca el
-         estado de entrega que muestre SAP (Entregado/Entrega parcial) —
-         para registrar la entrega en sí sigue estando el flujo ya
-         existente de "Comparar listado + Albaranes"/aplicar coincidencia
-         (_aplicar_coincidencia_albaran), que sí sabe hacerlo bien (con su
-         propio albarán, fecha e importe). Ver nota IMPORTANTE más abajo.
+      1. (2026-09-04, CORREGIDO en v12.32.13 — ver más abajo) El estado
+         inicial refleja el estado de entrega real que ya muestra SAP.
       2. Solo se puede crear un pedido si su proveedor SAP se ha
          reconocido en el catálogo (mismo filtro que ya usa el botón
          "Enviar resumen por correo") — si no, se omite y hay que
@@ -11416,17 +11517,58 @@ def crear_pedidos_desde_sap():
          importe base que ya se guarda hoy sin confirmar para los pedidos
          que sí existen (ver _comparar_listado_pdf_logica).
 
+    CORRECCIÓN v12.32.13 — bug real de v12.32.11, con impacto en
+    producción: el punto 1 original decía "el estado inicial es SIEMPRE
+    'ENVIADO AL PROVEEDOR', nunca el de SAP", con la idea de dejar el
+    registro de la entrega al flujo de "Comparar listado + Albaranes".
+    En la práctica esto fue un error grave: estos pedidos se crean con
+    una `fecha_tramitacion` REAL (a veces de varios meses atrás, tomada
+    tal cual del listado SAP), y el job diario de alertas
+    (`_job_alertas_diarias`) trata cualquier pedido en "ENVIADO AL
+    PROVEEDOR"/"ENTREGA PARCIAL" con `fecha_tramitacion` muy antigua como
+    "muy retrasado sin respuesta" — disparando reclamaciones automáticas
+    REALES al proveedor (correo de reclamación) y avisos internos a los
+    compradores, aunque el pedido ya estuviera Entregado según el propio
+    SAP. Reportado por Víctor con capturas reales (proveedores llamando
+    por reclamaciones que no procedían). Corregido: el estado inicial
+    ahora se calcula por fila con `_entrega_estado()` (misma función que
+    ya usa la auditoría) sobre `importe_base`/`importe_recibido` de SAP:
+    "Entregado" → ENTREGADO, "Entrega parcial" → ENTREGA PARCIAL, y
+    "No entregado" (o sin datos suficientes) → ENVIADO AL PROVEEDOR. Un
+    pedido creado ya como ENTREGADO queda fuera por completo del job de
+    alertas (no está en su WHERE), así que nunca genera una reclamación.
+    Uno en ENTREGA PARCIAL sigue sujeto a las alertas normales de ese
+    estado — igual que cualquier pedido real en Entrega parcial, a
+    petición explícita de Víctor ("y/o ENTREGA PARCIAL o TOTAL en el caso
+    que corresponda"). Ver también la corrección retroactiva en
+    `_auto_migrate()` para los pedidos ya creados con el bug antes de
+    este arreglo.
+
     IMPORTANTE — por qué esta función NO llama a enviar_emails_estado(),
-    a pesar de crear el pedido ya en "ENVIADO AL PROVEEDOR": en un alta o
-    cambio normal, ese estado dispara un correo AL PROVEEDOR real
-    avisando de un pedido nuevo — pero aquí el pedido no es nuevo en
-    absoluto, ya existe en SAP desde hace tiempo (por eso aparece en el
-    listado). Mandar ese correo sería un aviso duplicado y confuso a un
-    proveedor real sobre un pedido que probablemente ya está servido o
-    sirviéndose. Por eso esta función sí registra el alta en
-    historial_estados (para dejar rastro de auditoría), pero
-    deliberadamente no encola ningún correo — es un alta retroactiva, no
-    una decisión de compra tomada ahora mismo.
+    sea cual sea el estado inicial calculado: en un alta o cambio normal,
+    ENVIADO AL PROVEEDOR dispara un correo AL PROVEEDOR real avisando de
+    un pedido nuevo, y ENTREGADO/ENTREGA PARCIAL disparan un correo
+    interno de "entrega registrada" con detalle de los albaranes — pero
+    aquí el pedido no es nuevo en absoluto, ya existe en SAP desde hace
+    tiempo (por eso aparece en el listado), y esta ficha "cáscara" no
+    tiene ningún albarán propio que resumir. Mandar cualquiera de esos
+    correos sería un aviso duplicado, confuso o directamente vacío. Por
+    eso esta función sí registra el alta en historial_estados (para
+    dejar rastro de auditoría), pero deliberadamente no encola ningún
+    correo — es un alta retroactiva/de auditoría, no una decisión de
+    compra ni un registro de entrega tomados ahora mismo. "La idea es
+    que si el pedido ya está entregado, al proveedor no le debe llegar
+    correo por esta actualización" (Víctor).
+
+    TRAZABILIDAD — a petición de Víctor ("habíamos acordado que cuando
+    la creación fuera automática se registraba la trazabilidad de esta
+    manera y no con el nombre del admin"), el mismo criterio ya usado en
+    _aplicar_coincidencia_albaran(): el pedido y su historial_estados
+    guardan un nombre fijo descriptivo (_NOMBRE_AUTO_CREACION_SAP) en vez
+    del nombre de quien pulsó el botón, para distinguir a simple vista un
+    alta automática de una manual. `usuario_id`/`creado_por_id` sí quedan
+    con el id real (para integridad referencial), solo el nombre mostrado
+    cambia.
 
     Re-comprueba en el momento de crear (nunca se fía de lo que la
     pantalla tenía cargado) si cada pedido sigue sin estar registrado,
@@ -11456,7 +11598,20 @@ def crear_pedidos_desde_sap():
 
     db  = get_db()
     uid = current_user_id()
-    usuario_nombre = session.get("nombre", "")
+    # (2026-09-04, v12.32.13) Trazabilidad de altas automáticas — mismo
+    # criterio ya usado en _aplicar_coincidencia_albaran(): el nombre que
+    # queda registrado en el pedido y en su historial NO es el del admin
+    # que pulsó el botón, es un texto fijo que deja claro que fue una
+    # automatización la que lo creó. `uid` (el id real) sí se conserva.
+    _NOMBRE_AUTO_CREACION_SAP = "Automática — alta desde listado de pedidos SAP"
+    # (2026-09-04, v12.32.13) Mapeo del estado de entrega de SAP al estado
+    # inicial del pedido — ver CORRECCIÓN v12.32.13 en el docstring de
+    # arriba: "No entregado" (o cualquier otro valor) siempre cae a
+    # ENVIADO AL PROVEEDOR, nunca se inventa un estado de entrega sin dato.
+    _ESTADO_INICIAL_POR_ENTREGA = {
+        "Entregado":       "ENTREGADO",
+        "Entrega parcial": "ENTREGA PARCIAL",
+    }
 
     creados, omitidos, errores = [], [], []
     for num in nums_pedidos:
@@ -11479,6 +11634,7 @@ def crear_pedidos_desde_sap():
             fecha_tramitacion        = _parsear_fecha_es_a_iso(fila.get("fecha_pedido"))
             fecha_entrega_especifica = _parsear_fecha_es_a_iso(fila.get("fecha_entrega"))
             importe_base = fila.get("importe_base")
+            estado_inicial = _ESTADO_INICIAL_POR_ENTREGA.get(fila.get("entrega_estado"), "ENVIADO AL PROVEEDOR")
             observ = (
                 f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']}) "
                 f"el {datetime.now().strftime('%d/%m/%Y')} — pendiente de completar el resto de la documentación."
@@ -11505,23 +11661,26 @@ def crear_pedidos_desde_sap():
                 None, None, fecha_tramitacion,
                 fila["pedido_num_sap"], None, None,
                 False,
-                "ENVIADO AL PROVEEDOR", 0, 0,
+                estado_inicial, 0, 0,
                 0, 0,
                 fila["proveedor_id"], observ,
                 None, importe_base, 0,
                 None, fecha_entrega_especifica,
                 importe_base,
                 uid, uid,
-                usuario_nombre, usuario_nombre,
+                _NOMBRE_AUTO_CREACION_SAP, _NOMBRE_AUTO_CREACION_SAP,
             ))
             pedido_id = cur.fetchone()["id"]
             execute(
                 "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s)",
-                (pedido_id, "ENVIADO AL PROVEEDOR", uid, usuario_nombre,
+                (pedido_id, estado_inicial, uid, _NOMBRE_AUTO_CREACION_SAP,
                  f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']})")
             )
             db.commit()
-            creados.append({"pedido_num_sap": fila["pedido_num_sap"], "pedido_id": pedido_id, "norden": norden})
+            creados.append({
+                "pedido_num_sap": fila["pedido_num_sap"], "pedido_id": pedido_id,
+                "norden": norden, "estado": estado_inicial,
+            })
         except Exception as exc:
             log.exception("[CREAR-DESDE-SAP] Error creando pedido %s: %s", num, exc)
             errores.append({"pedido_num_sap": num, "error": str(exc)})

@@ -1,3 +1,28 @@
+# v12.32.13 — 4 septiembre 2026
+
+🚨 URGENTE — Crear pedidos desde SAP: corregido el estado inicial mal calculado (v12.32.11), que disparaba reclamaciones reales a proveedores de pedidos ya entregados
+
+**Petición de Víctor**, con capturas reales de pedidos afectados y de la línea temporal: "posiblemente error mío en las instrucciones, se crearon todos los pedidos con estado ENVIADO AL PROVEEDOR y no con los estados correctos detectados en el mismo listado, esto ocasiona envio de reclamaciones a los proveedores sin necesidad y los internos a los departamentos erróneos, me están tupiendo a llamadas jajajaja; de la misma manera, habíamos acordado que cuando la creación fuera automática se registraba la trazabilidad de esta manera y no con el nombre del admin. La idea es que si el pedido ya esta entregado, al proveedor no le debe llegar correo por esta actualizacion y los internos solo con el estado real, ENVIADO AL PROVEEDOR -> sin no se ha entregado, y/o ENTREGA PARCIAL o TOTAL en el caso que corresponda".
+
+**Causa raíz**: `crear_pedidos_desde_sap()` (v12.32.11) creaba SIEMPRE el pedido en "ENVIADO AL PROVEEDOR", ignorando el estado de entrega que el propio listado SAP ya traía para esa fila. Como estos pedidos nacen con una `fecha_tramitacion` REAL (a veces de varios meses atrás, la fecha real del pedido en SAP), el job diario de alertas (`_job_alertas_diarias`) los interpretaba como pedidos gravemente retrasados sin respuesta del proveedor — y con la reclamación automática activada, disparaba correos reales de reclamación al proveedor (y avisos internos a los compradores) para pedidos que, según el propio SAP, ya estaban entregados. Además, la trazabilidad del alta quedaba con el nombre del admin que pulsó "Crear pedidos seleccionados", no con el texto automático fijo que ya se usa para el resto de altas/cambios automáticos de la app (`_aplicar_coincidencia_albaran`, "LOS EJECUTADOS AUTOMATICAMENTE DEBERIAN SALIR ASI DEFINIDOS Y NO CON NOMBRE DE USUARIO").
+
+**Cambio en `app.py` — `crear_pedidos_desde_sap()`**:
+- El estado inicial de cada pedido ahora se calcula con `_entrega_estado()` (misma función que ya usa la auditoría) sobre el importe base/recibido de esa fila de SAP: "Entregado" → `ENTREGADO`, "Entrega parcial" → `ENTREGA PARCIAL`, "No entregado" (o sin dato) → `ENVIADO AL PROVEEDOR`. Un pedido creado ya `ENTREGADO` queda fuera por completo del job de alertas (no aparece en su `WHERE`), así que nunca dispara ninguna reclamación. Uno en `ENTREGA PARCIAL` sigue sujeto a las alertas normales de ese estado, igual que cualquier pedido real parcialmente entregado — a petición explícita de Víctor.
+- El nombre de "creado por"/"modificado por" en el pedido, y el de `historial_estados`, pasan a ser un texto fijo (`"Automática — alta desde listado de pedidos SAP"`) en vez del nombre del admin — mismo criterio que el resto de automatizaciones de la app. El `usuario_id`/`creado_por_id` real se conserva (solo cambia el nombre mostrado).
+- Sigue sin llamar a `enviar_emails_estado()` bajo ningún estado — ahora también cubre explícitamente el caso Entregado/Entrega parcial, cuyo correo interno de "entrega registrada" no tendría sentido sin ningún albarán propio de esta ficha.
+
+**Corrección retroactiva en `_auto_migrate()`** (afecta a los pedidos ya creados mal con la v12.32.11, ejecutada una sola vez por pedido, idempotente): (1) corrige el nombre de "creado por" y el de su entrada en `historial_estados` al texto automático fijo; (2) recalcula y corrige el `estado` desde el listado SAP guardado — solo en los pedidos que siguen exactamente en `ENVIADO AL PROVEEDOR` tal cual se crearon (si un admin ya lo corrigió a mano mientras tanto, no se pisa), dejando un nuevo registro en `historial_estados` documentando la corrección; (3) elimina de `emails_sistema_pendientes` cualquier reclamación automática de esos pedidos que todavía estuviera sin enviar — las que ya salieron no se pueden deshacer, pero se evita que salga ninguna más de las pendientes en cola.
+
+**Cambio en `templates/index.html`**: los textos del modal (aviso antes de crear, y descripción de la sección) ya no dicen que el estado siempre será "Enviado al proveedor" — explican que se usa el estado real de SAP. Al refrescar la tabla de auditoría tras crear, se usa el estado real devuelto por el backend en vez de asumir siempre "Enviado al proveedor".
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre el bloque `<script>` afectado, sin errores. Repasada a mano la lógica de `_entrega_estado()` y las condiciones de idempotencia del backfill (no repite trabajo en arranques sucesivos, no pisa pedidos ya corregidos a mano). No se ha podido probar en vivo contra producción desde aquí — **importante**: al desplegar, revisar en Admin → Integridad / listado de pedidos que los pedidos creados desde SAP con la v12.32.11 quedan con el estado correcto tras el primer arranque con esta versión, y que la cola de correos de sistema pendientes ya no conserva reclamaciones automáticas para ellos.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.12 — 4 septiembre 2026
 
 🩹 Crear pedidos automáticamente desde SAP (v12.32.11): ya no se ofrece al comparar solo el listado de Albaranes, únicamente cuando se procesa el Listado de Pedidos

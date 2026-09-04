@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.12
+          V 12.32.13
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2880,11 +2880,13 @@ tbody tr:last-child{border-bottom:none}
         <div style="font-weight:700;font-size:.95rem;margin-bottom:6px">🆕 Crear automáticamente los pedidos de SAP sin dar de alta</div>
         <div style="font-size:.8rem;color:var(--text-secondary);margin-bottom:10px">
           Se crean con el número de pedido, la fecha de tramitación (fecha de pedido en SAP), la fecha
-          de entrega prevista y el proveedor/importe que ya trae el listado SAP, en estado
-          <strong>"Enviado al proveedor"</strong> — el resto (departamento, presupuesto, adjuntos…) queda
-          pendiente de completar a mano, sin disparar ningún correo al proveedor (el pedido ya existía en
-          SAP, no es nuevo). Solo se pueden seleccionar los que tienen el proveedor identificado en el
-          catálogo — el resto hay que identificarlos primero en Admin → Proveedores.
+          de entrega prevista y el proveedor/importe que ya trae el listado SAP, en el estado real que
+          muestra SAP para cada uno (<strong>Enviado al proveedor</strong> si SAP no lo marca como
+          entregado, o <strong>Entrega parcial</strong>/<strong>Entregado</strong> si corresponde) — el
+          resto (departamento, presupuesto, adjuntos…) queda pendiente de completar a mano, sin disparar
+          ningún correo ni aviso por esta creación (el pedido ya existía en SAP, no es nuevo). Solo se
+          pueden seleccionar los que tienen el proveedor identificado en el catálogo — el resto hay que
+          identificarlos primero en Admin → Proveedores.
         </div>
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
           <span id="cmp-sap-crear-contador" style="font-size:.85rem;color:var(--text-secondary)"></span>
@@ -7250,9 +7252,10 @@ async function crearPedidosSeleccionadosSap() {
   const detalle = nums.slice(0, 10).join(', ') + (nums.length > 10 ? `… y ${nums.length - 10} más` : '');
   if (!confirm(
     `Se van a crear ${nums.length} pedido(s) nuevo(s) a partir del listado SAP (${detalle}), ` +
-    `en estado "Enviado al proveedor", con número, fechas, proveedor e importe rellenados desde SAP.\n\n` +
+    `cada uno con el estado real que muestra SAP (Enviado al proveedor / Entrega parcial / Entregado, ` +
+    `según corresponda), con número, fechas, proveedor e importe rellenados desde SAP.\n\n` +
     `El resto de la documentación (departamento, presupuesto, adjuntos…) quedará pendiente de completar a mano. ` +
-    `No se enviará ningún correo al proveedor. ¿Continuar?`
+    `No se enviará ningún correo ni aviso por esta creación. ¿Continuar?`
   )) return;
 
   const btn = document.getElementById('cmp-sap-crear-btn');
@@ -7293,7 +7296,7 @@ async function crearPedidosSeleccionadosSap() {
         if (creadosSet.has(p.pedido_num_sap)) {
           p.encontrado = true;
           const info = creados.find(c => c.pedido_num_sap === p.pedido_num_sap);
-          if (info) { p.pedido_id = info.pedido_id; p.norden = info.norden; p.estado_app = 'ENVIADO AL PROVEEDOR'; }
+          if (info) { p.pedido_id = info.pedido_id; p.norden = info.norden; p.estado_app = info.estado || 'ENVIADO AL PROVEEDOR'; }
         }
       });
       _cmpPdfResultado.no_encontrados = Math.max(0, (_cmpPdfResultado.no_encontrados || 0) - creados.length);

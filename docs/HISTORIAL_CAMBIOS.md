@@ -36,6 +36,19 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] URGENTE: corregido el estado mal calculado al crear pedidos desde SAP — disparaba reclamaciones reales a proveedores ya entregados (v12.32.13)
+
+- **Petición de Víctor**, con capturas: los pedidos creados por la nueva automatización (v12.32.11) salían todos en "ENVIADO AL PROVEEDOR" en vez del estado real que ya mostraba el listado SAP, y eso disparó reclamaciones automáticas REALES a proveedores de pedidos ya entregados ("me están tupiendo a llamadas"). Además pidió que la trazabilidad de estas altas usara el nombre automático fijo, no el del admin.
+- **Causa raíz**: al llevar `fecha_tramitacion` real (a veces de meses atrás) y quedarse en "ENVIADO AL PROVEEDOR", el job diario de alertas los trataba como gravemente retrasados y encolaba reclamaciones reales al proveedor + avisos internos.
+- **Cambio en `app.py` (`crear_pedidos_desde_sap`)**: el estado inicial ahora se calcula con `_entrega_estado()` desde el propio listado SAP — Entregado/Entrega parcial/Enviado al proveedor según corresponda; un pedido ya Entregado queda fuera del job de alertas por completo. Trazabilidad corregida al texto fijo `"Automática — alta desde listado de pedidos SAP"` (mismo criterio que `_aplicar_coincidencia_albaran`).
+- **Corrección retroactiva en `_auto_migrate()`**: para los pedidos ya creados mal con la v12.32.11 — corrige nombre de "creado por" e historial siempre; recalcula y corrige el estado solo si nadie lo tocó a mano desde el alta; purga de la cola cualquier reclamación automática todavía sin enviar para esos pedidos. Idempotente.
+- **Cambio en `templates/index.html`**: textos del modal actualizados (ya no prometen siempre "Enviado al proveedor"); el refresco tras crear usa el estado real devuelto por el backend.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. No probado en vivo — a confirmar tras desplegar: revisar que los pedidos creados con v12.32.11 quedan con el estado correcto y que no quedan reclamaciones automáticas pendientes en la cola para ellos.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] Crear pedidos desde SAP: ya no se ofrece al comparar solo Albaranes (v12.32.12)
 
 - **Petición de Víctor**: "si se detecta nuevo pedido al comprar el listado de albaranes, pienso que mas podria ser un error que un nuevo pedido, solo realizar esta gestion de crear nuevos pedidos con el listado de pedidos y no de albaranes".
