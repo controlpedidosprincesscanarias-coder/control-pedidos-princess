@@ -36,6 +36,17 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] URGENTE (segundo intento): la corrección retroactiva seguía sin ejecutarse — `NameError` por llamar a funciones aún no definidas, lógica reescrita en línea (v12.32.15)
+
+- **Detectado por Víctor**: tras desplegar v12.32.14 (badge ya "V 12.32.14"), la Línea temporal seguía mostrando exactamente los mismos pedidos sin corregir. Se le pidió el log completo de arranque de Render para no seguir a ciegas; el log reveló: `WARNING No se pudo ejecutar la corrección retroactiva de pedidos creados desde SAP (v12.32.13): name '_parse_importe_es' is not defined`.
+- **Causa raíz (distinta de la de v12.32.14)**: `_auto_migrate()` se invoca a nivel de módulo (`with app.app_context(): _auto_migrate()`) justo debajo de su propia definición, cerca del principio de `app.py` — es decir, se ejecuta DURANTE la importación del archivo, antes de que Python llegue a las definiciones (mucho más abajo) de `_parse_importe_es()` y `_entrega_estado()`. Llamarlas desde dentro de `_auto_migrate()` no podía funcionar en ninguna posición del bloque. Además, al compartir todo el bucle `for _p in _afectados` un único try/except, el `NameError` en el primer pedido abortaba también los pasos que no dependían de esas funciones (nombre automático, purga de reclamaciones) para el resto del lote.
+- **Cambio en `app.py`**: las llamadas a `_parse_importe_es()`/`_entrega_estado()` se sustituyen por dos funciones locales (`_parse_importe_es_local`, `_entrega_estado_local`) definidas dentro del propio bloque, con la lógica copiada en línea — sin depender de nada definido más abajo en el archivo. El cuerpo del bucle por pedido pasa a tener su propio try/except (`except Exception as exc_p`), igual que el patrón ya usado en el bloque de RLS: un pedido con datos raros ya no bloquea la corrección del resto del lote.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Repasada a mano la equivalencia de las funciones locales con las originales. No probado en vivo — dado que es el tercer intento (v12.32.13 no llegó a ejecutarse, v12.32.14 llegó pero falló con NameError), se recomienda verificar tras desplegar buscando en los logs `Auto-migración OK` sin ningún `WARNING No se pudo ejecutar la corrección retroactiva`, y/o recargando la Línea temporal de los pedidos de las capturas para confirmar nombre automático y estado corregidos.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html` (solo el número de versión del badge), `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] URGENTE: la corrección retroactiva de v12.32.13 nunca se ejecutó — movida al principio de `_auto_migrate()` (v12.32.14)
 
 - **Detectado por Víctor**: tras desplegar y arrancar con v12.32.13, la Línea temporal seguía mostrando los pedidos afectados con el nombre del admin y sin ningún registro de corrección de estado — la corrección retroactiva no se había aplicado.

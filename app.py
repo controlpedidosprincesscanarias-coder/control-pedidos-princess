@@ -269,8 +269,54 @@ def _auto_migrate():
             # para garantizar que se aplique en el próximo arranque pase lo
             # que pase más abajo en el resto de la función esa misma
             # ejecución.
+            #
+            # (2026-09-04, v12.32.15) SEGUNDO FALLO, DISTINTO DEL ANTERIOR —
+            # mover el bloque arriba (v12.32.14) NO fue suficiente: los
+            # logs de producción que Víctor pegó tras ese despliegue
+            # mostraron `NameError: name '_parse_importe_es' is not
+            # defined`. Motivo: _auto_migrate() se invoca en un `with
+            # app.app_context(): _auto_migrate()` a nivel de módulo situado
+            # justo debajo de la propia definición de la función, es decir,
+            # SE EJECUTA DURANTE LA IMPORTACIÓN del archivo — mucho antes de
+            # que Python haya llegado a las líneas (bastante más abajo en
+            # app.py) donde se definen _parse_importe_es() y
+            # _entrega_estado(). Llamarlas desde aquí, por tanto, nunca
+            # puede funcionar, esté el bloque donde esté dentro de
+            # _auto_migrate(). Y como todo el bucle `for _p in _afectados`
+            # estaba bajo un único try/except, el NameError en el primer
+            # pedido abortaba también los pasos 1 y 3 (nombre automático y
+            # purga de reclamaciones pendientes) para TODOS los pedidos,
+            # aunque esos dos pasos no dependían de esas funciones. Solución
+            # aplicada: la lógica de las dos funciones (parseo de importe en
+            # formato español y cálculo de "Entregado" / "Entrega parcial" /
+            # "No entregado") se copia aquí en línea, sin llamar a nada
+            # definido más abajo en el archivo; y cada pedido del lote se
+            # procesa ahora en su propio try/except, para que un dato raro
+            # en un pedido no bloquee la corrección del resto.
+            _NOMBRE_AUTO_SAP = "Automática — alta desde listado de pedidos SAP"
+
+            def _parse_importe_es_local(_s):
+                # Copia en línea de _parse_importe_es() (definida más abajo
+                # en app.py, no disponible todavía en este punto de la
+                # ejecución — ver nota v12.32.15 arriba).
+                if _s is None:
+                    return 0.0
+                try:
+                    return float(str(_s).strip().replace(".", "").replace(",", "."))
+                except ValueError:
+                    return 0.0
+
+            def _entrega_estado_local(_base, _recibido):
+                # Copia en línea de _entrega_estado() (misma razón).
+                _recibido = round(_recibido, 2)
+                _base = round(_base, 2)
+                if _recibido <= 0:
+                    return "No entregado"
+                if _recibido >= _base:
+                    return "Entregado"
+                return "Entrega parcial"
+
             try:
-                _NOMBRE_AUTO_SAP = "Automática — alta desde listado de pedidos SAP"
                 cur.execute("""
                     SELECT DISTINCT p.id, p.hotel_id, p.pedido_num, p.estado
                     FROM pedidos p
@@ -280,53 +326,58 @@ def _auto_migrate():
                 _afectados = cur.fetchall()
                 _corregidos_estado = 0
                 for _p in _afectados:
-                    # 1) Nombre de "creado por" — hecho histórico, siempre
-                    # correcto de aplicar pase lo que pase con el estado.
-                    cur.execute(
-                        "UPDATE pedidos SET creado_por_nombre=%s WHERE id=%s AND creado_por_nombre != %s",
-                        (_NOMBRE_AUTO_SAP, _p["id"], _NOMBRE_AUTO_SAP)
-                    )
-                    cur.execute(
-                        "UPDATE historial_estados SET usuario_nombre=%s "
-                        "WHERE pedido_id=%s AND nota LIKE 'Pedido creado automáticamente desde el listado SAP%%' "
-                        "AND usuario_nombre != %s",
-                        (_NOMBRE_AUTO_SAP, _p["id"], _NOMBRE_AUTO_SAP)
-                    )
-                    # 2) Estado — solo si nadie lo ha tocado desde el alta.
-                    if _p["estado"] == "ENVIADO AL PROVEEDOR" and _p.get("pedido_num"):
+                    try:
+                        # 1) Nombre de "creado por" — hecho histórico,
+                        # siempre correcto de aplicar pase lo que pase con
+                        # el estado.
                         cur.execute(
-                            "SELECT importe_base_txt, importe_recibido_txt FROM sap_pedidos_listado "
-                            "WHERE hotel_id=%s AND pedido_num_sap=%s",
-                            (_p["hotel_id"], _p["pedido_num"])
+                            "UPDATE pedidos SET creado_por_nombre=%s WHERE id=%s AND creado_por_nombre != %s",
+                            (_NOMBRE_AUTO_SAP, _p["id"], _NOMBRE_AUTO_SAP)
                         )
-                        _fila_sap = cur.fetchone()
-                        if _fila_sap:
-                            _importe_base     = _parse_importe_es(_fila_sap.get("importe_base_txt"))
-                            _importe_recibido = _parse_importe_es(_fila_sap.get("importe_recibido_txt"))
-                            _entrega = _entrega_estado(_importe_base, _importe_recibido)
-                            _estado_correcto = {"Entregado": "ENTREGADO", "Entrega parcial": "ENTREGA PARCIAL"}.get(_entrega)
-                            if _estado_correcto:
-                                cur.execute(
-                                    "UPDATE pedidos SET estado=%s, modificado_por_nombre=%s, modificado_en=NOW() "
-                                    "WHERE id=%s AND estado='ENVIADO AL PROVEEDOR'",
-                                    (_estado_correcto, _NOMBRE_AUTO_SAP, _p["id"])
-                                )
-                                cur.execute(
-                                    "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_nombre,nota) "
-                                    "VALUES (%s,%s,%s,%s,%s)",
-                                    (_p["id"], "ENVIADO AL PROVEEDOR", _estado_correcto, _NOMBRE_AUTO_SAP,
-                                     "Corrección automática (v12.32.13): el estado inicial del alta desde SAP se "
-                                     "calculó mal en v12.32.11 (siempre 'Enviado al proveedor') y se recalcula "
-                                     "aquí a partir del listado SAP guardado")
-                                )
-                                _corregidos_estado += 1
-                    # 3) Reclamaciones automáticas todavía sin enviar para
-                    # este pedido — se purgan de la cola en cualquier caso.
-                    cur.execute(
-                        "DELETE FROM emails_sistema_pendientes WHERE pedido_id=%s "
-                        "AND evento_codigo='reclamacion_proveedor_auto' AND enviado=FALSE",
-                        (_p["id"],)
-                    )
+                        cur.execute(
+                            "UPDATE historial_estados SET usuario_nombre=%s "
+                            "WHERE pedido_id=%s AND nota LIKE 'Pedido creado automáticamente desde el listado SAP%%' "
+                            "AND usuario_nombre != %s",
+                            (_NOMBRE_AUTO_SAP, _p["id"], _NOMBRE_AUTO_SAP)
+                        )
+                        # 2) Estado — solo si nadie lo ha tocado desde el alta.
+                        if _p["estado"] == "ENVIADO AL PROVEEDOR" and _p.get("pedido_num"):
+                            cur.execute(
+                                "SELECT importe_base_txt, importe_recibido_txt FROM sap_pedidos_listado "
+                                "WHERE hotel_id=%s AND pedido_num_sap=%s",
+                                (_p["hotel_id"], _p["pedido_num"])
+                            )
+                            _fila_sap = cur.fetchone()
+                            if _fila_sap:
+                                _importe_base     = _parse_importe_es_local(_fila_sap.get("importe_base_txt"))
+                                _importe_recibido = _parse_importe_es_local(_fila_sap.get("importe_recibido_txt"))
+                                _entrega = _entrega_estado_local(_importe_base, _importe_recibido)
+                                _estado_correcto = {"Entregado": "ENTREGADO", "Entrega parcial": "ENTREGA PARCIAL"}.get(_entrega)
+                                if _estado_correcto:
+                                    cur.execute(
+                                        "UPDATE pedidos SET estado=%s, modificado_por_nombre=%s, modificado_en=NOW() "
+                                        "WHERE id=%s AND estado='ENVIADO AL PROVEEDOR'",
+                                        (_estado_correcto, _NOMBRE_AUTO_SAP, _p["id"])
+                                    )
+                                    cur.execute(
+                                        "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_nombre,nota) "
+                                        "VALUES (%s,%s,%s,%s,%s)",
+                                        (_p["id"], "ENVIADO AL PROVEEDOR", _estado_correcto, _NOMBRE_AUTO_SAP,
+                                         "Corrección automática (v12.32.13): el estado inicial del alta desde SAP se "
+                                         "calculó mal en v12.32.11 (siempre 'Enviado al proveedor') y se recalcula "
+                                         "aquí a partir del listado SAP guardado")
+                                    )
+                                    _corregidos_estado += 1
+                        # 3) Reclamaciones automáticas todavía sin enviar
+                        # para este pedido — se purgan de la cola en
+                        # cualquier caso.
+                        cur.execute(
+                            "DELETE FROM emails_sistema_pendientes WHERE pedido_id=%s "
+                            "AND evento_codigo='reclamacion_proveedor_auto' AND enviado=FALSE",
+                            (_p["id"],)
+                        )
+                    except Exception as exc_p:
+                        log.warning(f"[CREAR-DESDE-SAP-FIX] No se pudo corregir el pedido id={_p.get('id')}: {exc_p}")
                 if _corregidos_estado:
                     log.info("[CREAR-DESDE-SAP-FIX] Estado corregido en %d pedido(s) creados automáticamente desde SAP (v12.32.13).",
                               _corregidos_estado)

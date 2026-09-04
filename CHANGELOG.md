@@ -1,3 +1,24 @@
+# v12.32.15 — 4 septiembre 2026
+
+🚨 URGENTE — segundo intento: la corrección retroactiva de v12.32.13/.14 seguía sin ejecutarse, ahora por un `NameError` — lógica reescrita en línea, sin depender de funciones definidas más abajo en el archivo
+
+**Detectado por Víctor**, con nuevas capturas de la Línea temporal tras desplegar la v12.32.14 (badge ya en "V 12.32.14") mostrando exactamente los mismos pedidos, sin corregir: seguían con el nombre del admin y en "ENVIADO AL PROVEEDOR". Se le pidió el log completo de arranque de Render para diagnosticar sin ir a ciegas; el segundo pegado de logs incluyó la línea clave:
+```
+WARNING No se pudo ejecutar la corrección retroactiva de pedidos creados desde SAP (v12.32.13): name '_parse_importe_es' is not defined
+```
+
+**Causa raíz (distinta de la de v12.32.14, y esta vez sí la definitiva)**: `_auto_migrate()` no se ejecuta "cuando ya está cargado todo el módulo", como se asumió al escribir la v12.32.13 — se invoca en una línea `with app.app_context(): _auto_migrate()` situada a nivel de módulo justo debajo de la propia definición de la función, cerca del principio de `app.py`. Eso significa que **se ejecuta durante la importación del archivo**, mucho antes de que Python llegue a las líneas —bastante más abajo— donde se definen `_parse_importe_es()` y `_entrega_estado()`. Da igual en qué punto de `_auto_migrate()` se coloque el bloque (principio o final): llamar a esas dos funciones desde dentro de `_auto_migrate()` nunca puede funcionar. Además, como todo el bucle `for _p in _afectados` compartía un único try/except, el `NameError` en el primer pedido abortaba también los pasos 1 (nombre automático) y 3 (purga de reclamaciones sin enviar) para el resto del lote, aunque esos dos pasos no necesitan esas funciones.
+
+**Cambio en `app.py`**: dentro del bloque de corrección retroactiva de `_auto_migrate()`, se sustituyen las llamadas a `_parse_importe_es()` y `_entrega_estado()` por dos funciones auxiliares locales (`_parse_importe_es_local`, `_entrega_estado_local`) definidas justo ahí mismo, con la misma lógica exacta copiada en línea (parseo de importe en formato español; comparación "Entregado" / "Entrega parcial" / "No entregado"), sin depender de nada definido más abajo en el archivo. Además, el cuerpo del bucle `for _p in _afectados` se envuelve ahora en su propio try/except por pedido (`except Exception as exc_p: log.warning(...)`), siguiendo el mismo patrón que ya usa el bloque de RLS más arriba en la función: si un pedido tiene un dato raro, se salta solo ese y se sigue corrigiendo el resto del lote.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Repasada a mano la lógica de `_parse_importe_es_local`/`_entrega_estado_local` contra las funciones originales (mismo comportamiento, mismos casos límite). Confirmado que ninguna otra parte de `_auto_migrate()` ni del resto del archivo depende de que estos dos nombres locales existan fuera de este bloque (son funciones anidadas, con alcance solo dentro de `_auto_migrate()`; no chocan con las funciones de mismo comportamiento definidas más abajo en el módulo). No se ha podido probar en vivo contra producción desde aquí — dado que este es el TERCER intento de que esta corrección retroactiva se aplique (v12.32.13 nunca llegó a la sentencia, v12.32.14 llegó pero falló con NameError), al desplegar conviene verificar de una de estas formas antes de dar el caso por cerrado: (1) en los logs de arranque de Render, buscar `Auto-migración OK` seguido, si corresponde, de `[CREAR-DESDE-SAP-FIX] Estado corregido en N pedido(s)` — y comprobar que ya NO aparece ningún `WARNING No se pudo ejecutar la corrección retroactiva`; (2) recargar (refresco forzado) la Línea temporal de alguno de los pedidos de las capturas y confirmar que el nombre ha cambiado a "Automática — alta desde listado de pedidos SAP" y, si procedía, que el estado ya no es "Enviado al proveedor".
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html` (solo el número de versión del badge), `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.14 — 4 septiembre 2026
 
 🚨 URGENTE — la corrección retroactiva de v12.32.13 nunca llegó a ejecutarse: movida al principio de `_auto_migrate()` para garantizar que se aplique
