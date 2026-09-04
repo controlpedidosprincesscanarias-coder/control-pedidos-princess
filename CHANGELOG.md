@@ -1,3 +1,88 @@
+# v12.32.12 — 4 septiembre 2026
+
+🩹 Crear pedidos automáticamente desde SAP (v12.32.11): ya no se ofrece al comparar solo el listado de Albaranes, únicamente cuando se procesa el Listado de Pedidos
+
+**Petición de Víctor**: "una duda, si se detecta nuevo pedido al comprar el listado de albaranes, pienso que mas podria ser un error que un nuevo pedido, solo realizar esta gestion de crear nuevos pedidos con el listado de pedidos y no de albaranes".
+
+**Situación anterior (v12.32.11)**: la sección "Crear automáticamente los pedidos de SAP sin dar de alta" se actualizaba tanto al terminar la comparación de un solo PDF (Listado de Pedidos) como al terminar la comparación combinada con Albaranes — en este segundo caso, incluso cuando esa comparación se había hecho SOLO con el listado de Albaranes, reutilizando el Listado de Pedidos ya guardado sin volver a leerlo. Víctor prefiere no ver esta gestión ahí: un "pedido nuevo" que apareciera al mirar solo los albaranes le parece más indicio de un desajuste/error que de un alta real pendiente.
+
+**Cambio en `templates/index.html`**: `_cargarPedidosPendientesCrearSap()` ya solo se llama (1) al terminar la comparación de un solo PDF (`_pollCompararListadoPdf`, siempre el Listado de Pedidos), y (2) dentro del `if (auditoria)` de la comparación combinada (`_pollCompararListadoAlbaranes`) — es decir, únicamente cuando esa comparación combinada procesó de verdad un PDF nuevo del Listado de Pedidos, nunca cuando se hizo solo con Albaranes reutilizando lo ya guardado. Se quita también la llamada que se disparaba solo al elegir hotel (sin haber comparado nada todavía), por el mismo motivo: no asociar la gestión de creación a una acción que no sea explícitamente sobre el Listado de Pedidos. Sin cambios en `app.py` — los endpoints y la lógica de creación no cambian, solo cuándo se ofrece la sección en pantalla.
+
+**Verificación**: `node --check` sobre el bloque `<script>` afectado, sin errores. `python3 -m py_compile app.py` sin errores (sin cambios en este archivo, se re-verifica por rutina).
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+
+**Entrega**: `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
+# v12.32.11 — 4 septiembre 2026
+
+✨ "Comparar listado PDF (SAP)": los pedidos que SAP tiene y la app aún no, ahora se pueden seleccionar y crear automáticamente con un clic
+
+**Petición de Víctor**: "TE LO COMPLICO UN POCO MAS SI ME DEJAS, PODEMOS AUTOMATIZAR ENTONCES AHORA LA CREACION DE LOS PEDIDOS NO REGISTRADOS EN LA APLICACION? SE MOSTRARIA AL USUARIO PREVIAMENTE EL LISTADO (COMO YA TENEMOS COMO RESUMEN DE CORREO) CON POSIBILIDAD DE SELECCIONAR Y ACEPTAR LA CREACION AUTOMATICA PENDIENTE DE SUBIR EL RESTO DE DOCUMENTACION, SE REGISTRARIA LA FECHA DEL PEDIDO COMO TRAMITACION Y LA DE ENTREGA COMO ENTREGA PREDEFINIDA, EL NUEMERO DE PEDIDO TAMBIE, ES DECIR, TODA AQUELLA INFO QUE TENGAMOS CON ESTE LISTADO". Aclarado con tres preguntas: (1) estado inicial siempre "Enviado al proveedor" (no el de entrega que muestre SAP), (2) solo se puede crear un pedido con el proveedor ya identificado en el catálogo, y (3) el importe (Total Pedido) se rellena también automáticamente.
+
+**Cambio en `app.py`**:
+- `_pedidos_sap_no_registrados(hotel_id)`: a partir del Listado de Pedidos (SAP) ya guardado (`sap_pedidos_listado`, v12.32.10), calcula al vuelo qué pedidos todavía no están dados de alta en la app — solo lectura, sin las escrituras silenciosas de `_comparar_listado_pdf_logica()` (no hacen falta aquí).
+- Nuevo endpoint `GET /api/pedidos/pendientes-crear-sap/<hotel_id>` — consulta esa lista sin necesidad de comparar ningún PDF nuevo (usa lo ya guardado).
+- Nuevo endpoint `POST /api/pedidos/crear-desde-sap` (`{"hotel_id", "pedidos_num_sap": [...]}`) — crea, para cada número de pedido SAP indicado, una ficha "cáscara": número de pedido, fecha de tramitación (fecha de pedido en SAP), fecha de entrega prevista, proveedor e importe (Total Pedido) vienen de SAP; departamento, presupuesto y adjuntos quedan pendientes de completar a mano. Re-comprueba en el momento de crear si cada pedido sigue sin registrar (por si alguien lo dio de alta a mano mientras tanto) y omite los que ya no proceden o cuyo proveedor no está identificado, sin abortar el resto del lote. Registra el alta en `historial_estados` para dejar rastro de auditoría.
+- **Importante**: aunque el estado inicial es "ENVIADO AL PROVEEDOR", esta creación **no llama a `enviar_emails_estado()`** — ese estado dispara normalmente un correo real al proveedor avisando de un pedido nuevo, pero aquí el pedido no es nuevo (ya existe en SAP desde hace tiempo): mandarlo sería un aviso duplicado y confuso. El registro de la entrega en sí (si SAP ya la muestra como Entregada/Entrega parcial) se deja al flujo ya existente de "Comparar listado + Albaranes"/aplicar coincidencia, que sí sabe hacerlo con su propio albarán.
+
+**Cambio en `templates/index.html`**: nueva sección "Crear automáticamente los pedidos de SAP sin dar de alta" dentro del modal "Comparar listado PDF (SAP)", con una tabla seleccionable (checkbox por fila, solo habilitado si el proveedor está identificado) y un botón "Crear pedidos seleccionados". Se actualiza sola al elegir hotel, al terminar cualquiera de las dos comparaciones (con o sin Albaranes, con o sin PDF de SAP nuevo) y con un botón "Actualizar" manual — siempre lee del listado SAP guardado, así que funciona también si Víctor solo ha ido pasando el Listado de Albaranes sin volver a subir el de Pedidos.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre el bloque `<script>` afectado, sin errores. Repasado a mano el mapeo de campos contra el esquema real de `pedidos` (incluidas las columnas añadidas por `_auto_migrate()`: `total_pedido`, `fecha_entrega_especifica`, `plazo_entrega_dias`) y contra el dominio completo de `estado` (`models.ESTADOS_VALIDOS`). No probado en vivo contra producción (sin backend/BD disponible desde aquí) — a confirmar tras desplegar: en un hotel con listado SAP guardado y al menos un pedido sin dar de alta con proveedor identificado, abrir "Comparar listado PDF (SAP)", elegir el hotel, comprobar que aparece la nueva tabla, seleccionar uno y crearlo — verificar que aparece en el listado de pedidos con el número, fechas e importe correctos, en estado "Enviado al proveedor", y que no se ha encolado ningún correo al proveedor.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica (no se toca ninguna tabla nueva ni RLS/Storage, y ninguno mantiene un listado exhaustivo de endpoints). `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
+# v12.32.10 — 4 septiembre 2026
+
+✨ "Comparar listado PDF (SAP)": el Listado de Pedidos de SAP ahora se guarda por hotel — a partir de la primera subida, se puede comparar solo con nuevos Listados de Albaranes sin volver a adjuntarlo cada vez
+
+**Petición de Víctor**: "sería posible que por ejemplo cargue únicamente el GY que es de varios meses, el sistema grabe esta info en algún punto, la idea es luego solo ir pasando el segundo listado de albaranes para ir contrastando y cerrando información". Aclarado con dos preguntas: (1) un único modal con el PDF de SAP opcional (no una pantalla aparte de "cargar SAP"), y (2) cada subida nueva del listado de SAP **fusiona** con lo ya guardado — no lo reemplaza, así que un pedido guardado que no aparezca en un PDF más reciente no se pierde.
+
+**Cambio en `app.py`**:
+- Nueva tabla `sap_pedidos_listado` (hotel_id + las mismas 10 columnas que ya extraía `_PATRON_LISTADO_SIMPLIFICADO` de cada PDF), con índice único `(hotel_id, pedido_num_sap)` para el upsert de fusión.
+- `_guardar_listado_sap_importado()`: guarda/fusiona (upsert) el listado recién leído. Se llama automáticamente cada vez que se lee un PDF de SAP, tanto desde "Comparar listado PDF" (un solo PDF) como desde "Comparar también con Albaranes" (dos PDF) — así cualquier subida, se use como se use, alimenta el listado guardado.
+- `_cargar_listado_sap_guardado()`: reconstruye las mismas tuplas que se leerían de un PDF nuevo, a partir de lo guardado — para que toda la lógica de comparación existente (matching por proveedor+importe, criterios de "sujeto a seguimiento", etc.) funcione exactamente igual reciba un PDF o datos guardados.
+- `_comparar_listado_albaranes_logica()`: el primer PDF (Listado de Pedidos SAP) pasa a ser **opcional** — si se omite, usa el listado guardado del hotel (error claro si nunca se guardó ninguno). La auditoría completa de SAP (qué pedidos faltan por dar de alta) solo se calcula cuando SÍ hay un PDF nuevo — no tiene sentido repetirla sobre datos que no han cambiado desde la última subida real.
+- Nuevo endpoint `GET /api/pedidos/listado-sap-guardado/<hotel_id>` — consulta rápida (sin subir nada) de si hay listado guardado, cuántos pedidos y desde cuándo.
+
+**Cambio en `templates/index.html`**: al marcar "+ Comparar también con Albaranes", el campo "Listado de Pedidos (SAP)" deja de ser obligatorio y aparece una línea informativa (al elegir hotel o marcar la casilla) indicando si hay un listado guardado para ese hotel y de cuándo es, o avisando de que hace falta subirlo al menos una vez. El resultado de la comparación también indica cuándo se usó el listado guardado en vez de un PDF nuevo.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre los bloques `<script>` afectados, sin errores. Comprobado el formato de los dos PDF de ejemplo que mandó Víctor (GY.pdf, listado de varios meses, y GY2.pdf, listado de albaranes) contra los patrones de reconocimiento existentes — coinciden con el formato esperado. No probado en vivo contra producción (sin backend/BD disponible desde aquí) — a confirmar tras desplegar: subir el Listado de Pedidos de un hotel una vez, cerrar el modal, volver a abrirlo, marcar "Comparar también con Albaranes", dejar el primer PDF vacío y comprobar que aparece el aviso de listado guardado y que la comparación funciona solo con el segundo PDF.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md` — no aplica, la tabla nueva se crea sola en el arranque como el resto (no usa Supabase Storage ni RLS). `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica, ninguno mantiene un listado exhaustivo de tablas. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
+# v12.32.09 — 4 septiembre 2026
+
+🩹 Integridad → "Telegram bloqueado o inservible": "Bloqueado desde" salía como "Invalid Date" y "Motivo" mostraba el JSON crudo de Telegram — ambos corregidos, con traducción a español y detalle técnico
+
+**Petición de Víctor**, a raíz de una captura real del panel (caso comprascan6/María Cruz): "el motivo y bloqueado desde deberia aparecer mas claro y detallado".
+
+**1) "Bloqueado desde" → "Invalid Date"**: `_validar_integridad_operativa()` nunca convertía `telegram_bloqueado_en` (columna TIMESTAMPTZ) a texto antes de servirlo por la API — a diferencia del resto de fechas de la app, que sí llaman `.isoformat()` explícitamente (p. ej. `creado_en` al listar usuarios o "Últimos pedidos" del dashboard). Sin ese paso, Flask lo serializaba con su formato por defecto ("Thu, 03 Sep 2026 18:20:58 GMT", RFC 1123) — y el frontend, además, le concatenaba una `'Z'` a mano (`new Date(u.telegram_bloqueado_en + 'Z')`), un patrón que solo es correcto para fechas "naive" (como `data.timestamp`, que viene de `datetime.utcnow().isoformat()`, sin huso horario propio). Con una TIMESTAMPTZ ya con su huso incluido, esa `'Z'` de más también habría roto el resultado aunque el backend sí convirtiera a ISO. Arreglado en los dos lados: el backend ahora sí llama `.isoformat()`, y el frontend deja de concatenar la `'Z'` (mismo patrón que el resto de fechas de la app que vienen de una TIMESTAMPTZ, p. ej. `new Date(r.creado_en)`).
+
+**2) "Motivo" → JSON crudo de Telegram**: antes se guardaba tal cual la respuesta de la API — `{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked by the user"}` — poco legible para un admin. Nueva función `_describir_motivo_telegram_bloqueo()` (`app.py`) que traduce las 5 causas conocidas (bot bloqueado, cuenta desactivada, chat borrado, chat_id vacío, peer_id inválido — la misma lista que ya usa `_send_telegram()` para decidir si el error es permanente, ahora compartida entre ambas para que no puedan desincronizarse) a una frase clara en español, seguida del detalle técnico real que devolvió Telegram (código HTTP + su "description"). Resultado, para el caso de Víctor: *"El usuario bloqueó el bot de Telegram desde su lado. Telegram devolvió HTTP 403: "Forbidden: bot was blocked by the user"."* — claro y detallado a la vez, no solo una frase bonita ni solo el JSON crudo.
+
+**Backfill**: el motivo de comprascan6 (y cualquier otro ya guardado con el JSON crudo de antes de esta versión) se reformatea automáticamente al arrancar la app (`_auto_migrate()`), sin esperar a que se repita un ciclo de bloqueo/desbloqueo.
+
+**Cambio en `templates/index.html`**: además de quitar la `'Z'` de la fecha, la celda de "Motivo" pasa a tener más aire (letra algo mayor, salto de línea normal en vez de venir apretada) ahora que el texto es una frase legible y no un JSON corto.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. `node --check` sobre los bloques `<script>` que contienen `telegram_bloqueado_en`, sin errores. Reproducido en local el caso exacto del log de Víctor (mismo JSON de error) y confirmado que `_describir_motivo_telegram_bloqueo()` genera el texto esperado. No probado en vivo contra producción (sin backend/BD disponible desde aquí) — a confirmar tras desplegar: abrir Admin → Integridad y comprobar que comprascan6 aparece con una fecha válida en "Bloqueado desde" y el motivo en español.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.08 — 3 septiembre 2026
 
 ✨ Apartado Presupuesto: ahora solo admite un documento de apoyo — PDF, Word o correo, nunca más de uno — con aviso flotante detallado si se intenta adjuntar un segundo

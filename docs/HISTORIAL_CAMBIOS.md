@@ -36,6 +36,51 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] Crear pedidos desde SAP: ya no se ofrece al comparar solo Albaranes (v12.32.12)
+
+- **Petición de Víctor**: "si se detecta nuevo pedido al comprar el listado de albaranes, pienso que mas podria ser un error que un nuevo pedido, solo realizar esta gestion de crear nuevos pedidos con el listado de pedidos y no de albaranes".
+- **Antes (v12.32.11)**: la sección de creación automática se actualizaba también al terminar una comparación hecha solo con el listado de Albaranes (reutilizando el Listado de Pedidos guardado, sin leer uno nuevo) y al elegir hotel, sin haber comparado nada todavía.
+- **Cambio en `templates/index.html`**: `_cargarPedidosPendientesCrearSap()` ahora solo se dispara tras procesar de verdad un PDF nuevo del Listado de Pedidos — en la comparación de un solo PDF siempre, y en la comparación combinada con Albaranes solo si esa comparación incluyó un PDF nuevo de Pedidos (dentro del `if (auditoria)`). Se quita la llamada al elegir hotel. Sin cambios en `app.py`.
+- **Verificación**: `node --check` sin errores. `python3 -m py_compile app.py` sin errores (sin cambios, re-verificado por rutina).
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
+## 2026-09-04 — [Control Pedidos] "Comparar listado PDF (SAP)": creación automática de los pedidos que faltan por dar de alta (v12.32.11)
+
+- **Petición de Víctor**: automatizar la creación de los pedidos que SAP ya tiene pero la app no — mostrando antes el listado (como el resumen de correo) para seleccionar y aceptar, dejando el resto de documentación pendiente de subir; que se registre la fecha de tramitación, la fecha de entrega predefinida y el número de pedido, "toda aquella info que tengamos con este listado". Aclarado con tres preguntas: (1) estado inicial siempre "Enviado al proveedor", nunca el de entrega de SAP; (2) solo se puede crear si el proveedor está identificado en el catálogo; (3) el importe (Total Pedido) también se rellena solo.
+- **Cambio en `app.py`**: `_pedidos_sap_no_registrados(hotel_id)` calcula al vuelo, desde el listado SAP ya guardado, qué pedidos faltan por dar de alta (solo lectura). Nuevo `GET /api/pedidos/pendientes-crear-sap/<hotel_id>` para consultarlo sin comparar ningún PDF. Nuevo `POST /api/pedidos/crear-desde-sap` que crea las fichas seleccionadas (número, fecha de tramitación, fecha de entrega prevista, proveedor e importe desde SAP; departamento/presupuesto/adjuntos quedan pendientes), re-comprobando en el momento por si alguien ya dio de alta alguno a mano. **No llama a `enviar_emails_estado()`** aunque el estado sea "ENVIADO AL PROVEEDOR": ese correo es para pedidos nuevos de verdad, y estos ya existían en SAP — mandarlo sería un aviso duplicado al proveedor real. Registra el alta en `historial_estados`.
+- **Cambio en `templates/index.html`**: nueva sección "Crear automáticamente los pedidos de SAP sin dar de alta" en el modal de comparación, con tabla seleccionable (checkbox, solo habilitado con proveedor identificado) y botón de creación masiva — se actualiza al elegir hotel y al terminar cualquiera de las dos comparaciones, siempre desde el listado guardado.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Repasado el mapeo de campos contra el esquema real de `pedidos` (columnas de `_auto_migrate()` incluidas) y el dominio de `estado`. No probado en vivo contra producción — a confirmar tras desplegar.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
+## 2026-09-04 — [Control Pedidos] "Comparar listado PDF (SAP)": listado de SAP guardado por hotel, ya no hace falta re-subirlo en cada comparación con Albaranes (v12.32.10)
+
+- **Petición de Víctor**: cargar el Listado de Pedidos de SAP (varios meses) una vez, que la app lo guarde, y a partir de ahí ir pasando solo el Listado de Albaranes para ir contrastando y cerrando información. Aclarado: un único modal con el PDF de SAP opcional, y cada subida nueva FUSIONA con lo ya guardado (no lo reemplaza).
+- **Cambio en `app.py`**: nueva tabla `sap_pedidos_listado` (upsert por hotel_id+pedido_num_sap) con `_guardar_listado_sap_importado()`/`_cargar_listado_sap_guardado()`; se guarda automáticamente en cualquier lectura de un PDF de SAP (con o sin Albaranes). `_comparar_listado_albaranes_logica()` acepta el primer PDF como opcional, usando el listado guardado si se omite (error claro si nunca se guardó ninguno para ese hotel); la auditoría completa de SAP solo se recalcula cuando hay un PDF nuevo. Nuevo endpoint `GET /api/pedidos/listado-sap-guardado/<hotel_id>`.
+- **Cambio en `templates/index.html`**: con "Comparar también con Albaranes" marcado, el campo de SAP deja de ser obligatorio y se informa (al elegir hotel/marcar la casilla) de si hay listado guardado y de cuándo.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Formato de los PDF de ejemplo de Víctor (GY.pdf/GY2.pdf) comprobado contra los patrones existentes. No probado en vivo contra producción — a confirmar tras desplegar.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
+## 2026-09-04 — [Control Pedidos] Integridad → "Telegram bloqueado": fecha "Invalid Date" y motivo en JSON crudo, corregidos (v12.32.09)
+
+- **Petición de Víctor**, con captura real del panel (comprascan6/María Cruz): "el motivo y bloqueado desde deberia aparecer mas claro y detallado".
+- **"Bloqueado desde" → Invalid Date**: `_validar_integridad_operativa()` no convertía `telegram_bloqueado_en` (TIMESTAMPTZ) a ISO antes de servirlo, a diferencia del resto de fechas de la app; el frontend además le concatenaba una `'Z'` a mano, patrón solo válido para fechas "naive" como `data.timestamp`. Arreglado en ambos lados: backend con `.isoformat()`, frontend sin la `'Z'` de más (mismo patrón que `new Date(r.creado_en)` en el resto de la app).
+- **"Motivo" → JSON crudo**: nueva función `_describir_motivo_telegram_bloqueo()` (`app.py`) que traduce las 5 causas conocidas a una frase clara en español + el detalle técnico real (código HTTP + descripción de Telegram) — comparte la lista de frases con `_send_telegram()` para que no se desincronicen. Backfill automático en `_auto_migrate()` para los motivos ya guardados en JSON crudo (incluye el caso real de comprascan6).
+- **Cambio en `templates/index.html`**: celda de "Motivo" con más aire (letra algo mayor, salto de línea normal).
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` sin errores. Reproducido en local el JSON exacto del caso de Víctor. No probado en vivo contra producción — a confirmar tras desplegar.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-03 — [Control Pedidos] Presupuesto: solo un documento de apoyo (PDF, Word o correo) con aviso flotante si se intenta un segundo (v12.32.08)
 
 - **Petición de Víctor**: en el apartado Presupuesto quiere permitir adjuntar un PDF, un Word o un correo, pero solo uno de los tres — y que al intentar poner un segundo salte un aviso flotante detallado y profesional, con el mismo estilo que el aviso de "Acceso restringido" cuando un rol sin permiso entra en un apartado de admin.

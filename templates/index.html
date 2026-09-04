@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.08
+          V 12.32.12
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2731,11 +2731,21 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;align-items:end">
           <div class="form-group">
             <label class="form-label">Hotel <span style="color:#e74c3c">*</span></label>
-            <select class="form-control" id="cmp-pdf-hotel"><option value="">— Selecciona —</option></select>
+            <select class="form-control" id="cmp-pdf-hotel" onchange="_actualizarInfoListadoSapGuardado()"><option value="">— Selecciona —</option></select>
           </div>
           <div class="form-group">
-            <label class="form-label">Listado de Pedidos (SAP) <span style="color:#e74c3c">*</span></label>
+            <label class="form-label">Listado de Pedidos (SAP) <span id="cmp-pdf-file-req" style="color:#e74c3c">*</span></label>
             <input class="form-control" type="file" id="cmp-pdf-file" accept="application/pdf">
+            <!-- (2026-09-04) A petición de Víctor: al comparar también con
+                 Albaranes, este PDF pasa a ser opcional — si se omite, se
+                 reutiliza el último Listado de Pedidos guardado para el
+                 hotel elegido (ver _guardar_listado_sap_importado() /
+                 _cargar_listado_sap_guardado() en app.py), para no tener
+                 que volver a subirlo cada vez que solo se quiere cruzar
+                 con un nuevo Listado de Albaranes. Se actualiza al elegir
+                 hotel o al marcar/desmarcar la casilla de abajo — ver
+                 _actualizarInfoListadoSapGuardado(). -->
+            <div id="cmp-pdf-file-info" style="font-size:.78rem;color:var(--text-secondary);margin-top:4px;display:none"></div>
           </div>
         </div>
 
@@ -2753,7 +2763,9 @@ tbody tr:last-child{border-bottom:none}
             Entregado/Entrega parcial (arriba) con el importe de cada albarán de este segundo
             listado — al coincidir proveedor e importe, propone registrar en el pedido la fecha
             de tramitación, el número de entrada del albarán y el cambio de estado, para que los
-            confirmes antes de aplicarlos.
+            confirmes antes de aplicarlos. Con esta opción marcada, el "Listado de Pedidos (SAP)"
+            de arriba es opcional: si no adjuntas uno nuevo, se usa el último guardado para el
+            hotel elegido.
           </div>
           <div class="form-group" id="cmp-pdf-file2-wrap" style="display:none;margin-top:10px;max-width:420px">
             <label class="form-label">Listado de Albaranes (DALI) <span style="color:#e74c3c">*</span></label>
@@ -2851,6 +2863,46 @@ tbody tr:last-child{border-bottom:none}
                   title="Envía un único correo interno con los pedidos de SAP sin dar de alta, lo registrado automáticamente y lo pendiente de realizar">
             📧 Enviar resumen por correo (pedidos + albaranes)
           </button>
+        </div>
+      </div>
+
+      <!-- ── Crear automáticamente los pedidos de SAP que faltan (2026-09-04) ──
+           A petición de Víctor: además de auditar qué falta, poder seleccionar
+           y dar de alta directamente esos pedidos con lo que ya sabemos por el
+           listado SAP guardado. Deliberadamente solo se muestra/actualiza tras
+           procesar un PDF nuevo del Listado de Pedidos (SAP) — nunca a raíz de
+           comparar solo el Listado de Albaranes (ver el comentario junto a
+           _cargarPedidosPendientesCrearSap() más abajo: un "pedido nuevo" que
+           saliera únicamente de mirar los albaranes le resulta a Víctor más
+           indicio de error que de alta real). Ver
+           _pedidos_sap_no_registrados()/crear_pedidos_desde_sap() en app.py. -->
+      <div id="cmp-sap-crear-wrap" style="display:none;margin-top:24px;padding-top:18px;border-top:2px solid var(--border,#dde1e8)">
+        <div style="font-weight:700;font-size:.95rem;margin-bottom:6px">🆕 Crear automáticamente los pedidos de SAP sin dar de alta</div>
+        <div style="font-size:.8rem;color:var(--text-secondary);margin-bottom:10px">
+          Se crean con el número de pedido, la fecha de tramitación (fecha de pedido en SAP), la fecha
+          de entrega prevista y el proveedor/importe que ya trae el listado SAP, en estado
+          <strong>"Enviado al proveedor"</strong> — el resto (departamento, presupuesto, adjuntos…) queda
+          pendiente de completar a mano, sin disparar ningún correo al proveedor (el pedido ya existía en
+          SAP, no es nuevo). Solo se pueden seleccionar los que tienen el proveedor identificado en el
+          catálogo — el resto hay que identificarlos primero en Admin → Proveedores.
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap">
+          <span id="cmp-sap-crear-contador" style="font-size:.85rem;color:var(--text-secondary)"></span>
+          <div style="flex:1"></div>
+          <button class="btn btn-ghost btn-sm" onclick="_cargarPedidosPendientesCrearSap()">↺ Actualizar</button>
+          <button class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none" id="cmp-sap-crear-btn"
+                  onclick="crearPedidosSeleccionadosSap()" disabled>➕ Crear pedidos seleccionados</button>
+        </div>
+        <div class="table-wrap" style="max-height:320px">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:28px"><input type="checkbox" id="cmp-sap-crear-check-todas" onchange="_toggleTodosSapCrear(this)"></th>
+                <th>Pedido SAP</th><th>F. pedido</th><th>F. entrega</th><th>Proveedor</th><th>Importe</th><th>Entrega (SAP)</th>
+              </tr>
+            </thead>
+            <tbody id="cmp-sap-crear-tbody"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -6789,6 +6841,9 @@ let _cmpPdfJobId = null;
 // (2026-08-15) Pedidos + Albaranes — estado de la segunda comparación
 let _cmpAlbResultado = null;
 let _cmpAlbJobId = null;
+// (2026-09-04) Crear pedidos automáticamente desde SAP — ver
+// _cargarPedidosPendientesCrearSap()/crearPedidosSeleccionadosSap()
+let _cmpSapCrearPedidos = [];
 
 function abrirModalCompararListado() {
   const sel = document.getElementById('cmp-pdf-hotel');
@@ -6815,11 +6870,59 @@ function _resetModalCompararPdf() {
   document.getElementById('cmp-alb-pendientes-wrap').style.display = 'none';
   _cmpAlbResultado = null;
   _cmpAlbJobId = null;
+  // (2026-09-04) Listado SAP guardado — ver _actualizarInfoListadoSapGuardado()
+  document.getElementById('cmp-pdf-file-req').style.display = '';
+  document.getElementById('cmp-pdf-file-info').style.display = 'none';
+  // (2026-09-04) Crear pedidos automáticamente desde SAP — ver
+  // _cargarPedidosPendientesCrearSap()
+  _cmpSapCrearPedidos = [];
+  document.getElementById('cmp-sap-crear-wrap').style.display = 'none';
+  document.getElementById('cmp-sap-crear-tbody').innerHTML = '';
+  document.getElementById('cmp-sap-crear-check-todas').checked = false;
+  document.getElementById('cmp-sap-crear-btn').disabled = true;
+  document.getElementById('cmp-sap-crear-contador').textContent = '';
 }
 
 function _toggleCompararConAlbaranes() {
   const checked = document.getElementById('cmp-pdf-con-albaranes').checked;
   document.getElementById('cmp-pdf-file2-wrap').style.display = checked ? '' : 'none';
+  _actualizarInfoListadoSapGuardado();
+}
+
+// (2026-09-04) A petición de Víctor: con "+ Comparar también con Albaranes"
+// marcado, el Listado de Pedidos (SAP) es opcional — se reutiliza el
+// último guardado para el hotel elegido si no se adjunta uno nuevo (ver
+// _guardar_listado_sap_importado()/_cargar_listado_sap_guardado() en
+// app.py). Esta función consulta ese estado (GET, sin subir nada) cada vez
+// que cambia el hotel o se marca/desmarca la casilla de Albaranes, y
+// actualiza el asterisco de obligatoriedad + una línea informativa bajo el
+// campo del PDF, para que quede claro qué va a pasar si se deja vacío.
+let _cmpPdfSapInfoReqId = 0;
+async function _actualizarInfoListadoSapGuardado() {
+  const hotelId = val('cmp-pdf-hotel');
+  const conAlbaranes = document.getElementById('cmp-pdf-con-albaranes').checked;
+  const reqEl  = document.getElementById('cmp-pdf-file-req');
+  const infoEl = document.getElementById('cmp-pdf-file-info');
+  if (!conAlbaranes || !hotelId) {
+    reqEl.style.display = '';
+    infoEl.style.display = 'none';
+    return;
+  }
+  reqEl.style.display = 'none';   // con Albaranes marcado, el PDF de SAP ya no es obligatorio
+  const miReqId = ++_cmpPdfSapInfoReqId;
+  infoEl.textContent = 'Comprobando si hay un listado guardado…';
+  infoEl.style.display = '';
+  try {
+    const r = await fetch(`/api/pedidos/listado-sap-guardado/${hotelId}`, { credentials: 'same-origin' });
+    const d = await r.json();
+    if (miReqId !== _cmpPdfSapInfoReqId) return;   // el usuario ya cambió de hotel/casilla mientras tanto
+    if (!r.ok || !d.ok) { infoEl.style.display = 'none'; return; }
+    infoEl.textContent = d.guardado
+      ? `🗂️ Hay un listado guardado para este hotel: ${d.total_pedidos} pedido(s), actualizado el ${new Date(d.actualizado_en).toLocaleString('es-ES')}. Si no adjuntas un PDF aquí, se usará ese.`
+      : '⚠️ Todavía no hay ningún listado SAP guardado para este hotel — adjunta uno al menos esta vez.';
+  } catch (e) {
+    if (miReqId === _cmpPdfSapInfoReqId) infoEl.style.display = 'none';
+  }
 }
 
 async function compararListadoPdf() {
@@ -6830,19 +6933,26 @@ async function compararListadoPdf() {
   const file2Input = document.getElementById('cmp-pdf-file2');
   const file2 = file2Input.files[0];
   if (!hotelId) { toast('Selecciona un hotel', 'error'); return; }
-  if (!file) { toast('Selecciona el listado de pedidos (SAP)', 'error'); return; }
-  if (conAlbaranes && !file2) { toast('Selecciona también el listado de albaranes (DALI)', 'error'); return; }
+  if (conAlbaranes) {
+    if (!file2) { toast('Selecciona el listado de albaranes (DALI)', 'error'); return; }
+    // (2026-09-04) El listado de pedidos (SAP) es opcional aquí — si se
+    // omite, el backend reutiliza el último guardado para este hotel (y
+    // devuelve un error propio si tampoco hay ninguno guardado todavía).
+  } else {
+    if (!file) { toast('Selecciona el listado de pedidos (SAP)', 'error'); return; }
+  }
 
   document.getElementById('cmp-pdf-form').style.display = 'none';
   document.getElementById('cmp-pdf-loading').style.display = '';
   document.getElementById('cmp-pdf-loading').textContent = conAlbaranes
-    ? 'Subiendo y leyendo los dos PDF…' : 'Subiendo y leyendo el PDF…';
+    ? (file ? 'Subiendo y leyendo los dos PDF…' : 'Leyendo el listado de albaranes y comparando con el listado SAP guardado…')
+    : 'Subiendo y leyendo el PDF…';
   document.getElementById('cmp-pdf-resultado').style.display = 'none';
   document.getElementById('cmp-alb-resultado').style.display = 'none';
 
   const fd = new FormData();
   fd.append('hotel_id', hotelId);
-  fd.append('file', file);
+  if (file) fd.append('file', file);   // (2026-09-04) opcional con Albaranes marcado, ver más arriba
   if (conAlbaranes) fd.append('file2', file2);
 
   // (2026-08-10) FIX: con PDFs grandes (170+ páginas) el proceso completo
@@ -6924,6 +7034,10 @@ async function _pollCompararListadoPdf(jobId, intentos) {
   document.getElementById('cmp-pdf-resultado').style.display = '';
   document.getElementById('cmp-pdf-solo-faltantes').checked = true;
   _renderCompararPdfResultado();
+  // (2026-09-04) A petición de Víctor: tras auditar, ofrecer directamente
+  // la creación automática de los pedidos que faltan — ver
+  // _cargarPedidosPendientesCrearSap().
+  _cargarPedidosPendientesCrearSap();
 }
 
 function _renderCompararPdfResultado() {
@@ -7045,6 +7159,156 @@ async function enviarResumenComparacionPdf() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   Crear pedidos automáticamente desde SAP — 2026-09-04
+   A petición de Víctor: "PODEMOS AUTOMATIZAR ENTONCES AHORA LA CREACION DE
+   LOS PEDIDOS NO REGISTRADOS EN LA APLICACION?" — muestra los pedidos del
+   listado SAP guardado que aún no están dados de alta, con checkbox para
+   seleccionar y crearlos de una vez (número, fechas, proveedor e importe
+   vienen de SAP; el resto queda pendiente de completar a mano).
+
+   (2026-09-04, ajuste) Deliberadamente SOLO se ofrece justo después de
+   procesar un PDF nuevo del "Listado de Pedidos" (SAP) — nunca a raíz de
+   comparar (solo) el "Listado de Albaranes": Víctor prefiere no ver esta
+   gestión ahí, porque un "pedido nuevo" detectado al mirar únicamente los
+   albaranes le resulta más indicio de un error/desajuste que de un alta
+   real pendiente. Por eso las dos únicas llamadas a
+   _cargarPedidosPendientesCrearSap() están en el "done" de
+   _pollCompararListadoPdf() (comparación de un solo PDF, siempre el
+   Listado de Pedidos) y dentro del `if (auditoria)` de
+   _pollCompararListadoAlbaranes() (solo cuando esa comparación combinada
+   SÍ incluyó un PDF nuevo del Listado de Pedidos, no cuando se reutilizó
+   el guardado). Los datos en sí siempre vienen de sap_pedidos_listado
+   (nunca de un PDF de Albaranes) — ver _pedidos_sap_no_registrados() /
+   crear_pedidos_desde_sap() en app.py.
+═══════════════════════════════════════════════════════════════════════ */
+async function _cargarPedidosPendientesCrearSap() {
+  const hotelId = val('cmp-pdf-hotel');
+  const wrap = document.getElementById('cmp-sap-crear-wrap');
+  if (!hotelId) { wrap.style.display = 'none'; return; }
+  try {
+    const r = await fetch(`/api/pedidos/pendientes-crear-sap/${hotelId}`, { credentials: 'same-origin' });
+    const d = await r.json();
+    if (!r.ok || !d.ok) { wrap.style.display = 'none'; return; }
+    _cmpSapCrearPedidos = d.pedidos || [];
+  } catch (e) {
+    wrap.style.display = 'none';
+    return;
+  }
+  if (!_cmpSapCrearPedidos.length) { wrap.style.display = 'none'; return; }
+  wrap.style.display = '';
+  _renderPedidosPendientesCrearSap();
+}
+
+function _renderPedidosPendientesCrearSap() {
+  const filas = _cmpSapCrearPedidos;
+  const tbody = document.getElementById('cmp-sap-crear-tbody');
+  const fmtImporte = n => (n ?? 0).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const colorEntrega = { 'Entregado': '#155724', 'Entrega parcial': '#856404', 'No entregado': '#721c24' };
+  const iconoEntrega = { 'Entregado': '📦', 'Entrega parcial': '🚚', 'No entregado': '⏳' };
+  tbody.innerHTML = filas.map(p => {
+    const chk = p.proveedor_identificado
+      ? `<input type="checkbox" class="cmp-sap-crear-check" value="${p.pedido_num_sap}" onchange="_actualizarBotonCrearSap()">`
+      : `<span title="Identifica primero el proveedor en el catálogo (Admin → Proveedores)" style="color:#e67700">⚠️</span>`;
+    const provLabel = p.proveedor_identificado
+      ? p.proveedor_pdf
+      : `${p.proveedor_pdf} <span style="color:#e67700">(sin identificar)</span>`;
+    const entrega = `<span style="color:${colorEntrega[p.entrega_estado] || '#495057'};font-weight:600">
+        ${iconoEntrega[p.entrega_estado] || ''} ${p.entrega_estado}</span>`;
+    return `<tr>
+      <td>${chk}</td>
+      <td class="monospace">${p.pedido_num_sap}</td>
+      <td>${p.fecha_pedido || ''}</td>
+      <td>${p.fecha_entrega || ''}</td>
+      <td>${provLabel}</td>
+      <td>${fmtImporte(p.importe_base)}</td>
+      <td>${entrega}</td>
+    </tr>`;
+  }).join('');
+  const seleccionables = filas.filter(p => p.proveedor_identificado).length;
+  document.getElementById('cmp-sap-crear-contador').textContent =
+    `${filas.length} pedido(s) sin dar de alta — ${seleccionables} se pueden crear ya (proveedor identificado)`;
+  document.getElementById('cmp-sap-crear-check-todas').checked = false;
+  _actualizarBotonCrearSap();
+}
+
+function _toggleTodosSapCrear(checkboxTodas) {
+  document.querySelectorAll('.cmp-sap-crear-check').forEach(c => { c.checked = checkboxTodas.checked; });
+  _actualizarBotonCrearSap();
+}
+
+function _actualizarBotonCrearSap() {
+  const marcados = document.querySelectorAll('.cmp-sap-crear-check:checked').length;
+  const btn = document.getElementById('cmp-sap-crear-btn');
+  btn.disabled = marcados === 0;
+  btn.textContent = marcados ? `➕ Crear ${marcados} pedido(s) seleccionado(s)` : '➕ Crear pedidos seleccionados';
+}
+
+async function crearPedidosSeleccionadosSap() {
+  const hotelId = val('cmp-pdf-hotel');
+  const nums = Array.from(document.querySelectorAll('.cmp-sap-crear-check:checked')).map(c => c.value);
+  if (!hotelId || !nums.length) return;
+  const detalle = nums.slice(0, 10).join(', ') + (nums.length > 10 ? `… y ${nums.length - 10} más` : '');
+  if (!confirm(
+    `Se van a crear ${nums.length} pedido(s) nuevo(s) a partir del listado SAP (${detalle}), ` +
+    `en estado "Enviado al proveedor", con número, fechas, proveedor e importe rellenados desde SAP.\n\n` +
+    `El resto de la documentación (departamento, presupuesto, adjuntos…) quedará pendiente de completar a mano. ` +
+    `No se enviará ningún correo al proveedor. ¿Continuar?`
+  )) return;
+
+  const btn = document.getElementById('cmp-sap-crear-btn');
+  btn.disabled = true;
+  const textoOriginal = btn.textContent;
+  btn.textContent = 'Creando…';
+  try {
+    const r = await fetch('/api/pedidos/crear-desde-sap', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ hotel_id: hotelId, pedidos_num_sap: nums }),
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) {
+      toast(d.error || 'Error creando los pedidos', 'error');
+      return;
+    }
+    const creados = d.creados || [], omitidos = d.omitidos || [], errores = d.errores || [];
+    let msg = `✅ ${creados.length} pedido(s) creado(s)`;
+    if (omitidos.length) msg += ` — ${omitidos.length} omitido(s)`;
+    if (errores.length) msg += ` — ${errores.length} con error`;
+    toast(msg, errores.length ? 'error' : 'success');
+    if (omitidos.length || errores.length) {
+      const detalleOmitidos = omitidos.map(o => `• ${o.pedido_num_sap}: ${o.motivo}`).join('\n');
+      const detalleErrores = errores.map(e => `• ${e.pedido_num_sap}: ${e.error}`).join('\n');
+      console.warn('[CREAR-DESDE-SAP] Omitidos/errores:\n' + detalleOmitidos + '\n' + detalleErrores);
+    }
+    // Refresca la tabla (los recién creados ya no deben aparecer) y, si
+    // sigue visible, también la auditoría completa de arriba.
+    await _cargarPedidosPendientesCrearSap();
+    if (_cmpPdfResultado) {
+      // Marca en memoria como "encontrados" los que se acaban de crear,
+      // para que la tabla de auditoría (si está visible) refleje el alta
+      // sin tener que volver a comparar el PDF entero.
+      const creadosSet = new Set(creados.map(c => c.pedido_num_sap));
+      _cmpPdfResultado.pedidos.forEach(p => {
+        if (creadosSet.has(p.pedido_num_sap)) {
+          p.encontrado = true;
+          const info = creados.find(c => c.pedido_num_sap === p.pedido_num_sap);
+          if (info) { p.pedido_id = info.pedido_id; p.norden = info.norden; p.estado_app = 'ENVIADO AL PROVEEDOR'; }
+        }
+      });
+      _cmpPdfResultado.no_encontrados = Math.max(0, (_cmpPdfResultado.no_encontrados || 0) - creados.length);
+      _cmpPdfResultado.encontrados = (_cmpPdfResultado.encontrados || 0) + creados.length;
+      _renderCompararPdfResultado();
+    }
+  } catch (e) {
+    toast('Error creando los pedidos: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = textoOriginal;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    Comparar listado PDF (SAP) + Albaranes (DALI) — 2026-08-15
    Segunda comparación opcional dentro del mismo modal: cruza los pedidos
    que SAP muestra como Entregado/Entrega parcial con los albaranes ya
@@ -7106,6 +7370,18 @@ async function _pollCompararListadoAlbaranes(jobId, intentos) {
     // para no acabar enviando dos correos distintos de la misma consulta.
     const btnAuditoria = document.getElementById('cmp-pdf-btn-enviar-resumen');
     if (btnAuditoria) btnAuditoria.style.display = 'none';
+    // (2026-09-04, ajuste a petición de Víctor) La creación
+    // automática de pedidos SOLO se ofrece cuando esta comparación ha
+    // procesado de verdad un PDF nuevo del Listado de Pedidos (SAP) —
+    // es decir, cuando hay `auditoria` (auditoria_pdf1 no es null, ver
+    // _comparar_listado_albaranes_logica en app.py). Si esta comparación
+    // se ha hecho SOLO con el listado de Albaranes (pdf1 omitido,
+    // reutilizando lo ya guardado), Víctor prefiere que la gestión de
+    // "crear pedidos nuevos" no aparezca aquí — un "pedido nuevo" que
+    // surgiera de mirar solo los albaranes le resulta más sospechoso de
+    // error que de alta real, así que esta acción queda reservada al
+    // Listado de Pedidos propiamente dicho.
+    _cargarPedidosPendientesCrearSap();
   }
 
   document.getElementById('cmp-alb-resultado').style.display = '';
@@ -7155,6 +7431,10 @@ function _renderCompararAlbaranesResultado(d) {
   const coincidencias = d.coincidencias || [];
   const totalPendientes = (d.pendientes_ambiguos || []).length + (d.pendientes_sin_albaran || []).length + (d.pendientes_sin_pedido || []).length;
   resumen.innerHTML =
+    // (2026-09-04) Cuando esta comparación no venía con un PDF de SAP
+    // nuevo, aclara de dónde salió el listado de pedidos usado — ver
+    // listado_sap_info en _comparar_listado_albaranes_logica() (app.py).
+    (d.listado_sap_info ? pill(`🗂️ Usando el listado SAP guardado (${d.listado_sap_info.total_pedidos} pedidos, actualizado el ${d.listado_sap_info.actualizado_en ? new Date(d.listado_sap_info.actualizado_en).toLocaleString('es-ES') : '—'})`, '#e2e3ff', '#3730a3') : '') +
     pill(`📄 ${d.total_pdf1} pedidos / 📦 ${d.total_pdf2} albaranes`, '#e9ecef', '#495057') +
     pill(`✅ ${coincidencias.length} coincidencias propuestas`, coincidencias.length ? '#d4edda' : '#e9ecef', coincidencias.length ? '#155724' : '#495057') +
     pill(`⏳ ${totalPendientes} pendientes de revisión manual`, totalPendientes ? '#fff3cd' : '#d4edda', totalPendientes ? '#856404' : '#155724') +
@@ -9480,7 +9760,25 @@ async function loadIntegridad() {
       titulo: '🔴 Telegram bloqueado o inservible',
       gravedad: 'critico',
       desc: 'El usuario bloqueó el bot, desactivó su cuenta o borró el chat — no recibirá avisos hasta que lo desbloquee él mismo desde su Telegram. Se marca solo (v12.32.04) y desaparece de esta lista en cuanto un envío vuelve a tener éxito.',
-      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td><td style="padding:6px 10px;color:var(--text-secondary)">${u.telegram_bloqueado_en ? new Date(u.telegram_bloqueado_en + 'Z').toLocaleString('es-ES') : '—'}</td><td style="padding:6px 10px;font-size:11px;color:var(--text-secondary)">${u.telegram_bloqueado_motivo || '—'}</td></tr>`,
+      // (2026-09-04) A petición de Víctor: "Bloqueado desde" salía como
+      // "Invalid Date" y "Motivo" mostraba el JSON crudo de Telegram, poco
+      // claro. Causas y arreglo:
+      // - Fecha: el backend ahora sirve `telegram_bloqueado_en` ya en ISO
+      //   (`.isoformat()`, ver _validar_integridad_operativa() en app.py) —
+      //   ese valor YA incluye su propio huso horario (viene de una
+      //   columna TIMESTAMPTZ), así que aquí ya no hay que concatenarle
+      //   una 'Z' a mano (eso es solo para fechas "naive" como
+      //   `data.timestamp`, más arriba en este mismo archivo — con una
+      //   TIMESTAMPTZ ya con offset, la 'Z' de más es lo que producía
+      //   "Invalid Date"). Mismo patrón que el resto de fechas de la app
+      //   que vienen de TIMESTAMPTZ (p. ej. `new Date(r.creado_en)`, sin 'Z').
+      // - Motivo: el backend ahora traduce el JSON crudo a una frase clara
+      //   en español + el detalle técnico (ver
+      //   _describir_motivo_telegram_bloqueo() en app.py), así que aquí
+      //   solo hace falta darle más aire visualmente (más tamaño de letra
+      //   y una línea propia) para que se lea bien en vez de venir
+      //   apretado en una celda pequeña.
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600;vertical-align:top">${u.username}</td><td style="padding:6px 10px;vertical-align:top">${u.nombre}</td><td style="padding:6px 10px;color:var(--text-secondary);white-space:nowrap;vertical-align:top">${u.telegram_bloqueado_en ? new Date(u.telegram_bloqueado_en).toLocaleString('es-ES') : '—'}</td><td style="padding:6px 10px;font-size:12.5px;line-height:1.5;color:var(--text-secondary);white-space:normal;min-width:260px">${u.telegram_bloqueado_motivo || '—'}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th><th style="padding:6px 10px;text-align:left">Bloqueado desde</th><th style="padding:6px 10px;text-align:left">Motivo</th></tr>',
     },
     {

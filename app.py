@@ -1724,6 +1724,79 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS dashboard_prefs TEXT"
             )
+
+            # ── Backfill: motivo de Telegram bloqueado, de JSON crudo a texto
+            #    legible (v12.32.09, 2026-09-04) ─────────────────────────────
+            # A petición de Víctor: antes de este cambio, telegram_bloqueado_motivo
+            # se guardaba tal cual devolvía la API de Telegram — p. ej.
+            # '{"ok":false,"error_code":403,"description":"Forbidden: bot was
+            # blocked by the user"}' — poco claro en Admin → Integridad (caso
+            # real detectado: comprascan6/María Cruz). De aquí en adelante
+            # _describir_motivo_telegram_bloqueo() ya guarda un texto legible
+            # para cualquier bloqueo NUEVO; esta sentencia reformatea los que
+            # ya estuvieran guardados con el JSON crudo de antes, para que se
+            # vean bien sin tener que esperar a un próximo ciclo de
+            # bloqueo/desbloqueo. Solo toca filas que todavía tengan pinta de
+            # JSON sin traducir (empiezan por '{"ok"') — un motivo ya
+            # traducido nunca vuelve a coincidir, así que es idempotente.
+            cur.execute("""
+                UPDATE usuarios SET telegram_bloqueado_motivo = CASE
+                    WHEN telegram_bloqueado_motivo ILIKE '%bot was blocked by the user%'
+                        THEN 'El usuario bloqueó el bot de Telegram desde su lado. Telegram devolvió HTTP 403: "Forbidden: bot was blocked by the user".'
+                    WHEN telegram_bloqueado_motivo ILIKE '%user is deactivated%'
+                        THEN 'El usuario desactivó su cuenta de Telegram. Telegram devolvió HTTP 403: "Forbidden: user is deactivated".'
+                    WHEN telegram_bloqueado_motivo ILIKE '%chat not found%'
+                        THEN 'El usuario borró la conversación con el bot (o nunca llegó a iniciarla). Telegram devolvió HTTP 400: "Bad Request: chat not found".'
+                    WHEN telegram_bloqueado_motivo ILIKE '%chat_id is empty%'
+                        THEN 'No hay un chat_id de Telegram válido guardado para este usuario.'
+                    WHEN telegram_bloqueado_motivo ILIKE '%peer_id_invalid%'
+                        THEN 'El identificador de chat de Telegram registrado ya no es válido.'
+                    ELSE telegram_bloqueado_motivo
+                END
+                WHERE telegram_bloqueado_motivo LIKE '{"ok"%'
+            """)
+            if cur.rowcount:
+                log.info("[TELEGRAM-BLOQUEO] Backfill: %d motivo(s) reformateado(s) de JSON crudo a texto legible.", cur.rowcount)
+                db.commit()
+
+            # ── Listado de Pedidos (SAP) guardado por hotel (v12.32.10) ────────
+            # (2026-09-04) A petición de Víctor: "Comparar listado PDF (SAP)" +
+            # "Comparar también con Albaranes" exigía subir el PDF de SAP en
+            # CADA comparación, aunque no hubiera cambiado desde la última vez
+            # — quiere poder subir el listado de SAP (que cubre varios meses)
+            # una vez, y a partir de ahí ir pasando solo el listado de
+            # Albaranes para ir cruzando y cerrando información. Esta tabla
+            # guarda, por hotel, la última línea conocida de cada pedido del
+            # "Listado de Pedidos" simplificado de SAP — los mismos 10 campos
+            # que ya extraía _PATRON_LISTADO_SIMPLIFICADO de cada subida — para
+            # que _comparar_listado_albaranes_logica() pueda reconstruirlos sin
+            # tener que volver a leer un PDF. Ver _guardar_listado_sap_importado()
+            # / _cargar_listado_sap_guardado(). Cada subida nueva del PDF de SAP
+            # FUSIONA (upsert por hotel_id+pedido_num_sap) en vez de reemplazar
+            # — los pedidos ya guardados que no aparezcan en un PDF más
+            # reciente se mantienen tal cual, nunca se borran solos aquí.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sap_pedidos_listado (
+                    id                   SERIAL PRIMARY KEY,
+                    hotel_id             INTEGER NOT NULL REFERENCES hoteles(id),
+                    pedido_num_sap       TEXT NOT NULL,
+                    fecha_hora_fecha     TEXT,
+                    fecha_hora_hora      TEXT,
+                    importe_base_txt     TEXT,
+                    proveedor_raw        TEXT,
+                    fecha_pedido         TEXT,
+                    fecha_entrega        TEXT,
+                    estado_sap           TEXT,
+                    importe_recibido_txt    TEXT,
+                    importe_pendiente_txt   TEXT,
+                    creado_en            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    actualizado_en       TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS sap_pedidos_listado_hotel_pedido_uk
+                    ON sap_pedidos_listado (hotel_id, pedido_num_sap)
+            """)
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -3747,6 +3820,46 @@ def _get_usuarios_hotel_rol_telegram(hotel_codigo: str) -> list:
     ))
     return rows
 
+# (2026-09-04) A petición de Víctor: en Admin → Integridad, "Motivo" mostraba
+# el JSON crudo que devuelve la API de Telegram — p. ej.
+# '{"ok":false,"error_code":403,"description":"Forbidden: bot was blocked
+# by the user"}' — poco claro para un admin. Se traduce a una frase en
+# español, usando la misma lista de frases que ya usa _send_telegram() para
+# decidir si el error es permanente (así ambas listas no pueden
+# desincronizarse en qué cuenta como "permanente" vs. cómo se explica).
+_MOTIVOS_TELEGRAM_BLOQUEO = [
+    ("bot was blocked by the user", "El usuario bloqueó el bot de Telegram desde su lado."),
+    ("user is deactivated",         "El usuario desactivó su cuenta de Telegram."),
+    ("chat not found",              "El usuario borró la conversación con el bot (o nunca llegó a iniciarla)."),
+    ("chat_id is empty",            "No hay un chat_id de Telegram válido guardado para este usuario."),
+    ("peer_id_invalid",             "El identificador de chat de Telegram registrado ya no es válido."),
+]
+
+
+def _describir_motivo_telegram_bloqueo(http_code: int, body: str) -> str:
+    """
+    (2026-09-04) Construye el texto legible que se guarda en
+    usuarios.telegram_bloqueado_motivo, a partir de la respuesta HTTP cruda
+    de Telegram: una frase clara en español (de _MOTIVOS_TELEGRAM_BLOQUEO,
+    si la respuesta coincide con alguna de las conocidas) seguida del
+    detalle técnico real que devolvió Telegram (código HTTP + su campo
+    "description"), para que quede claro Y detallado a la vez — no solo
+    una frase bonita sin más, ni tampoco solo el JSON crudo.
+    Si el body no es JSON válido o no trae "description", se usa el propio
+    body (recortado) como detalle técnico de respaldo.
+    """
+    body_lower = body.lower()
+    amigable = next((d for frase, d in _MOTIVOS_TELEGRAM_BLOQUEO if frase in body_lower), None)
+    descripcion_api = None
+    try:
+        descripcion_api = json.loads(body).get("description")
+    except Exception:
+        pass
+    detalle_tecnico = f'Telegram devolvió HTTP {http_code}: "{descripcion_api}"' if descripcion_api \
+        else f"Telegram devolvió HTTP {http_code}: {body[:200]}"
+    return f"{amigable} {detalle_tecnico}." if amigable else f"{detalle_tecnico}."
+
+
 def _marcar_telegram_bloqueado(chat_id: str, motivo: str) -> None:
     """
     (v12.32.04) Registra en usuarios.telegram_bloqueado_en/_motivo que este
@@ -3757,6 +3870,10 @@ def _marcar_telegram_bloqueado(chat_id: str, motivo: str) -> None:
     cuándo lleva bloqueado); el motivo sí se actualiza siempre por si cambia.
     Nunca debe romper el envío real de Telegram: cualquier fallo aquí se
     registra y se ignora.
+
+    (2026-09-04) `motivo` ya debe llegar traducido a español y con el
+    detalle técnico incluido — ver _describir_motivo_telegram_bloqueo(),
+    que es quien lo construye antes de llamar aquí.
     """
     try:
         execute(
@@ -3764,7 +3881,7 @@ def _marcar_telegram_bloqueado(chat_id: str, motivo: str) -> None:
                   SET telegram_bloqueado_en = COALESCE(telegram_bloqueado_en, NOW()),
                       telegram_bloqueado_motivo = %s
                 WHERE telegram_chat_id = %s""",
-            (motivo[:200], chat_id)
+            (motivo[:300], chat_id)
         )
         get_db().commit()
     except Exception as exc:
@@ -3856,16 +3973,16 @@ def _send_telegram(chat_id: str, text: str) -> dict:
         # entregarse reintentando: bot bloqueado, chat borrado/inexistente,
         # cuenta de usuario desactivada. Se detecta por texto porque
         # Telegram no da un código de error específico para esto, solo una
-        # "description" en inglés.
-        es_permanente = e.code in (400, 403) and any(frase in body_lower for frase in (
-            "bot was blocked by the user",
-            "user is deactivated",
-            "chat not found",
-            "chat_id is empty",
-            "peer_id_invalid",
-        ))
+        # "description" en inglés. (2026-09-04) La lista de frases vive
+        # ahora en _MOTIVOS_TELEGRAM_BLOQUEO — la misma que usa
+        # _describir_motivo_telegram_bloqueo() para traducir el motivo —
+        # para que "qué cuenta como permanente" y "cómo se explica" nunca
+        # puedan desincronizarse entre sí.
+        es_permanente = e.code in (400, 403) and any(
+            frase in body_lower for frase, _ in _MOTIVOS_TELEGRAM_BLOQUEO
+        )
         if es_permanente:
-            _marcar_telegram_bloqueado(chat_id, body[:200])
+            _marcar_telegram_bloqueado(chat_id, _describir_motivo_telegram_bloqueo(e.code, body))
         return {"ok": False, "error": f"HTTP {e.code}: {body[:200]}", "permanente": es_permanente}
     except Exception as e:
         log.error("Telegram error para chat_id %s: %s", chat_id, e)
@@ -10105,6 +10222,14 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
             "(Nº pedido, fechas, proveedor, importes y estado en una sola línea por pedido)?"
         )
 
+    # (2026-09-04) A petición de Víctor: cada vez que se lee un Listado de
+    # Pedidos de SAP —desde esta comparación de un solo PDF o desde
+    # _comparar_listado_albaranes_logica()— se guarda (fusiona) en
+    # sap_pedidos_listado, para poder comparar más adelante solo con un
+    # nuevo Listado de Albaranes sin volver a subir este PDF. Ver
+    # _guardar_listado_sap_importado().
+    _guardar_listado_sap_importado(hotel_id, encontrados_pdf)
+
     # ── Catálogo de proveedores, para el filtro de seguimiento ───────────────
     proveedores_cat = rows_to_list(query(
         "SELECT id, nombre, sujeto_seguimiento FROM proveedores WHERE activo=1"
@@ -10320,7 +10445,195 @@ def _parsear_fecha_es_a_iso(fecha_ddmmyyyy):
     except Exception:
         return None
 
-def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_bytes: bytes) -> dict:
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Listado de Pedidos (SAP) guardado por hotel (v12.32.10)
+# ═══════════════════════════════════════════════════════════════════════════
+# (2026-09-04) A petición de Víctor: poder subir el "Listado de Pedidos"
+# (SAP) —que cubre varios meses— UNA vez, y a partir de ahí ir pasando solo
+# el "Listado de Albaranes" (DALI) para ir cruzando y cerrando información,
+# sin tener que volver a adjuntar el PDF de SAP en cada comparación. Estas
+# tres funciones guardan/leen, por hotel, las mismas 10 columnas que ya
+# extrae `_PATRON_LISTADO_SIMPLIFICADO.findall()` de un PDF recién subido —
+# así `_comparar_listado_pdf_logica()`/`_comparar_listado_albaranes_logica()`
+# pueden trabajar exactamente igual reciban un PDF nuevo o reconstruyan las
+# mismas tuplas desde `sap_pedidos_listado`, sin duplicar ninguna lógica de
+# más abajo.
+
+def _guardar_listado_sap_importado(hotel_id: int, encontrados: list) -> int:
+    """
+    Guarda (fusiona) en `sap_pedidos_listado` el "Listado de Pedidos" de SAP
+    recién leído para este hotel. FUSIONA por upsert (hotel_id,
+    pedido_num_sap): los pedidos ya guardados de una subida anterior que no
+    aparezcan en este PDF se mantienen tal cual — nunca se borran aquí — y
+    los que sí aparecen se actualizan con el dato más reciente. Devuelve el
+    nº de filas guardadas/actualizadas. No lanza excepción si falla (mismo
+    criterio que el resto de escrituras "silenciosas" de esta zona): un
+    fallo aquí no debe impedir que la comparación en curso siga adelante.
+    """
+    if not encontrados:
+        return 0
+    try:
+        for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
+             fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt,
+             importe_pendiente_txt) in encontrados:
+            execute(
+                """INSERT INTO sap_pedidos_listado
+                       (hotel_id, pedido_num_sap, fecha_hora_fecha, fecha_hora_hora,
+                        importe_base_txt, proveedor_raw, fecha_pedido, fecha_entrega,
+                        estado_sap, importe_recibido_txt, importe_pendiente_txt, actualizado_en)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s, NOW())
+                   ON CONFLICT (hotel_id, pedido_num_sap) DO UPDATE SET
+                       fecha_hora_fecha     = EXCLUDED.fecha_hora_fecha,
+                       fecha_hora_hora      = EXCLUDED.fecha_hora_hora,
+                       importe_base_txt     = EXCLUDED.importe_base_txt,
+                       proveedor_raw        = EXCLUDED.proveedor_raw,
+                       fecha_pedido         = EXCLUDED.fecha_pedido,
+                       fecha_entrega        = EXCLUDED.fecha_entrega,
+                       estado_sap           = EXCLUDED.estado_sap,
+                       importe_recibido_txt = EXCLUDED.importe_recibido_txt,
+                       importe_pendiente_txt = EXCLUDED.importe_pendiente_txt,
+                       actualizado_en       = NOW()""",
+                (hotel_id, num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt,
+                 proveedor_raw, fecha_pedido, fecha_entrega, estado_sap,
+                 importe_recibido_txt, importe_pendiente_txt)
+            )
+        get_db().commit()
+        return len(encontrados)
+    except Exception as exc:
+        log.error("[SAP-LISTADO] No se pudo guardar el listado SAP del hotel %s: %s", hotel_id, exc)
+        return 0
+
+
+def _cargar_listado_sap_guardado(hotel_id: int) -> list:
+    """
+    Reconstruye la misma lista de tuplas de 10 campos que devolvería
+    `_PATRON_LISTADO_SIMPLIFICADO.findall()` sobre un PDF recién subido,
+    pero a partir de lo que ya se guardó para este hotel en una subida
+    anterior (ver _guardar_listado_sap_importado). Lista vacía si nunca se
+    guardó nada para este hotel.
+    """
+    filas = rows_to_list(query(
+        """SELECT pedido_num_sap, fecha_hora_fecha, fecha_hora_hora,
+                  importe_base_txt, proveedor_raw, fecha_pedido, fecha_entrega,
+                  estado_sap, importe_recibido_txt, importe_pendiente_txt
+           FROM sap_pedidos_listado
+           WHERE hotel_id=%s
+           ORDER BY pedido_num_sap""",
+        (hotel_id,)
+    ))
+    return [
+        (f["pedido_num_sap"], f["fecha_hora_fecha"], f["fecha_hora_hora"],
+         f["importe_base_txt"], f["proveedor_raw"], f["fecha_pedido"], f["fecha_entrega"],
+         f["estado_sap"], f["importe_recibido_txt"], f["importe_pendiente_txt"])
+        for f in filas
+    ]
+
+
+def _info_listado_sap_guardado(hotel_id: int) -> dict:
+    """
+    Resumen del listado SAP guardado para este hotel — cuántos pedidos y
+    cuándo se actualizó por última vez alguno de ellos. `guardado: False`
+    si nunca se guardó nada. Usado tanto por el endpoint que consulta el
+    frontend antes de comparar, como para informar en el resultado de una
+    comparación que reutilizó el listado guardado en vez de un PDF nuevo.
+    """
+    fila = query(
+        "SELECT COUNT(*) AS n, MAX(actualizado_en) AS ultima FROM sap_pedidos_listado WHERE hotel_id=%s",
+        (hotel_id,), one=True
+    )
+    if not fila or not fila["n"]:
+        return {"guardado": False, "total_pedidos": 0, "actualizado_en": None}
+    return {
+        "guardado": True,
+        "total_pedidos": fila["n"],
+        "actualizado_en": fila["ultima"].isoformat() if fila["ultima"] else None,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Creación automática de pedidos desde el Listado SAP (v12.32.11)
+# ═══════════════════════════════════════════════════════════════════════════
+# (2026-09-04) A petición de Víctor: además de auditar qué pedidos de SAP
+# faltan en la app (tabla de "Comparar listado PDF"), poder seleccionarlos
+# y darlos de alta automáticamente con lo que ya sabemos por el listado —
+# número de pedido, fecha de tramitación (fecha de pedido en SAP), fecha
+# de entrega prevista y proveedor/importe — dejando el resto (departamento,
+# presupuesto, adjuntos...) pendiente de completar a mano, tal como pidió
+# ("pendiente de subir el resto de documentación").
+
+def _pedidos_sap_no_registrados(hotel_id: int) -> list:
+    """
+    Devuelve, a partir del Listado de Pedidos (SAP) ya guardado para este
+    hotel (`sap_pedidos_listado`, ver _cargar_listado_sap_guardado), los
+    pedidos que TODAVÍA no están dados de alta en la app — misma detección
+    de "encontrado" que la tabla de auditoría de "Comparar listado PDF",
+    pero calculada al vuelo justo antes de crear pedidos (nunca nos fiamos
+    de lo que el navegador tenía cargado: puede haber pasado tiempo desde
+    la última comparación, y alguien puede haber dado de alta ese pedido a
+    mano mientras tanto).
+
+    A diferencia de _comparar_listado_pdf_logica(), esta función es de
+    SOLO LECTURA — no hace ninguna de las tres escrituras silenciosas
+    (Total Pedido / base imponible / fecha tramitación de pedidos que YA
+    existen): aquí solo interesan los que faltan, y crearlos es una
+    decisión explícita del usuario (ver crear_pedidos_desde_sap()), nunca
+    automática al comparar.
+
+    Lista vacía si nunca se guardó ningún listado SAP para este hotel.
+    """
+    encontrados = _cargar_listado_sap_guardado(hotel_id)
+    if not encontrados:
+        return []
+
+    proveedores_cat = rows_to_list(query(
+        "SELECT id, nombre, sujeto_seguimiento FROM proveedores WHERE activo=1"
+    ))
+    cat_por_nombre = {_normalizar_nombre_proveedor(p["nombre"]): p for p in proveedores_cat if p["nombre"]}
+
+    pedidos_app = rows_to_list(query(
+        "SELECT pedido_num FROM pedidos WHERE hotel_id=%s AND pedido_num IS NOT NULL AND pedido_num != ''",
+        (hotel_id,)
+    ))
+    nums_app = {_normalizar_pedido_num(p["pedido_num"]) for p in pedidos_app}
+
+    resultado = []
+    vistos = set()
+    for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
+         fecha_pedido, fecha_entrega, estado_sap, importe_recibido_txt,
+         importe_pendiente_txt) in encontrados:
+        if num_sap in vistos:
+            continue
+        vistos.add(num_sap)
+        if _normalizar_pedido_num(num_sap) in nums_app:
+            continue  # ya está dado de alta — no es "no registrado"
+
+        nombre_prov = proveedor_raw.strip()
+        prov_match = _match_proveedor_catalogo(_normalizar_nombre_proveedor(nombre_prov), cat_por_nombre)
+        if prov_match and not prov_match["sujeto_seguimiento"]:
+            continue  # proveedor excluido a propósito (p.ej. alimentación/bebida)
+
+        importe_base      = _parse_importe_es(importe_base_txt)
+        importe_recibido  = _parse_importe_es(importe_recibido_txt)
+        importe_pendiente = _parse_importe_es(importe_pendiente_txt)
+
+        resultado.append({
+            "pedido_num_sap":         num_sap,
+            "fecha_pedido":           fecha_pedido,
+            "fecha_entrega":          fecha_entrega,
+            "proveedor_pdf":          nombre_prov,
+            "proveedor_id":           prov_match["id"] if prov_match else None,
+            "proveedor_identificado": bool(prov_match),
+            "importe_base":           importe_base,
+            "importe_recibido":       importe_recibido,
+            "importe_pendiente":      importe_pendiente,
+            "estado_sap":             estado_sap,
+            "entrega_estado":         _entrega_estado(importe_base, importe_recibido),
+        })
+    return resultado
+
+
+def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes, pdf2_bytes: bytes) -> dict:
     """
     (2026-08-15) Ampliación de "Comparar listado PDF" a petición del
     usuario (Víctor): además del "Listado de Pedidos" simplificado de SAP
@@ -10329,6 +10642,13 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
     y cruza ambos para proponer el registro automático de la entrega
     (fecha de tramitación, número de entrada del albarán y estado) en los
     pedidos de esta app que ya están dados de alta.
+
+    (2026-09-04) `pdf1_bytes` es ahora OPCIONAL (`None` si se omite) — ver
+    _guardar_listado_sap_importado()/_cargar_listado_sap_guardado(): a
+    petición de Víctor, para no tener que volver a subir el Listado de
+    Pedidos de SAP en cada comparación, ese PDF se guarda (fusiona) por
+    hotel la primera vez, y las siguientes comparaciones pueden omitirlo y
+    usar solo el Listado de Albaranes contra lo ya guardado.
 
     Criterio de coincidencia (decisión del usuario, preguntado
     explícitamente): mismo proveedor Y mismo importe entre el importe YA
@@ -10418,15 +10738,41 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
             log.exception("[COMPARAR-ALBARANES] Error leyendo PDF (%s): %s", etiqueta, exc)
             raise RuntimeError(f"No se pudo leer el PDF de {etiqueta}: {exc}")
 
-    texto1 = _leer_texto(pdf1_bytes, "pedidos")
-    texto2 = _leer_texto(pdf2_bytes, "albaranes")
+    # (2026-09-04) A petición de Víctor: `pdf1_bytes` (Listado de Pedidos
+    # SAP) es ahora OPCIONAL — si se adjunta, se lee y además se guarda
+    # (fusiona) en `sap_pedidos_listado` para poder reutilizarlo más
+    # adelante; si se omite, se reconstruye desde lo último guardado para
+    # este hotel, para no tener que volver a subir el mismo PDF de SAP en
+    # cada comparación con un nuevo Listado de Albaranes. `listado_sap_info`
+    # viaja en el resultado para que la pantalla explique de dónde salió el
+    # Listado de Pedidos usado en esta comparación.
+    listado_sap_info = None
+    if pdf1_bytes:
+        texto1 = _leer_texto(pdf1_bytes, "pedidos")
+        encontrados_pdf1 = _PATRON_LISTADO_SIMPLIFICADO.findall(texto1)
+        if not encontrados_pdf1:
+            raise RuntimeError(
+                "No se ha reconocido ningún pedido en el primer PDF — "
+                "¿es el \"Listado de Pedidos\" simplificado de SAP?"
+            )
+        # Se guarda aquí mismo (no se deja solo en manos de la llamada a
+        # _comparar_listado_pdf_logica() de auditoria_pdf1, más abajo) para
+        # que quede persistido incluso si esa auditoría fallara por
+        # cualquier motivo — _guardar_listado_sap_importado() es un upsert
+        # idempotente y nunca lanza excepción, así que llamarlo dos veces
+        # con los mismos datos (aquí y, de nuevo, dentro de esa auditoría)
+        # no hace daño, solo repite el mismo UPSERT sin cambiar nada.
+        _guardar_listado_sap_importado(hotel_id, encontrados_pdf1)
+    else:
+        encontrados_pdf1 = _cargar_listado_sap_guardado(hotel_id)
+        if not encontrados_pdf1:
+            raise RuntimeError(
+                "No hay ningún Listado de Pedidos (SAP) guardado todavía para este hotel — "
+                "adjúntalo al menos una vez para poder comparar después solo con el Listado de Albaranes."
+            )
+        listado_sap_info = _info_listado_sap_guardado(hotel_id)
 
-    encontrados_pdf1 = _PATRON_LISTADO_SIMPLIFICADO.findall(texto1)
-    if not encontrados_pdf1:
-        raise RuntimeError(
-            "No se ha reconocido ningún pedido en el primer PDF — "
-            "¿es el \"Listado de Pedidos\" simplificado de SAP?"
-        )
+    texto2 = _leer_texto(pdf2_bytes, "albaranes")
     encontrados_pdf2 = _PATRON_LISTADO_ALBARANES.findall(texto2)
     if not encontrados_pdf2:
         raise RuntimeError(
@@ -10743,7 +11089,15 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
             execute("UPDATE pedidos SET entrada_albaran_num=%s WHERE id=%s", (_entrada_str, _pid_ba))
         get_db().commit()
 
-    auditoria_pdf1 = _comparar_listado_pdf_logica(hotel_id, pdf1_bytes)
+    # (2026-09-04) auditoria_pdf1 (más las 3 escrituras silenciosas propias
+    # de _comparar_listado_pdf_logica: Total Pedido, base imponible de la
+    # última entrada y fecha de tramitación) solo tiene sentido cuando hay
+    # un PDF de SAP REALMENTE NUEVO que auditar — si esta comparación
+    # reutilizó el listado ya guardado (pdf1_bytes es None), no hay nada
+    # nuevo que esas tres escrituras pudieran cambiar desde la última vez
+    # que sí se subió un PDF, así que se omite en vez de forzar una
+    # relectura sin sentido.
+    auditoria_pdf1 = _comparar_listado_pdf_logica(hotel_id, pdf1_bytes) if pdf1_bytes else None
 
     return {
         "ok": True,
@@ -10756,6 +11110,7 @@ def _comparar_listado_albaranes_logica(hotel_id: int, pdf1_bytes: bytes, pdf2_by
         "excluidos_pdf1":         excluidos_pdf1,
         "excluidos_pdf2":         excluidos_pdf2,
         "auditoria_pdf1":         auditoria_pdf1,
+        "listado_sap_info":       listado_sap_info,
         "base_imponible_albaranes_actualizados": len(_base_imponible_albaranes_actualizados),
     }
 
@@ -10939,9 +11294,17 @@ def comparar_listado_albaranes():
     Mismo patrón asíncrono que /api/pedidos/comparar-listado-pdf (job_id +
     polling) — necesario aquí todavía más, porque ahora se leen DOS PDF.
 
+    (2026-09-04) `file` (PDF 1 — listado de pedidos SAP) es ahora OPCIONAL —
+    a petición de Víctor, para no tener que volver a subirlo en cada
+    comparación: si se omite, se reutiliza el último Listado de Pedidos
+    guardado para ese hotel (ver _guardar_listado_sap_importado() /
+    _cargar_listado_sap_guardado()). `file2` (listado de albaranes) sigue
+    siendo obligatorio siempre — es la parte que se espera ir subiendo cada
+    vez.
+
     POST /api/pedidos/comparar-listado-albaranes
-    form-data: hotel_id, file (PDF 1 — listado de pedidos SAP),
-               file2 (PDF 2 — listado de albaranes DALI)
+    form-data: hotel_id, file (PDF 1 — listado de pedidos SAP, OPCIONAL),
+               file2 (PDF 2 — listado de albaranes DALI, obligatorio)
     → 202 {"ok": true, "job_id": "..."}
     """
     if session.get("rol") != "admin":
@@ -10954,19 +11317,23 @@ def comparar_listado_albaranes():
         hotel_id = int(hotel_id_raw)
     except ValueError:
         return jsonify({"error": "Hotel no válido"}), 400
-    if "file" not in request.files or "file2" not in request.files:
-        return jsonify({"error": "Faltan uno o los dos PDF (listado de pedidos y listado de albaranes)"}), 400
-    archivo1 = request.files["file"]
+    if "file2" not in request.files:
+        return jsonify({"error": "Falta el listado de albaranes (DALI)"}), 400
     archivo2 = request.files["file2"]
-    if not archivo1.filename or not archivo1.filename.lower().endswith(".pdf"):
-        return jsonify({"error": "El primer archivo (listado de pedidos) debe ser un PDF"}), 400
     if not archivo2.filename or not archivo2.filename.lower().endswith(".pdf"):
         return jsonify({"error": "El segundo archivo (listado de albaranes) debe ser un PDF"}), 400
-
-    pdf1_bytes = archivo1.read()
     pdf2_bytes = archivo2.read()
-    if not pdf1_bytes or not pdf2_bytes:
-        return jsonify({"error": "Alguno de los dos archivos está vacío"}), 400
+    if not pdf2_bytes:
+        return jsonify({"error": "El archivo de listado de albaranes está vacío"}), 400
+
+    pdf1_bytes = None
+    archivo1 = request.files.get("file")
+    if archivo1 and archivo1.filename:
+        if not archivo1.filename.lower().endswith(".pdf"):
+            return jsonify({"error": "El primer archivo (listado de pedidos) debe ser un PDF"}), 400
+        pdf1_bytes = archivo1.read()
+        if not pdf1_bytes:
+            return jsonify({"error": "El archivo de listado de pedidos está vacío"}), 400
 
     import time as _time_pdf
     job_id = secrets.token_hex(16)
@@ -10986,6 +11353,180 @@ def comparar_listado_albaranes():
     )
     hilo.start()
     return jsonify({"ok": True, "job_id": job_id}), 202
+
+@app.route("/api/pedidos/listado-sap-guardado/<int:hotel_id>", methods=["GET"])
+@login_required
+def listado_sap_guardado(hotel_id):
+    """
+    (2026-09-04) Consulta rápida (sin subir ningún PDF) de si ya hay un
+    Listado de Pedidos (SAP) guardado para este hotel, y cuántos pedidos /
+    desde cuándo — usado por el modal "Comparar listado PDF (SAP)" para
+    informar antes de comparar si se puede omitir el primer PDF. Ver
+    _info_listado_sap_guardado().
+    GET /api/pedidos/listado-sap-guardado/<hotel_id>
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    return jsonify({"ok": True, **_info_listado_sap_guardado(hotel_id)})
+
+@app.route("/api/pedidos/pendientes-crear-sap/<int:hotel_id>", methods=["GET"])
+@login_required
+def pedidos_pendientes_crear_sap(hotel_id):
+    """
+    (2026-09-04) Lista, para el hotel indicado, los pedidos del Listado SAP
+    guardado que todavía no están dados de alta en la app — para mostrar
+    al usuario la tabla seleccionable de "Crear pedidos automáticamente"
+    (ver _pedidos_sap_no_registrados()).
+    GET /api/pedidos/pendientes-crear-sap/<hotel_id>
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(hotel_id):
+        return jsonify({"error": "Hotel no disponible"}), 403
+    return jsonify({"ok": True, "pedidos": _pedidos_sap_no_registrados(hotel_id)})
+
+@app.route("/api/pedidos/crear-desde-sap", methods=["POST"])
+@login_required
+def crear_pedidos_desde_sap():
+    """
+    (2026-09-04) Automatiza la creación de los pedidos que SAP ya tiene
+    registrados pero que todavía no existen en la app — a petición de
+    Víctor: "PODEMOS AUTOMATIZAR ENTONCES AHORA LA CREACION DE LOS
+    PEDIDOS NO REGISTRADOS EN LA APLICACION?". Se crean como "ficha
+    cáscara": número de pedido, fecha de tramitación (fecha de pedido en
+    SAP), fecha de entrega prevista, proveedor e importe vienen del
+    Listado SAP guardado (sap_pedidos_listado, v12.32.10) — el resto
+    (departamento, presupuesto, adjuntos...) se deja pendiente de
+    completar a mano, exactamente como pidió ("pendiente de subir el
+    resto de documentación"). Solo admin, y solo a partir del listado ya
+    guardado — no hace falta volver a subir ningún PDF aquí.
+
+    Tres decisiones tomadas con Víctor (AskUserQuestion, 2026-09-04):
+      1. El estado inicial es SIEMPRE "ENVIADO AL PROVEEDOR", nunca el
+         estado de entrega que muestre SAP (Entregado/Entrega parcial) —
+         para registrar la entrega en sí sigue estando el flujo ya
+         existente de "Comparar listado + Albaranes"/aplicar coincidencia
+         (_aplicar_coincidencia_albaran), que sí sabe hacerlo bien (con su
+         propio albarán, fecha e importe). Ver nota IMPORTANTE más abajo.
+      2. Solo se puede crear un pedido si su proveedor SAP se ha
+         reconocido en el catálogo (mismo filtro que ya usa el botón
+         "Enviar resumen por correo") — si no, se omite y hay que
+         identificarlo primero en Admin → Proveedores.
+      3. El importe (Total Pedido) se rellena también, con el mismo
+         importe base que ya se guarda hoy sin confirmar para los pedidos
+         que sí existen (ver _comparar_listado_pdf_logica).
+
+    IMPORTANTE — por qué esta función NO llama a enviar_emails_estado(),
+    a pesar de crear el pedido ya en "ENVIADO AL PROVEEDOR": en un alta o
+    cambio normal, ese estado dispara un correo AL PROVEEDOR real
+    avisando de un pedido nuevo — pero aquí el pedido no es nuevo en
+    absoluto, ya existe en SAP desde hace tiempo (por eso aparece en el
+    listado). Mandar ese correo sería un aviso duplicado y confuso a un
+    proveedor real sobre un pedido que probablemente ya está servido o
+    sirviéndose. Por eso esta función sí registra el alta en
+    historial_estados (para dejar rastro de auditoría), pero
+    deliberadamente no encola ningún correo — es un alta retroactiva, no
+    una decisión de compra tomada ahora mismo.
+
+    Re-comprueba en el momento de crear (nunca se fía de lo que la
+    pantalla tenía cargado) si cada pedido sigue sin estar registrado,
+    para no duplicar un pedido_num si alguien lo dio de alta a mano
+    mientras tanto (ver _pedidos_sap_no_registrados()).
+
+    POST /api/pedidos/crear-desde-sap
+    body JSON: {"hotel_id": int, "pedidos_num_sap": ["12345", ...]}
+    → {"ok": true, "creados": [...], "omitidos": [...], "errores": [...]}
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+
+    data = request.get_json(silent=True) or {}
+    hotel_id = data.get("hotel_id")
+    nums_pedidos = [str(n).strip() for n in (data.get("pedidos_num_sap") or []) if str(n).strip()]
+    if not hotel_id or not nums_pedidos:
+        return jsonify({"error": "Falta el hotel o la lista de pedidos a crear"}), 400
+    if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(hotel_id):
+        return jsonify({"error": "Hotel no disponible"}), 403
+
+    filas = _pedidos_sap_no_registrados(hotel_id)
+    if not filas:
+        return jsonify({"error": "No hay ningún listado SAP guardado para este hotel, o ya no queda ningún "
+                                  "pedido pendiente de crear — vuelve a comparar el listado"}), 400
+    filas_por_num = {_normalizar_pedido_num(f["pedido_num_sap"]): f for f in filas}
+
+    db  = get_db()
+    uid = current_user_id()
+    usuario_nombre = session.get("nombre", "")
+
+    creados, omitidos, errores = [], [], []
+    for num in nums_pedidos:
+        fila = filas_por_num.get(_normalizar_pedido_num(num))
+        if not fila:
+            omitidos.append({
+                "pedido_num_sap": num,
+                "motivo": "Ya no está pendiente de crear — puede que ya se haya dado de alta "
+                          "(a mano o en otra pestaña) mientras tanto",
+            })
+            continue
+        if not fila.get("proveedor_identificado"):
+            omitidos.append({
+                "pedido_num_sap": num,
+                "motivo": "El proveedor no está identificado en el catálogo — identifícalo primero en Admin → Proveedores",
+            })
+            continue
+        try:
+            norden = _next_norden(db)
+            fecha_tramitacion        = _parsear_fecha_es_a_iso(fila.get("fecha_pedido"))
+            fecha_entrega_especifica = _parsear_fecha_es_a_iso(fila.get("fecha_entrega"))
+            importe_base = fila.get("importe_base")
+            observ = (
+                f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']}) "
+                f"el {datetime.now().strftime('%d/%m/%Y')} — pendiente de completar el resto de la documentación."
+            )
+
+            cur = execute("""
+                INSERT INTO pedidos (
+                    norden, hotel_id, departamento_id,
+                    fecha_solicitud, fecha_envio_visto_bueno, fecha_tramitacion,
+                    pedido_num, presupuesto_num, entrada_albaran_num,
+                    tarifa_acordada,
+                    estado, comunicado_ab, comunicado_jefe_dep,
+                    parte_rotura, parte_ampliacion,
+                    proveedor_id, observaciones,
+                    familia_id, importe, sujeto_techo,
+                    plazo_entrega_dias, fecha_entrega_especifica,
+                    total_pedido,
+                    creado_por_id, modificado_por_id,
+                    creado_por_nombre, modificado_por_nombre
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
+            """, (
+                norden, hotel_id, None,
+                None, None, fecha_tramitacion,
+                fila["pedido_num_sap"], None, None,
+                False,
+                "ENVIADO AL PROVEEDOR", 0, 0,
+                0, 0,
+                fila["proveedor_id"], observ,
+                None, importe_base, 0,
+                None, fecha_entrega_especifica,
+                importe_base,
+                uid, uid,
+                usuario_nombre, usuario_nombre,
+            ))
+            pedido_id = cur.fetchone()["id"]
+            execute(
+                "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s)",
+                (pedido_id, "ENVIADO AL PROVEEDOR", uid, usuario_nombre,
+                 f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']})")
+            )
+            db.commit()
+            creados.append({"pedido_num_sap": fila["pedido_num_sap"], "pedido_id": pedido_id, "norden": norden})
+        except Exception as exc:
+            log.exception("[CREAR-DESDE-SAP] Error creando pedido %s: %s", num, exc)
+            errores.append({"pedido_num_sap": num, "error": str(exc)})
+
+    return jsonify({"ok": True, "creados": creados, "omitidos": omitidos, "errores": errores})
 
 @app.route("/api/pedidos/comparar-listado-albaranes/<job_id>", methods=["GET"])
 @login_required
@@ -15791,6 +16332,19 @@ def _validar_integridad_operativa() -> dict:
                  AND telegram_bloqueado_en IS NOT NULL
                ORDER BY telegram_bloqueado_en DESC"""
         ))
+        # (2026-09-04) A petición de Víctor: "Bloqueado desde" salía como
+        # "Invalid Date" en Integridad. Causa: el resto de campos de fecha
+        # de esta función (y del resto de la app, ver p. ej. la línea
+        # `u["creado_en"] = u["creado_en"].isoformat() ...` al listar
+        # usuarios) convierten el datetime a texto ISO explícitamente antes
+        # de servirlo — aquí faltaba ese paso, así que Flask lo serializaba
+        # solo con su formato por defecto ("Thu, 03 Sep 2026 18:20:58 GMT",
+        # RFC 1123) y el frontend, que espera ISO y le concatena una 'Z'
+        # (`new Date(u.telegram_bloqueado_en + 'Z')`, igual que con el resto
+        # de fechas de la app), obtenía una cadena inválida para `Date`.
+        for u in telegram_bloqueado:
+            if u.get("telegram_bloqueado_en"):
+                u["telegram_bloqueado_en"] = u["telegram_bloqueado_en"].isoformat()
         problemas["telegram_bloqueado"] = telegram_bloqueado
 
         # ── Compradores sin email ─────────────────────────────────────────────
