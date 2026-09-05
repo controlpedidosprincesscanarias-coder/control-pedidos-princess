@@ -36,6 +36,65 @@
 
 ---
 
+## 2026-09-06 — [Control Pedidos] Control de duplicidades del Nº de Pedido dentro del mismo hotel (v12.32.36)
+
+- **Petición de Víctor**: al registrar/tramitar un pedido, ¿se
+  comprueba que el Nº de Pedido no esté ya registrado en la app para
+  ese mismo hotel (dado de alta por otro usuario u otra automatización)?
+  Se revisó el código y se confirmó que NO existía ningún control: nada
+  impedía que el mismo pedido SAP acabase con dos fichas distintas en
+  la app (dos usuarios distintos, o un alta manual duplicando una ya
+  creada por "Crear pedidos desde SAP"), cada una con su propio
+  circuito de tramitación y sus propios avisos a proveedor.
+- **Cambio en `app.py`**: función nueva `_detectar_pedido_num_duplicado
+  (hotel_id, pedido_num, excluir_pedido_id=None)` — compara NORMALIZADO
+  (reutiliza `_normalizar_pedido_num()`, ya existente desde v12.32.06 y
+  usada en todos los cruces con SAP/Albaranes: quita ceros a la
+  izquierda/espacios, mayúsculas, para que "00040159" y "40159" se
+  detecten como el mismo pedido) contra el resto de pedidos de ESE
+  MISMO hotel — el mismo Nº en dos hoteles distintos no es duplicidad,
+  cada hotel tramita sus pedidos SAP de forma independiente. Devuelve
+  el pedido ya existente (id/norden/estado) o `None`.
+  Aplicada en dos puntos, como se planteó a Víctor:
+  1. **`upload_adjunto()`** (donde se fija el Nº de Pedido, al leer el
+     PDF oficial en «Nº Pedido (DALI/SAP)», ver v12.32.35): si el Nº
+     leído ya pertenece a OTRO pedido de este hotel, se rechaza el PDF
+     entero con 400 — no se guarda ni el adjunto ni ningún dato, igual
+     que cuando el PDF no se reconoce como pedido oficial.
+  2. **`update_pedido()`**, bloque de validación de ENVIADO AL
+     PROVEEDOR: red de seguridad — repite la misma comprobación sobre
+     el `pedido_num` ya guardado antes de dejar pasar el cambio de
+     estado, por si el valor llegó a fijarse por otra vía (pedido dado
+     de alta antes de este control, migración de datos, edición
+     directa en la base de datos). Bloquea el cambio de estado con el
+     mismo mensaje que el resto de validaciones de ese bloque
+     (histórico "Nº Presupuesto obligatorio", adjuntos, etc.).
+  En ambos casos el mensaje de error identifica el pedido duplicado ya
+  existente (Nº interno/`norden` y estado) para poder localizarlo y
+  verificar si es un error real antes de continuar.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Revisada
+  a mano la lógica de `_detectar_pedido_num_duplicado()` contra los
+  casos ya cubiertos por `_normalizar_pedido_num()` en el resto de la
+  app (ceros a la izquierda, mayúsculas/espacios) y contra el caso de
+  hoteles distintos con el mismo Nº (no debe marcarse como duplicado).
+  No probado en vivo contra producción — a confirmar tras desplegar
+  intentando adjuntar, en dos pedidos del mismo hotel, dos PDF con el
+  mismo Nº de Pedido (debe rechazarse el segundo).
+- **Sin control retroactivo**: esta entrega no revisa los pedidos ya
+  existentes en busca de duplicados previos a este cambio — si Víctor
+  quiere una auditoría puntual de los ya registrados, sería un pase
+  aparte de solo lectura.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`,
+  `docs/hallazgo-seguridad-princess.md` — no aplica (sin cambios de
+  despliegue/seguridad ni tarea pendiente que cerrar). `README.md` sí:
+  versión actual y nota en el bullet de "Pedidos".
+- **Entrega**: `app.py`, `README.md`, más este historial/`CHANGELOG.md`
+  y `templates/index.html` (solo el badge de versión). `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-06 — [Control Pedidos] Al adjuntar el PDF del pedido oficial, el Proveedor se rellena solo y se verifica el Departamento contra el "Almacén" del PDF (v12.32.35)
 
 - **Petición de Víctor**, a partir de un PDF real de pedido oficial

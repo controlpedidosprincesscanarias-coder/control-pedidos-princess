@@ -1,3 +1,25 @@
+# v12.32.36 — 6 septiembre 2026
+
+🔁 Control de duplicidades: el Nº de Pedido ya no puede repetirse dentro del mismo hotel
+
+**Petición de Víctor**: al registrar un pedido y pasarlo a ENVIADO AL PROVEEDOR, ¿se verifica que el Nº de Pedido no esté ya registrado en la app para ese mismo hotel — por otro usuario o por una automatización? Se revisó el código: no existía ningún control, así que un mismo pedido SAP podía acabar dado de alta dos veces (dos usuarios distintos, o un alta manual duplicando una ya creada por "Crear pedidos desde SAP"), cada una con su propio circuito de tramitación y avisos a proveedor independientes.
+
+**Cambio en `app.py`**: función nueva `_detectar_pedido_num_duplicado(hotel_id, pedido_num, excluir_pedido_id=None)` — compara NORMALIZADO (reutiliza `_normalizar_pedido_num()`, ya usada en todos los cruces con SAP/Albaranes desde v12.32.06: quita ceros a la izquierda/espacios, mayúsculas) contra el resto de pedidos de ese mismo hotel; el mismo Nº en hoteles distintos no cuenta como duplicidad. Aplicada en dos puntos:
+- **`upload_adjunto()`**: si el Nº de Pedido leído del PDF oficial ya pertenece a otro pedido de este hotel, se rechaza el PDF entero (400) — no se guarda nada, ni el adjunto ni ningún dato.
+- **`update_pedido()`** (bloque de validación ENVIADO AL PROVEEDOR): red de seguridad — repite la comprobación sobre el `pedido_num` ya guardado antes de dejar pasar el cambio de estado, por si llegó a fijarse de otra forma (dato legado, migración, edición directa en BD).
+
+En ambos casos el mensaje identifica el pedido duplicado ya existente (Nº interno y estado) para poder localizarlo y verificar si es un error real.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Revisada a mano la lógica contra los casos ya cubiertos por `_normalizar_pedido_num()` (ceros a la izquierda, mayúsculas/espacios) y contra hoteles distintos con el mismo Nº (no debe marcarse). No probado en vivo — a confirmar tras desplegar intentando adjuntar, en dos pedidos del mismo hotel, dos PDF con el mismo Nº de Pedido.
+
+**Sin control retroactivo**: no se ha auditado el histórico de pedidos ya existentes en busca de duplicados previos a este cambio.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual y nota en el bullet de "Pedidos".
+
+**Entrega**: `app.py`, `README.md`, `templates/index.html` (solo badge de versión), más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.35 — 6 septiembre 2026
 
 🏷️📄 Al adjuntar el PDF del pedido oficial, el Proveedor se rellena solo (ya no se busca/selecciona a mano) y se verifica el Departamento contra el "Almacén" del PDF

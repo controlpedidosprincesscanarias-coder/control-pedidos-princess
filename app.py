@@ -10252,6 +10252,40 @@ def _normalizar_pedido_num(s):
     m = re.match(r'^0*(\d+)$', s)
     return m.group(1) if m else s
 
+def _detectar_pedido_num_duplicado(hotel_id, pedido_num, excluir_pedido_id=None):
+    """
+    (2026-09-06, v12.32.36) Comprueba si `pedido_num` ya está registrado en
+    OTRO pedido de este mismo hotel — control de duplicidades pedido por
+    Víctor: hasta esta versión, nada impedía que el mismo pedido SAP
+    acabase dado de alta dos veces en la app (dos usuarios distintos, un
+    alta manual duplicando una ya creada por la automatización de SAP,
+    etc.), cada una con su propio circuito de tramitación y sus propios
+    avisos a proveedor.
+
+    Compara NORMALIZADO (ver _normalizar_pedido_num, mismo criterio que
+    ya usa el resto de la app para SAP/Albaranes: quita ceros a la
+    izquierda y espacios, pasa a mayúsculas) para que '00040159' y
+    '40159' se detecten como el mismo pedido aunque estén tecleados de
+    forma distinta. La comparación es SIEMPRE por hotel — el mismo
+    Nº de Pedido en dos hoteles distintos no es una duplicidad (cada
+    hotel tramita sus propios pedidos SAP de forma independiente).
+
+    Devuelve la fila (id, norden, estado, pedido_num) del pedido
+    duplicado ya existente, o None si no hay ninguno.
+    """
+    num_norm = _normalizar_pedido_num(pedido_num)
+    if not num_norm or not hotel_id:
+        return None
+    sql = "SELECT id, norden, estado, pedido_num FROM pedidos WHERE hotel_id=%s AND pedido_num IS NOT NULL AND pedido_num != ''"
+    params = [hotel_id]
+    if excluir_pedido_id:
+        sql += " AND id != %s"
+        params.append(excluir_pedido_id)
+    for f in rows_to_list(query(sql, tuple(params))):
+        if _normalizar_pedido_num(f["pedido_num"]) == num_norm:
+            return f
+    return None
+
 def _normalizar_num_albaran(s):
     """
     (2026-08-19) Normaliza un número de albarán/registro DALI para poder
@@ -16393,6 +16427,26 @@ def update_pedido(pid):
                 "para pasar a ENVIADO AL PROVEEDOR — la aplicación rellena sola el Nº de Pedido y el Total "
                 "Pedido al leerlo."
             )
+        else:
+            # 1b. Red de seguridad — Nº de Pedido duplicado en el mismo hotel
+            # (2026-09-06, v12.32.36). El control real está en
+            # upload_adjunto() (impide guardar el PDF si el Nº de Pedido ya
+            # está registrado en otro pedido de este hotel, ver
+            # _detectar_pedido_num_duplicado) — esta comprobación es un
+            # segundo cierre por si el valor llegó a fijarse de otra forma
+            # (pedido dado de alta antes de que existiera este control,
+            # migración de datos, edición directa en la base de datos...):
+            # nunca deja pasar a ENVIADO AL PROVEEDOR un pedido cuyo Nº ya
+            # tenga otro pedido activo del mismo hotel.
+            _hotel_id_dup = data.get("hotel_id", pedido_actual.get("hotel_id"))
+            _dup_pedido_envio = _detectar_pedido_num_duplicado(_hotel_id_dup, pedido_num_val, excluir_pedido_id=pid)
+            if _dup_pedido_envio:
+                errores_envio.append(
+                    f"No se puede pasar a ENVIADO AL PROVEEDOR: el Nº de Pedido «{pedido_num_val}» ya está "
+                    f"registrado en OTRO pedido de este hotel (Nº interno {_dup_pedido_envio['norden']}, "
+                    f"estado «{_dup_pedido_envio['estado']}»). Verifique que no se trate del mismo pedido "
+                    f"duplicado antes de continuar."
+                )
 
         # 2. Adjunto pedido_doc: exactamente 1 documento (el PDF de pedido
         #    oficial, obligatorio — ya no admite correo .eml/.msg en este
@@ -18412,7 +18466,7 @@ def get_adjuntos(pid):
 @login_required
 def upload_adjunto(pid):
     # Verificar que el pedido existe
-    pedido = query("SELECT id FROM pedidos WHERE id=%s", (pid,), one=True)
+    pedido = query("SELECT id, hotel_id FROM pedidos WHERE id=%s", (pid,), one=True)
     if not pedido:
         return jsonify({"ok": False, "error": "Pedido no encontrado"}), 404
 
@@ -18478,6 +18532,29 @@ def upload_adjunto(pid):
             _datos_pedido_pdf = _parsear_pdf_pedido_oficial(datos)
         except ValueError as _exc_pdf:
             return jsonify({"ok": False, "error": str(_exc_pdf)}), 400
+
+        # (2026-09-06, v12.32.36) Control de duplicidades — a petición de
+        # Víctor: el Nº de Pedido leído del PDF no puede coincidir con el
+        # de OTRO pedido ya registrado en este mismo hotel (ver
+        # _detectar_pedido_num_duplicado). Se rechaza el archivo entero
+        # ANTES de guardar nada (ni el adjunto ni el Nº de Pedido), igual
+        # que cuando el PDF no se reconoce como pedido oficial justo
+        # arriba — para que quien lo suba se dé cuenta al momento, en vez
+        # de descubrirlo más tarde al intentar pasar a ENVIADO AL
+        # PROVEEDOR (ver también el aviso de seguridad en update_pedido()).
+        _dup_pedido = _detectar_pedido_num_duplicado(
+            pedido["hotel_id"], _datos_pedido_pdf.get("pedido_num"), excluir_pedido_id=pid
+        )
+        if _dup_pedido:
+            return jsonify({
+                "ok": False,
+                "error": (
+                    f"El Nº de Pedido «{_datos_pedido_pdf.get('pedido_num')}» leído de este PDF ya está "
+                    f"registrado en OTRO pedido de este hotel (Nº interno {_dup_pedido['norden']}, estado "
+                    f"«{_dup_pedido['estado']}»). Verifique que no se trate del mismo pedido dado de alta "
+                    f"dos veces antes de continuar — si es un error, elimine o corrija el pedido duplicado."
+                )
+            }), 400
 
     elif tipo in ("presupuesto_doc", "solicitud_doc", "firma_techo_doc"):
         etiqueta = "PDF, Word o correo (.eml/.msg)" if tipo == "presupuesto_doc" else "Excel, Word, PDF o correo (.eml/.msg)"
