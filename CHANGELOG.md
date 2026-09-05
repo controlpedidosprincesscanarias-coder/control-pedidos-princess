@@ -1,3 +1,24 @@
+# v12.32.40 — 6 septiembre 2026
+
+🏨✅ Verificación de la comprobación Hotel vs. PDF (v12.32.38) contra los 10 hoteles reales — 1 falso aviso corregido
+
+**Petición de Víctor**: tras entregar v12.32.38 (Hotel vs. HOTEL/CENTRO del PDF), adjuntó el PDF de pedido oficial real de cada uno de los 10 hoteles de la app para comprobar que el nombre se lee y empareja correctamente con el catálogo en todos los casos, "evitando falso error".
+
+**Comprobación (`pypdf.extract_text()` sobre los 10 PDF reales, uno por hotel)**: `_extraer_hotel_nombre_pdf_oficial()` lee correctamente el nombre de HOTEL/CENTRO en los 10/10 PDF. Al emparejar contra el catálogo con `_normalizar_nombre_hotel()`:
+- **8/10 coinciden directamente** (Gran Canaria, Taurito, Mogan, Princess Inspire Tenerife, Maspalomas & Tabaiba, Guayarmina, Fuerteventura, y Suite — este último porque «SUITE PRINCESS» del PDF ya es sufijo de «TUI Blue Suite Princess» del catálogo y `_coincide_hotel`/`_coincideHotel` ya comparan también por "contenido" en ambos sentidos, no solo por igualdad exacta).
+- **1/10 (Jandia) también coincidía ya**, por el mismo motivo: «JANDIA PRINCESS» del PDF es sufijo de «Club Jandia Princess» del catálogo.
+- **1/10 (La Palma) NO coincidía — falso aviso confirmado**: el PDF SAP trae «HOTEL LA PALMA TENEGUIA PRINCESS», pero el catálogo tiene «La Palma Princess» (sin «Teneguia»). Al llevar «TENEGUIA» intercalado EN MEDIO de las dos palabras comunes, ni la igualdad ni el "contiene" en ningún sentido lo emparejaban — con el hotel correcto seleccionado, la app habría mostrado el aviso de mismatch y bloqueado igualmente el paso a ENVIADO AL PROVEEDOR.
+
+**Corrección (`app.py` / `templates/index.html`)**: nuevo diccionario `_ALIAS_NOMBRE_HOTEL_PDF` (y su réplica `_ALIAS_NOMBRE_HOTEL_PDF_JS` en el frontend) con la única entrada necesaria, `"LA PALMA TENEGUIA PRINCESS" -> "LA PALMA PRINCESS"`, aplicado al final de `_normalizar_nombre_hotel()`/`_normalizarNombreHotelJs()` sobre el nombre ya normalizado (mayúsculas/sin acentos/sin "HOTEL"/sin "&"), para no depender de mayúsculas o acentos. No se toca la lógica de comparación en sí (sigue siendo igualdad-o-contenido en ambos sentidos), solo la normalización del nombre de La Palma.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores nuevos. Los 8 bloques `<script>` reales de `templates/index.html` comprobados uno a uno con `node --check` (sin errores), balance de `<div>` correcto (975/975). Reproducido con `pypdf` el emparejamiento de los 10 PDF reales de ejemplo contra el catálogo tras el cambio: 10/10 coinciden con su hotel correcto y ninguno coincide con un hotel distinto. No probado en vivo contra producción.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+
+**Entrega**: `app.py`, `templates/index.html`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`/`README.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.38 — 6 septiembre 2026
 
 🏨📄 El Hotel seleccionado se verifica contra el "HOTEL/CENTRO" del PDF del pedido oficial

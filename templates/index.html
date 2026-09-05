@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.38
+          V 12.32.40
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5580,16 +5580,28 @@ function _normalizarTextoGenericoJs(s) {
   return s.toUpperCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 }
 
-// (2026-09-06, v12.32.38) Normaliza el nombre de un Hotel para comparar
-// contra el HOTEL/CENTRO leído del PDF — réplica en JS de
-// _normalizar_nombre_hotel() en app.py: parte de
+// (2026-09-06, v12.32.40) Alias explícitos de nombre de HOTEL/CENTRO —
+// réplica en JS de _ALIAS_NOMBRE_HOTEL_PDF en app.py (ver comentario
+// allí para el porqué: el PDF SAP de LA PALMA trae "TENEGUIA" intercalado
+// entre las dos palabras comunes con el nombre del catálogo, por lo que
+// ni la igualdad ni el "contiene" en ambos sentidos lo emparejan). Se
+// mantienen las dos copias sincronizadas a mano.
+const _ALIAS_NOMBRE_HOTEL_PDF_JS = {
+  'LA PALMA TENEGUIA PRINCESS': 'LA PALMA PRINCESS',
+};
+
+// (2026-09-06, v12.32.38; alias añadidos en v12.32.40) Normaliza el nombre
+// de un Hotel para comparar contra el HOTEL/CENTRO leído del PDF — réplica
+// en JS de _normalizar_nombre_hotel() en app.py: parte de
 // _normalizarTextoGenericoJs y además quita la palabra "HOTEL" al
-// principio (el PDF la antepone siempre; el catálogo nunca la lleva) y el
-// símbolo "&" (el PDF lo pierde al extraer el texto de esa caja).
+// principio (el PDF la antepone siempre; el catálogo nunca la lleva), el
+// símbolo "&" (el PDF lo pierde al extraer el texto de esa caja) y por
+// último aplica _ALIAS_NOMBRE_HOTEL_PDF_JS.
 function _normalizarNombreHotelJs(s) {
   if (!s) return '';
   let norm = _normalizarTextoGenericoJs(s);
   norm = norm.replace(/^HOTEL\s+/, '').replace(/&/g, ' ').replace(/\s+/g, ' ').trim();
+  norm = _ALIAS_NOMBRE_HOTEL_PDF_JS[norm] || norm;
   return norm;
 }
 

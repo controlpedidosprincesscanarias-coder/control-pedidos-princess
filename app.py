@@ -10383,19 +10383,45 @@ def _normalizar_texto_generico(s: str) -> str:
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
+# (2026-09-06, v12.32.40) Alias explícitos de nombre de HOTEL/CENTRO —
+# a petición de Víctor, verificados con los 10 PDF de pedido oficial
+# reales (uno por hotel) que aportó para hacer esta comprobación: en 2
+# de los 10 (SUITE PRINCESS -> TUI Blue Suite Princess, JANDIA PRINCESS
+# -> Club Jandia Princess) el emparejamiento YA funcionaba sin tocar
+# nada, porque _coincide_hotel/_coincideHotel ya comparan también por
+# "contenido" (in) en ambos sentidos, no solo por igualdad exacta — el
+# nombre del PDF es sencillamente un sufijo del nombre del catálogo. El
+# único caso real que fallaba (falso aviso de error, HOTEL LA PALMA
+# TENEGUIA PRINCESS del PDF SAP no encaja ni por igualdad ni por
+# "contenido" con LA PALMA PRINCESS del catálogo, porque "TENEGUIA" va
+# EN MEDIO de las dos palabras comunes, no al principio o al final) se
+# resuelve aquí con un alias explícito, aplicado sobre el nombre YA
+# normalizado (mayúsculas/sin acentos/sin "HOTEL"/sin "&") para que sea
+# insensible a mayúsculas, acentos o espacios de más. Si en el futuro
+# aparece algún otro hotel cuyo nombre SAP difiera del catálogo de esta
+# misma forma (palabra intercalada), añadir aquí su entrada siguiendo
+# el mismo patrón — nunca "adivinar" quitando palabras sueltas del
+# nombre, que podría emparejar hoteles distintos por error.
+_ALIAS_NOMBRE_HOTEL_PDF = {
+    "LA PALMA TENEGUIA PRINCESS": "LA PALMA PRINCESS",
+}
+
 def _normalizar_nombre_hotel(s: str) -> str:
     """
-    (2026-09-06, v12.32.38) Normaliza el nombre de un HOTEL/CENTRO para
-    emparejar el leído del PDF oficial ("Hotel Maspalomas Tabaiba
-    Princess") con el nombre guardado en el catálogo de hoteles de la app
-    ("Maspalomas & Tabaiba Princess", ver models.py) — parte de
-    _normalizar_texto_generico (mayúsculas, sin acentos, espacios
-    colapsados) y además quita la palabra "HOTEL" al principio (el PDF
-    la antepone siempre en la caja HOTEL/CENTRO; el catálogo nunca la
-    lleva) y el símbolo "&" (pypdf lo pierde al extraer el texto de esa
-    caja — confirmado con el PDF real de ejemplo: la caja imprime
-    "Hotel Maspalomas Tabaiba\nPrincess", sin el "&" que sí lleva el
-    nombre del catálogo).
+    (2026-09-06, v12.32.38; alias añadidos en v12.32.40) Normaliza el
+    nombre de un HOTEL/CENTRO para emparejar el leído del PDF oficial
+    ("Hotel Maspalomas Tabaiba Princess") con el nombre guardado en el
+    catálogo de hoteles de la app ("Maspalomas & Tabaiba Princess", ver
+    models.py) — parte de _normalizar_texto_generico (mayúsculas, sin
+    acentos, espacios colapsados) y además quita la palabra "HOTEL" al
+    principio (el PDF la antepone siempre en la caja HOTEL/CENTRO; el
+    catálogo nunca la lleva) y el símbolo "&" (pypdf lo pierde al
+    extraer el texto de esa caja — confirmado con el PDF real de
+    ejemplo: la caja imprime "Hotel Maspalomas Tabaiba\nPrincess", sin
+    el "&" que sí lleva el nombre del catálogo). Por último aplica
+    _ALIAS_NOMBRE_HOTEL_PDF (ver comentario junto al diccionario) para
+    los casos en los que el nombre SAP difiere del catálogo más allá de
+    formato.
     """
     if not s:
         return ""
@@ -10403,6 +10429,7 @@ def _normalizar_nombre_hotel(s: str) -> str:
     norm = re.sub(r'^HOTEL\s+', '', norm)
     norm = norm.replace('&', ' ')
     norm = re.sub(r'\s+', ' ', norm).strip()
+    norm = _ALIAS_NOMBRE_HOTEL_PDF.get(norm, norm)
     return norm
 
 def _match_departamento_prefijo(blob: str, deptos_norm: list):

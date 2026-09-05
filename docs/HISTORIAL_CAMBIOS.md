@@ -36,6 +36,48 @@
 
 ---
 
+## 2026-09-06 — [Control Pedidos] Verificación de Hotel vs. PDF (v12.32.38) contra los 10 hoteles reales — 1 falso aviso corregido (v12.32.40)
+
+- **Petición de Víctor**: tras entregar v12.32.38, adjuntó el PDF de
+  pedido oficial real de cada uno de los 10 hoteles de la app para
+  comprobar que el nombre de HOTEL/CENTRO se lee y empareja
+  correctamente con el catálogo en todos los casos, "evitando falso
+  error".
+- **Comprobación con `pypdf` sobre los 10 PDF reales**: `_extraer_hotel_nombre_pdf_oficial()`
+  lee correctamente el nombre en los 10/10. Al emparejar con
+  `_normalizar_nombre_hotel()`: 9/10 ya coincidían correctamente (8
+  directos, más Suite y Jandia gracias a que `_coincide_hotel` ya
+  compara también por "contenido" en ambos sentidos — «SUITE PRINCESS»
+  y «JANDIA PRINCESS» del PDF son sufijo de «TUI Blue Suite Princess» y
+  «Club Jandia Princess» del catálogo respectivamente). El hotel de
+  **La Palma no coincidía**: el PDF SAP trae «HOTEL LA PALMA TENEGUIA
+  PRINCESS» y el catálogo tiene «La Palma Princess» — «TENEGUIA» va
+  intercalado EN MEDIO de las dos palabras comunes, así que ni la
+  igualdad ni el "contiene" lo emparejaban; con el hotel correcto
+  seleccionado la app habría mostrado un falso aviso de mismatch y
+  bloqueado el paso a ENVIADO AL PROVEEDOR sin motivo real.
+- **Corrección**: nuevo diccionario `_ALIAS_NOMBRE_HOTEL_PDF` en
+  `app.py` (y su réplica `_ALIAS_NOMBRE_HOTEL_PDF_JS` en
+  `templates/index.html`) con la entrada
+  `"LA PALMA TENEGUIA PRINCESS" -> "LA PALMA PRINCESS"`, aplicado al
+  final de `_normalizar_nombre_hotel()`/`_normalizarNombreHotelJs()`
+  sobre el nombre ya normalizado. La lógica de comparación
+  (igualdad-o-contenido en ambos sentidos) no cambia.
+- **Verificación**: `python3 -m py_compile app.py` sin errores nuevos.
+  Los 8 bloques `<script>` reales verificados uno a uno con
+  `node --check`, balance de `<div>` correcto (975/975). Reproducido
+  con `pypdf` el emparejamiento de los 10 PDF reales tras el cambio:
+  10/10 coinciden con su hotel correcto, ninguno con uno distinto. No
+  probado en vivo contra producción.
+- **Revisión de otros documentos**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`,
+  `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md`:
+  versión actual actualizada.
+- **Entrega**: `app.py`, `templates/index.html`, más este historial /
+  `CHANGELOG.md` / `README.md`.
+
+---
+
 ## 2026-09-06 — [Control Pedidos] El Hotel seleccionado se verifica contra el "HOTEL/CENTRO" del PDF del pedido oficial (v12.32.38)
 
 - **Petición de Víctor**, tras la entrega de v12.32.35 (verificación de
