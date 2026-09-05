@@ -11037,7 +11037,7 @@ def _extraer_listado_detallado_completo(pdf_bytes: bytes) -> dict:
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for pagina in pdf.pages:
+            for i_pagina, pagina in enumerate(pdf.pages):
                 try:
                     texto_pagina = pagina.extract_text() or ""
                 except Exception:
@@ -11115,7 +11115,33 @@ def _extraer_listado_detallado_completo(pdf_bytes: bytes) -> dict:
                 # subir tramos quincenales — de ahí el job "perdido" que
                 # reportó Víctor: el proceso entero se reinicia (se pierde
                 # _PDF_JOBS, en memoria) a mitad de la subida.
+                #
+                # (2026-09-05, v12.32.29) flush_cache() NO era suficiente:
+                # solo borra los atributos cacheados que declara pdfplumber
+                # (`cached_properties`, p.ej. "_layout" en Page) — pero el
+                # propio objeto Page (con su `page_obj` de pdfminer y su
+                # `get_textmap` envuelto en lru_cache, ambos AJENOS a
+                # cached_properties) sigue vivo para siempre, porque
+                # `pdfplumber.PDF.pages` es una property que la PRIMERA vez
+                # que se lee construye TODAS las páginas y las guarda en
+                # `pdf._pages` — y ahí se quedan mientras el objeto `pdf`
+                # exista, sin importar cuántas veces llames a
+                # `pagina.flush_cache()`. Confirmado empíricamente con un
+                # script de medición de memoria real (psutil) sobre el PDF
+                # de 99 páginas / 281 pedidos que Víctor reportó que hacía
+                # caer el servicio: con flush_cache() pero SIN esto, la
+                # memoria subía ~4,2 MB por página hasta 497 MB de pico (con
+                # el límite de Render en 512 MB, esto es justo lo que
+                # provocaba el "Ran out of memory" del panel de Eventos,
+                # incluso en la versión v12.32.28 que ya arregló las
+                # consultas a la base de datos — el problema de memoria era
+                # independiente y no tenía nada que ver con SQL). Con la
+                # línea de abajo (que vacía la propia lista `pdf.pages` que
+                # pdfplumber usa como caché), el pico bajó a 108 MB — sin
+                # tocar el resultado final, solo cambia qué se mantiene en
+                # memoria mientras se recorre el PDF.
                 pagina.flush_cache()
+                pdf.pages[i_pagina] = None
     except Exception as exc:
         log.error("[LISTADO-DETALLADO] Error leyendo el PDF: %s", exc)
         raise RuntimeError(f"No se pudo leer el PDF: {exc}")
@@ -11502,7 +11528,12 @@ def _extraer_albaranes_detallado_completo(pdf_bytes: bytes) -> dict:
                                 "descuento_pct_txt": (fila[idx0 + 7] or "").strip() or None,
                                 "importe_txt":      (fila[idx0 + 8] or "").strip() or None,
                             })
+                # (2026-09-05, v12.32.29) ver la nota extensa junto al mismo
+                # flush_cache() en _extraer_listado_detallado_completo():
+                # flush_cache() no basta, hay que soltar también la
+                # referencia que pdfplumber guarda en pdf.pages[i].
                 pagina.flush_cache()
+                pdf.pages[i] = None
     except Exception as exc:
         log.error("[LISTADO-ALBARANES] Error leyendo el PDF: %s", exc)
         raise RuntimeError(f"No se pudo leer el PDF: {exc}")
@@ -11785,7 +11816,7 @@ def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes) -> dict:
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            for pagina in pdf.pages:
+            for i_pagina, pagina in enumerate(pdf.pages):
                 try:
                     tablas = pagina.extract_tables()
                 except Exception:
@@ -11817,7 +11848,14 @@ def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes) -> dict:
                         valor = (fila[1] or "").strip()
                         if clave and valor:
                             metadatos[clave] = valor
+                # (2026-09-05, v12.32.29) ver la nota extensa junto al mismo
+                # flush_cache() en _extraer_listado_detallado_completo():
+                # flush_cache() no basta, hay que soltar también la
+                # referencia que pdfplumber guarda en pdf.pages[i]. Este PDF
+                # suele ser de pocas páginas (un solo albarán), pero se
+                # aplica igual por consistencia con los otros dos parsers.
                 pagina.flush_cache()
+                pdf.pages[i_pagina] = None
     except Exception as exc:
         log.error("[CONFIRMACION-ALBARAN] Error leyendo el PDF: %s", exc)
         raise RuntimeError(f"No se pudo leer el PDF: {exc}")

@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-05 — [Control Pedidos] Corregido el OOM real que la v12.32.28 no arregló: pdfplumber retenía en memoria TODAS las páginas ya procesadas del PDF durante toda la subida (v12.32.29)
+
+- **Qué pasó**: tras la v12.32.28 (que sí redujo las consultas a la BD), Víctor volvió a subir el mismo listado de 99 páginas / 281 pedidos y volvió a fallar — esta vez el panel de Eventos de Render fue explícito: "Instance failed: vvzpz — Ran out of memory (used over 512MB) while running your code", ~6 minutos tras el despliegue. Confirmaba que había un segundo problema, independiente del de la base de datos, todavía sin corregir.
+- **Causa real**: `pagina.flush_cache()` (v12.32.21) solo borra los atributos que pdfplumber marca como "cacheados" en cada `Page` — pero el objeto `Page` en sí (con su página de pdfminer y su `get_textmap` envuelto en `lru_cache`) sigue vivo, porque `pdfplumber.PDF.pages` construye TODAS las páginas de golpe la primera vez que se lee y las guarda en una lista interna (`pdf._pages`) que vive mientras exista el objeto `pdf` — es decir, durante toda la subida. Medido con `psutil` sobre el PDF real de 99 páginas / 281 pedidos: memoria subiendo ~4,2 MB por página hasta un pico de 497,7 MB — encaja exactamente con el límite de 512 MB de Render (plan Free).
+- **Cambio en `app.py`**: en las tres funciones que leen un PDF con `pdfplumber` (`_extraer_listado_detallado_completo()`, `_extraer_albaranes_detallado_completo()`, `_extraer_albaran_confirmacion_individual()`), justo después de `pagina.flush_cache()`, se añade `pdf.pages[i] = None` — vacía la propia lista interna de pdfplumber una vez procesada esa página. Un cambio mínimo, no toca qué datos se extraen ni cómo se guardan.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Con `psutil`, sobre el mismo PDF de 99 páginas: pico de memoria de 497,7 MB → 99,6 MB. A escala completa, con el listado real de 739 páginas / 2.018 pedidos: pico de solo 152,7 MB (frente a varios GB sin el fix). Probado de extremo a extremo contra un PostgreSQL 16 real: mismo resultado numérico que antes del fix (281 pedidos nuevos, 281 departamentos actualizados, 2.281 líneas guardadas), en 35 segundos en local. Las otras dos funciones, probadas por separado con PDFs reales (Albaranes de 2.422 líneas, y una confirmación de albarán suelto), devuelven el mismo resultado que antes.
+- **Lección**: "confirmado que no da OOM" no es lo mismo que "no puede dar OOM" — pdfplumber tiene más de un sitio donde retiene memoria por página, y el `flush_cache()` de la v12.32.21 solo tapaba uno. Medir con una herramienta de memoria real, no solo por el tiempo que tarda ni por la RAM del entorno de pruebas local (que no tiene el límite de 512 MB de Render).
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html` (solo versión), `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] Corregido bug real de la v12.32.27: "Departamentos y líneas" reiniciaba el servicio con un PDF pequeño — no era memoria, eran casi 4.000 consultas a la BD una por una en vez de en bloque (v12.32.28)
 
 - **Qué pasó**: Víctor subió un listado de solo 99 páginas / 281 pedidos y, tras ~4,5 minutos, saltó "El job no existe o ha caducado" — el log de Render confirmó que el servicio se reinició entero a mitad de la subida, mismo síntoma que el problema de memoria de la v12.32.21 pero con un PDF que no debería dar problemas por tamaño.
