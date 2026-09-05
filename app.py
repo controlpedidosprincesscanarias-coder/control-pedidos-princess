@@ -203,6 +203,12 @@ _SAP_DEPARTAMENTO_MAP = {
     "00000001": "ECONOMATO",
     "00000010": "COCINA",
     "00000015": "COCINA",               # COCINA PERSONAL
+    # (2026-09-05, v12.32.34) 00000100 y 00000301 son casos especiales:
+    # el nombre "correcto" para ellos depende del HOTEL, no es fijo — ver
+    # _resolver_departamento_sap() más abajo, que es lo que de verdad se
+    # usa para resolverlos. Los valores de aquí son solo el caso general
+    # (hotel con departamento combinado); para GY/IT/MT/TA nunca se leen
+    # directamente de este diccionario.
     "00000100": "RESTAURANTE & BARES",  # RESTAURANTE / BODEGA (Food Market)
     "00000301": "BARES",                # BAR SALON (Discoteca, Princess)
     # (2026-09-05, v12.32.33) Confirmado con Víctor tras avisar el listado
@@ -222,6 +228,45 @@ _SAP_DEPARTAMENTO_MAP = {
     "00000800": "SSTT",                 # SERVICIO TECNICO
     "00000810": "UNIFORMES PERSONAL",
 }
+
+# (2026-09-05, v12.32.34) Mismo criterio que ya usaba el desplegable manual
+# de departamento en el formulario de pedido (ver
+# HOTELES_RESTAURANTE_BARES_SEPARADOS en templates/index.html, JS): estos
+# 4 hoteles gestionan RESTAURANTE y BARES como departamentos separados —
+# para ellos el departamento combinado "RESTAURANTE & BARES" no debe
+# usarse nunca. El resto de hoteles es al revés: un único departamento
+# combinado, sin "RESTAURANTE" ni "BARES" por separado.
+_HOTELES_RESTAURANTE_BARES_SEPARADOS = {"GY", "IT", "MT", "TA"}
+
+def _resolver_departamento_sap(codigo: str, hotel_codigo: str) -> str:
+    """
+    (2026-09-05, v12.32.34) Traduce un código de departamento de SAP al
+    nombre de departamento de la app — ver _SAP_DEPARTAMENTO_MAP para la
+    lista base, fija para casi todos los códigos. Los códigos 00000100
+    (RESTAURANTE / BODEGA) y 00000301 (BAR SALON) son la excepción: a qué
+    departamento corresponden SÍ depende del hotel, porque no todos los
+    hoteles tienen los mismos departamentos de Restaurante/Bares dados de
+    alta (ver _HOTELES_RESTAURANTE_BARES_SEPARADOS).
+
+    Bug real reportado por Víctor (2026-09-05): el listado detallado de
+    GY asociaba "00000100 - RESTAURANTE / BODEGA" al departamento
+    "RESTAURANTE & BARES" (el nombre fijo que traía _SAP_DEPARTAMENTO_MAP
+    para ese código) — pero GY es uno de los hoteles que separa
+    Restaurante y Bares, así que ahí ese departamento combinado no
+    debería usarse nunca; le correspondía "RESTAURANTE" a secas. Para los
+    hoteles con departamento combinado, en cambio, es correcto usar
+    "RESTAURANTE & BARES" tanto para el código de restaurante como para
+    el de bares (confirmado por Víctor: "es correcto que se utilice tanto
+    para restaurante como para bares").
+    """
+    if not codigo:
+        return None
+    separado = hotel_codigo in _HOTELES_RESTAURANTE_BARES_SEPARADOS
+    if codigo == "00000100":
+        return "RESTAURANTE" if separado else "RESTAURANTE & BARES"
+    if codigo == "00000301":
+        return "BARES" if separado else "RESTAURANTE & BARES"
+    return _SAP_DEPARTAMENTO_MAP.get(codigo)
 
 def _auto_migrate():
     """Añade columnas/tablas nuevas de forma idempotente."""
@@ -429,6 +474,18 @@ def _auto_migrate():
             except Exception as exc_dep:
                 log.warning(f"No se pudieron crear los departamentos nuevos (LAVANDERIA / LENCERIA, UNIFORMES PERSONAL): {exc_dep}")
 
+            # (2026-09-05, v12.32.34) Necesario para el paso 4 de más abajo
+            # — resolver los códigos 00000100/00000301 (Restaurante/Bares)
+            # depende del hotel, ver _resolver_departamento_sap(). Aparte
+            # (try/except propio), para que un fallo aquí no impida el
+            # resto de la corrección retroactiva de este bloque.
+            _hoteles_codigo_por_id = {}
+            try:
+                cur.execute("SELECT id, codigo FROM hoteles")
+                _hoteles_codigo_por_id = {h["id"]: h["codigo"] for h in cur.fetchall()}
+            except Exception as exc_hot:
+                log.warning(f"No se pudo cargar el catálogo de hoteles para resolver departamentos: {exc_hot}")
+
             try:
                 cur.execute("""
                     SELECT DISTINCT p.id, p.hotel_id, p.pedido_num, p.estado, p.departamento_id
@@ -507,7 +564,10 @@ def _auto_migrate():
                             )
                             _fila_dep = cur.fetchone()
                             _dep_codigo = _fila_dep.get("departamento_sap_codigo") if _fila_dep else None
-                            _dep_nombre = _SAP_DEPARTAMENTO_MAP.get(_dep_codigo) if _dep_codigo else None
+                            _dep_nombre = (
+                                _resolver_departamento_sap(_dep_codigo, _hoteles_codigo_por_id.get(_p["hotel_id"]))
+                                if _dep_codigo else None
+                            )
                             if _dep_nombre:
                                 cur.execute("SELECT id FROM departamentos WHERE nombre=%s", (_dep_nombre,))
                                 _dep_row = cur.fetchone()
@@ -11365,6 +11425,12 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
             "(cabecera de pedido seguida de una línea por artículo, con departamento)?"
         )
 
+    # (2026-09-05, v12.32.34) Necesario para resolver los códigos 00000100/
+    # 00000301 (Restaurante/Bares) correctamente según el hotel — ver
+    # _resolver_departamento_sap().
+    _fila_hotel = query("SELECT codigo FROM hoteles WHERE id=%s", (hotel_id,), one=True)
+    hotel_codigo = _fila_hotel["codigo"] if _fila_hotel else None
+
     # (2026-09-04, v12.32.28) Defensa ante una cabecera nunca reconocida —
     # en teoría no debería pasar (_extraer_listado_detallado_completo()
     # solo crea una entrada en el dict a partir de una cabecera ya
@@ -11451,7 +11517,7 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
         dep_id_por_nombre = {d["nombre"]: d["id"] for d in deptos_cat}
         filas_pedidos_dep = []
         for hotel_id_v, num_sap, codigo in filas_con_codigo:
-            dep_nombre = _SAP_DEPARTAMENTO_MAP.get(codigo)
+            dep_nombre = _resolver_departamento_sap(codigo, hotel_codigo)
             dep_id = dep_id_por_nombre.get(dep_nombre) if dep_nombre else None
             if dep_id:
                 filas_pedidos_dep.append((hotel_id_v, num_sap, dep_id))
@@ -12862,6 +12928,12 @@ def _pedidos_sap_no_registrados(hotel_id: int) -> list:
     if not encontrados:
         return []
 
+    # (2026-09-05, v12.32.34) Necesario para resolver los códigos 00000100/
+    # 00000301 (Restaurante/Bares) correctamente según el hotel — ver
+    # _resolver_departamento_sap().
+    _fila_hotel = query("SELECT codigo FROM hoteles WHERE id=%s", (hotel_id,), one=True)
+    hotel_codigo = _fila_hotel["codigo"] if _fila_hotel else None
+
     proveedores_cat = rows_to_list(query(
         "SELECT id, nombre, sujeto_seguimiento FROM proveedores WHERE activo=1"
     ))
@@ -12916,7 +12988,7 @@ def _pedidos_sap_no_registrados(hotel_id: int) -> list:
         importe_base      = _parse_importe_es(importe_base_txt)
         importe_recibido  = _parse_importe_es(importe_recibido_txt)
         importe_pendiente = _parse_importe_es(importe_pendiente_txt)
-        departamento_nombre = _SAP_DEPARTAMENTO_MAP.get(departamento_sap_codigo)
+        departamento_nombre = _resolver_departamento_sap(departamento_sap_codigo, hotel_codigo)
         departamento_id = deptos_id_por_nombre.get(departamento_nombre) if departamento_nombre else None
 
         # (2026-09-05, v12.32.31 — Pieza 3) `importe_base_txt` es NULL

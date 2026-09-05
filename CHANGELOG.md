@@ -1,3 +1,23 @@
+# v12.32.34 — 5 septiembre 2026
+
+Corregido bug real: el departamento de Restaurante/Bares del listado detallado se asignaba mal en los hoteles que los llevan por separado (GY, IT, MT, TA) — se asociaba siempre a "RESTAURANTE & BARES" aunque ese departamento combinado no exista para ellos
+
+**Qué pasó**: Víctor subió el listado detallado de GY (91 páginas) y, al revisar el resultado, vio que "00000100 - RESTAURANTE / BODEGA" se estaba asociando al departamento "RESTAURANTE & BARES" — y avisó de que GY es uno de los hoteles donde Restaurante y Bares están separados (recordó que esto ya se había tenido en cuenta en alguna actualización anterior para el desplegable manual de departamento): "es correcto que se utilice tanto para restaurante como para bares RESTAURANTE & BARES [en los hoteles con departamento unificado] pero este no es el caso [de GY]".
+
+**Causa**: `_SAP_DEPARTAMENTO_MAP` (la lista de equivalencias código-SAP → nombre-de-departamento, ver v12.32.16 y v12.32.33) es un diccionario FIJO, sin ningún conocimiento de qué hotel es cada pedido — el código `00000100` (RESTAURANTE / BODEGA) llevaba escrito el nombre fijo "RESTAURANTE & BARES", y el `00000301` (BAR SALON) el nombre fijo "BARES", sin más. Esto es correcto SOLO para los hoteles con departamento combinado. Para GY/IT/MT/TA (que sí tienen "RESTAURANTE" y "BARES" como departamentos separados en el catálogo — el mismo criterio que ya usa desde antes el desplegable manual del formulario de pedido, `HOTELES_RESTAURANTE_BARES_SEPARADOS` en el JS) el código `00000100` debía resolver a "RESTAURANTE" a secas, y el `00000301` a "BARES" a secas — nunca al departamento combinado, que ni siquiera se usa en esos hoteles.
+
+**Cambio en `app.py`**: nueva función `_resolver_departamento_sap(codigo, hotel_codigo)`, que sustituye el acceso directo a `_SAP_DEPARTAMENTO_MAP` en los tres sitios que resuelven y ESCRIBEN un departamento a partir de un código SAP: el backfill de arranque de `_auto_migrate()` (corrección retroactiva de pedidos creados desde SAP), `_actualizar_departamentos_desde_listado_detallado()` ("Departamentos y líneas", el botón que usó Víctor) y `_pedidos_sap_no_registrados()` (la función que usa "Crear pedidos desde SAP" para rellenar el departamento al dar de alta un pedido nuevo). Para los códigos `00000100`/`00000301` consulta si el hotel está en `_HOTELES_RESTAURANTE_BARES_SEPARADOS` (mismo criterio y misma lista de 4 hoteles que el JS) y devuelve "RESTAURANTE"/"BARES" en ese caso, o "RESTAURANTE & BARES" en el resto — para el resto de códigos, se comporta exactamente igual que antes (consulta directa a `_SAP_DEPARTAMENTO_MAP`). Los tres sitios afectados ahora obtienen el código del hotel (`hoteles.codigo`) con una única consulta antes de resolver cualquier departamento — nunca dentro de un bucle por pedido.
+
+**Verificación**: reprocesado el PDF real que subió Víctor (GY, 91 páginas, con 23 líneas de código `00000100` y decenas de código `00000301`) contra un PostgreSQL 16 real, aplicado dos veces — una simulando el hotel GY (separado) y otra simulando un hotel con departamento combinado (GC) — con dos pedidos de prueba por hotel, uno con cada código: en GY el resultado fue "RESTAURANTE" y "BARES" respectivamente; en el hotel combinado, "RESTAURANTE & BARES" para ambos — confirma que el mismo PDF se resuelve de forma distinta y correcta según el hotel. También comprobado con un código no afectado (`00000001`, ECONOMATO) que sigue igual en ambos casos, y que `codigos_sap_no_mapeados` sigue saliendo vacío. `python3 -m py_compile app.py` sin errores.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+
+**Sigue pendiente**: revisar si algún pedido de GY/IT/MT/TA ya dado de alta se quedó con "RESTAURANTE & BARES" mal asignado por este bug antes de esta corrección (esta entrega solo corrige el comportamiento hacia adelante, no hace backfill retroactivo de pedidos ya creados con el departamento equivocado — a confirmar con Víctor si hace falta una pasada de corrección aparte). Pieza 5 (unificar los 5 botones actuales del cruce Pedidos↔Albaranes en un flujo de dos pasos), egress-tracking (pospuesta a petición de Víctor).
+
+**Entrega**: `app.py`, badge de versión en `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `render.yaml`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.33 — 5 septiembre 2026
 
 Añadido el código de departamento SAP 00000700 (ADMINISTRACIÓN) a la lista de equivalencias — Víctor reportó que siempre salía como "sin mapear" pese a aparecer correctamente en el listado

@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-05 — [Control Pedidos] Corregido bug real: el departamento Restaurante/Bares del listado detallado se asignaba mal en los hoteles que los llevan separados (GY, IT, MT, TA) — siempre se asociaba a "RESTAURANTE & BARES" aunque ese departamento combinado no exista para ellos (v12.32.34)
+
+- **Qué pasó**: Víctor subió el listado detallado de GY y vio "00000100 - RESTAURANTE / BODEGA" asociado al departamento "RESTAURANTE & BARES" — pero GY separa Restaurante y Bares (mismo criterio ya usado antes para el desplegable manual del formulario de pedido).
+- **Causa**: `_SAP_DEPARTAMENTO_MAP` es un diccionario fijo código→nombre, sin conocimiento del hotel. Los códigos `00000100` (RESTAURANTE/BODEGA) y `00000301` (BAR SALON) SÍ dependen del hotel: para GY/IT/MT/TA (departamentos separados) debían resolver a "RESTAURANTE"/"BARES" a secas, nunca al combinado.
+- **Cambio en `app.py`**: nueva función `_resolver_departamento_sap(codigo, hotel_codigo)`, que sustituye el acceso directo a `_SAP_DEPARTAMENTO_MAP` en los tres sitios que escriben un departamento a partir de un código SAP (backfill de `_auto_migrate()`, `_actualizar_departamentos_desde_listado_detallado()`, `_pedidos_sap_no_registrados()`) — resuelve `00000100`/`00000301` según si el hotel está en `_HOTELES_RESTAURANTE_BARES_SEPARADOS` (misma lista de 4 hoteles que el JS), el resto de códigos igual que antes.
+- **Verificación**: reprocesado el PDF real de GY (91 páginas, 23 líneas de código 100 + decenas de código 301) contra PostgreSQL 16, aplicado simulando GY (separado) y un hotel combinado con los mismos dos pedidos de prueba: en GY sale "RESTAURANTE"/"BARES", en el combinado sale "RESTAURANTE & BARES" para ambos. `python3 -m py_compile` sin errores.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Sigue pendiente**: por confirmar con Víctor si hace falta una corrección retroactiva de pedidos de GY/IT/MT/TA ya dados de alta con "RESTAURANTE & BARES" mal asignado antes de esta entrega — esta corrección solo aplica hacia adelante. Pieza 5 (unificar botones), egress-tracking (pospuesta a petición de Víctor).
+- **Entrega**: `app.py`, badge de versión en `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-09-05 — [Control Pedidos] Añadido el código de departamento SAP 00000700 (ADMINISTRACIÓN) a la lista de equivalencias — Víctor reportó que siempre salía como "sin mapear" pese a aparecer correctamente en el listado (v12.32.33)
 
 - **Qué pasó**: al subir el listado detallado de 121 páginas de GY, Víctor reportó que el aviso de código sin mapear "00000700" sale siempre, preguntando por qué si en el listado aparece correctamente como "Administración".
