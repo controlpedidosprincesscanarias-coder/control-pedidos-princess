@@ -795,6 +795,33 @@ def _auto_migrate():
                 )
             except Exception as e:
                 log.warning(f"No se pudo añadir la columna pedidos.total_pedido_aproximado: {e}")
+            # ── Proveedor y Almacén leídos del PDF oficial de pedido — v12.32.35
+            # (petición de Víctor, a partir de este mismo PDF de ejemplo:
+            # "también el proveedor se registrara automáticamente y que el
+            # departamento se verifique") ────────────────────────────────────
+            # proveedor_pdf_codigo/proveedor_pdf_nombre: lo que
+            # _parsear_pdf_pedido_oficial() lee de las cajas "PROVEEDOR
+            # <código>" y el nombre justo encima de su CIF — se guardan
+            # SIEMPRE que el PDF los traiga, tanto si el proveedor se ha
+            # podido emparejar con el catálogo (entonces también se rellena
+            # pedidos.proveedor_id, ver upload_adjunto) como si no (entonces
+            # sirven para mostrar un aviso persistente de "proveedor no
+            # reconocido" cada vez que se abra el pedido, no solo justo
+            # después de subir el PDF). departamento_pdf_detectado: el
+            # "Almacén" de la cabecera del PDF, para comparar contra el
+            # Departamento que el usuario tenga seleccionado — ver la
+            # validación nueva en update_pedido() (bloque ENVIADO AL
+            # PROVEEDOR). Los tres son NULL para cualquier pedido creado
+            # antes de este cambio (incluido uno con pedido_doc ya subido) —
+            # no hay backfill retroactivo, a propósito: releer y volver a
+            # parsear todos los PDF ya guardados no se ha pedido y no es
+            # gratis (habría que descargar cada adjunto de Storage/BD).
+            try:
+                cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS proveedor_pdf_codigo TEXT")
+                cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS proveedor_pdf_nombre TEXT")
+                cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS departamento_pdf_detectado TEXT")
+            except Exception as e:
+                log.warning(f"No se pudieron añadir las columnas pedidos.proveedor_pdf_codigo/proveedor_pdf_nombre/departamento_pdf_detectado: {e}")
             # ── Código DALI del proveedor (2026-08-31) ────────────────────────
             # Víctor: "en la ficha de proveedores, necesito junto a la casilla
             # CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos
@@ -16159,7 +16186,13 @@ def create_pedido():
         1 if data.get("comunicado_jefe_dep") else 0,
         1 if data.get("parte_rotura") else 0,
         1 if data.get("parte_ampliacion") else 0,
-        data.get("proveedor_id"), data.get("observaciones"),
+        # (2026-09-06, v12.32.35) proveedor_id tampoco se acepta del
+        # cliente al crear, mismo motivo que pedido_num/total_pedido justo
+        # arriba: ahora es exclusivamente automático, resuelto al subir el
+        # PDF de «Nº Pedido (DALI/SAP)» (ver upload_adjunto/
+        # _resolver_proveedor_pdf_oficial) — y eso requiere un pedido_id
+        # que todavía no existe en este punto.
+        None, data.get("observaciones"),
         familia_id, importe, sujeto_techo,
         data.get("plazo_entrega_dias") or None,
         data.get("fecha_entrega_especifica") or None,
@@ -16275,14 +16308,37 @@ def update_pedido(pid):
     if estado_nuevo == "ENVIADO AL PROVEEDOR" and estado_antes != "ENVIADO AL PROVEEDOR":
         errores_envio = []
 
-        # 0a. Proveedor asignado obligatorio
-        proveedor_id_val = data.get("proveedor_id", pedido_actual.get("proveedor_id"))
+        # 0a. Proveedor asignado obligatorio — (2026-09-06, v12.32.35) ya NO
+        # se lee de `data`: desde este cambio el proveedor es exclusivamente
+        # automático (igual que pedido_num/total_pedido), resuelto al subir
+        # el PDF de «Nº Pedido (DALI/SAP)» — ver upload_adjunto/
+        # _resolver_proveedor_pdf_oficial. Si sigue sin asignarse, el
+        # mensaje distingue dos causas: (a) el PDF todavía no se ha subido
+        # en absoluto, o (b) se subió pero el proveedor que trae no se ha
+        # reconocido en el catálogo (pedido_actual.proveedor_pdf_codigo lo
+        # deja constancia) — en ese caso se muestra el código/nombre leídos
+        # del PDF para que el admin lo busque y, si de verdad no existe, lo
+        # dé de alta él mismo en Admin → Proveedores (nunca se crea solo).
+        proveedor_id_val = pedido_actual.get("proveedor_id")
         hotel_id_val = data.get("hotel_id", pedido_actual.get("hotel_id"))
         if not proveedor_id_val:
-            errores_envio.append(
-                "No se puede pasar a ENVIADO AL PROVEEDOR porque el pedido no tiene proveedor asignado. "
-                "Asigne un proveedor antes de cambiar el estado."
-            )
+            _prov_cod_pdf = pedido_actual.get("proveedor_pdf_codigo")
+            _prov_nom_pdf = pedido_actual.get("proveedor_pdf_nombre")
+            if _prov_cod_pdf:
+                errores_envio.append(
+                    f"No se puede pasar a ENVIADO AL PROVEEDOR: el proveedor leído del PDF oficial "
+                    f"(código SAP {_prov_cod_pdf}"
+                    + (f", «{_prov_nom_pdf}»" if _prov_nom_pdf else "")
+                    + ") no se ha reconocido en el catálogo. Verifique en Admin → Proveedores si ya existe "
+                      "con otro código/nombre y, si no, dé de alta ese proveedor allí — el pedido lo tomará "
+                      "solo en cuanto exista."
+                )
+            else:
+                errores_envio.append(
+                    "No se puede pasar a ENVIADO AL PROVEEDOR porque el pedido no tiene proveedor asignado. "
+                    "El proveedor se asigna automáticamente al adjuntar el PDF del pedido oficial en la "
+                    "sección «Nº Pedido (DALI/SAP)»."
+                )
         else:
             # 0b. El proveedor debe tener al menos un contacto principal con email
             emails_proveedor = _get_proveedor_emails_principales(proveedor_id_val, hotel_id_val)
@@ -16294,6 +16350,30 @@ def update_pedido(pid):
                     f"El proveedor «{prov_nombre}» no tiene ningún correo electrónico configurado en su ficha "
                     f"(contacto principal con email). Acceda a la ficha del proveedor, añada un email al contacto "
                     f"principal y vuelva a cambiar el estado."
+                )
+
+        # 0c. Departamento vs. "Almacén" leído del PDF oficial — (2026-09-06,
+        # v12.32.35) a petición de Víctor: si el PDF trae un Almacén de
+        # cabecera (ver departamento_pdf_detectado), debe coincidir
+        # (normalizado, sin acentos/mayúsculas) con el Departamento que el
+        # usuario tenga seleccionado AHORA para este cambio de estado — si
+        # no coincide, se bloquea hasta corregirlo. Un pedido sin PDF
+        # subido, o cuyo PDF no trajo Almacén, no pasa por esta
+        # comprobación (departamento_pdf_detectado es NULL, nunca se
+        # inventa una comparación).
+        _almacen_pdf_val = pedido_actual.get("departamento_pdf_detectado")
+        if _almacen_pdf_val:
+            _depto_id_val = data.get("departamento_id", pedido_actual.get("departamento_id"))
+            _depto_row = query("SELECT nombre FROM departamentos WHERE id=%s", (_depto_id_val,), one=True) if _depto_id_val else None
+            _depto_nombre_val = _depto_row["nombre"] if _depto_row else None
+            _norm_pdf = _normalizar_texto_generico(_almacen_pdf_val)
+            _norm_dep = _normalizar_texto_generico(_depto_nombre_val or "")
+            _coincide = bool(_norm_dep) and (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
+            if not _coincide:
+                errores_envio.append(
+                    f"El Departamento seleccionado (« {_depto_nombre_val or 'ninguno'} ») no coincide con el "
+                    f"Almacén indicado en el PDF del pedido oficial («{_almacen_pdf_val}»). Corrija el "
+                    f"Departamento antes de pasar a ENVIADO AL PROVEEDOR."
                 )
 
         if errores_envio:
@@ -16515,7 +16595,11 @@ def update_pedido(pid):
         1 if data.get("comunicado_jefe_dep", pedido_actual["comunicado_jefe_dep"]) else 0,
         1 if data.get("parte_rotura",        pedido_actual["parte_rotura"]) else 0,
         1 if data.get("parte_ampliacion",    pedido_actual["parte_ampliacion"]) else 0,
-        data.get("proveedor_id",  pedido_actual["proveedor_id"]),
+        # (2026-09-06, v12.32.35) proveedor_id tampoco se toma de `data`,
+        # mismo motivo que pedido_num/total_pedido más abajo: es
+        # exclusivamente automático desde este cambio, solo cambia vía
+        # upload_adjunto() al leer el PDF de pedido oficial.
+        pedido_actual["proveedor_id"],
         data.get("observaciones", pedido_actual["observaciones"]),
         familia_id, importe, sujeto_techo, _mes_consumo_techo_val,
         data.get("plazo_entrega_dias", pedido_actual.get("plazo_entrega_dias")) or None,
@@ -18178,15 +18262,87 @@ _PATRON_IMPORTE_LINEA_OFICIAL = re.compile(
 _PATRON_FECHA_PEDIDO_OFICIAL = re.compile(r'\bFecha\s+Pedido\s+(\d{2}/\d{2}/\d{4})\b')
 _PATRON_FECHA_ENTREGA_OFICIAL = re.compile(r'\bFecha\s+Entrega\s+(\d{2}/\d{2}/\d{4})\b')
 
+# (2026-09-06, v12.32.35) A petición de Víctor, a partir de este mismo PDF
+# de ejemplo (pedido a PILSA): además de Nº de Pedido/Total/Fechas, se lee
+# también el código de proveedor SAP ("PROVEEDOR 00001045") y el "Almacén"
+# de cabecera ("Almacén ECONOMATO") — confirmado con pypdf.extract_text()
+# sobre el PDF real que el orden de columnas vuelve a salir mezclado (igual
+# problema ya documentado arriba para Nº Pedido/Total): "PROVEEDOR
+# 00001045HOTEL/CENTRO" (el código pegado sin espacio a la etiqueta de la
+# caja vecina) — por eso basta con \d+ para el código, que se para solo en
+# el primer carácter no numérico. "Almacén" sí queda en su propia línea
+# ("Almacén ECONOMATO\nCódigo Descripción...", confirmado con el PDF real),
+# así que un patrón hasta el primer salto de línea es suficiente y no
+# arrastra la cabecera de la tabla siguiente.
+_PATRON_PROVEEDOR_COD_OFICIAL = re.compile(r'\bPROVEEDOR\s+(\d+)')
+_PATRON_ALMACEN_OFICIAL = re.compile(r'\bAlmac[ée]n\s+([^\n]+)')
+# (2026-09-06) El NOMBRE del proveedor es más frágil de extraer que su
+# código: en el texto de pypdf aparece como "NOMBRE\nCIF" (p. ej. "PILSA
+# HOSTELERIA TECNICA SL\nB18283580..."), pero la caja "SOCIEDAD" (la
+# entidad legal fija que emite el pedido, no el proveedor — en el PDF de
+# ejemplo "CANSUR, S.L.") tiene EXACTAMENTE la misma forma "NOMBRE\nCIF" y
+# aparece en el mismo documento. Se distinguen porque, justo después del
+# CIF de la caja SOCIEDAD, el propio PDF imprime la etiqueta "SOCIEDAD" a
+# continuación (confirmado con el PDF real) — la del proveedor no tiene esa
+# etiqueta pegada ahí. Es un heurístico, no una lectura garantizada como el
+# código: si no encuentra un candidato claro, devuelve None y el proveedor
+# queda sin nombre descriptivo (pero el código, que es lo que de verdad se
+# usa para emparejar con el catálogo, no depende de esto).
+_PATRON_NOMBRE_CIF_OFICIAL = re.compile(
+    r'([A-ZÁÉÍÓÚÑÜ][A-ZÁÉÍÓÚÑÜ0-9 .,&\-]{2,80}?)\s*\n\s*([A-Z]\d{7,9})'
+)
+
+def _extraer_proveedor_nombre_pdf_oficial(texto: str):
+    """Ver _PATRON_NOMBRE_CIF_OFICIAL — devuelve el primer nombre candidato
+    cuyo CIF NO esté seguido de la etiqueta "SOCIEDAD", o None si no hay
+    ninguno (el PDF no tiene por qué traer un candidato reconocible)."""
+    for m in _PATRON_NOMBRE_CIF_OFICIAL.finditer(texto):
+        nombre = m.group(1).strip()
+        resto = texto[m.end():m.end() + 20].lstrip()
+        if resto.startswith("SOCIEDAD"):
+            continue
+        return nombre
+    return None
+
+def _resolver_proveedor_pdf_oficial(proveedor_codigo, proveedor_nombre_pdf):
+    """
+    (2026-09-06, v12.32.35) Empareja el proveedor leído del PDF oficial con
+    el catálogo de la app — primero por código SAP exacto
+    (proveedores.codigo, igual de fiable que el propio Nº de Pedido: es un
+    código, no texto libre), y solo si eso falla, por nombre normalizado
+    (reutilizando _normalizar_nombre_proveedor/_match_proveedor_catalogo,
+    ya usados en la comparación de listados SAP) — cubre el caso de un
+    proveedor ya dado de alta en el catálogo sin su código SAP relleno.
+
+    Devuelve la fila completa de `proveedores` (dict) si lo encuentra, o
+    None si no — nunca crea un proveedor nuevo: eso queda para que el
+    admin lo verifique y dé de alta a mano en Admin → Proveedores, a
+    petición explícita de Víctor.
+    """
+    if proveedor_codigo:
+        fila = query("SELECT * FROM proveedores WHERE codigo=%s AND activo=1", (proveedor_codigo,), one=True)
+        if fila:
+            return row_to_dict(fila)
+    if proveedor_nombre_pdf:
+        cat = rows_to_list(query("SELECT * FROM proveedores WHERE activo=1"))
+        cat_por_nombre = {_normalizar_nombre_proveedor(p["nombre"]): p for p in cat}
+        fila = _match_proveedor_catalogo(_normalizar_nombre_proveedor(proveedor_nombre_pdf), cat_por_nombre)
+        if fila:
+            return fila
+    return None
+
 def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
     """
     Lee un PDF de pedido oficial PRINCESS (SAP/DALI) y devuelve
     {"pedido_num": "16287", "total_pedido": 4614.60,
-    "fecha_pedido_iso": "2026-08-21"|None, "fecha_entrega_iso": "2026-09-21"|None}.
+    "fecha_pedido_iso": "2026-08-21"|None, "fecha_entrega_iso": "2026-09-21"|None,
+    "proveedor_codigo": "00001045"|None, "proveedor_nombre_pdf": "PILSA HOSTELERIA TECNICA SL"|None,
+    "almacen_pdf": "ECONOMATO"|None}.
 
-    Las dos fechas son opcionales (ver comentario junto a los patrones de
-    arriba) — el Nº de Pedido y el Total siguen siendo los únicos campos
-    que, si faltan, hacen rechazar el PDF entero.
+    Las fechas, el proveedor y el almacén son todos opcionales (ver
+    comentarios junto a los patrones de arriba) — el Nº de Pedido y el
+    Total siguen siendo los únicos campos que, si faltan, hacen rechazar
+    el PDF entero.
 
     Lanza ValueError con un mensaje pensado para mostrarse tal cual al
     usuario (ver upload_adjunto) si el PDF no se puede leer o no tiene la
@@ -18225,11 +18381,21 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
     fecha_pedido_iso  = _parsear_fecha_es_a_iso(m_fecha_pedido.group(1))  if m_fecha_pedido  else None
     fecha_entrega_iso = _parsear_fecha_es_a_iso(m_fecha_entrega.group(1)) if m_fecha_entrega else None
 
+    m_proveedor_cod = _PATRON_PROVEEDOR_COD_OFICIAL.search(texto)
+    proveedor_codigo = m_proveedor_cod.group(1) if m_proveedor_cod else None
+    proveedor_nombre_pdf = _extraer_proveedor_nombre_pdf_oficial(texto)
+
+    m_almacen = _PATRON_ALMACEN_OFICIAL.search(texto)
+    almacen_pdf = m_almacen.group(1).strip() if m_almacen else None
+
     return {
         "pedido_num": pedido_num,
         "total_pedido": total_pedido,
         "fecha_pedido_iso": fecha_pedido_iso,
         "fecha_entrega_iso": fecha_entrega_iso,
+        "proveedor_codigo": proveedor_codigo,
+        "proveedor_nombre_pdf": proveedor_nombre_pdf,
+        "almacen_pdf": almacen_pdf,
     }
 
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
@@ -18456,13 +18622,54 @@ def upload_adjunto(pid):
         # ver crear_pedidos_desde_sap()/_actualizar_departamentos_desde_
         # listado_detallado), deja de estarlo en cuanto se adjunta su
         # propio PDF oficial.
+        #
+        # (2026-09-06, v12.32.35) A petición de Víctor: el Proveedor pasa a
+        # rellenarse también solo, con el mismo criterio que pedido_num/
+        # total_pedido (ver _resolver_proveedor_pdf_oficial) — si se
+        # encuentra en el catálogo, se asigna proveedor_id; si no, se deja
+        # NULL pero se guardan igualmente el código y nombre leídos del PDF
+        # (proveedor_pdf_codigo/nombre) para poder avisar de forma
+        # persistente, no solo en este momento. departamento_pdf_detectado
+        # guarda el "Almacén" de cabecera, para la validación nueva de
+        # ENVIADO AL PROVEEDOR en update_pedido() (comparación contra el
+        # Departamento que el usuario tenga seleccionado).
+        _prov_codigo_pdf  = _datos_pedido_pdf.get("proveedor_codigo")
+        _prov_nombre_pdf  = _datos_pedido_pdf.get("proveedor_nombre_pdf")
+        _almacen_pdf      = _datos_pedido_pdf.get("almacen_pdf")
+        _prov_resuelto = _resolver_proveedor_pdf_oficial(_prov_codigo_pdf, _prov_nombre_pdf)
         execute(
-            "UPDATE pedidos SET pedido_num=%s, total_pedido=%s, total_pedido_aproximado=FALSE WHERE id=%s",
-            (_datos_pedido_pdf["pedido_num"], _datos_pedido_pdf["total_pedido"], pid)
+            "UPDATE pedidos SET pedido_num=%s, total_pedido=%s, total_pedido_aproximado=FALSE, "
+            "proveedor_id=%s, proveedor_pdf_codigo=%s, proveedor_pdf_nombre=%s, departamento_pdf_detectado=%s "
+            "WHERE id=%s",
+            (_datos_pedido_pdf["pedido_num"], _datos_pedido_pdf["total_pedido"],
+             _prov_resuelto["id"] if _prov_resuelto else None, _prov_codigo_pdf, _prov_nombre_pdf, _almacen_pdf,
+             pid)
         )
         db.commit()
         respuesta["pedido_num"] = _datos_pedido_pdf["pedido_num"]
         respuesta["total_pedido"] = _datos_pedido_pdf["total_pedido"]
+        respuesta["proveedor_id"] = _prov_resuelto["id"] if _prov_resuelto else None
+        respuesta["proveedor_nombre"] = _prov_resuelto["nombre"] if _prov_resuelto else _prov_nombre_pdf
+        respuesta["proveedor_reconocido"] = _prov_resuelto is not None
+        respuesta["proveedor_pdf_codigo"] = _prov_codigo_pdf
+        respuesta["proveedor_pdf_nombre"] = _prov_nombre_pdf
+        respuesta["departamento_pdf"] = _almacen_pdf
+        # Comparación inmediata contra el Departamento que el pedido tenga
+        # seleccionado AHORA MISMO (antes de guardar nada del formulario
+        # todavía abierto) — solo informativa aquí; el bloqueo real de
+        # ENVIADO AL PROVEEDOR está en update_pedido(), comprobado de nuevo
+        # en ese momento contra lo que se vaya a guardar.
+        respuesta["departamento_coincide"] = None
+        if _almacen_pdf:
+            _depto_actual = query(
+                "SELECT d.nombre FROM pedidos p LEFT JOIN departamentos d ON p.departamento_id = d.id WHERE p.id=%s",
+                (pid,), one=True
+            )
+            _depto_actual_nombre = _depto_actual["nombre"] if _depto_actual else None
+            if _depto_actual_nombre:
+                _norm_pdf = _normalizar_texto_generico(_almacen_pdf)
+                _norm_dep = _normalizar_texto_generico(_depto_actual_nombre)
+                respuesta["departamento_coincide"] = (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
         # (2026-08-28) A petición de Víctor: "Fecha Pedido" y "Fecha
         # Entrega" del PDF oficial NO se escriben aquí en la base de datos
         # — a diferencia de pedido_num/total_pedido, «Fecha tramitación» y

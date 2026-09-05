@@ -1,3 +1,32 @@
+# v12.32.35 — 6 septiembre 2026
+
+🏷️📄 Al adjuntar el PDF del pedido oficial, el Proveedor se rellena solo (ya no se busca/selecciona a mano) y se verifica el Departamento contra el "Almacén" del PDF
+
+**Petición de Víctor**, a partir de un PDF real de pedido oficial (pedido a PILSA, hotel Maspalomas Tabaiba): "me gustaría que también el proveedor se registrara automáticamente y que el departamento se verifique el introducido por el usuario, en caso de no ser correcto lanzar un aviso al usuario y no dejar cambiar el estado a ENVIADO AL PROVEEDOR el pedido si no corrige el error. El proveedor si lo dejamos exclusivamente automático como el número de pedido etc. Si el proveedor no es encontrado en el listado de proveedores también se lanza mensaje indicándolo para que se verifique y registre el alta del proveedor en caso necesario, indicar que también será necesario registrar un correo electrónico al proveedor para poder cambiar el estado a enviado".
+
+**Lectura del PDF (`_parsear_pdf_pedido_oficial()`), verificada con `pypdf.extract_text()` sobre el PDF real de ejemplo**: además de Nº Pedido/Total/Fechas (ya existentes), ahora también lee:
+- **Código de proveedor SAP** (caja "PROVEEDOR 00001045") — mismo criterio que el propio Nº de Pedido: el orden de columnas de pypdf vuelve a salir mezclado ("PROVEEDOR 00001045HOTEL/CENTRO", pegado sin espacio a la etiqueta de la caja vecina), así que basta con `\d+`, que se para solo en el primer carácter no numérico.
+- **Nombre del proveedor** (heurístico, best-effort): el texto trae "NOMBRE\nCIF" tanto para el proveedor como para la "SOCIEDAD" (entidad legal fija que emite el pedido — en el ejemplo, "CANSUR, S.L."), con la misma forma exacta — se distinguen porque, justo después del CIF de la SOCIEDAD, el PDF imprime la etiqueta "SOCIEDAD" a continuación; la del proveedor no. Si no encuentra un candidato claro, devuelve `None` — el nombre es solo para mostrar mensajes más claros, el emparejamiento real usa el código.
+- **"Almacén" de cabecera** (p. ej. "ECONOMATO") — quién de los departamentos de la app debería tener seleccionado el pedido.
+
+**Proveedor — exclusivamente automático (`app.py`)**: `_resolver_proveedor_pdf_oficial()` empareja primero por código SAP exacto contra `proveedores.codigo` y, si falla, por nombre normalizado (reutilizando `_normalizar_nombre_proveedor`/`_match_proveedor_catalogo`, ya usados en la comparación de listados SAP) — nunca crea un proveedor nuevo. `create_pedido()`/`update_pedido()` dejan de aceptar `proveedor_id` del cliente — se comporta exactamente igual que Nº Pedido/Total Pedido desde v12.30.42: de solo lectura, solo cambia al subir el PDF en `upload_adjunto()`. Nuevas columnas `pedidos.proveedor_pdf_codigo`/`proveedor_pdf_nombre`: guardan lo leído del PDF SIEMPRE (se reconozca o no), para poder avisar de forma persistente si no se reconoce — no solo justo después de subir el PDF.
+
+**Departamento — verificado, no automático**: nueva columna `pedidos.departamento_pdf_detectado` guarda el "Almacén" leído. Nueva validación en `update_pedido()` (bloque ENVIADO AL PROVEEDOR): si hay un Almacén detectado, se compara (normalizado, sin acentos/mayúsculas) contra el Departamento seleccionado — si no coincide, se bloquea el cambio de estado con un mensaje claro hasta corregirlo. Un pedido sin PDF subido, o cuyo PDF no trajo Almacén, no pasa por esta comprobación.
+
+**Correo del proveedor — ya existía, se mantiene**: la validación "el proveedor debe tener un contacto principal con email" (punto 0b) ya bloqueaba ENVIADO AL PROVEEDOR desde antes de este cambio — sigue igual, y cobra más relevancia ahora: un proveedor recién dado de alta a mano (tras el aviso de "no reconocido") normalmente no tendrá todavía ningún contacto/email, así que esta validación seguirá exigiendo completarlo antes de poder enviar.
+
+**Frontend (`templates/index.html`)**: el campo "Proveedor" pasa a ser de solo lectura (mismo estilo que "Nº Pedido (DALI/SAP)"), se retira el buscador manual (código antiguo `buscarProveedor`/`seleccionarProveedor` queda sin usar, no borrado). Nuevo aviso persistente bajo el campo Proveedor (`_mostrarAvisoProveedorPdf()`) que se muestra tanto justo tras subir el PDF como cada vez que se reabre el pedido, mientras el proveedor siga sin reconocerse o el Departamento sin coincidir — se recalcula solo al cambiar el desplegable de Departamento (`_revisarDepartamentoTrasCambio()`). Réplica en JS de la normalización de texto de Python (`_normalizarTextoGenericoJs`) para comparar Departamento vs. Almacén sin ir al servidor.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores. Los 3 patrones de lectura (código de proveedor, nombre de proveedor, almacén) probados directamente con `pypdf` contra el PDF real adjuntado por Víctor — los tres extraen el valor correcto. `node --check` sobre los bloques `<script>` con los cambios, sin errores nuevos. Balance de `<div>` correcto. No probado en vivo contra producción — a confirmar tras desplegar: subir el PDF de un pedido con un proveedor ya en el catálogo (debe autoasignarse y no mostrar aviso) y con uno que no lo esté (debe mostrar el aviso con código/nombre y bloquear ENVIADO AL PROVEEDOR hasta darlo de alta), y probar con el Departamento mal seleccionado respecto al Almacén del PDF.
+
+**Sin backfill retroactivo**: pedidos creados antes de este cambio (incluidos los que ya tienen su PDF oficial adjuntado) no tienen valor en las 3 columnas nuevas — no se ha vuelto a leer ni reparsear ningún adjunto ya guardado. Si Víctor quiere ese repaso retroactivo, se aborda aparte.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica. `README.md` sí: versión actual y nota en el bullet de "Pedidos".
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `models.py` y `requirements.txt` no cambian (usa `pypdf`, ya en uso).
+
+---
+
 # v12.32.34 — 5 septiembre 2026
 
 Corregido bug real: el departamento de Restaurante/Bares del listado detallado se asignaba mal en los hoteles que los llevan por separado (GY, IT, MT, TA) — se asociaba siempre a "RESTAURANTE & BARES" aunque ese departamento combinado no exista para ellos

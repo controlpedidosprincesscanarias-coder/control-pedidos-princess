@@ -36,6 +36,76 @@
 
 ---
 
+## 2026-09-06 — [Control Pedidos] Al adjuntar el PDF del pedido oficial, el Proveedor se rellena solo y se verifica el Departamento contra el "Almacén" del PDF (v12.32.35)
+
+- **Petición de Víctor**, a partir de un PDF real de pedido oficial
+  (pedido a PILSA, hotel Maspalomas Tabaiba): que el proveedor se
+  registre automáticamente (exclusivamente automático, como el número
+  de pedido) y que el departamento introducido se verifique contra el
+  PDF, avisando y bloqueando ENVIADO AL PROVEEDOR si no coincide. Si el
+  proveedor no se reconoce en el catálogo, avisar para que se
+  verifique/dé de alta, recordando que también hará falta un correo
+  electrónico del proveedor para poder enviar.
+- **Lectura del PDF, verificada con `pypdf.extract_text()` sobre el PDF
+  real de ejemplo**: además de Nº Pedido/Total/Fechas (ya existentes),
+  ahora también el código de proveedor SAP (caja "PROVEEDOR 00001045"
+  — mismo criterio que el propio Nº de Pedido: el texto sale con las
+  columnas mezcladas, pero `\d+` se para solo en el primer carácter no
+  numérico), el nombre del proveedor (heurístico best-effort: se
+  distingue de la "SOCIEDAD" fija que emite el pedido — en el ejemplo
+  "CANSUR, S.L." — porque el CIF de la SOCIEDAD va seguido de esa
+  etiqueta en el texto extraído y el del proveedor no; si no hay un
+  candidato claro, se deja sin nombre, sin afectar al emparejamiento
+  real que usa el código) y el "Almacén" de cabecera (p. ej.
+  "ECONOMATO").
+- **Proveedor — exclusivamente automático**:
+  `_resolver_proveedor_pdf_oficial()` empareja por código SAP exacto
+  y, si falla, por nombre normalizado (reutilizando
+  `_normalizar_nombre_proveedor`/`_match_proveedor_catalogo` ya
+  existentes) — nunca crea un proveedor nuevo.
+  `create_pedido()`/`update_pedido()` dejan de aceptar `proveedor_id`
+  del cliente, igual que Nº Pedido/Total Pedido desde v12.30.42: solo
+  cambia al subir el PDF (`upload_adjunto()`). Nuevas columnas
+  `pedidos.proveedor_pdf_codigo`/`proveedor_pdf_nombre`: guardan lo
+  leído del PDF SIEMPRE (se reconozca o no), para un aviso persistente
+  aunque no se resuelva justo al subir.
+- **Departamento — verificado, no automático**: nueva columna
+  `pedidos.departamento_pdf_detectado` guarda el Almacén leído. Nueva
+  validación en `update_pedido()` (bloque ENVIADO AL PROVEEDOR):
+  compara (normalizado) contra el Departamento seleccionado — si no
+  coincide, bloquea el cambio de estado hasta corregirlo. Sin PDF
+  subido, o sin Almacén detectado, no se compara nada.
+- **Correo del proveedor**: la validación "contacto principal con
+  email obligatorio" ya existía desde antes — se mantiene igual, y
+  cobra más relevancia porque un proveedor recién dado de alta tras el
+  aviso de "no reconocido" normalmente no tendrá aún ningún contacto.
+- **Frontend**: campo "Proveedor" pasa a solo lectura (mismo estilo
+  que "Nº Pedido (DALI/SAP)"), buscador manual retirado (código
+  antiguo no borrado, solo sin usar). Aviso persistente bajo el campo
+  (`_mostrarAvisoProveedorPdf()`), visible tanto tras subir el PDF
+  como al reabrir el pedido mientras el problema siga sin resolver;
+  se recalcula solo al cambiar el Departamento
+  (`_revisarDepartamentoTrasCambio()`). Réplica en JS de la
+  normalización de texto de Python para comparar sin ir al servidor.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Los 3
+  patrones probados directamente con `pypdf` contra el PDF real
+  adjuntado por Víctor — los tres extraen el valor correcto.
+  `node --check` sin errores nuevos en los bloques modificados.
+  Balance de `<div>` correcto. No probado en vivo contra producción —
+  a confirmar tras desplegar con un proveedor ya en catálogo, uno que
+  no lo esté, y un Departamento mal seleccionado respecto al PDF.
+- **Sin backfill retroactivo**: pedidos ya existentes (incluidos los
+  que ya tienen su PDF oficial adjuntado) no tienen valor en las 3
+  columnas nuevas — no se ha reparseado ningún adjunto ya guardado.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+  `README.md` sí: versión actual y nota en el bullet de "Pedidos".
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este
+  historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no
+  cambian (usa `pypdf`, ya en uso).
+
+---
+
 ## 2026-09-05 — [Control Pedidos] Corregido bug real: el departamento Restaurante/Bares del listado detallado se asignaba mal en los hoteles que los llevan separados (GY, IT, MT, TA) — siempre se asociaba a "RESTAURANTE & BARES" aunque ese departamento combinado no exista para ellos (v12.32.34)
 
 - **Qué pasó**: Víctor subió el listado detallado de GY y vio "00000100 - RESTAURANTE / BODEGA" asociado al departamento "RESTAURANTE & BARES" — pero GY separa Restaurante y Bares (mismo criterio ya usado antes para el desplegable manual del formulario de pedido).

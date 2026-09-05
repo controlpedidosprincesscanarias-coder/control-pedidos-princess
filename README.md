@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.34** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.35** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -75,7 +75,14 @@ confundirse entre sí, ver más abajo):
   por hotel y proveedor. El apartado "Presupuesto" admite un único
   documento de apoyo (PDF, Word o correo) — desde v12.32.08, intentar
   adjuntar un segundo muestra un aviso flotante explicando que hay que
-  quitar el actual primero.
+  quitar el actual primero. El Proveedor ya no se busca/selecciona a
+  mano — desde v12.32.35 se lee y asigna solo al adjuntar el PDF del
+  pedido oficial en «Nº Pedido (DALI/SAP)» (igual que Nº Pedido/Total
+  Pedido); si no se reconoce en el catálogo, avisa con el código/nombre
+  leídos para verificarlo/darlo de alta en Admin → Proveedores. El
+  Departamento seleccionado se verifica contra el "Almacén" de ese
+  mismo PDF — si no coincide, avisa y bloquea el paso a ENVIADO AL
+  PROVEEDOR hasta corregirlo.
 - **Alertas** — avisos de plazos de entrega vencidos o próximos a vencer.
 
 **Gestión** (admin + compras, y Proveedores también hotel)

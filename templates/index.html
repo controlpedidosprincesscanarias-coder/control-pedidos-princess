@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.34
+          V 12.32.35
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2338,7 +2338,7 @@ tbody tr:last-child{border-bottom:none}
         </div>
         <div class="form-group">
           <label class="form-label">Departamento *</label>
-          <select class="form-control" id="p-depto" required></select>
+          <select class="form-control" id="p-depto" required onchange="_revisarDepartamentoTrasCambio()"></select>
         </div>
 
         <!-- Fechas -->
@@ -2498,12 +2498,17 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-section">Proveedor</div>
         <div class="form-group full">
           <label class="form-label">Proveedor</label>
-          <div style="position:relative">
-            <input class="form-control" id="p-proveedor-input" placeholder="Escribir para buscar proveedor…"
-                   autocomplete="off" oninput="buscarProveedor(this.value)" onfocus="buscarProveedor(this.value)">
-            <input type="hidden" id="p-proveedor">
-            <div id="prov-dropdown" style="display:none;position:absolute;top:calc(100% + 4px);left:0;right:0;z-index:99999;background:#fff;border:1.5px solid #c7d2fe;border-radius:10px;box-shadow:0 8px 32px rgba(0,0,0,.18),0 2px 8px rgba(99,102,241,.08);max-height:240px;overflow-y:auto;padding:4px 0"></div>
-          </div>
+          <!-- (2026-09-06, v12.32.35) A petición de Víctor: el proveedor deja
+               de buscarse/seleccionarse a mano — se rellena solo al adjuntar
+               el PDF de «Nº Pedido (DALI/SAP)», igual que Nº Pedido/Total
+               Pedido (ver subirAdjuntos/_procesarProveedorPdfPedidoOficial).
+               El buscador antiguo (buscarProveedor/seleccionarProveedor,
+               templates/index.html más abajo) queda sin usar aquí, no se ha
+               borrado por si se recupera en algún caso especial. -->
+          <input class="form-control" id="p-proveedor-input" placeholder="Se rellena al adjuntar el PDF de «Nº Pedido (DALI/SAP)»"
+                 readonly style="background:#f5f5f5;color:#555">
+          <input type="hidden" id="p-proveedor">
+          <div id="p-proveedor-aviso" style="display:none;margin-top:6px;padding:8px 10px;border-radius:6px;font-size:12.5px;line-height:1.4"></div>
         </div>
 
         <!-- Comunicaciones -->
@@ -5200,6 +5205,18 @@ async function openPedidoModal(id=null) {
     document.getElementById('p-proveedor').value = p.proveedor_id || '';
     document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
     document.getElementById('p-proveedor').dataset.email = p.proveedor_email || '';
+    // (2026-09-06, v12.32.35) Aviso persistente si el proveedor leído del
+    // PDF oficial no se reconoció en el catálogo, o si el Departamento
+    // seleccionado no coincide con el Almacén del PDF — no solo justo
+    // después de subir el PDF (ver _mostrarAvisoProveedorPdf), sino cada
+    // vez que se reabra el pedido, mientras el problema siga sin resolver.
+    _mostrarAvisoProveedorPdf({
+      proveedor_reconocido: p.proveedor_id ? true : (p.proveedor_pdf_codigo ? false : null),
+      proveedor_pdf_codigo: p.proveedor_pdf_codigo,
+      proveedor_pdf_nombre: p.proveedor_pdf_nombre,
+      departamento_pdf: p.departamento_pdf_detectado,
+      departamento_nombre_actual: p.departamento_nombre,
+    });
     setVal('p-observaciones', p.observaciones);
     document.getElementById('p-ab').checked       = !!p.comunicado_ab;
     document.getElementById('p-jefe').checked     = !!p.comunicado_jefe_dep;
@@ -5494,6 +5511,30 @@ async function subirAdjuntos(input, tipo) {
           document.getElementById('p-total-pedido-aprox-badge').hidden = true;  // el PDF oficial siempre es el importe real
           toast(`PDF leído — Nº Pedido ${data.pedido_num}, Total ${Number(data.total_pedido).toFixed(2)} €`, 'success');
           _procesarFechasPdfPedidoOficial(data);
+          // (2026-09-06, v12.32.35) A petición de Víctor: el proveedor
+          // también se lee y asigna solo del mismo PDF (ver
+          // _resolver_proveedor_pdf_oficial en app.py) — se refleja aquí
+          // igual que Nº Pedido/Total, y si no se reconoce en el catálogo
+          // o el Departamento no coincide con el Almacén del PDF, se avisa
+          // de inmediato (además de quedar bloqueado más tarde al intentar
+          // pasar a ENVIADO AL PROVEEDOR, ver update_pedido en app.py).
+          document.getElementById('p-proveedor').value = data.proveedor_id || '';
+          document.getElementById('p-proveedor-input').value = data.proveedor_nombre || '';
+          _mostrarAvisoProveedorPdf({
+            proveedor_reconocido: data.proveedor_reconocido,
+            proveedor_pdf_codigo: data.proveedor_pdf_codigo,
+            proveedor_pdf_nombre: data.proveedor_pdf_nombre,
+            departamento_pdf: data.departamento_pdf,
+            departamento_nombre_actual: (function(){
+              const sel = document.getElementById('p-depto');
+              return (sel && sel.selectedOptions.length) ? sel.selectedOptions[0].textContent.trim() : '';
+            })(),
+          });
+          if (data.proveedor_reconocido) {
+            toast(`Proveedor reconocido — ${data.proveedor_nombre}`, 'success');
+          } else if (data.proveedor_pdf_codigo) {
+            toast(`Proveedor con código SAP ${data.proveedor_pdf_codigo} no reconocido — verifíquelo en Admin → Proveedores`, 'error');
+          }
         }
       } else {
         toast(`Error subiendo "${archivo.name}": ${data.error}`, 'error');
@@ -5511,6 +5552,73 @@ async function subirAdjuntos(input, tipo) {
     // el Nº de Pedido y el Total leídos) — evita duplicar aviso aquí.
     if (tipo !== 'pedido_doc') toast(`${subidos} archivo${subidos>1?'s':''} subido${subidos>1?'s':''}`, 'success');
     cargarAdjuntos(pedidoId);
+  }
+}
+
+// (2026-09-06, v12.32.35) Normaliza texto para comparar Departamento vs.
+// "Almacén" del PDF — réplica en JS de _normalizar_texto_generico() en
+// app.py (mayúsculas, sin acentos, espacios colapsados). Se mantienen las
+// dos copias sincronizadas a mano: no hay forma de compartir código entre
+// Python y este archivo.
+function _normalizarTextoGenericoJs(s) {
+  if (!s) return '';
+  return s.toUpperCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+// (2026-09-06, v12.32.35) Aviso de "Proveedor" — a petición de Víctor, el
+// proveedor pasa a rellenarse solo al leer el PDF oficial (ver
+// _resolver_proveedor_pdf_oficial en app.py), así que este banner cubre
+// los dos casos en los que hace falta que un humano actúe:
+//  - proveedor_reconocido === false: el PDF traía un proveedor que no está
+//    en el catálogo — hay que verificarlo/darlo de alta en Admin →
+//    Proveedores (nunca se crea solo).
+//  - departamento_coincide === false: el Departamento seleccionado no
+//    coincide con el Almacén del PDF — hay que corregir uno de los dos.
+// null/true en cualquiera de los dos casos no muestra nada. Se llama tanto
+// justo después de subir el PDF (subirAdjuntos) como cada vez que se abre
+// un pedido ya existente (poblarFormulario más arriba) — el problema
+// persiste hasta que alguien lo resuelva, no solo en el momento de subir.
+function _mostrarAvisoProveedorPdf(info) {
+  // Se guarda para poder recalcular solo la parte de Departamento cuando
+  // el usuario cambie el desplegable (ver _revisarDepartamentoTrasCambio),
+  // sin perder el resto del aviso (proveedor no reconocido, si lo hay).
+  G.avisoProveedorInfo = info;
+  const cont = document.getElementById('p-proveedor-aviso');
+  if (!cont) return;
+  const avisos = [];
+  if (info.proveedor_reconocido === false) {
+    avisos.push(
+      `⚠️ Proveedor con código SAP <b>${esc(info.proveedor_pdf_codigo || '?')}</b>`
+      + (info.proveedor_pdf_nombre ? ` («${esc(info.proveedor_pdf_nombre)}»)` : '')
+      + ` no reconocido en el catálogo. Verifique si ya existe con otro código/nombre y, si no, `
+      + `dé de alta el proveedor en <b>Admin → Proveedores</b> — el pedido lo tomará solo en cuanto exista.`
+    );
+  }
+  // departamento_coincide se calcula aquí mismo (nunca lo pasa el caller) —
+  // así solo hay un sitio donde se compara Departamento vs. Almacén del
+  // PDF en JS, tanto si se llama justo tras subir el PDF como al reabrir
+  // un pedido ya existente (poblarFormulario).
+  if (info.departamento_pdf) {
+    const normPdf = _normalizarTextoGenericoJs(info.departamento_pdf);
+    const normDep = _normalizarTextoGenericoJs(info.departamento_nombre_actual || '');
+    const coincide = !!normDep && (normPdf === normDep || normPdf.includes(normDep) || normDep.includes(normPdf));
+    if (!coincide) {
+      avisos.push(
+        `⚠️ El Departamento seleccionado («${esc(info.departamento_nombre_actual || 'ninguno')}») no coincide `
+        + `con el Almacén indicado en el PDF del pedido oficial («${esc(info.departamento_pdf)}»). `
+        + `Corríjalo antes de pasar a ENVIADO AL PROVEEDOR.`
+      );
+    }
+  }
+  if (avisos.length) {
+    cont.innerHTML = avisos.map(a => `<div style="margin-bottom:4px">${a}</div>`).join('');
+    cont.style.display = '';
+    cont.style.background = '#fff3cd';
+    cont.style.border = '1px solid #ffc107';
+    cont.style.color = '#7a5b00';
+  } else {
+    cont.style.display = 'none';
+    cont.innerHTML = '';
   }
 }
 
@@ -5537,6 +5645,19 @@ async function subirAdjuntos(input, tipo) {
 // que si el usuario los hubiera escrito a mano — no se escriben en la
 // base de datos hasta pulsar "Guardar" (a diferencia de Nº Pedido/Total,
 // que sí se guardan al momento por ser de solo lectura).
+// (2026-09-06, v12.32.35) Recalcula solo el aviso de Departamento vs.
+// Almacén del PDF cuando el usuario cambia el desplegable de Departamento
+// — reutiliza G.avisoProveedorInfo (guardado por _mostrarAvisoProveedorPdf
+// la última vez que se pintó, ya sea al abrir el pedido o al subir el
+// PDF) para no perder el aviso de "proveedor no reconocido" si también
+// estaba activo.
+function _revisarDepartamentoTrasCambio() {
+  if (!G.avisoProveedorInfo) return;
+  const sel = document.getElementById('p-depto');
+  const nombreActual = (sel && sel.selectedOptions.length) ? sel.selectedOptions[0].textContent.trim() : '';
+  _mostrarAvisoProveedorPdf({ ...G.avisoProveedorInfo, departamento_nombre_actual: nombreActual });
+}
+
 function _procesarFechasPdfPedidoOficial(data) {
   const fechaPedidoPdf  = data.fecha_pedido_iso  || null;
   const fechaEntregaPdf = data.fecha_entrega_iso || null;
@@ -6053,7 +6174,14 @@ function clearPedidoForm() {
   document.getElementById('p-proveedor').value = '';
   document.getElementById('p-proveedor').dataset.email = '';
   document.getElementById('p-proveedor-input').value = '';
-  document.getElementById('prov-dropdown').style.display = 'none';
+  // (2026-09-06, v12.32.35) prov-dropdown ya no existe (proveedor pasó a
+  // ser de solo lectura, ver formulario más arriba) — se quita esta línea
+  // en vez de dejarla apuntando a un elemento inexistente. Se limpia
+  // también el aviso de proveedor/departamento del pedido anterior, para
+  // que un "Nuevo pedido" no arrastre el aviso de la última ficha abierta.
+  G.avisoProveedorInfo = null;
+  const _contAvisoProv = document.getElementById('p-proveedor-aviso');
+  if (_contAvisoProv) { _contAvisoProv.style.display = 'none'; _contAvisoProv.innerHTML = ''; }
   ['p-ab','p-jefe','p-rotura','p-ampliacion'].forEach(id=>document.getElementById(id).checked=false);
   // (2026-09-03) Resetear "Techo de gastos" — a petición de Víctor, que
   // reportó que al cerrar un pedido con el techo activado y abrir uno
@@ -6196,16 +6324,28 @@ async function savePedido() {
   const _cambiandoAEnviado   = _estadoNuevoValidar === 'ENVIADO AL PROVEEDOR'
                                 && _estadoAnteriorBD !== 'ENVIADO AL PROVEEDOR';
   if (_cambiandoAEnviado) {
-    // 0a. Comprobar que hay proveedor asignado
+    // 0a. Comprobar que hay proveedor asignado — (2026-09-06, v12.32.35)
+    // el proveedor ya no se asigna a mano: se lee solo del PDF de «Nº
+    // Pedido (DALI/SAP)» (ver subirAdjuntos/pedido_doc). El mensaje
+    // distingue si el PDF no se ha subido en absoluto o si se subió pero
+    // su proveedor no se reconoció en el catálogo (G.currentPedidoData lo
+    // conserva desde la última carga/subida, ver poblarFormulario y
+    // subirAdjuntos).
     const _proveedorId    = document.getElementById('p-proveedor').value;
     const _proveedorNombre = document.getElementById('p-proveedor-input').value.trim();
     const _proveedorEmail  = document.getElementById('p-proveedor').dataset.email || '';
     if (!_proveedorId) {
+      const _codPdf = G.currentPedidoData && G.currentPedidoData.proveedor_pdf_codigo;
+      const _nomPdf = G.currentPedidoData && G.currentPedidoData.proveedor_pdf_nombre;
       showFormAlert(
-        'No se puede pasar a ENVIADO AL PROVEEDOR. El pedido no tiene proveedor asignado. Asigne un proveedor antes de cambiar el estado.',
+        _codPdf
+          ? `No se puede pasar a ENVIADO AL PROVEEDOR: el proveedor leído del PDF oficial (código SAP ${_codPdf}`
+            + (_nomPdf ? `, «${_nomPdf}»` : '') + `) no se ha reconocido en el catálogo. Verifique si ya existe `
+            + `con otro código/nombre y, si no, dé de alta ese proveedor en Admin → Proveedores.`
+          : 'No se puede pasar a ENVIADO AL PROVEEDOR. El proveedor se asigna automáticamente al adjuntar el '
+            + 'PDF del pedido oficial en la sección «Nº Pedido (DALI/SAP)».',
         { title: '⚠️ No se puede continuar', duracion: 8000 }
       );
-      document.getElementById('p-proveedor-input').focus();
       return;
     }
     // 0b. Comprobar que el proveedor tiene email en su ficha (contacto principal)
@@ -6215,6 +6355,26 @@ async function savePedido() {
         { title: '⚠️ No se puede continuar', duracion: 10000 }
       );
       return;
+    }
+    // 0c. Departamento vs. "Almacén" del PDF oficial — (2026-09-06,
+    // v12.32.35) comprobación en el frontend por comodidad (respuesta
+    // inmediata); el backend vuelve a comprobarlo igual y es el que de
+    // verdad lo impide (ver update_pedido en app.py).
+    const _almacenPdf = G.currentPedidoData && G.currentPedidoData.departamento_pdf_detectado;
+    if (_almacenPdf) {
+      const _deptoSel = document.getElementById('p-depto');
+      const _deptoNombreActual = (_deptoSel && _deptoSel.selectedOptions.length) ? _deptoSel.selectedOptions[0].textContent.trim() : '';
+      const _normPdf = _normalizarTextoGenericoJs(_almacenPdf);
+      const _normDep = _normalizarTextoGenericoJs(_deptoNombreActual);
+      const _coincideDepto = !!_normDep && (_normPdf === _normDep || _normPdf.includes(_normDep) || _normDep.includes(_normPdf));
+      if (!_coincideDepto) {
+        showFormAlert(
+          `El Departamento seleccionado («${_deptoNombreActual || 'ninguno'}») no coincide con el Almacén `
+          + `indicado en el PDF del pedido oficial («${_almacenPdf}»). Corrija el Departamento antes de continuar.`,
+          { title: '⚠️ No se puede continuar', duracion: 9000 }
+        );
+        return;
+      }
     }
     // (2026-08-28) Nº Pedido y Total Pedido ya no se escriben a mano: solo
     // llegan a tener valor si se ha adjuntado y leído el PDF del pedido
