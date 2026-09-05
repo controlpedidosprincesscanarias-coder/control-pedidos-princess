@@ -822,6 +822,24 @@ def _auto_migrate():
                 cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS departamento_pdf_detectado TEXT")
             except Exception as e:
                 log.warning(f"No se pudieron añadir las columnas pedidos.proveedor_pdf_codigo/proveedor_pdf_nombre/departamento_pdf_detectado: {e}")
+            # ── HOTEL/CENTRO leído del PDF oficial — v12.32.38 (petición de
+            # Víctor: "¿se verifica que el hotel es el correcto contra el PDF
+            # subido? También evitaría registrar un pedido a un hotel
+            # incorrecto") ──────────────────────────────────────────────────
+            # hotel_pdf_detectado: el nombre completo de HOTEL/CENTRO leído de
+            # la cabecera del PDF (ver _extraer_hotel_nombre_pdf_oficial), para
+            # comparar contra el Hotel que el usuario tenga seleccionado en el
+            # pedido — mismo criterio que departamento_pdf_detectado con el
+            # Almacén (ver validación en update_pedido, bloque ENVIADO AL
+            # PROVEEDOR). NULL para cualquier pedido creado antes de este
+            # cambio (incluido uno con pedido_doc ya subido) — no hay backfill
+            # retroactivo, igual que el resto de columnas *_pdf_* de más
+            # arriba: releer y volver a parsear todos los PDF ya guardados no
+            # se ha pedido y no es gratis.
+            try:
+                cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS hotel_pdf_detectado TEXT")
+            except Exception as e:
+                log.warning(f"No se pudo añadir la columna pedidos.hotel_pdf_detectado: {e}")
             # ── Código DALI del proveedor (2026-08-31) ────────────────────────
             # Víctor: "en la ficha de proveedores, necesito junto a la casilla
             # CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos
@@ -10365,6 +10383,28 @@ def _normalizar_texto_generico(s: str) -> str:
     s = re.sub(r'\s+', ' ', s).strip()
     return s
 
+def _normalizar_nombre_hotel(s: str) -> str:
+    """
+    (2026-09-06, v12.32.38) Normaliza el nombre de un HOTEL/CENTRO para
+    emparejar el leído del PDF oficial ("Hotel Maspalomas Tabaiba
+    Princess") con el nombre guardado en el catálogo de hoteles de la app
+    ("Maspalomas & Tabaiba Princess", ver models.py) — parte de
+    _normalizar_texto_generico (mayúsculas, sin acentos, espacios
+    colapsados) y además quita la palabra "HOTEL" al principio (el PDF
+    la antepone siempre en la caja HOTEL/CENTRO; el catálogo nunca la
+    lleva) y el símbolo "&" (pypdf lo pierde al extraer el texto de esa
+    caja — confirmado con el PDF real de ejemplo: la caja imprime
+    "Hotel Maspalomas Tabaiba\nPrincess", sin el "&" que sí lleva el
+    nombre del catálogo).
+    """
+    if not s:
+        return ""
+    norm = _normalizar_texto_generico(s)
+    norm = re.sub(r'^HOTEL\s+', '', norm)
+    norm = norm.replace('&', ' ')
+    norm = re.sub(r'\s+', ' ', norm).strip()
+    return norm
+
 def _match_departamento_prefijo(blob: str, deptos_norm: list):
     """
     (2026-08-15) En el listado de albaranes de DALI, el nombre del
@@ -16410,6 +16450,32 @@ def update_pedido(pid):
                     f"Departamento antes de pasar a ENVIADO AL PROVEEDOR."
                 )
 
+        # 0d. Hotel vs. "HOTEL/CENTRO" leído del PDF oficial — (2026-09-06,
+        # v12.32.38) a petición de Víctor: "¿se verifica que el hotel es el
+        # correcto contra el PDF subido? También evitaría registrar un
+        # pedido a un hotel incorrecto". Mismo criterio que el punto 0c con
+        # Departamento/Almacén: si el PDF trae un HOTEL/CENTRO de cabecera
+        # (ver hotel_pdf_detectado), debe coincidir (normalizado, sin
+        # acentos/mayúsculas/palabra "HOTEL"/símbolo "&" — ver
+        # _normalizar_nombre_hotel) con el Hotel que el usuario tenga
+        # seleccionado AHORA para este cambio de estado — si no coincide, se
+        # bloquea hasta corregirlo. Un pedido sin PDF subido, o cuyo PDF no
+        # trajo HOTEL/CENTRO reconocible, no pasa por esta comprobación
+        # (hotel_pdf_detectado es NULL, nunca se inventa una comparación).
+        _hotel_pdf_val = pedido_actual.get("hotel_pdf_detectado")
+        if _hotel_pdf_val:
+            _hotel_row_val = query("SELECT nombre FROM hoteles WHERE id=%s", (hotel_id_val,), one=True) if hotel_id_val else None
+            _hotel_nombre_val = _hotel_row_val["nombre"] if _hotel_row_val else None
+            _norm_hpdf = _normalizar_nombre_hotel(_hotel_pdf_val)
+            _norm_hact = _normalizar_nombre_hotel(_hotel_nombre_val or "")
+            _coincide_hotel = bool(_norm_hact) and (_norm_hpdf == _norm_hact or _norm_hpdf in _norm_hact or _norm_hact in _norm_hpdf)
+            if not _coincide_hotel:
+                errores_envio.append(
+                    f"El Hotel seleccionado (« {_hotel_nombre_val or 'ninguno'} ») no coincide con el "
+                    f"HOTEL/CENTRO indicado en el PDF del pedido oficial («{_hotel_pdf_val}»). Corrija el "
+                    f"Hotel antes de pasar a ENVIADO AL PROVEEDOR."
+                )
+
         if errores_envio:
             return jsonify({"ok": False, "error": " | ".join(errores_envio), "errores": errores_envio}), 422
 
@@ -18346,6 +18412,50 @@ _PATRON_NOMBRE_CIF_OFICIAL = re.compile(
     r'([A-ZÁÉÍÓÚÑÜ][A-ZÁÉÍÓÚÑÜ0-9 .,&\-]{2,80}?)\s*\n\s*([A-Z]\d{7,9})'
 )
 
+# (2026-09-06, v12.32.38) A petición de Víctor, a partir del mismo PDF de
+# ejemplo (pedido a PILSA, hotel Maspalomas Tabaiba): "¿se verifica que el
+# hotel es el correcto contra el PDF subido? También evitaría registrar un
+# pedido a un hotel incorrecto" — el nombre completo del HOTEL/CENTRO
+# destinatario, comprobado con pypdf.extract_text() sobre el PDF real,
+# aparece SIEMPRE justo ANTES de la línea "PEDIDO <núm>" (a diferencia del
+# Almacén y las Fechas, que van DESPUÉS): "...ventas@pilsa.com\nHotel
+# Maspalomas Tabaiba \nPrincess\nPEDIDO 00029875\n..." — el nombre ocupa 1
+# o 2 líneas de texto según lo largo que sea (aquí se parte en dos: "Hotel
+# Maspalomas Tabaiba" / "Princess"), y justo antes de esas líneas viene
+# contenido que no es el nombre del hotel (aquí, el email del proveedor).
+# _PATRON_HOTEL_NOMBRE_LINEA valida que una línea "parezca" texto de
+# nombre (letras/números/espacios/puntuación básica, sin "@") — se toman
+# hasta 2 líneas válidas consecutivas inmediatamente anteriores a "PEDIDO"
+# y se concatenan en ese orden, cubriendo tanto un nombre que cabe en una
+# sola línea como uno partido en dos.
+_PATRON_HOTEL_NOMBRE_LINEA = re.compile(r'^[A-Za-zÁÉÍÓÚÑÜáéíóúñü0-9&.,\'\-]+(?:\s[A-Za-zÁÉÍÓÚÑÜáéíóúñü0-9&.,\'\-]+)*$')
+
+def _extraer_hotel_nombre_pdf_oficial(texto: str):
+    """
+    Ver comentario junto a _PATRON_HOTEL_NOMBRE_LINEA — devuelve el nombre
+    de HOTEL/CENTRO leído justo antes de "PEDIDO <núm>", o None si no hay
+    ningún candidato razonable (heurístico, igual que
+    _extraer_proveedor_nombre_pdf_oficial: nunca bloquea el resto del
+    parseo si no lo encuentra).
+    """
+    m_pedido = _PATRON_PEDIDO_NUM_OFICIAL.search(texto)
+    if not m_pedido:
+        return None
+    previo = texto[:m_pedido.start()]
+    lineas = [l.strip() for l in previo.split("\n")]
+    while lineas and not lineas[-1]:
+        lineas.pop()
+    candidatas = []
+    while lineas and len(candidatas) < 2:
+        linea = lineas[-1]
+        if not linea or "@" in linea or not _PATRON_HOTEL_NOMBRE_LINEA.match(linea):
+            break
+        candidatas.insert(0, linea)
+        lineas.pop()
+    if not candidatas:
+        return None
+    return " ".join(candidatas).strip()
+
 def _extraer_proveedor_nombre_pdf_oficial(texto: str):
     """Ver _PATRON_NOMBRE_CIF_OFICIAL — devuelve el primer nombre candidato
     cuyo CIF NO esté seguido de la etiqueta "SOCIEDAD", o None si no hay
@@ -18391,12 +18501,13 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
     {"pedido_num": "16287", "total_pedido": 4614.60,
     "fecha_pedido_iso": "2026-08-21"|None, "fecha_entrega_iso": "2026-09-21"|None,
     "proveedor_codigo": "00001045"|None, "proveedor_nombre_pdf": "PILSA HOSTELERIA TECNICA SL"|None,
-    "almacen_pdf": "ECONOMATO"|None}.
+    "almacen_pdf": "ECONOMATO"|None,
+    "hotel_nombre_pdf": "Hotel Maspalomas Tabaiba Princess"|None}.
 
-    Las fechas, el proveedor y el almacén son todos opcionales (ver
-    comentarios junto a los patrones de arriba) — el Nº de Pedido y el
-    Total siguen siendo los únicos campos que, si faltan, hacen rechazar
-    el PDF entero.
+    Las fechas, el proveedor, el almacén y el hotel son todos opcionales
+    (ver comentarios junto a los patrones de arriba) — el Nº de Pedido y
+    el Total siguen siendo los únicos campos que, si faltan, hacen
+    rechazar el PDF entero.
 
     Lanza ValueError con un mensaje pensado para mostrarse tal cual al
     usuario (ver upload_adjunto) si el PDF no se puede leer o no tiene la
@@ -18442,6 +18553,8 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
     m_almacen = _PATRON_ALMACEN_OFICIAL.search(texto)
     almacen_pdf = m_almacen.group(1).strip() if m_almacen else None
 
+    hotel_nombre_pdf = _extraer_hotel_nombre_pdf_oficial(texto)
+
     return {
         "pedido_num": pedido_num,
         "total_pedido": total_pedido,
@@ -18450,6 +18563,7 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
         "proveedor_codigo": proveedor_codigo,
         "proveedor_nombre_pdf": proveedor_nombre_pdf,
         "almacen_pdf": almacen_pdf,
+        "hotel_nombre_pdf": hotel_nombre_pdf,
     }
 
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
@@ -18713,14 +18827,16 @@ def upload_adjunto(pid):
         _prov_codigo_pdf  = _datos_pedido_pdf.get("proveedor_codigo")
         _prov_nombre_pdf  = _datos_pedido_pdf.get("proveedor_nombre_pdf")
         _almacen_pdf      = _datos_pedido_pdf.get("almacen_pdf")
+        _hotel_nombre_pdf = _datos_pedido_pdf.get("hotel_nombre_pdf")
         _prov_resuelto = _resolver_proveedor_pdf_oficial(_prov_codigo_pdf, _prov_nombre_pdf)
         execute(
             "UPDATE pedidos SET pedido_num=%s, total_pedido=%s, total_pedido_aproximado=FALSE, "
-            "proveedor_id=%s, proveedor_pdf_codigo=%s, proveedor_pdf_nombre=%s, departamento_pdf_detectado=%s "
+            "proveedor_id=%s, proveedor_pdf_codigo=%s, proveedor_pdf_nombre=%s, departamento_pdf_detectado=%s, "
+            "hotel_pdf_detectado=%s "
             "WHERE id=%s",
             (_datos_pedido_pdf["pedido_num"], _datos_pedido_pdf["total_pedido"],
              _prov_resuelto["id"] if _prov_resuelto else None, _prov_codigo_pdf, _prov_nombre_pdf, _almacen_pdf,
-             pid)
+             _hotel_nombre_pdf, pid)
         )
         db.commit()
         respuesta["pedido_num"] = _datos_pedido_pdf["pedido_num"]
@@ -18747,6 +18863,27 @@ def upload_adjunto(pid):
                 _norm_pdf = _normalizar_texto_generico(_almacen_pdf)
                 _norm_dep = _normalizar_texto_generico(_depto_actual_nombre)
                 respuesta["departamento_coincide"] = (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
+        # (2026-09-06, v12.32.38) Misma comparación inmediata, pero de Hotel
+        # vs. HOTEL/CENTRO leído del PDF — a petición de Víctor: "¿se
+        # verifica que el hotel es el correcto contra el PDF subido? También
+        # evitaría registrar un pedido a un hotel incorrecto". Solo
+        # informativa aquí (contra el hotel_id que el pedido tiene AHORA
+        # MISMO en BD, no el que el formulario todavía sin guardar pueda
+        # tener seleccionado); el bloqueo real de ENVIADO AL PROVEEDOR está
+        # en update_pedido(), comprobado de nuevo contra lo que se vaya a
+        # guardar — igual que departamento_coincide arriba.
+        respuesta["hotel_pdf"] = _hotel_nombre_pdf
+        respuesta["hotel_coincide"] = None
+        if _hotel_nombre_pdf:
+            _hotel_actual = query(
+                "SELECT h.nombre FROM pedidos p LEFT JOIN hoteles h ON p.hotel_id = h.id WHERE p.id=%s",
+                (pid,), one=True
+            )
+            _hotel_actual_nombre = _hotel_actual["nombre"] if _hotel_actual else None
+            if _hotel_actual_nombre:
+                _norm_hpdf = _normalizar_nombre_hotel(_hotel_nombre_pdf)
+                _norm_hact = _normalizar_nombre_hotel(_hotel_actual_nombre)
+                respuesta["hotel_coincide"] = (_norm_hpdf == _norm_hact or _norm_hpdf in _norm_hact or _norm_hact in _norm_hpdf)
         # (2026-08-28) A petición de Víctor: "Fecha Pedido" y "Fecha
         # Entrega" del PDF oficial NO se escriben aquí en la base de datos
         # — a diferencia de pedido_num/total_pedido, «Fecha tramitación» y

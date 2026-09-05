@@ -36,6 +36,89 @@
 
 ---
 
+## 2026-09-06 — [Control Pedidos] El Hotel seleccionado se verifica contra el "HOTEL/CENTRO" del PDF del pedido oficial (v12.32.38)
+
+- **Petición de Víctor**, tras la entrega de v12.32.35 (verificación de
+  Departamento vs. Almacén): "¿otra duda, se verifica que el hotel es el
+  correcto contra el PDF subido? También evitaría registrar un pedido a
+  un hotel incorrecto" — se confirmó que el Hotel del pedido nunca se
+  contrastaba con nada del PDF, se quedaba tal cual el usuario lo elegía
+  al crear el pedido, aunque subiera el PDF de un pedido de otro hotel.
+  A partir del mismo PDF de ejemplo (pedido a PILSA, hotel Maspalomas
+  Tabaiba), Víctor confirmó: "en el pedido pone el nombre completo del
+  hotel, el PDF adjunto por ejemplo corresponde a MT MASPALOMAS &
+  TABAIBA PRINCESS".
+- **Lectura del PDF, verificada con `pypdf.extract_text()` sobre el PDF
+  real de ejemplo**: nueva función `_extraer_hotel_nombre_pdf_oficial()`
+  — a diferencia del Almacén y las Fechas (que van DESPUÉS de "PEDIDO
+  «núm»" en el texto extraído), el nombre completo de HOTEL/CENTRO
+  aparece SIEMPRE justo ANTES (`"...ventas@pilsa.com\nHotel Maspalomas
+  Tabaiba \nPrincess\nPEDIDO 00029875\n..."`). Se toman hasta las 2
+  líneas de texto inmediatamente anteriores a "PEDIDO «núm»" que
+  parezcan un nombre (letras/números/espacios/puntuación básica, sin
+  "@") y se concatenan — cubre tanto un nombre en una sola línea como
+  uno partido en dos ("Hotel Maspalomas Tabaiba" / "Princess" en el
+  ejemplo). Heurístico best-effort (mismo criterio que el nombre del
+  proveedor, v12.32.35): si no hay candidato claro, devuelve `None` sin
+  bloquear el resto del parseo.
+- **Emparejamiento con el catálogo (`_normalizar_nombre_hotel()`)**: el
+  PDF imprime "Hotel Maspalomas Tabaiba Princess" (con "Hotel" delante y
+  sin el "&", que pypdf pierde al extraer esa caja) frente a
+  "Maspalomas & Tabaiba Princess" en `hoteles.nombre` — la normalización
+  añade, sobre `_normalizar_texto_generico` ya existente, quitar la
+  palabra "HOTEL" al principio y el símbolo "&". Probado directamente
+  contra el PDF real: coincide con el hotel correcto (MT) y NO coincide
+  con un hotel distinto de prueba.
+- **Nueva columna `pedidos.hotel_pdf_detectado`**: guarda el nombre
+  leído del PDF, igual que `departamento_pdf_detectado` guarda el
+  Almacén — se rellena al subir el PDF en «Nº Pedido (DALI/SAP)»
+  (`upload_adjunto()`), coincida o no con el hotel actual.
+- **Bloqueo real en `update_pedido()`** (nuevo punto 0d del bloque de
+  validación ENVIADO AL PROVEEDOR, justo después del 0c de
+  Departamento/Almacén): si hay un HOTEL/CENTRO detectado en el PDF, se
+  compara (normalizado) contra el Hotel seleccionado AHORA para este
+  cambio de estado — si no coincide, se bloquea con un mensaje claro
+  hasta corregirlo. Un pedido sin PDF subido, o cuyo PDF no trajo un
+  HOTEL/CENTRO reconocible, no pasa por esta comprobación.
+- **Aviso inmediato y persistente**: `upload_adjunto()` devuelve
+  `hotel_pdf`/`hotel_coincide` (comparación informativa contra el hotel
+  ya guardado en ese momento) y `_mostrarAvisoProveedorPdf()` en
+  `templates/index.html` pinta el mismo banner amarillo bajo el campo
+  Proveedor si el Hotel no coincide — tanto justo tras subir el PDF como
+  cada vez que se reabre el pedido. Nueva `_revisarHotelTrasCambio()`
+  (mismo patrón que `_revisarDepartamentoTrasCambio()`) recalcula el
+  aviso al cambiar el desplegable de Hotel. Réplica en JS de la
+  normalización (`_normalizarNombreHotelJs`). Bloqueo espejo en el
+  frontend antes de enviar el cambio de estado — el backend vuelve a
+  comprobarlo igual y es el que de verdad lo impide.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Patrón
+  de extracción y normalización probados directamente con `pypdf`
+  contra el PDF real adjuntado por Víctor — extrae "Hotel Maspalomas
+  Tabaiba Princess" y coincide correctamente con "Maspalomas & Tabaiba
+  Princess" del catálogo, sin falsos positivos contra otro hotel. Los 8
+  bloques `<script>` de `templates/index.html` verificados uno a uno con
+  `node --check` (la comprobación del archivo completo de un tirón da
+  un falso error ya presente en la versión original, por dos apariciones
+  de la palabra "&lt;script&gt;" dentro de comentarios CSS, no de
+  código). Balance de `<div>` correcto (975/975). No probado en vivo
+  contra producción — a confirmar tras desplegar: adjuntar en un pedido
+  dado de alta con el hotel INCORRECTO el PDF oficial de otro hotel
+  (debe avisar y bloquear ENVIADO AL PROVEEDOR hasta corregir el Hotel)
+  y con el hotel correcto (no debe avisar).
+- **Sin backfill retroactivo**: pedidos creados antes de este cambio
+  (incluidos los que ya tienen su PDF oficial adjuntado) no tienen valor
+  en `hotel_pdf_detectado` — no se ha vuelto a leer ni reparsear ningún
+  adjunto ya guardado, mismo criterio que el resto de columnas
+  `*_pdf_*` desde v12.32.35.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`,
+  `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí:
+  versión actual y nota en el bullet de "Pedidos".
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este
+  historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-06 — [Control Pedidos] Control de duplicidades del Nº de Pedido dentro del mismo hotel (v12.32.36)
 
 - **Petición de Víctor**: al registrar/tramitar un pedido, ¿se

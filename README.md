@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.36** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.38** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -85,7 +85,11 @@ confundirse entre sí, ver más abajo):
   PROVEEDOR hasta corregirlo. Control de duplicados (v12.32.36): el Nº
   de Pedido leído del PDF no puede coincidir con el de otro pedido ya
   registrado en el mismo hotel — se rechaza al adjuntar el PDF, con una
-  segunda comprobación de seguridad al pasar a ENVIADO AL PROVEEDOR.
+  segunda comprobación de seguridad al pasar a ENVIADO AL PROVEEDOR. El
+  Hotel seleccionado se verifica también (v12.32.38) contra el
+  "HOTEL/CENTRO" de cabecera de ese mismo PDF — si no coincide, avisa y
+  bloquea igualmente el paso a ENVIADO AL PROVEEDOR hasta corregirlo
+  (evita registrar y tramitar un pedido en el hotel equivocado).
 - **Alertas** — avisos de plazos de entrega vencidos o próximos a vencer.
 
 **Gestión** (admin + compras, y Proveedores también hotel)

@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.36
+          V 12.32.38
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2334,7 +2334,7 @@ tbody tr:last-child{border-bottom:none}
         <!-- Hotel + Departamento -->
         <div class="form-group">
           <label class="form-label">Hotel *</label>
-          <select class="form-control" id="p-hotel" required onchange="poblarSelectDeptos()"></select>
+          <select class="form-control" id="p-hotel" required onchange="poblarSelectDeptos(); _revisarHotelTrasCambio();"></select>
         </div>
         <div class="form-group">
           <label class="form-label">Departamento *</label>
@@ -5206,16 +5206,20 @@ async function openPedidoModal(id=null) {
     document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
     document.getElementById('p-proveedor').dataset.email = p.proveedor_email || '';
     // (2026-09-06, v12.32.35) Aviso persistente si el proveedor leído del
-    // PDF oficial no se reconoció en el catálogo, o si el Departamento
-    // seleccionado no coincide con el Almacén del PDF — no solo justo
-    // después de subir el PDF (ver _mostrarAvisoProveedorPdf), sino cada
-    // vez que se reabra el pedido, mientras el problema siga sin resolver.
+    // PDF oficial no se reconoció en el catálogo, si el Departamento
+    // seleccionado no coincide con el Almacén del PDF, o (2026-09-06,
+    // v12.32.38) si el Hotel seleccionado no coincide con el HOTEL/CENTRO
+    // del PDF — no solo justo después de subir el PDF (ver
+    // _mostrarAvisoProveedorPdf), sino cada vez que se reabra el pedido,
+    // mientras el problema siga sin resolver.
     _mostrarAvisoProveedorPdf({
       proveedor_reconocido: p.proveedor_id ? true : (p.proveedor_pdf_codigo ? false : null),
       proveedor_pdf_codigo: p.proveedor_pdf_codigo,
       proveedor_pdf_nombre: p.proveedor_pdf_nombre,
       departamento_pdf: p.departamento_pdf_detectado,
       departamento_nombre_actual: p.departamento_nombre,
+      hotel_pdf: p.hotel_pdf_detectado,
+      hotel_nombre_actual: p.hotel_nombre,
     });
     setVal('p-observaciones', p.observaciones);
     document.getElementById('p-ab').checked       = !!p.comunicado_ab;
@@ -5529,11 +5533,22 @@ async function subirAdjuntos(input, tipo) {
               const sel = document.getElementById('p-depto');
               return (sel && sel.selectedOptions.length) ? sel.selectedOptions[0].textContent.trim() : '';
             })(),
+            hotel_pdf: data.hotel_pdf,
+            hotel_nombre_actual: _nombreHotelPorId(document.getElementById('p-hotel').value),
           });
           if (data.proveedor_reconocido) {
             toast(`Proveedor reconocido — ${data.proveedor_nombre}`, 'success');
           } else if (data.proveedor_pdf_codigo) {
             toast(`Proveedor con código SAP ${data.proveedor_pdf_codigo} no reconocido — verifíquelo en Admin → Proveedores`, 'error');
+          }
+          // (2026-09-06, v12.32.38) Aviso inmediato si el HOTEL/CENTRO leído
+          // del PDF no coincide con el Hotel ya seleccionado en el pedido —
+          // a petición de Víctor, para detectar cuanto antes un pedido dado
+          // de alta en el hotel equivocado (el bloqueo real de ENVIADO AL
+          // PROVEEDOR está en update_pedido/app.py; esto es solo el aviso
+          // en el momento de subir el PDF, ver también _mostrarAvisoProveedorPdf).
+          if (data.hotel_pdf && data.hotel_coincide === false) {
+            toast(`⚠️ El HOTEL/CENTRO del PDF («${data.hotel_pdf}») no coincide con el Hotel seleccionado`, 'error');
           }
         }
       } else {
@@ -5565,23 +5580,40 @@ function _normalizarTextoGenericoJs(s) {
   return s.toUpperCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// (2026-09-06, v12.32.38) Normaliza el nombre de un Hotel para comparar
+// contra el HOTEL/CENTRO leído del PDF — réplica en JS de
+// _normalizar_nombre_hotel() en app.py: parte de
+// _normalizarTextoGenericoJs y además quita la palabra "HOTEL" al
+// principio (el PDF la antepone siempre; el catálogo nunca la lleva) y el
+// símbolo "&" (el PDF lo pierde al extraer el texto de esa caja).
+function _normalizarNombreHotelJs(s) {
+  if (!s) return '';
+  let norm = _normalizarTextoGenericoJs(s);
+  norm = norm.replace(/^HOTEL\s+/, '').replace(/&/g, ' ').replace(/\s+/g, ' ').trim();
+  return norm;
+}
+
 // (2026-09-06, v12.32.35) Aviso de "Proveedor" — a petición de Víctor, el
 // proveedor pasa a rellenarse solo al leer el PDF oficial (ver
 // _resolver_proveedor_pdf_oficial en app.py), así que este banner cubre
-// los dos casos en los que hace falta que un humano actúe:
+// los casos en los que hace falta que un humano actúe:
 //  - proveedor_reconocido === false: el PDF traía un proveedor que no está
 //    en el catálogo — hay que verificarlo/darlo de alta en Admin →
 //    Proveedores (nunca se crea solo).
 //  - departamento_coincide === false: el Departamento seleccionado no
 //    coincide con el Almacén del PDF — hay que corregir uno de los dos.
-// null/true en cualquiera de los dos casos no muestra nada. Se llama tanto
+//  - (2026-09-06, v12.32.38) hotel_pdf presente y no coincide con el Hotel
+//    seleccionado — hay que corregir uno de los dos (mismo criterio que
+//    Departamento/Almacén; ver petición de Víctor en update_pedido/app.py).
+// null/true en cualquiera de los casos no muestra nada. Se llama tanto
 // justo después de subir el PDF (subirAdjuntos) como cada vez que se abre
 // un pedido ya existente (poblarFormulario más arriba) — el problema
 // persiste hasta que alguien lo resuelva, no solo en el momento de subir.
 function _mostrarAvisoProveedorPdf(info) {
-  // Se guarda para poder recalcular solo la parte de Departamento cuando
-  // el usuario cambie el desplegable (ver _revisarDepartamentoTrasCambio),
-  // sin perder el resto del aviso (proveedor no reconocido, si lo hay).
+  // Se guarda para poder recalcular solo la parte de Departamento/Hotel
+  // cuando el usuario cambie el desplegable correspondiente (ver
+  // _revisarDepartamentoTrasCambio/_revisarHotelTrasCambio), sin perder el
+  // resto del aviso (proveedor no reconocido, si lo hay).
   G.avisoProveedorInfo = info;
   const cont = document.getElementById('p-proveedor-aviso');
   if (!cont) return;
@@ -5606,6 +5638,21 @@ function _mostrarAvisoProveedorPdf(info) {
       avisos.push(
         `⚠️ El Departamento seleccionado («${esc(info.departamento_nombre_actual || 'ninguno')}») no coincide `
         + `con el Almacén indicado en el PDF del pedido oficial («${esc(info.departamento_pdf)}»). `
+        + `Corríjalo antes de pasar a ENVIADO AL PROVEEDOR.`
+      );
+    }
+  }
+  // (2026-09-06, v12.32.38) hotel_coincide se calcula aquí mismo, igual que
+  // departamento_coincide justo arriba — un único sitio donde se compara
+  // Hotel vs. HOTEL/CENTRO del PDF en JS.
+  if (info.hotel_pdf) {
+    const normHPdf = _normalizarNombreHotelJs(info.hotel_pdf);
+    const normHAct = _normalizarNombreHotelJs(info.hotel_nombre_actual || '');
+    const coincideHotel = !!normHAct && (normHPdf === normHAct || normHPdf.includes(normHAct) || normHAct.includes(normHPdf));
+    if (!coincideHotel) {
+      avisos.push(
+        `⚠️ El Hotel seleccionado («${esc(info.hotel_nombre_actual || 'ninguno')}») no coincide con el `
+        + `HOTEL/CENTRO indicado en el PDF del pedido oficial («${esc(info.hotel_pdf)}»). `
         + `Corríjalo antes de pasar a ENVIADO AL PROVEEDOR.`
       );
     }
@@ -5649,13 +5696,29 @@ function _mostrarAvisoProveedorPdf(info) {
 // Almacén del PDF cuando el usuario cambia el desplegable de Departamento
 // — reutiliza G.avisoProveedorInfo (guardado por _mostrarAvisoProveedorPdf
 // la última vez que se pintó, ya sea al abrir el pedido o al subir el
-// PDF) para no perder el aviso de "proveedor no reconocido" si también
-// estaba activo.
+// PDF) para no perder el resto del aviso (proveedor no reconocido, Hotel
+// no coincidente) si también estaba activo.
 function _revisarDepartamentoTrasCambio() {
   if (!G.avisoProveedorInfo) return;
   const sel = document.getElementById('p-depto');
   const nombreActual = (sel && sel.selectedOptions.length) ? sel.selectedOptions[0].textContent.trim() : '';
   _mostrarAvisoProveedorPdf({ ...G.avisoProveedorInfo, departamento_nombre_actual: nombreActual });
+}
+
+// (2026-09-06, v12.32.38) Misma idea que _revisarDepartamentoTrasCambio,
+// pero para el desplegable de Hotel — recalcula solo el aviso de Hotel vs.
+// HOTEL/CENTRO del PDF cuando el usuario cambia de hotel, sin perder el
+// resto del aviso. El texto de la opción de "p-hotel" es "CODIGO – Nombre"
+// (ver poblarSelectHoteles), así que se busca el nombre real en
+// G.maestros.hoteles en vez de usar el texto de la opción tal cual.
+function _nombreHotelPorId(hotelId) {
+  const h = (G.maestros.hoteles || []).find(x => String(x.id) === String(hotelId));
+  return h ? h.nombre : '';
+}
+function _revisarHotelTrasCambio() {
+  if (!G.avisoProveedorInfo) return;
+  const hotelId = document.getElementById('p-hotel').value;
+  _mostrarAvisoProveedorPdf({ ...G.avisoProveedorInfo, hotel_nombre_actual: _nombreHotelPorId(hotelId) });
 }
 
 function _procesarFechasPdfPedidoOficial(data) {
@@ -6371,6 +6434,27 @@ async function savePedido() {
         showFormAlert(
           `El Departamento seleccionado («${_deptoNombreActual || 'ninguno'}») no coincide con el Almacén `
           + `indicado en el PDF del pedido oficial («${_almacenPdf}»). Corrija el Departamento antes de continuar.`,
+          { title: '⚠️ No se puede continuar', duracion: 9000 }
+        );
+        return;
+      }
+    }
+    // 0d. Hotel vs. "HOTEL/CENTRO" del PDF oficial — (2026-09-06,
+    // v12.32.38) a petición de Víctor: "¿se verifica que el hotel es el
+    // correcto contra el PDF subido? También evitaría registrar un pedido
+    // a un hotel incorrecto". Comprobación en el frontend por comodidad
+    // (respuesta inmediata); el backend vuelve a comprobarlo igual y es el
+    // que de verdad lo impide (ver update_pedido en app.py, bloque 0d).
+    const _hotelPdf = G.currentPedidoData && G.currentPedidoData.hotel_pdf_detectado;
+    if (_hotelPdf) {
+      const _hotelNombreActual = _nombreHotelPorId(document.getElementById('p-hotel').value);
+      const _normHPdf = _normalizarNombreHotelJs(_hotelPdf);
+      const _normHAct = _normalizarNombreHotelJs(_hotelNombreActual);
+      const _coincideHotel = !!_normHAct && (_normHPdf === _normHAct || _normHPdf.includes(_normHAct) || _normHAct.includes(_normHPdf));
+      if (!_coincideHotel) {
+        showFormAlert(
+          `El Hotel seleccionado («${_hotelNombreActual || 'ninguno'}») no coincide con el HOTEL/CENTRO `
+          + `indicado en el PDF del pedido oficial («${_hotelPdf}»). Corrija el Hotel antes de continuar.`,
           { title: '⚠️ No se puede continuar', duracion: 9000 }
         );
         return;
