@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-05 — [Control Pedidos] Añadido el código de departamento SAP 00000700 (ADMINISTRACIÓN) a la lista de equivalencias — Víctor reportó que siempre salía como "sin mapear" pese a aparecer correctamente en el listado (v12.32.33)
+
+- **Qué pasó**: al subir el listado detallado de 121 páginas de GY, Víctor reportó que el aviso de código sin mapear "00000700" sale siempre, preguntando por qué si en el listado aparece correctamente como "Administración".
+- **Causa**: no era un fallo, era comportamiento esperado — `_SAP_DEPARTAMENTO_MAP` es una lista de equivalencias mantenida a mano A PROPÓSITO (nunca inventa una correspondencia para un código que no reconoce) y el código `00000700` nunca se había añadido. Comprobado en el PDF real de Víctor: aparece 3 veces como "00000700 - ADMINISTRACION".
+- **Cambio en `app.py`**: añadida `"00000700": "ADMINISTRACION"` a `_SAP_DEPARTAMENTO_MAP` — nombre confirmado con Víctor (AskUserQuestion) exactamente como está en Admin → Departamentos (sin tilde), porque la comparación con el catálogo es de texto exacto.
+- **Verificación**: reprocesado el PDF real de 121 páginas (238 pedidos) contra PostgreSQL 16 — `codigos_sap_no_mapeados` pasa de `["00000700"]` a `[]`. `python3 -m py_compile` sin errores.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Sigue pendiente**: Pieza 5 (unificar botones), egress-tracking (pospuesta a petición de Víctor). Si aparece un código de departamento SAP nuevo en el futuro, seguirá avisando — es el comportamiento deseado.
+- **Entrega**: `app.py` (una línea de datos), badge de versión en `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`.
+
+---
+
 ## 2026-09-05 — [Control Pedidos] Pieza 4 del rediseño "solo con los dos detallados": revisión en bloque de entregas pendientes cruzando Pedidos↔Albaranes detallado, con tabla de auditoría para marcar y aplicar — nunca cambia el estado sola (v12.32.32)
 
 - **Contexto**: continuación de Pieza 3 (v12.32.31), Víctor confirmó seguir. Pregunta de diseño planteada antes de construir nada (AskUserQuestion): el cruce que necesita esta pieza para prescindir del RESUMIDO solo puede hacerse por proveedor+artículo (el Listado de Albaranes nunca trae el número de pedido) — señal más débil que proveedor+importe exacto (la que ya usa "Comparar listado + Albaranes"). Víctor eligió la opción segura: "Solo sugerir, nunca cambiar estado solo".

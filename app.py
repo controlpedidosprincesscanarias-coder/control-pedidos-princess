@@ -205,6 +205,16 @@ _SAP_DEPARTAMENTO_MAP = {
     "00000015": "COCINA",               # COCINA PERSONAL
     "00000100": "RESTAURANTE & BARES",  # RESTAURANTE / BODEGA (Food Market)
     "00000301": "BARES",                # BAR SALON (Discoteca, Princess)
+    # (2026-09-05, v12.32.33) Confirmado con Víctor tras avisar el listado
+    # de 121 páginas (GY 121) que este código SIEMPRE salía como "sin
+    # mapear" pese a aparecer en el PDF como "00000700 - ADMINISTRACION"
+    # (comprobado: 3 líneas reales, artículos "SILLA OFICINA", "GASTOS
+    # MONTAJE/INSTALACION", "FOLIO DIN A4") — no era un fallo, es que el
+    # código nunca se había añadido aquí (esta lista es manual a
+    # propósito, ver comentario de cabecera). Nombre EXACTO confirmado
+    # por Víctor tal cual está en Admin → Departamentos: "ADMINISTRACION"
+    # (sin tilde).
+    "00000700": "ADMINISTRACION",
     "00000701": "RECEPCION",
     "00000702": "LAVANDERIA / LENCERIA",
     "00000706": "PISOS",

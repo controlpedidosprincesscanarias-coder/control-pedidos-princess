@@ -1,3 +1,23 @@
+# v12.32.33 — 5 septiembre 2026
+
+Añadido el código de departamento SAP 00000700 (ADMINISTRACIÓN) a la lista de equivalencias — Víctor reportó que siempre salía como "sin mapear" pese a aparecer correctamente en el listado
+
+**Qué pasó**: al subir el listado detallado de 121 páginas de GY (pedido 121), Víctor reportó que el aviso "Código(s) de departamento de SAP sin mapear a un departamento de la app: 00000700" sale siempre, y preguntó por qué, si en el listado aparece correctamente como "Administración".
+
+**Causa**: no era un fallo — `_SAP_DEPARTAMENTO_MAP` (app.py, cabecera del archivo) es una lista de equivalencias código-SAP → nombre-de-departamento-de-la-app **mantenida a mano a propósito** (ver su comentario: "un código de SAP que no aparezca aquí ... simplemente no rellena departamento_id — nunca se inventa una correspondencia"), y el código `00000700` nunca se había añadido — por eso avisaba en cada subida, sin excepción, desde que existe este cruce (v12.32.16). Comprobado directamente en el PDF que subió Víctor: aparece 3 veces, siempre como "00000700 - ADMINISTRACION" (artículos "SILLA OFICINA CON RUEDAS", "GASTOS MONTAJE / INSTALACION", "FOLIO DIN A4"), confirmando que su lectura del listado era correcta.
+
+**Cambio en `app.py`**: añadida la entrada `"00000700": "ADMINISTRACION"` a `_SAP_DEPARTAMENTO_MAP` — nombre confirmado con Víctor (AskUserQuestion) tal cual está en Admin → Departamentos de la app, sin tilde, porque la comparación con el catálogo es de texto exacto (`dep_id_por_nombre = {d["nombre"]: d["id"] for d in deptos_cat}`) y una tilde de más lo habría dejado sin mapear igual, en silencio.
+
+**Verificación**: reprocesado contra un PostgreSQL 16 real el mismo PDF de 121 páginas que subió Víctor (238 pedidos, 2115 líneas): antes de este cambio, `codigos_sap_no_mapeados` contenía `["00000700"]`; después, sale `[]` — vacío, sin ningún código sin mapear en todo el listado. `python3 -m py_compile app.py` sin errores.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+
+**Sigue pendiente**: Pieza 5 del rediseño (unificar los 5 botones actuales del cruce Pedidos↔Albaranes en un flujo de dos pasos). Sigue pendiente también, por separado y sin tocar hoy, la corrección del hueco de egress-tracking en los 4 jobs de subida de PDF (pospuesta a petición explícita de Víctor). Si aparece algún código de departamento SAP nuevo en el futuro, seguirá avisando igual — es el comportamiento deseado, para que nunca se invente un departamento sin confirmar antes con Víctor.
+
+**Entrega**: solo `app.py` (una línea de datos añadida) y el badge de versión en `templates/index.html`, más `README.md` y este changelog/`docs/HISTORIAL_CAMBIOS.md`. `render.yaml`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.32 — 5 septiembre 2026
 
 Pieza 4 del rediseño "solo con los dos detallados": revisión en bloque de entregas pendientes cruzando Pedidos↔Albaranes detallado, con tabla de auditoría para marcar y aplicar — nunca cambia el estado sola
