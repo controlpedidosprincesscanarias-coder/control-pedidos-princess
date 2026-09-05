@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.40** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.41** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -106,7 +106,11 @@ confundirse entre sí, ver más abajo):
     entregado) comparando importe del pedido vs. importe recibido. De
     paso, sin pedir confirmación (no cambia estado ni dispara avisos):
     rellena `Total Pedido`, la base imponible de la última entrada ya
-    registrada, y la fecha de tramitación si estaba vacía. Los
+    registrada, y la fecha de tramitación si estaba vacía — **excepto**
+    (v12.32.41) si el pedido ya tiene su propio PDF oficial adjuntado en
+    «Nº Pedido (DALI/SAP)»: ese documento es la verdad absoluta del Total
+    Pedido y este listado deja de sobrescribirlo, avisando en su lugar si
+    la cifra no coincide, para revisión manual. Los
     proveedores marcados como "no sujetos a seguimiento" (ficha de
     Proveedores — pensado para alimentación/bebida) quedan excluidos
     del todo. Desde v12.32.10, este listado se guarda por hotel al

@@ -36,6 +36,48 @@
 
 ---
 
+## 2026-09-06 — [Control Pedidos] El PDF oficial propio del pedido pasa a ser la única "verdad absoluta" del Total Pedido (v12.32.41)
+
+- **Petición de Víctor**: "la idea es que si el valor del pedido está
+  leído directamente del PDF entonces es verdad absoluta" — al aclarar a
+  cuál de los dos PDF se refería (el Listado de Pedidos RESUMIDO de SAP,
+  que compara todos los pedidos de un hotel de golpe, o el PDF oficial
+  propio de cada pedido en «Nº Pedido DALI/SAP»), confirmó que es este
+  segundo: "del PDF del pedido que se carga en cada pedido desde donde se
+  leen todos los valores para poder ENVIAR AL PROVEEDOR".
+- **Hallazgo**: `_comparar_listado_pdf_logica()` trataba el importe del
+  Listado RESUMIDO con el mismo privilegio que el PDF propio del pedido
+  — si el `total_pedido` ya guardado no coincidía con la cifra del
+  listado, se sobrescribía en silencio, sin comparar la fuente ni avisar.
+  Esto permitía que el Total Pedido fijado por el PDF propio (la verdad
+  absoluta real) se pisara solo al comparar después el Listado RESUMIDO,
+  si las dos cifras no coincidían.
+- **Corrección**: nueva comprobación `_pedidos_con_pdf_propio` en
+  `_comparar_listado_pdf_logica()` (`app.py`) — si el pedido ya tiene su
+  propio PDF oficial adjuntado (`pedido_adjuntos.tipo='pedido_doc'`), su
+  `total_pedido` deja de sobrescribirse desde este listado; si la cifra
+  difiere, se añade a la nueva `discrepancias_total_pedido_pdf_propio`
+  (en la respuesta) para revisión manual, sin tocar nada. Un pedido SIN
+  PDF propio sigue tomando el importe del listado igual que siempre.
+- **Frontend** (`templates/index.html`): pill de resumen "⚠️ N
+  discrepancia(s) Total Pedido vs. PDF propio (no tocado)" y, en la tabla
+  de resultados, ⚠️ con tooltip en la celda del importe del listado de
+  cada pedido afectado, mostrando el Total Pedido real (el conservado).
+- **Verificación**: `python3 -m py_compile app.py` sin errores nuevos.
+  Los 8 bloques `<script>` reales verificados uno a uno con
+  `node --check`, balance de `<div>` correcto (975/975). Revisados a mano
+  los cuatro casos (con/sin PDF propio × con/sin discrepancia). No
+  probado en vivo contra producción.
+- **Revisión de otros documentos**: `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`,
+  `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md`:
+  versión actual y bullet de "Comparar Pedidos + Albaranes (SAP)"
+  actualizados.
+- **Entrega**: `app.py`, `templates/index.html`, más este historial /
+  `CHANGELOG.md` / `README.md`.
+
+---
+
 ## 2026-09-06 — [Control Pedidos] Verificación de Hotel vs. PDF (v12.32.38) contra los 10 hoteles reales — 1 falso aviso corregido (v12.32.40)
 
 - **Petición de Víctor**: tras entregar v12.32.38, adjuntó el PDF de

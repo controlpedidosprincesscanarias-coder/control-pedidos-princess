@@ -1,3 +1,25 @@
+# v12.32.41 — 6 septiembre 2026
+
+🔒📄 El PDF oficial propio del pedido pasa a ser la única "verdad absoluta" del Total Pedido — el Listado de Pedidos RESUMIDO de SAP ya no lo pisa
+
+**Petición de Víctor**, en la misma conversación sobre verificación Hotel/Total Pedido: "la idea es que si el valor del pedido está leído directamente del PDF entonces es verdad absoluta" — y, al preguntarle a cuál de los dos PDF se refería (el "Listado de Pedidos" RESUMIDO de SAP que compara todos los pedidos de un hotel de golpe, o el PDF oficial propio de cada pedido, el que se adjunta en «Nº Pedido (DALI/SAP)» y habilita ENVIADO AL PROVEEDOR), confirmó que es este segundo: **"del PDF del pedido que se carga en cada pedido desde donde se leen todos los valores para poder ENVIAR AL PROVEEDOR"**.
+
+**Hallazgo**: hasta ahora, `_comparar_listado_pdf_logica()` (el Listado de Pedidos RESUMIDO) trataba su propio importe con el mismo privilegio que el PDF propio del pedido — si el `total_pedido` ya guardado (viniera de donde viniera, incluido el PDF propio ya adjuntado) no coincidía con la cifra del listado, se sobrescribía en silencio, sin comparar ni avisar. Esto significa que, hasta esta versión, era posible: 1) subir el PDF oficial de un pedido (fija su Total Pedido = verdad absoluta), y 2) al comparar después el Listado RESUMIDO de SAP para ese mismo hotel, que esa cifra se pisara sola con el importe del listado — aunque las dos no coincidieran y la del PDF propio fuera la que de verdad manda.
+
+**Corrección en `_comparar_listado_pdf_logica()` (`app.py`)**: nueva comprobación `_pedidos_con_pdf_propio` — antes de decidir si el importe del listado se escribe en `pedidos.total_pedido`, se consulta si ese pedido ya tiene su propio PDF oficial adjuntado (`pedido_adjuntos.tipo='pedido_doc'`):
+- **Si NO lo tiene**: comportamiento sin cambios — el importe del listado se guarda como hasta ahora (sigue siendo el mejor dato disponible para un pedido que aún no tiene su PDF propio).
+- **Si SÍ lo tiene**: ya NO se sobrescribe, aunque la cifra difiera. Si de verdad difiere, se añade a la nueva lista `discrepancias_total_pedido_pdf_propio` (en la respuesta de la comparación) para que quede constancia y se revise a mano — nunca se pisa en silencio.
+
+**Frontend (`templates/index.html`)**: nuevo pill de resumen "⚠️ N discrepancia(s) Total Pedido vs. PDF propio (no tocado)" en rojo (solo aparece si hay alguna), y en la tabla de resultados, la celda del importe del listado de cada pedido afectado lleva un ⚠️ con tooltip indicando el Total Pedido real (el del PDF propio, que es el que se ha conservado) — para que quede claro en pantalla que ese pedido no se ha tocado, en vez de dar a entender que se ha actualizado como el resto.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores nuevos. Los 8 bloques `<script>` reales verificados uno a uno con `node --check`, balance de `<div>` correcto (975/975). Revisada a mano la lógica contra los tres casos: pedido sin PDF propio y sin discrepancia (comportamiento sin cambios), pedido sin PDF propio (toma el importe del listado igual que siempre), pedido con PDF propio y sin discrepancia (no se toca, sin aviso), y pedido con PDF propio y con discrepancia (no se toca, se avisa). No probado en vivo contra producción.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual y bullet de "Comparar Pedidos + Albaranes (SAP)".
+
+**Entrega**: `app.py`, `templates/index.html`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`/`README.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.40 — 6 septiembre 2026
 
 🏨✅ Verificación de la comprobación Hotel vs. PDF (v12.32.38) contra los 10 hoteles reales — 1 falso aviso corregido

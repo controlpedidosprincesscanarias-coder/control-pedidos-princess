@@ -12597,7 +12597,16 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     notificaciones ni cambia el estado del pedido, por eso no hay nada
     que el usuario tenga que revisar antes de aplicar (a diferencia de un
     cambio de estado o un nuevo albarán):
-      1. El importe base del PDF (6ª columna) en `pedidos.total_pedido`.
+      1. El importe base del PDF (6ª columna) en `pedidos.total_pedido` —
+         EXCEPTO (2026-09-06, v12.32.41) si el pedido ya tiene su propio
+         PDF oficial adjuntado (`pedido_adjuntos.tipo='pedido_doc'`): ese
+         documento es la única fuente que cuenta como verdad absoluta del
+         Total Pedido (se lee y suma directamente de las líneas de ESE
+         pedido), así que este listado —un documento distinto, agregado de
+         todos los pedidos del hotel— deja de sobrescribirlo; si la cifra
+         no coincide, se devuelve en `discrepancias_total_pedido_pdf_propio`
+         para revisión manual, sin tocar nada. Ver `_pedidos_con_pdf_propio`
+         más abajo.
       2. La base imponible de la ÚLTIMA entrada/albarán ya registrado en
          el pedido (si tiene alguna), en el 3er segmento de
          `entrada_albaran_num` — calculada como el importe recibido
@@ -12688,6 +12697,27 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     for p in pedidos_app:
         app_por_num.setdefault(_normalizar_pedido_num(p["pedido_num"]), p)
 
+    # (2026-09-06, v12.32.41) Pedidos que ya tienen su PROPIO PDF oficial
+    # adjuntado (`pedido_adjuntos.tipo='pedido_doc'`) — a petición de
+    # Víctor: ese PDF individual (el que se sube en la ficha de "Nº Pedido
+    # DALI/SAP" y habilita ENVIADO AL PROVEEDOR) es la única fuente que
+    # cuenta como "verdad absoluta" del Total Pedido, porque se lee y suma
+    # directamente de las líneas de artículo de ESE pedido en concreto. El
+    # "Listado de Pedidos" RESUMIDO de SAP que se procesa aquí es un
+    # documento distinto (un listado agregado de TODOS los pedidos del
+    # hotel, no el documento propio de cada uno) — hasta ahora se trataba
+    # con el mismo privilegio y podía pisar en silencio un total_pedido ya
+    # fijado por el PDF propio si la cifra del listado no coincidía. Ver
+    # comentario junto a `_total_pedido_actualizados`/`_discrepancias_total_
+    # pedido_pdf_propio` más abajo para el cambio de comportamiento.
+    _pedidos_con_pdf_propio = set()
+    if pedidos_app:
+        _filas_pdf_propio = rows_to_list(query(
+            "SELECT DISTINCT pedido_id FROM pedido_adjuntos WHERE tipo='pedido_doc' AND pedido_id = ANY(%s)",
+            ([p["id"] for p in pedidos_app],)
+        ))
+        _pedidos_con_pdf_propio = {f["pedido_id"] for f in _filas_pdf_propio}
+
     # (2026-08-27) Total Pedido real — petición de Víctor: al comparar el
     # listado de SAP, el importe base (6ª columna del PDF) se guarda solo
     # como `pedidos.total_pedido` para cada pedido localizado, sin ningún
@@ -12696,7 +12726,18 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     # dispara notificaciones ni cambia estado, así que no hay nada que
     # confirmar. Solo se escribe cuando el valor cambia de verdad, para no
     # generar escrituras de más en cada comparación repetida del mismo PDF.
+    #
+    # (2026-09-06, v12.32.41) EXCEPCIÓN — a petición de Víctor: si el
+    # pedido ya tiene su PROPIO PDF oficial adjuntado (ver
+    # `_pedidos_con_pdf_propio` justo arriba), su `total_pedido` YA es
+    # verdad absoluta y este listado (una fuente distinta y menos fiable
+    # para ese caso concreto) deja de sobrescribirlo — como mucho, si la
+    # cifra no coincide, se avisa (`_discrepancias_total_pedido_pdf_propio`)
+    # para revisión manual, nunca se pisa en silencio. Un pedido SIN PDF
+    # propio adjuntado sigue tomando el importe del listado exactamente
+    # igual que antes (sigue siendo el mejor dato disponible en ese caso).
     _total_pedido_actualizados = []
+    _discrepancias_total_pedido_pdf_propio = []
 
     # (2026-08-27) Base imponible de la ENTRADA (albarán) — segunda parte
     # de la misma petición: "del mismo modo" que Total Pedido, al comparar
@@ -12749,10 +12790,34 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
 
         pedido_app = app_por_num.get(_normalizar_pedido_num(num_sap))
 
+        # (2026-09-06, v12.32.41) tiene_pdf_propio: True si este pedido ya
+        # tiene su propio PDF oficial adjuntado — ver comentario junto a
+        # `_pedidos_con_pdf_propio` más arriba. Determina si el importe del
+        # listado puede escribir (pedido sin PDF propio, comportamiento sin
+        # cambios) o solo puede avisar de una discrepancia sin tocar nada
+        # (pedido con PDF propio, que ya es la verdad absoluta).
+        _tiene_pdf_propio = bool(pedido_app) and pedido_app["id"] in _pedidos_con_pdf_propio
+        _discrepancia_total_pedido = False
         if pedido_app and importe_base is not None:
             _total_actual = pedido_app.get("total_pedido")
             _total_actual_f = float(_total_actual) if _total_actual is not None else None
-            if _total_actual_f is None or round(_total_actual_f, 2) != round(importe_base, 2):
+            _difiere = _total_actual_f is None or round(_total_actual_f, 2) != round(importe_base, 2)
+            if _difiere and _tiene_pdf_propio:
+                # No se sobrescribe: el PDF propio ya adjuntado manda. Solo
+                # se avisa si de verdad hay un valor distinto guardado (un
+                # total_pedido NULL con PDF propio adjuntado no debería
+                # darse nunca — upload_adjunto lo rellena siempre — pero
+                # por si acaso no se cuenta como discrepancia, solo como
+                # "sin dato", para no generar un aviso confuso).
+                if _total_actual_f is not None:
+                    _discrepancia_total_pedido = True
+                    _discrepancias_total_pedido_pdf_propio.append({
+                        "pedido_id": pedido_app["id"],
+                        "pedido_num": pedido_app["pedido_num"],
+                        "total_pedido_actual": _total_actual_f,
+                        "importe_base_listado": importe_base,
+                    })
+            elif _difiere:
                 _total_pedido_actualizados.append((pedido_app["id"], importe_base))
 
         if pedido_app and importe_recibido is not None:
@@ -12799,6 +12864,16 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
             "pedido_id":              pedido_app["id"] if pedido_app else None,
             "norden":                 pedido_app["norden"] if pedido_app else None,
             "estado_app":             pedido_app["estado"] if pedido_app else None,
+            # (2026-09-06, v12.32.41) total_pedido_pdf_propio/discrepancia_
+            # total_pedido: para que el frontend pueda distinguir en la
+            # tabla un pedido cuyo Total Pedido ya viene de su propio PDF
+            # oficial (verdad absoluta, no se toca) de uno que sigue
+            # tomando el importe de este listado con normalidad — y avisar
+            # cuando el primero no coincide con lo que trae el listado, sin
+            # haberlo pisado.
+            "total_pedido_pdf_propio":   _tiene_pdf_propio,
+            "discrepancia_total_pedido": _discrepancia_total_pedido,
+            "total_pedido_actual":       float(pedido_app["total_pedido"]) if (pedido_app and pedido_app.get("total_pedido") is not None) else None,
         })
 
     # Escritura del Total Pedido, de la base imponible de la última
@@ -12845,6 +12920,12 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
         "no_entregados":         no_entregados,
         "entregas_parciales":    parciales,
         "total_pedido_actualizados": len(_total_pedido_actualizados),
+        # (2026-09-06, v12.32.41) discrepancias_total_pedido_pdf_propio:
+        # pedidos cuyo Total Pedido NO se ha tocado (porque ya tienen su
+        # propio PDF oficial, verdad absoluta) pero cuya cifra no coincide
+        # con la de este listado — a revisar a mano, ver comentario junto a
+        # `_pedidos_con_pdf_propio` más arriba.
+        "discrepancias_total_pedido_pdf_propio": _discrepancias_total_pedido_pdf_propio,
         "base_imponible_entrada_actualizados": len(_base_imponible_entrada_actualizados),
         "fecha_tramitacion_actualizados": len(_fecha_tramitacion_actualizados),
         "pedidos":               resultado,

@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.40
+          V 12.32.41
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -8142,6 +8142,15 @@ function _renderCompararPdfResultado() {
     // informativo, para que quede claro que ha pasado algo en la BD y no
     // sea una sorpresa si luego se revisa una ficha.
     (d.total_pedido_actualizados ? pill(`💾 ${d.total_pedido_actualizados} "Total Pedido" actualizado(s) en la ficha`, '#cfe2ff', '#084298') : '') +
+    // (2026-09-06, v12.32.41) Discrepancias Total Pedido vs. PDF propio —
+    // a petición de Víctor: pedidos cuyo Total Pedido YA viene de su
+    // propio PDF oficial (verdad absoluta, nunca se pisa desde este
+    // listado) pero cuya cifra no coincide con la de este listado — a
+    // revisar a mano. Ver comentario en _comparar_listado_pdf_logica
+    // (app.py).
+    ((d.discrepancias_total_pedido_pdf_propio || []).length
+      ? pill(`⚠️ ${d.discrepancias_total_pedido_pdf_propio.length} discrepancia(s) Total Pedido vs. PDF propio (no tocado)`, '#f8d7da', '#721c24')
+      : '') +
     // (2026-08-27) Base imponible de la última entrada — misma idea que
     // Total Pedido, ver comentario en _comparar_listado_pdf_logica (app.py).
     (d.base_imponible_entrada_actualizados ? pill(`💾 ${d.base_imponible_entrada_actualizados} base imponible de entrada actualizada(s)`, '#cfe2ff', '#084298') : '') +
@@ -8192,12 +8201,21 @@ function _renderCompararPdfResultado() {
       ? `<button class="btn btn-ghost btn-sm" onclick="closeModal('modal-comparar-pdf');openPedidoModal(${p.pedido_id})">Ver</button>`
       : `<button class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none"
                  onclick="_crearPedidoDesdeComparacion('${p.pedido_num_sap}')">➕ Crear pedido</button>`;
+    // (2026-09-06, v12.32.41) Si el pedido ya tiene su propio PDF oficial
+    // adjuntado (total_pedido_pdf_propio) su Total Pedido es verdad
+    // absoluta y este listado ya NO lo sobrescribe (ver app.py) — si
+    // además la cifra no coincide (discrepancia_total_pedido), se marca
+    // en la celda del importe del listado en vez de dar a entender que se
+    // ha actualizado la ficha con ese valor.
+    const importeBaseCelda = p.discrepancia_total_pedido
+      ? `${fmtImporte(p.importe_base)} <span title="El pedido ya tiene su propio PDF oficial con Total Pedido = ${fmtImporte(p.total_pedido_actual)} € — no se ha sobrescrito con este listado. Revisar a mano." style="color:#e67700">⚠️</span>`
+      : fmtImporte(p.importe_base);
     return `<tr>
       <td class="monospace">${p.pedido_num_sap}</td>
       <td>${p.fecha_pedido || p.fecha}</td>
       <td>${p.fecha_entrega || ''}</td>
       <td>${provLabel}</td>
-      <td>${fmtImporte(p.importe_base)}</td>
+      <td>${importeBaseCelda}</td>
       <td>${fmtImporte(p.importe_recibido)}</td>
       <td>${entrega}</td>
       <td>${estado}</td>
