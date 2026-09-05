@@ -706,6 +706,25 @@ def _auto_migrate():
                 )
             except Exception as e:
                 log.warning(f"No se pudo añadir la columna pedidos.total_pedido: {e}")
+            # ── Total Pedido APROXIMADO — Pieza 3 del rediseño "solo con los
+            # dos detallados" (2026-09-05, v12.32.31) ─────────────────────────
+            # Marca los pedidos cuyo total_pedido NO viene del "Listado de
+            # Pedidos" RESUMIDO real de SAP (el único caso ya cubierto arriba,
+            # v12.30.30), sino que se ha calculado sumando las líneas de
+            # artículo del listado DETALLADO (ver
+            # _actualizar_departamentos_desde_listado_detallado() y
+            # crear_pedidos_desde_sap()) — a petición de Víctor, que aceptó
+            # explícitamente que este importe "puede no cuadrar al céntimo"
+            # con el que reporte SAP, siempre que quede visualmente marcado
+            # como aproximado y nunca se confunda con el importe exacto. Se
+            # limpia sola (vuelve a FALSE) en cuanto _comparar_listado_pdf_logica()
+            # trae el importe real del RESUMIDO y lo sobrescribe.
+            try:
+                cur.execute(
+                    "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS total_pedido_aproximado BOOLEAN NOT NULL DEFAULT FALSE"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo añadir la columna pedidos.total_pedido_aproximado: {e}")
             # ── Código DALI del proveedor (2026-08-31) ────────────────────────
             # Víctor: "en la ficha de proveedores, necesito junto a la casilla
             # CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos
@@ -11406,7 +11425,84 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
         pedidos_con_lineas = len(nums_con_lineas)
         lineas_guardadas = len(todas_las_lineas)
 
-    if actualizados or lineas_guardadas or pedidos_nuevos_en_listado_sap:
+    # ── 4: Total Pedido APROXIMADO para pedidos ya dados de alta sin
+    # importe (2026-09-05, v12.32.31 — Pieza 3 del rediseño "solo con los
+    # dos detallados") ─────────────────────────────────────────────────
+    # Víctor aceptó explícitamente (AskUserQuestion, 2026-09-04) rellenar
+    # de forma aproximada, sumando las líneas del detallado, el importe de
+    # los pedidos antiguos que nunca llegaron a tener un RESUMIDO — "puede
+    # no cuadrar al céntimo con SAP", pero es mejor que dejarlo vacío.
+    #
+    # SOLO se toca `pedidos.total_pedido` (el campo puramente informativo
+    # de v12.30.30, ver su comentario más arriba en _auto_migrate) —
+    # `sap_pedidos_listado.importe_base_txt`/`importe_recibido_txt` y el
+    # `estado`/`entrega_estado` del pedido NUNCA se calculan a partir de
+    # esta suma (mismo motivo ya documentado junto a
+    # _PATRON_LISTADO_SIMPLIFICADO: sumar líneas no cuadra siempre al
+    # céntimo, así que no es una fuente fiable para nada que dispare
+    # alertas o cambie estado — solo para informar).
+    #
+    # Un pedido se considera candidato si, y solo si:
+    #   - ya existe en `pedidos` (hotel_id + pedido_num), Y
+    #   - su `total_pedido` es NULL (nunca se ha rellenado), o es 0 pero
+    #     SOLO si esa fila de `sap_pedidos_listado` tiene
+    #     `importe_base_txt IS NULL` — es decir, un 0,00 que sabemos que
+    #     es el "hueco" que deja crear_pedidos_desde_sap() para un pedido
+    #     DETALLADO-only (v12.32.27), nunca un 0,00 real que haya podido
+    #     traer el RESUMIDO (ese si es un valor real, aunque sea cero, y
+    #     no se toca).
+    # Nunca se sobrescribe un total_pedido ya distinto de NULL/0 — ese SÍ
+    # es un importe real (del RESUMIDO o tecleado a mano) y no se pisa.
+    total_pedido_aproximado_rellenado = 0
+    pedidos_existentes = rows_to_list(query(
+        "SELECT id, pedido_num, total_pedido FROM pedidos WHERE hotel_id=%s AND pedido_num = ANY(%s)",
+        (hotel_id, list(listado.keys()))
+    ))
+    if pedidos_existentes:
+        importes_base_txt = {
+            r["pedido_num_sap"]: r["importe_base_txt"]
+            for r in rows_to_list(query(
+                "SELECT pedido_num_sap, importe_base_txt FROM sap_pedidos_listado "
+                "WHERE hotel_id=%s AND pedido_num_sap = ANY(%s)",
+                (hotel_id, list(listado.keys()))
+            ))
+        }
+        filas_importe_aprox = []
+        for p_row in pedidos_existentes:
+            num = p_row["pedido_num"]
+            info = listado.get(num)
+            if not info or not info.get("lineas"):
+                continue
+            total_actual = p_row["total_pedido"]
+            total_actual_f = float(total_actual) if total_actual is not None else None
+            es_hueco_null = total_actual_f is None
+            es_hueco_cero = (
+                total_actual_f is not None and round(total_actual_f, 2) == 0.0
+                and importes_base_txt.get(num) is None
+            )
+            if not (es_hueco_null or es_hueco_cero):
+                continue  # ya tiene un importe real (RESUMIDO o manual) — no se toca
+            suma = round(sum(_parse_importe_es(ln.get("importe_linea_txt")) for ln in info["lineas"]), 2)
+            if suma <= 0:
+                continue  # sin datos de importe reales en las líneas — mejor dejarlo como está que poner "≈0,00"
+            filas_importe_aprox.append((p_row["id"], suma))
+        if filas_importe_aprox:
+            with get_db().cursor() as cur:
+                rellenados = execute_values(
+                    cur,
+                    """UPDATE pedidos AS p
+                           SET total_pedido = v.importe, total_pedido_aproximado = TRUE
+                       FROM (VALUES %s) AS v(pedido_id, importe)
+                       WHERE p.id = v.pedido_id
+                       RETURNING p.id""",
+                    filas_importe_aprox,
+                    template="(%s,%s)",
+                    page_size=1000,
+                    fetch=True,
+                )
+            total_pedido_aproximado_rellenado = len(rellenados)
+
+    if actualizados or lineas_guardadas or pedidos_nuevos_en_listado_sap or total_pedido_aproximado_rellenado:
         get_db().commit()
 
     return {
@@ -11420,6 +11516,7 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
         "pedidos_con_lineas": pedidos_con_lineas,
         "lineas_guardadas": lineas_guardadas,
         "pedidos_nuevos_en_listado_sap": pedidos_nuevos_en_listado_sap,
+        "total_pedido_aproximado_rellenado": total_pedido_aproximado_rellenado,
     }
 
 
@@ -12159,8 +12256,18 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
     # valor realmente cambia (o, en el caso de fecha_tramitacion, solo de
     # las que estaban vacías).
     if _total_pedido_actualizados:
+        # (2026-09-05, v12.32.31 — Pieza 3) También se limpia
+        # `total_pedido_aproximado` aquí: este UPDATE solo se dispara con
+        # un `importe_base` REAL recién leído del RESUMIDO (ver más arriba
+        # en este mismo bucle), así que cualquier marca de "aproximado"
+        # que tuviera antes (por venir de sumar líneas del detallado, ver
+        # _actualizar_departamentos_desde_listado_detallado/
+        # crear_pedidos_desde_sap) deja de ser cierta a partir de ahora.
         for _pid_tp, _importe_tp in _total_pedido_actualizados:
-            execute("UPDATE pedidos SET total_pedido=%s WHERE id=%s", (_importe_tp, _pid_tp))
+            execute(
+                "UPDATE pedidos SET total_pedido=%s, total_pedido_aproximado=FALSE WHERE id=%s",
+                (_importe_tp, _pid_tp)
+            )
         get_db().commit()
     if _base_imponible_entrada_actualizados:
         for _pid_be, _entrada_str in _base_imponible_entrada_actualizados:
@@ -12417,6 +12524,22 @@ def _pedidos_sap_no_registrados(hotel_id: int) -> list:
     deptos_cat = rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1"))
     deptos_id_por_nombre = {d["nombre"]: d["id"] for d in deptos_cat}
 
+    # (2026-09-05, v12.32.31 — Pieza 3) Suma de líneas por pedido, para
+    # poder ofrecer un Total Pedido APROXIMADO ya al crear un pedido
+    # DETALLADO-only (importe_base_txt NULL) — ver crear_pedidos_desde_sap().
+    # Una única consulta para todo el hotel (nunca una por pedido dentro
+    # del bucle de abajo — mismo motivo por el que v12.32.28 tuvo que
+    # reescribirse en bloque).
+    suma_lineas_por_pedido = {}
+    for fila_ln in rows_to_list(query(
+        "SELECT pedido_num_sap, importe_linea_txt FROM sap_pedidos_lineas WHERE hotel_id=%s",
+        (hotel_id,)
+    )):
+        suma_lineas_por_pedido[fila_ln["pedido_num_sap"]] = (
+            suma_lineas_por_pedido.get(fila_ln["pedido_num_sap"], 0.0)
+            + _parse_importe_es(fila_ln["importe_linea_txt"])
+        )
+
     resultado = []
     vistos = set()
     for (num_sap, fecha_hora_fecha, fecha_hora_hora, importe_base_txt, proveedor_raw,
@@ -12439,11 +12562,28 @@ def _pedidos_sap_no_registrados(hotel_id: int) -> list:
         departamento_nombre = _SAP_DEPARTAMENTO_MAP.get(departamento_sap_codigo)
         departamento_id = deptos_id_por_nombre.get(departamento_nombre) if departamento_nombre else None
 
+        # (2026-09-05, v12.32.31 — Pieza 3) `importe_base_txt` es NULL
+        # exactamente cuando este pedido viene SOLO del listado DETALLADO
+        # (alta en bloque de v12.32.27, ver _actualizar_departamentos_
+        # desde_listado_detallado) — nunca del RESUMIDO real. Solo en ese
+        # caso se ofrece un importe aproximado (suma de líneas ya
+        # guardadas de una subida previa del detallado); si el RESUMIDO sí
+        # trajo un importe (aunque fuera 0,00), ese es el real y no se
+        # sustituye por nada.
+        importe_base_real = importe_base_txt is not None
+        importe_aproximado = None if importe_base_real else suma_lineas_por_pedido.get(num_sap)
+        if importe_aproximado is not None:
+            importe_aproximado = round(importe_aproximado, 2)
+            if importe_aproximado <= 0:
+                importe_aproximado = None  # sin datos reales en las líneas tampoco — no inventar "≈0,00"
+
         resultado.append({
             "pedido_num_sap":         num_sap,
             "fecha_pedido":           fecha_pedido,
             "fecha_entrega":          fecha_entrega,
             "proveedor_pdf":          nombre_prov,
+            "importe_base_real":      importe_base_real,
+            "importe_aproximado":     importe_aproximado,
             "proveedor_id":           prov_match["id"] if prov_match else None,
             "proveedor_identificado": bool(prov_match),
             "importe_base":           importe_base,
@@ -13377,6 +13517,26 @@ def crear_pedidos_desde_sap():
             fecha_entrega_especifica = _parsear_fecha_es_a_iso(fila.get("fecha_entrega"))
             importe_base = fila.get("importe_base")
             estado_inicial = _ESTADO_INICIAL_POR_ENTREGA.get(fila.get("entrega_estado"), "ENVIADO AL PROVEEDOR")
+            # (2026-09-05, v12.32.31 — Pieza 3) Total Pedido: si el RESUMIDO
+            # nunca trajo un importe real para este pedido (DETALLADO-only,
+            # `importe_base_real` False — ver _pedidos_sap_no_registrados),
+            # se usa la suma de líneas ya guardada como aproximación en vez
+            # de dejarlo en 0,00 fijo — marcado con `total_pedido_aproximado`
+            # para que quede claro en la ficha que no es el importe exacto
+            # de SAP. Nunca afecta a `importe` (el campo de techo/presupuesto,
+            # que sigue viniendo solo de `importe_base`) ni a `estado_inicial`
+            # (calculado arriba a partir del importe REAL, nunca del
+            # aproximado — mismo criterio que en
+            # _actualizar_departamentos_desde_listado_detallado).
+            if fila.get("importe_base_real"):
+                total_pedido_val = importe_base
+                total_pedido_aproximado = False
+            elif fila.get("importe_aproximado") is not None:
+                total_pedido_val = fila["importe_aproximado"]
+                total_pedido_aproximado = True
+            else:
+                total_pedido_val = importe_base  # se queda en 0,00 — sin líneas todavía de las que aproximar
+                total_pedido_aproximado = False
             observ = (
                 f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']}) "
                 f"el {datetime.now().strftime('%d/%m/%Y')} — pendiente de completar el resto de la documentación."
@@ -13393,10 +13553,10 @@ def crear_pedidos_desde_sap():
                     proveedor_id, observaciones,
                     familia_id, importe, sujeto_techo,
                     plazo_entrega_dias, fecha_entrega_especifica,
-                    total_pedido,
+                    total_pedido, total_pedido_aproximado,
                     creado_por_id, modificado_por_id,
                     creado_por_nombre, modificado_por_nombre
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
                 RETURNING id
             """, (
                 norden, hotel_id, fila.get("departamento_id"),
@@ -13408,7 +13568,7 @@ def crear_pedidos_desde_sap():
                 fila["proveedor_id"], observ,
                 None, importe_base, 0,
                 None, fecha_entrega_especifica,
-                importe_base,
+                total_pedido_val, total_pedido_aproximado,
                 uid, uid,
                 _NOMBRE_AUTO_CREACION_SAP, _NOMBRE_AUTO_CREACION_SAP,
             ))
@@ -17859,8 +18019,16 @@ def upload_adjunto(pid):
     # la ÚNICA vía por la que cambian de valor.
     respuesta = {"ok": True, "id": adjunto_id}
     if tipo == "pedido_doc":
+        # (2026-09-05, v12.32.31 — Pieza 3) `total_pedido_aproximado=FALSE`:
+        # el PDF oficial del propio pedido es la fuente MÁS fiable de toda
+        # la app (se suma directamente de sus propias líneas, no del
+        # listado detallado de SAP de otro pedido) — si este pedido tenía
+        # marcado un total_pedido aproximado (por Pieza 3 del rediseño SAP,
+        # ver crear_pedidos_desde_sap()/_actualizar_departamentos_desde_
+        # listado_detallado), deja de estarlo en cuanto se adjunta su
+        # propio PDF oficial.
         execute(
-            "UPDATE pedidos SET pedido_num=%s, total_pedido=%s WHERE id=%s",
+            "UPDATE pedidos SET pedido_num=%s, total_pedido=%s, total_pedido_aproximado=FALSE WHERE id=%s",
             (_datos_pedido_pdf["pedido_num"], _datos_pedido_pdf["total_pedido"], pid)
         )
         db.commit()

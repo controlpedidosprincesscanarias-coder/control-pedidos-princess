@@ -1,3 +1,36 @@
+# v12.32.31 — 5 septiembre 2026
+
+Pieza 3 del rediseño "solo con los dos detallados": Total Pedido APROXIMADO — pedidos antiguos sin importe se rellenan sumando las líneas del listado detallado, marcado siempre como "≈ aproximado" y nunca confundido con el importe real de SAP
+
+**Contexto — por qué esta entrega**: continuación acordada del rediseño "solo con los dos listados detallado" (Pieza 1+2 entregada en v12.32.27-30). Víctor había elegido explícitamente (AskUserQuestion, 2026-09-04) la opción "Rellenar retroactivo aproximado" para los pedidos que quedaron sin importe por no tener nunca un listado RESUMIDO — "acepto que puede no cuadrar al céntimo con SAP". Con la confirmación de que Pieza 1+2 ya funciona en producción (v12.32.29/30), Víctor dio luz verde para seguir ("SEGUIMOS SI").
+
+**Dónde puede faltar el importe, y qué hace cada uno**:
+1. Pedidos ya dados de alta (a mano o desde SAP) cuyo `total_pedido` nunca se rellenó (`NULL`) — pedidos antiguos, de antes de que existiera este campo.
+2. Pedidos creados por "Crear pedidos desde SAP" (v12.32.11) a partir de un pedido DETALLADO-only (v12.32.27) — se crean con `total_pedido = 0,00` fijo, a la espera de esta entrega (así lo decía literalmente el aviso que se quitó de la v12.32.27: "ver próxima entrega").
+
+**Cambio en `app.py`**:
+- Nueva columna `pedidos.total_pedido_aproximado BOOLEAN NOT NULL DEFAULT FALSE` (`_auto_migrate()`, bloque protegido, mismo patrón ya usado para `total_pedido`/`no_autorizado_previo`/`codigo_dali`) — marca si el `total_pedido` actual viene de sumar líneas del detallado en vez del importe real del RESUMIDO.
+- `_actualizar_departamentos_desde_listado_detallado()` (paso 4 nuevo, en bloque con `execute_values` — mismo patrón ya validado en v12.32.28): para cada pedido YA dado de alta cuyo `total_pedido` sea `NULL`, o sea `0,00` pero SOLO si esa fila de `sap_pedidos_listado` tiene `importe_base_txt IS NULL` (para no confundir nunca un `0,00` real del RESUMIDO con un hueco), se rellena con la suma de las líneas de artículo de ESTE mismo listado detallado que se acaba de subir, y se marca `total_pedido_aproximado = TRUE`. Un `total_pedido` ya distinto de `NULL`/`0` (real, del RESUMIDO o tecleado a mano) nunca se toca. Nuevo contador en el resultado: `total_pedido_aproximado_rellenado`.
+- `_pedidos_sap_no_registrados()`: nueva consulta (una sola, para todo el hotel — nunca dentro del bucle) que suma las líneas ya guardadas de `sap_pedidos_lineas` por pedido; cada fila del resultado incorpora `importe_base_real` (si el importe viene del RESUMIDO de verdad) e `importe_aproximado` (la suma de líneas, solo cuando no hay importe real).
+- `crear_pedidos_desde_sap()`: si el pedido no tiene importe real (`importe_base_real` False) pero sí hay una suma de líneas disponible, `total_pedido` se rellena con esa suma en vez de quedar en `0,00` fijo, y se marca `total_pedido_aproximado = TRUE`. El campo `importe` (el de techo/presupuesto) y el `estado_inicial` del pedido siguen calculándose exactamente igual que antes, a partir del importe REAL — el aproximado nunca los toca, para no arriesgar ninguna alerta o clasificación de entrega ya corregida en v12.32.13.
+- `_comparar_listado_pdf_logica()`: el UPDATE que ya sobrescribía `total_pedido` con el importe real en cuanto llega un RESUMIDO ahora también pone `total_pedido_aproximado = FALSE` en la misma sentencia — la marca de "aproximado" desaparece sola en cuanto hay un dato real.
+- `upload_adjunto()` (subida del PDF oficial de un pedido, v12.30.28): mismo criterio — al leerse su propio PDF (la fuente más fiable de toda la app, calculada de sus propias líneas) también se limpia `total_pedido_aproximado`, por si el pedido lo tenía marcado desde antes.
+
+**Cambio en `templates/index.html`**:
+- Ficha de pedido: nueva etiqueta "≈ APROXIMADO" junto a "Total Pedido (€)", visible solo cuando `total_pedido_aproximado` es verdadero, con un tooltip explicando que no es el importe real de SAP. Se limpia sola al abrir un pedido nuevo, al adjuntar el PDF oficial del pedido, o al cerrar el formulario.
+- Resultado de "🏷️ Departamentos y líneas (SAP detallado)": nueva píldora "N Total Pedido ≈ aproximado rellenado(s)" y su aviso explicando qué se ha hecho.
+- "Crear pedidos desde SAP": la columna de importe de la tabla de pedidos pendientes de crear muestra "≈ importe" (en vez de 0,00 fijo) cuando el pedido se crearía con un importe aproximado — para que se vea ANTES de crear, no después.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores; los 8 `<script>` de `templates/index.html` pasan `node --check` sin errores. Probado de extremo a extremo contra un PostgreSQL 16 real con 4 pedidos de prueba cubriendo los 4 casos posibles: `total_pedido NULL` → se rellena aproximado (540,00 €, suma real de sus líneas) y se marca; `total_pedido = 0,00` con `importe_base_txt` también `NULL` (hueco de v12.32.27) → se rellena aproximado (1.039,58 €) y se marca; `total_pedido = 0,00` con `importe_base_txt = '0,00'` REAL (un cero de verdad del RESUMIDO) → se queda intacto, sin marcar — confirma que nunca se confunde un cero real con un hueco; `total_pedido = 55,00` (importe real ya existente) → se queda intacto. Aparte, probado `crear_pedidos_desde_sap()` de extremo a extremo (vía el propio endpoint Flask, con sesión de admin simulada): un pedido nuevo creado desde un listado DETALLADO-only con líneas ya guardadas sale con `total_pedido = 1.783,20 €` (suma real de sus líneas) y `total_pedido_aproximado = TRUE`, mientras que `importe` (el campo de techo) se queda en `0,00` sin tocar y el `estado` inicial sale `ENVIADO AL PROVEEDOR` — exactamente igual que si esta entrega no existiera, confirmando que no se ha tocado nada de la clasificación de entrega ya corregida en v12.32.13. Y comprobado el UPDATE de limpieza de la marca (`_comparar_listado_pdf_logica`): al simular la llegada de un importe real, `total_pedido_aproximado` vuelve a `FALSE` en el mismo movimiento.
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+
+**Sigue pendiente**: Pieza 4 (cruce Pedidos↔Albaranes detallado para proponer el estado de entrega) y Pieza 5 (unificar los 5 botones actuales en un flujo de dos pasos) — siguientes entregas, una a una. Sigue pendiente también, por separado y sin tocar hoy, la corrección del hueco de egress-tracking en los 4 jobs de subida de PDF (pospuesta a petición explícita de Víctor).
+
+**Entrega**: `app.py`, `templates/index.html`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `render.yaml`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.30 — 5 septiembre 2026
 
 Listados detallados grandes (120+ páginas): subido el margen de tiempo (gunicorn y el sondeo del navegador) para que les dé tiempo a terminar — investigado si se podía acelerar la lectura del PDF en sí, sin encontrar una forma segura de hacerlo

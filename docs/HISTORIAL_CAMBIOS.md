@@ -36,6 +36,19 @@
 
 ---
 
+## 2026-09-05 — [Control Pedidos] Pieza 3 del rediseño "solo con los dos detallados": Total Pedido APROXIMADO para pedidos antiguos sin importe, sumando las líneas del detallado y siempre marcado como "≈ aproximado" (v12.32.31)
+
+- **Contexto**: continuación de Pieza 1+2 (v12.32.27-30, ya confirmada en producción). Víctor había elegido "Rellenar retroactivo aproximado" para los pedidos sin importe (AskUserQuestion, 2026-09-04) y dio luz verde a seguir.
+- **Dos huecos que cubre**: (1) pedidos antiguos con `total_pedido NULL` (de antes de que existiera el campo); (2) pedidos creados por "Crear pedidos desde SAP" desde un DETALLADO-only, que se creaban con `total_pedido=0,00` fijo — literalmente "pendiente para próxima entrega" en el aviso de v12.32.27.
+- **Cambio en `app.py`**: nueva columna `pedidos.total_pedido_aproximado` (boolean); `_actualizar_departamentos_desde_listado_detallado()` rellena en bloque el Total Pedido de pedidos ya existentes sin importe (sumando las líneas del listado recién subido) SOLO si su `total_pedido` es NULL o es un 0,00 confirmado como "hueco" (nunca un 0,00 real del RESUMIDO); `_pedidos_sap_no_registrados()`/`crear_pedidos_desde_sap()` usan la misma suma al crear un pedido nuevo, sin tocar `importe` (techo) ni el `estado_inicial`; `_comparar_listado_pdf_logica()` y la subida del PDF oficial del propio pedido limpian la marca en cuanto llega un importe real.
+- **Cambio en `templates/index.html`**: etiqueta "≈ APROXIMADO" junto a Total Pedido en la ficha; nueva píldora en el resultado de "Departamentos y líneas"; la tabla de "Crear pedidos desde SAP" muestra "≈ importe" antes de crear.
+- **Verificación**: probado contra un PostgreSQL 16 real con los 4 casos posibles (NULL, 0,00-hueco, 0,00-real, importe real ya existente) — cada uno se comporta exactamente como se esperaba, incluido que un 0,00 real de SAP NUNCA se confunde con un hueco. `crear_pedidos_desde_sap()` probado de extremo a extremo vía el endpoint Flask real: importe aproximado correcto, `importe`/`estado_inicial` sin alterar. `python3 -m py_compile` y `node --check` sin errores.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Sigue pendiente**: Pieza 4 (cruce Pedidos↔Albaranes), Pieza 5 (unificar botones), egress-tracking (pospuesta a petición de Víctor).
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `render.yaml`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-05 — [Control Pedidos] Listados grandes (120+ páginas): subido el margen de tiempo (gunicorn + sondeo del navegador) para que les dé tiempo a terminar — investigado acelerar la lectura del PDF sin encontrar forma segura de hacerlo (v12.32.30)
 
 - **Qué pasó**: confirmado el arreglo del OOM (v12.32.29) sobre un listado de 99 páginas, mide 4m19s reales (no "segundos", como se dijo antes por error). Víctor sube un listado real distinto de 121 páginas preguntando si se puede acelerar, antes de pasar a listados semanales más cortos.

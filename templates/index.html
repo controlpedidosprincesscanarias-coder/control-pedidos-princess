@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.30
+          V 12.32.31
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2443,6 +2443,7 @@ tbody tr:last-child{border-bottom:none}
             Total Pedido (€)
             <span style="font-size:10px;color:#888;font-weight:400"> (automático)</span>
           </label>
+          <span id="p-total-pedido-aprox-badge" hidden title="Este importe NO viene del Listado de Pedidos RESUMIDO de SAP — es una suma aproximada de las líneas del Listado DETALLADO, puede no coincidir al céntimo con el importe real de SAP. Se corrige sola en cuanto se compare el listado RESUMIDO." style="display:inline-block;background:#fff3cd;border:1px solid #ffc107;color:#7a5b00;border-radius:4px;font-size:10px;padding:1px 5px;margin-left:4px;font-weight:700">≈ APROXIMADO</span>
           <input class="form-control" type="number" id="p-total-pedido" min="0" step="0.01" placeholder="Se rellena al adjuntar el PDF" readonly style="background:#f5f5f5;color:#555">
           <div style="font-size:10.5px;color:#888;margin-top:4px">
             Se rellena al adjuntar el PDF del pedido oficial (suma de las líneas de importe) y se corrige solo, si hiciera falta, al comparar el "Listado de Pedidos" PDF de SAP.
@@ -5112,6 +5113,7 @@ async function openPedidoModal(id=null) {
     setVal('p-pedido-num', p.pedido_num);
     setVal('p-presup', p.presupuesto_num);
     setVal('p-total-pedido', p.total_pedido != null ? Number(p.total_pedido).toFixed(2) : '');
+    document.getElementById('p-total-pedido-aprox-badge').hidden = !p.total_pedido_aproximado;
     document.getElementById('chk-tarifa-acordada').checked = !!p.tarifa_acordada;
     onTarifaAcordadaChange();
     setVal('p-estado', p.estado);
@@ -5411,6 +5413,7 @@ async function subirAdjuntos(input, tipo) {
         if (tipo === 'pedido_doc' && data.pedido_num !== undefined) {
           setVal('p-pedido-num', data.pedido_num);
           setVal('p-total-pedido', data.total_pedido != null ? Number(data.total_pedido).toFixed(2) : '');
+          document.getElementById('p-total-pedido-aprox-badge').hidden = true;  // el PDF oficial siempre es el importe real
           toast(`PDF leído — Nº Pedido ${data.pedido_num}, Total ${Number(data.total_pedido).toFixed(2)} €`, 'success');
           _procesarFechasPdfPedidoOficial(data);
         }
@@ -5946,6 +5949,7 @@ function _setFormCanceladoSilent(bloqueado) {
 
 function clearPedidoForm() {
   ['p-hotel','p-depto','p-pedido-num','p-presup','p-total-pedido','p-observaciones','p-nota','p-plazo-entrega','p-fecha-entrega-especifica'].forEach(id=>setVal(id,''));
+  document.getElementById('p-total-pedido-aprox-badge').hidden = true;
   // Sin hotel seleccionado: el desplegable de Departamento vuelve a mostrar
   // el catálogo completo (sin el filtro por hotel de poblarSelectDeptos),
   // en vez de quedarse con el filtrado del pedido editado anteriormente.
@@ -7364,12 +7368,16 @@ async function _pollActualizarDepartamentos(jobId, intentos) {
     ${(res.pedidos_completados || 0) > 0 ? pill(`${res.pedidos_completados} pedido(s) ya dado(s) de alta completado(s) con departamento`, '#d4edda', '#155724') : ''}
     ${pill(`${res.lineas_guardadas ?? 0} línea(s) guardada(s) (${res.pedidos_con_lineas ?? 0} pedido(s))`, '#e7e0f7', '#4d2f8f')}
     ${(res.pedidos_nuevos_en_listado_sap || 0) > 0 ? pill(`${res.pedidos_nuevos_en_listado_sap} pedido(s) nuevo(s) registrado(s) desde el detallado (sin resumido)`, '#5b3a99', '#fff') : ''}
+    ${(res.total_pedido_aproximado_rellenado || 0) > 0 ? pill(`${res.total_pedido_aproximado_rellenado} Total Pedido ≈ aproximado rellenado(s)`, '#fff3cd', '#7a5b00') : ''}
     ${(res.no_encontrados_en_listado || 0) > 0 ? pill(`${res.no_encontrados_en_listado} sin listado resumido todavía`, '#fff3cd', '#856404') : ''}
     ${(res.sin_departamento_en_pdf || 0) > 0 ? pill(`${res.sin_departamento_en_pdf} sin departamento en el PDF`, '#f8f9fa', '#666') : ''}
   `;
   let avisos = '';
   if ((res.pedidos_nuevos_en_listado_sap || 0) > 0) {
-    avisos += `<p>Se han registrado ${res.pedidos_nuevos_en_listado_sap} pedido(s) que solo aparecían en este listado detallado (nunca se había subido el resumido con ellos) — ya están disponibles en "📄 Comparar listado PDF" y en "Crear pedidos desde SAP" para darlos de alta. Su importe quedará vacío hasta que se suba el listado resumido correspondiente (o se calcule de forma aproximada — ver próxima entrega).</p>`;
+    avisos += `<p>Se han registrado ${res.pedidos_nuevos_en_listado_sap} pedido(s) que solo aparecían en este listado detallado (nunca se había subido el resumido con ellos) — ya están disponibles en "📄 Comparar listado PDF" y en "Crear pedidos desde SAP" para darlos de alta.</p>`;
+  }
+  if ((res.total_pedido_aproximado_rellenado || 0) > 0) {
+    avisos += `<p>Se ha rellenado un Total Pedido <strong>≈ aproximado</strong> (suma de las líneas de este listado) en ${res.total_pedido_aproximado_rellenado} pedido(s) ya dado(s) de alta que no tenían ningún importe — marcado en su ficha, y se corregirá solo con el valor real en cuanto se compare el listado RESUMIDO correspondiente.</p>`;
   }
   if ((res.no_encontrados_en_listado || 0) > 0) {
     avisos += `<p>${res.no_encontrados_en_listado} pedido(s) del PDF detallado no se han podido registrar en el listado SAP — revisa los logs del servidor.</p>`;
@@ -7829,13 +7837,22 @@ function _renderPedidosPendientesCrearSap() {
       : `${p.proveedor_pdf} <span style="color:#e67700">(sin identificar)</span>`;
     const entrega = `<span style="color:${colorEntrega[p.entrega_estado] || '#495057'};font-weight:600">
         ${iconoEntrega[p.entrega_estado] || ''} ${p.entrega_estado}</span>`;
+    // (2026-09-05, v12.32.31 — Pieza 3) Si SAP nunca trajo un importe real
+    // para este pedido (importe_base_real false) pero sí hay líneas del
+    // detallado de las que aproximar, se muestra con "≈" — es lo que
+    // realmente se guardará en Total Pedido al crearlo (ver
+    // crear_pedidos_desde_sap()), para que quede claro ANTES de crear que
+    // no es un importe exacto de SAP.
+    const importeCell = (!p.importe_base_real && p.importe_aproximado != null)
+      ? `<span title="No es un importe real de SAP — es la suma de las líneas del listado detallado" style="color:#7a5b00">≈ ${fmtImporte(p.importe_aproximado)}</span>`
+      : fmtImporte(p.importe_base);
     return `<tr>
       <td>${chk}</td>
       <td class="monospace">${p.pedido_num_sap}</td>
       <td>${p.fecha_pedido || ''}</td>
       <td>${p.fecha_entrega || ''}</td>
       <td>${provLabel}</td>
-      <td>${fmtImporte(p.importe_base)}</td>
+      <td>${importeCell}</td>
       <td>${entrega}</td>
     </tr>`;
   }).join('');
