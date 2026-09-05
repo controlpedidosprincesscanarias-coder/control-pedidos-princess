@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-05 — [Control Pedidos] Listados grandes (120+ páginas): subido el margen de tiempo (gunicorn + sondeo del navegador) para que les dé tiempo a terminar — investigado acelerar la lectura del PDF sin encontrar forma segura de hacerlo (v12.32.30)
+
+- **Qué pasó**: confirmado el arreglo del OOM (v12.32.29) sobre un listado de 99 páginas, mide 4m19s reales (no "segundos", como se dijo antes por error). Víctor sube un listado real distinto de 121 páginas preguntando si se puede acelerar, antes de pasar a listados semanales más cortos.
+- **Investigado sin éxito**: (1) reordenar `extract_text()`/`extract_tables()` — mismo coste total, solo cambia qué llamada "paga" el coste de fondo de `pdfminer`; (2) recortar cada página a su mitad inferior para la cabecera huérfana — 48x más rápido pero 13/99 páginas dan texto mezclado de forma distinta al de la página completa, riesgo real de atribuir mal un artículo a un pedido. Ninguno se llegó a entregar.
+- **Cambio real**: `render.yaml` — `--timeout` de gunicorn 300→900s (a ~2,6s/página real en Render, 300s se quedan cortos a partir de ~115 páginas). `templates/index.html` — las 4 funciones de sondeo del navegador (`_pollCompararListadoPdf`, `_pollActualizarDepartamentos`, `_pollImportarAlbaranes`, `_pollCompararListadoAlbaranes`) subidas de 5 a 16 minutos de espera antes de rendirse.
+- **Verificación**: el listado real de 121 páginas se probó de principio a fin contra un PostgreSQL 16 real: 316 pedidos / 2.827 líneas, 0 sin proveedor, 0 sin fecha, sin ninguna excepción. `python3 -m py_compile app.py` y `node --check` sobre los 8 `<script>` de `index.html`, sin errores. No se pudo medir el tiempo real en Render desde aquí.
+- **Aviso importante**: si el servicio de Render de Víctor no sincroniza `render.yaml` automáticamente (Blueprint), puede que el nuevo `--timeout` no se aplique solo con subir archivos — conviene revisar el "Start Command" a mano en Render → Settings.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `templates/index.html`, `render.yaml`, `README.md`, más este historial/`CHANGELOG.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-05 — [Control Pedidos] Corregido el OOM real que la v12.32.28 no arregló: pdfplumber retenía en memoria TODAS las páginas ya procesadas del PDF durante toda la subida (v12.32.29)
 
 - **Qué pasó**: tras la v12.32.28 (que sí redujo las consultas a la BD), Víctor volvió a subir el mismo listado de 99 páginas / 281 pedidos y volvió a fallar — esta vez el panel de Eventos de Render fue explícito: "Instance failed: vvzpz — Ran out of memory (used over 512MB) while running your code", ~6 minutos tras el despliegue. Confirmaba que había un segundo problema, independiente del de la base de datos, todavía sin corregir.

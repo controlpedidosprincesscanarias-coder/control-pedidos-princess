@@ -1,3 +1,30 @@
+# v12.32.30 — 5 septiembre 2026
+
+Listados detallados grandes (120+ páginas): subido el margen de tiempo (gunicorn y el sondeo del navegador) para que les dé tiempo a terminar — investigado si se podía acelerar la lectura del PDF en sí, sin encontrar una forma segura de hacerlo
+
+**Qué pasó**: nada más confirmarse que la v12.32.29 arregló el OOM (el listado de 99 páginas terminó bien, sin caerse), Víctor avisó de que tarda "no en segundos" — 4 minutos 19 segundos reales, medidos sobre el HAR de red que compartió. Y a continuación subió un listado real de una quincena distinta con 121 páginas, más grande que el de 99 que se había probado hasta ahora, preguntando si se podía conseguir que listados así de grandes (o mayores; avisa de que "hay algunas quincenas con más páginas") entrasen sin problema, antes de pasar a subirlos semanalmente como tiene pensado hacer una vez esté todo al día.
+
+**Investigado, sin éxito — por qué el tiempo de lectura no se puede recortar fácilmente**: se probaron dos formas de acelerar la lectura del PDF con `pdfplumber`, ambas descartadas tras medir con cuidado:
+1. Cambiar el orden de `extract_text()` y `extract_tables()` (o quitar `extract_text()` cuando no hace falta): medido con un cronómetro real página a página, el coste de fondo (`pdfminer`, la librería que hay debajo de `pdfplumber`, interpretando cada carácter del PDF uno a uno) es el mismo se llame primero una función o la otra — no hay ahorro real, solo se cambia qué función "paga" el coste ya hecho.
+2. Cortar el PDF por la mitad inferior de cada página para buscar solo ahí la "cabecera huérfana" (ver v12.32.16/`_extraer_listado_detallado_completo`): mucho más rápido (unas 48 veces), pero al probarlo con cuidado contra el texto completo de las 99 páginas del listado ya conocido, en 13 de 99 el texto recortado salía mezclado con contenido de la tabla de forma distinta a como lo ve `pdfplumber` con la página entera — un riesgo real de identificar mal a qué pedido pertenece un artículo, mucho peor que ir despacio. Se descartó sin llegar a tocar `app.py`.
+
+Ninguno de los dos intentos llegó a entregarse — se probaron, no funcionaron o eran arriesgados, y se descartaron. El coste real medido (~350-365 ms por página en un entorno de pruebas con más CPU que el plan Free de Render, y unos 2,6 s por página ya en producción, calculado sobre los 259s reales que tardó el listado de 99 páginas) parece ser, con las herramientas actuales de esta app, el suelo de lo que cuesta reconstruir una tabla así de densa con `pdfplumber` — bajarlo de verdad probablemente exigiría cambiar de librería de lectura de PDF, un cambio mucho más grande y arriesgado que no se ha intentado hoy.
+
+**Cambio real — dar más margen de tiempo, en vez de ir más rápido**:
+- `render.yaml`: `--timeout` de gunicorn, de 300 a 900 segundos. A ~2,6 s/página en producción, 300s se quedan cortos a partir de ~115 páginas — justo lo que le pasó a Víctor con el listado de 121. 900s da margen hasta unas 300-330 páginas.
+- `templates/index.html`: las 4 funciones de sondeo del navegador que esperan a que termine un job en segundo plano (`_pollCompararListadoPdf`, `_pollActualizarDepartamentos`, `_pollImportarAlbaranes`, `_pollCompararListadoAlbaranes`) se rendían a los 5 minutos (150 intentos × 2s) con "está tardando demasiado" — un límite que ya se había quedado corto para el listado de 121 páginas incluso antes de fijarse en el de gunicorn. Subido a 16 minutos (480 intentos) en las 4, para que el navegador no se rinda antes de que el servidor termine de verdad.
+- Verificado con el propio listado real de 121 páginas que mandó Víctor: se extraen correctamente 316 pedidos / 2.827 líneas, sin ningún error, con `proveedor_raw`/`fecha_hora_fecha` presentes en el 100% de los pedidos (0 huecos) — mismo criterio de calidad que ya se había comprobado con el de 99 páginas.
+
+**Verificación**: `python3 -m py_compile app.py` sin errores (aunque `app.py` no cambia en esta entrega); los 8 bloques `<script>` de `templates/index.html` pasan `node --check` sin errores. El listado real de 121 páginas / 316 pedidos / 2.827 líneas se procesó de principio a fin contra un PostgreSQL 16 real sin ninguna excepción, con el mismo resultado limpio (0 pedidos sin proveedor, 0 sin fecha, 1 único código de departamento sin mapear — el mismo `00000700` ya conocido de antes). No se ha podido medir en Render real el tiempo exacto que tardará este PDF de 121 páginas (sin acceso a esa infraestructura desde aquí) — con la tasa de ~2,6 s/página ya observada en producción, se espera del orden de 5-6 minutos, bien dentro de los nuevos márgenes de 900s (servidor) y 16 minutos (navegador).
+
+**Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+
+**Sigue pendiente / aviso importante para el despliegue**: si el servicio de Render de Víctor no está conectado a este repositorio en modo "Blueprint" (sincronizando `render.yaml` automáticamente en cada despliegue — a juzgar por sus despliegues anteriores tipo "Add files via upload", puede que no lo esté), el cambio de `--timeout` de este archivo puede NO aplicarse solo con subir los archivos: conviene que revise y actualice el "Start Command" directamente en Render → su servicio → Settings, para asegurarse de que el 900 quede reflejado ahí también. Sigue sin tocarse la corrección del egress-tracking (pendiente, según lo acordado). La posibilidad de un cambio más profundo (otra librería de lectura de PDF, más rápida) queda anotada para si en el futuro los listados quincenales/semanales siguen dando problemas de tiempo — no se ha tocado hoy por el riesgo que supondría hacerlo con prisa.
+
+**Entrega**: `templates/index.html`, `render.yaml`, `README.md`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.29 — 5 septiembre 2026
 
 Corregido el OOM real que la v12.32.28 no arregló: no era la base de datos, era pdfplumber reteniendo en memoria TODAS las páginas ya procesadas del PDF durante toda la subida

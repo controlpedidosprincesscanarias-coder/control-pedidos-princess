@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.29
+          V 12.32.30
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -7207,9 +7207,18 @@ async function compararListadoPdf() {
 }
 
 async function _pollCompararListadoPdf(jobId, intentos) {
-  // Sondeo cada 2s, hasta 5 minutos (150 intentos) — de sobra incluso
-  // para un listado varias veces más grande que los probados hasta ahora.
-  if (intentos > 150) {
+  // (2026-09-05, v12.32.30) Sondeo cada 2s, hasta 16 minutos (480
+  // intentos) — antes eran 5 minutos (150), pero con un listado real de
+  // 121 páginas ese margen se quedaba corto para "Departamentos y
+  // líneas" (pdfplumber tarda ~2,6s/página en la CPU compartida de
+  // Render): el navegador se rendía con "tardando demasiado" antes de
+  // que el job terminase de verdad. Se sube el límite en las 4
+  // funciones de sondeo por igual (esta, _pollActualizarDepartamentos,
+  // _pollImportarAlbaranes, _pollCompararListadoAlbaranes) — todas
+  // comparten el mismo patrón y el mismo riesgo con listados grandes,
+  // aunque esta en concreto use pypdf (más rápido) y no pdfplumber. Ver
+  // también --timeout de gunicorn en render.yaml, subido a 900s.
+  if (intentos > 480) {
     toast('La comparación está tardando demasiado — inténtalo de nuevo en unos minutos', 'error');
     document.getElementById('cmp-pdf-form').style.display = '';
     document.getElementById('cmp-pdf-loading').style.display = 'none';
@@ -7310,7 +7319,9 @@ async function actualizarDepartamentosListado() {
 }
 
 async function _pollActualizarDepartamentos(jobId, intentos) {
-  if (intentos > 150) {
+  // (2026-09-05, v12.32.30) 16 minutos (antes 5) — ver la nota extensa
+  // junto al mismo límite en _pollCompararListadoPdf.
+  if (intentos > 480) {
     toast('La actualización está tardando demasiado — inténtalo de nuevo en unos minutos', 'error');
     document.getElementById('dep-list-form').style.display = '';
     document.getElementById('dep-list-loading').style.display = 'none';
@@ -7420,7 +7431,9 @@ async function importarListadoAlbaranes() {
 }
 
 async function _pollImportarAlbaranes(jobId, intentos) {
-  if (intentos > 150) {
+  // (2026-09-05, v12.32.30) 16 minutos (antes 5) — ver la nota extensa
+  // junto al mismo límite en _pollCompararListadoPdf.
+  if (intentos > 480) {
     toast('La importación está tardando demasiado — inténtalo de nuevo en unos minutos', 'error');
     document.getElementById('alb-list-form').style.display = '';
     document.getElementById('alb-list-loading').style.display = 'none';
@@ -7921,8 +7934,10 @@ async function crearPedidosSeleccionadosSap() {
 ═══════════════════════════════════════════════════════════════════════ */
 async function _pollCompararListadoAlbaranes(jobId, intentos) {
   // Mismo patrón de sondeo que _pollCompararListadoPdf (evita timeouts de
-  // proxy con PDFs grandes): 2s entre intentos, hasta 5 minutos.
-  if (intentos > 150) {
+  // proxy con PDFs grandes): 2s entre intentos.
+  // (2026-09-05, v12.32.30) 16 minutos (antes 5) — ver la nota extensa
+  // junto al mismo límite en _pollCompararListadoPdf.
+  if (intentos > 480) {
     toast('La comparación está tardando demasiado — inténtalo de nuevo en unos minutos', 'error');
     document.getElementById('cmp-pdf-form').style.display = '';
     document.getElementById('cmp-pdf-loading').style.display = 'none';

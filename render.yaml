@@ -15,7 +15,23 @@ services:
     # gthread reparte las peticiones entrantes entre varios hilos del
     # mismo worker, así que los sondeos se siguen atendiendo con
     # normalidad mientras el hilo de fondo hace lo suyo.
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 300
+    #
+    # (2026-09-05, v12.32.30) --timeout 300 → 900: "Departamentos y
+    # líneas (SAP detallado)" lee cada página con pdfplumber a mano,
+    # tabla por tabla — en la CPU compartida del plan Free de Render
+    # esto sale a ~2,6 segundos por página (comprobado con un PDF real
+    # de 99 páginas que tardó 259s en producción). Con --timeout 300,
+    # un listado de más de ~115 páginas puede volver a dar el mismo
+    # síntoma de siempre ("el job no existe o ha caducado"), esta vez
+    # por tiempo de CPU, no por memoria — le pasó a Víctor con un
+    # listado real de 121 páginas. Investigado si se podía acelerar la
+    # lectura en sí (ver CHANGELOG.md v12.32.30): no se encontró forma
+    # segura de hacerlo más rápido sin arriesgar el resultado, así que
+    # se sube el margen en vez de forzar la velocidad. 900s da margen
+    # para listados de hasta unas 300-330 páginas; si Víctor pasa a
+    # subir listados semanales (más cortos) como tiene pensado, este
+    # margen probablemente ya no hará falta apurarlo tanto.
+    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 900
     envVars:
       - key: DATABASE_URL
         sync: false          # Lo pegas manualmente en Render → Environment
