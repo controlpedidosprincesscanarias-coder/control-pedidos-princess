@@ -1561,17 +1561,17 @@ tbody tr:last-child{border-bottom:none}
       <div id="view-pedidos" class="section-hidden">
         <div class="filters" id="pedidos-filters">
           <input class="filter-input" id="f-q" placeholder="🔍 Buscar…" oninput="debouncedLoad()">
-          <select class="filter-select" id="f-hotel" onchange="loadPedidos()">
+          <select class="filter-select" id="f-hotel" onchange="applyFilter()">
             <option value="">Todos los hoteles</option>
           </select>
-          <select class="filter-select" id="f-estado" onchange="loadPedidos()">
+          <select class="filter-select" id="f-estado" onchange="applyFilter()">
             <option value="">Todos los estados</option>
           </select>
-          <select class="filter-select" id="f-depto" onchange="loadPedidos()">
+          <select class="filter-select" id="f-depto" onchange="applyFilter()">
             <option value="">Todos los departamentos</option>
           </select>
-          <input class="filter-input" id="f-fecha-desde" type="date" title="Fecha solicitud desde" style="width:140px" onchange="loadPedidos()">
-          <input class="filter-input" id="f-fecha-hasta" type="date" title="Fecha solicitud hasta" style="width:140px" onchange="loadPedidos()">
+          <input class="filter-input" id="f-fecha-desde" type="date" title="Fecha solicitud desde" style="width:140px" onchange="applyFilter()">
+          <input class="filter-input" id="f-fecha-hasta" type="date" title="Fecha solicitud hasta" style="width:140px" onchange="applyFilter()">
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
           <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
           <button class="btn btn-sm" id="btn-comparar-listado-pdf" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCompararListado()">📄 Comparar listado PDF</button>
@@ -5015,7 +5015,16 @@ function renderAccesosRapidos() {
    Pedidos
 ═══════════════════════════════════════════════════════════════════════════ */
 let debounceT;
-function debouncedLoad() { clearTimeout(debounceT); debounceT=setTimeout(loadPedidos,350); }
+function debouncedLoad() { clearTimeout(debounceT); debounceT=setTimeout(() => { G.page = 1; loadPedidos(); }, 350); }
+
+// v12.32.43 — cualquier cambio de filtro (buscador, hotel, estado, depto,
+// fechas) debe volver a la página 1: si no, un pedido que solo existe en la
+// página 1 del resultado filtrado puede "desaparecer" porque la petición
+// sigue pidiendo la página en la que estaba el usuario antes de filtrar
+// (p.ej. página 5 de la vista sin filtrar), que ya no tiene filas para el
+// nuevo filtro. Bug reportado: buscar un Nº de pedido conocido devolvía
+// "No hay pedidos que mostrar" pese a existir.
+function applyFilter() { G.page = 1; loadPedidos(); }
 
 async function loadPedidos() {
   const q      = document.getElementById('f-q').value.trim();
