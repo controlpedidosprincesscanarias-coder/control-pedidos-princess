@@ -36,6 +36,18 @@
 
 ---
 
+## 2026-09-04 — [Control Pedidos] Corregido bug real de la v12.32.27: "Departamentos y líneas" reiniciaba el servicio con un PDF pequeño — no era memoria, eran casi 4.000 consultas a la BD una por una en vez de en bloque (v12.32.28)
+
+- **Qué pasó**: Víctor subió un listado de solo 99 páginas / 281 pedidos y, tras ~4,5 minutos, saltó "El job no existe o ha caducado" — el log de Render confirmó que el servicio se reinició entero a mitad de la subida, mismo síntoma que el problema de memoria de la v12.32.21 pero con un PDF que no debería dar problemas por tamaño.
+- **Causa real**: `_actualizar_departamentos_desde_listado_detallado()` hacía una consulta a la base de datos por cada cosa que tocaba (alta nueva, SELECT+UPDATE de departamento, UPDATE de `pedidos.departamento_id`, DELETE de líneas, un INSERT por línea) — para 281 pedidos con 2.281 líneas, casi 4.000 consultas seguidas. En local (sin red) es instantáneo, por eso no se detectó antes de entregar la v12.32.27; contra Supabase real, con latencia de red normal, esas casi 4.000 consultas tardan varios minutos — de sobra para que Render diera el proceso por colgado y lo reiniciase.
+- **Cambio en `app.py`**: la función se reescribe para hacer todo en bloque con `psycopg2.extras.execute_values` — un único INSERT para los pedidos nuevos, un único UPDATE para el departamento de `sap_pedidos_listado`, otro único UPDATE para propagarlo a `pedidos.departamento_id`, un único DELETE (`pedido_num_sap = ANY(...)`) y unos pocos INSERT paginados de 1.000 en 1.000 para las líneas. Mismo resultado numérico que antes, de casi 4.000 consultas a poco más de una decena. Se añade también una defensa menor: un pedido cuyo número saliera vacío del PDF se descarta en vez de romper toda la subida.
+- **Verificación**: `python3 -m py_compile app.py` sin errores. Probado de extremo a extremo contra un PostgreSQL 16 real con el esquema completo de la app, usando el mismo PDF real de 99 páginas que reportó Víctor: resultado idéntico al esperado de la v12.32.27 (281 pedidos nuevos, 281 departamentos actualizados, 2.281 líneas guardadas), propagación a `pedidos.departamento_id` confirmada sobre un pedido ya dado de alta, y segunda subida idempotente (0 nuevos, sin duplicados). No se ha podido medir el tiempo real contra Supabase desde aquí — al desplegar, repetir la subida que falló y confirmar que ahora termina en segundos.
+- **Lección**: cualquier función que recorra un listado y haga una consulta a la BD DENTRO del bucle es un riesgo de este tipo, aunque funcione perfecto en local — la diferencia solo aparece con latencia de red real. Contar el nº de consultas en el peor caso (pedidos × pasos) antes de dar por buena una función así.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Entrega**: `app.py`, `templates/index.html` (solo versión), `README.md`, más este historial/`CHANGELOG.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-04 — [Control Pedidos] Pieza 1+2 del rediseño "solo con los dos detallados": un pedido que solo aparece en el listado DETALLADO ya se registra y se puede crear, sin depender del RESUMIDO (v12.32.27)
 
 - **Contexto**: Víctor quiere poder trabajar únicamente con los dos listados DETALLADO de SAP (Pedidos y Albaranes), sin tener que subir también el RESUMIDO ni compararlos a la vez. Confirmada la viabilidad de la extracción de proveedor+fecha (100% sobre 2.018 cabeceras reales), se acordó entregarlo por piezas — esta es la primera: que un pedido visible solo en el detallado deje de ser invisible para la app.

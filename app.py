@@ -11,7 +11,7 @@ from functools import wraps
 from apscheduler.schedulers.background import BackgroundScheduler
 
 import psycopg2
-from psycopg2.extras import RealDictCursor
+from psycopg2.extras import RealDictCursor, execute_values
 from psycopg2.pool import ThreadedConnectionPool
 import requests
 
@@ -11197,6 +11197,40 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
     fuente que puede actualizar proveedor/fechas/importe de una fila ya
     existente (ver _guardar_listado_sap_importado). Esto solo rellena el
     hueco de los pedidos que el RESUMIDO nunca reportó.
+
+    (2026-09-04, v12.32.28) TODO EN BLOQUE, NO PEDIDO A PEDIDO — bug real
+    encontrado por Víctor nada más desplegar la v12.32.27: subir un
+    listado de solo 99 páginas / 281 pedidos hacía que el servicio entero
+    se reiniciase a mitad de la subida (mismo síntoma "El job no existe o
+    ha caducado" que el problema de memoria de la v12.32.21, pero esta vez
+    con un PDF muchísimo más pequeño que el que causaba aquel). Antes de
+    esta versión, esta función hacía **una consulta a la base de datos por
+    cada pedido y por cada línea de artículo** (el alta nueva de
+    v12.32.27, el SELECT/UPDATE de departamento, el UPDATE de
+    `pedidos.departamento_id`, el DELETE de líneas y un INSERT por línea)
+    — para 281 pedidos con 2.281 líneas eso son casi 4.000 consultas
+    seguidas, cada una con su propio viaje de ida y vuelta hasta Supabase.
+    En el sandbox de pruebas (Postgres local, sin red de por medio) eso es
+    instantáneo, pero contra la base de datos real de Víctor tardó más de
+    4 minutos, tiempo de sobra para que Render diera por muerto el
+    proceso — la causa real no era memoria, sino miles de consultas
+    innecesarias donde bastaban unas pocas.
+
+    Ahora se hace todo en un puñado de sentencias, cada una con TODOS los
+    pedidos/líneas de golpe (`psycopg2.extras.execute_values`): un único
+    INSERT ... ON CONFLICT DO NOTHING para las altas nuevas, un único
+    UPDATE (con una tabla temporal vía VALUES) para el departamento de
+    `sap_pedidos_listado`, otro único UPDATE para propagarlo a
+    `pedidos.departamento_id`, un único DELETE con `pedido_num_sap =
+    ANY(...)` y un puñado de INSERT (paginados de 1.000 en 1.000, no fila
+    a fila) para las líneas. El resultado numérico es idéntico al de
+    antes — mismos contadores, mismo criterio de qué se actualiza y qué
+    no — solo cambia CUÁNTAS veces se habla con la base de datos para
+    conseguirlo. Como consecuencia de hacerlo en bloque, `no_encontrados_
+    en_listado` ya no puede pasar de 0 en la práctica (el alta en bloque
+    del paso 0 crea la fila de cualquier pedido que faltara antes de que
+    el paso de departamento la busque) — se mantiene en el resultado por
+    compatibilidad, pero deja de ser una señal útil.
     """
     listado = _extraer_listado_detallado_completo(pdf_bytes)
     if not listado:
@@ -11205,6 +11239,14 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
             "¿es el \"Listado de Pedidos\" detallado de SAP, con el formato habitual "
             "(cabecera de pedido seguida de una línea por artículo, con departamento)?"
         )
+
+    # (2026-09-04, v12.32.28) Defensa ante una cabecera nunca reconocida —
+    # en teoría no debería pasar (_extraer_listado_detallado_completo()
+    # solo crea una entrada en el dict a partir de una cabecera ya
+    # matcheada), pero un num_sap vacío/None reventaría el INSERT en
+    # bloque de más abajo (columna NOT NULL) en vez de limitarse a
+    # ignorar ese pedido concreto.
+    listado = {num: info for num, info in listado.items() if num}
 
     actualizados = 0
     pedidos_completados = 0
@@ -11215,88 +11257,128 @@ def _actualizar_departamentos_desde_listado_detallado(hotel_id: int, pdf_bytes: 
     lineas_guardadas = 0
     pedidos_nuevos_en_listado_sap = 0
 
+    # ── 0: alta en bloque de los pedidos que el RESUMIDO nunca trajo ──────────
+    # (ver docstring v12.32.27/28). ON CONFLICT DO NOTHING: nunca pisa una
+    # fila que ya exista — el RESUMIDO sigue siendo la única fuente que
+    # actualiza proveedor/fechas/importe de una fila ya presente.
+    filas_nuevas = []
+    for num_sap, info in listado.items():
+        lineas = info.get("lineas") or []
+        primera_linea = lineas[0] if lineas else {}
+        filas_nuevas.append((
+            hotel_id, num_sap, info.get("fecha_hora_fecha"), info.get("fecha_hora_hora"),
+            info.get("proveedor_raw"), primera_linea.get("fecha_pedido"), primera_linea.get("fecha_entrega"),
+            info.get("departamento_sap_codigo"),
+        ))
+    if filas_nuevas:
+        with get_db().cursor() as cur:
+            insertados = execute_values(
+                cur,
+                """INSERT INTO sap_pedidos_listado
+                       (hotel_id, pedido_num_sap, fecha_hora_fecha, fecha_hora_hora,
+                        proveedor_raw, fecha_pedido, fecha_entrega, departamento_sap_codigo,
+                        actualizado_en)
+                   VALUES %s
+                   ON CONFLICT (hotel_id, pedido_num_sap) DO NOTHING
+                   RETURNING pedido_num_sap""",
+                filas_nuevas,
+                template="(%s,%s,%s,%s,%s,%s,%s,%s, NOW())",
+                page_size=1000,
+                fetch=True,
+            )
+        pedidos_nuevos_en_listado_sap = len(insertados)
+
+    # ── 1 y 2: departamento, en bloque (sap_pedidos_listado + pedidos.departamento_id) ──
+    filas_con_codigo = []
     for num_sap, info in listado.items():
         codigo = info.get("departamento_sap_codigo")
-        lineas = info.get("lineas") or []
-
-        # ── 0 (v12.32.27): alta en sap_pedidos_listado de los pedidos que el
-        # RESUMIDO nunca trajo — ver docstring. No pisa ninguna fila ya
-        # existente (ON CONFLICT DO NOTHING): el RESUMIDO sigue siendo la
-        # única fuente que actualiza proveedor/fechas/importe de una fila
-        # ya presente.
-        primera_linea = lineas[0] if lineas else {}
-        cur_nuevo = execute(
-            """INSERT INTO sap_pedidos_listado
-                   (hotel_id, pedido_num_sap, fecha_hora_fecha, fecha_hora_hora,
-                    proveedor_raw, fecha_pedido, fecha_entrega, departamento_sap_codigo,
-                    actualizado_en)
-               VALUES (%s,%s,%s,%s,%s,%s,%s,%s, NOW())
-               ON CONFLICT (hotel_id, pedido_num_sap) DO NOTHING""",
-            (hotel_id, num_sap, info.get("fecha_hora_fecha"), info.get("fecha_hora_hora"),
-             info.get("proveedor_raw"), primera_linea.get("fecha_pedido"), primera_linea.get("fecha_entrega"),
-             codigo)
-        )
-        if cur_nuevo.rowcount:
-            pedidos_nuevos_en_listado_sap += 1
-
-        # ── 1 y 2: departamento (sap_pedidos_listado + pedidos.departamento_id) ──
         if not codigo:
             sin_departamento_en_pdf += 1
-        else:
-            if codigo not in _SAP_DEPARTAMENTO_MAP:
-                codigos_no_mapeados.add(codigo)
-            fila = query(
-                "SELECT id FROM sap_pedidos_listado WHERE hotel_id=%s AND pedido_num_sap=%s",
-                (hotel_id, num_sap), one=True
+            continue
+        if codigo not in _SAP_DEPARTAMENTO_MAP:
+            codigos_no_mapeados.add(codigo)
+        filas_con_codigo.append((hotel_id, num_sap, codigo))
+
+    if filas_con_codigo:
+        with get_db().cursor() as cur:
+            actualizadas_sap = execute_values(
+                cur,
+                """UPDATE sap_pedidos_listado AS t
+                       SET departamento_sap_codigo = v.codigo, actualizado_en = NOW()
+                   FROM (VALUES %s) AS v(hotel_id, pedido_num_sap, codigo)
+                   WHERE t.hotel_id = v.hotel_id AND t.pedido_num_sap = v.pedido_num_sap
+                   RETURNING t.pedido_num_sap""",
+                filas_con_codigo,
+                template="(%s,%s,%s)",
+                page_size=1000,
+                fetch=True,
             )
-            if not fila:
-                no_encontrados_en_listado += 1
-            else:
-                execute(
-                    "UPDATE sap_pedidos_listado SET departamento_sap_codigo=%s, actualizado_en=NOW() "
-                    "WHERE hotel_id=%s AND pedido_num_sap=%s",
-                    (codigo, hotel_id, num_sap)
+        actualizados = len(actualizadas_sap)
+        no_encontrados_en_listado = len(filas_con_codigo) - actualizados
+
+        # (2026-09-04, v12.32.17, ahora en bloque en v12.32.28) Propagación
+        # inmediata al pedido ya dado de alta — ver docstring. `pedido_num`
+        # se compara tal cual (sin normalizar ceros a la izquierda), mismo
+        # criterio que ya usa el backfill de _auto_migrate() para este
+        # mismo cruce. Solo si el pedido no tiene YA un departamento
+        # (nunca se pisa uno existente).
+        deptos_cat = rows_to_list(query("SELECT id, nombre FROM departamentos"))
+        dep_id_por_nombre = {d["nombre"]: d["id"] for d in deptos_cat}
+        filas_pedidos_dep = []
+        for hotel_id_v, num_sap, codigo in filas_con_codigo:
+            dep_nombre = _SAP_DEPARTAMENTO_MAP.get(codigo)
+            dep_id = dep_id_por_nombre.get(dep_nombre) if dep_nombre else None
+            if dep_id:
+                filas_pedidos_dep.append((hotel_id_v, num_sap, dep_id))
+        if filas_pedidos_dep:
+            with get_db().cursor() as cur:
+                completados = execute_values(
+                    cur,
+                    """UPDATE pedidos AS p
+                           SET departamento_id = v.dep_id
+                       FROM (VALUES %s) AS v(hotel_id, pedido_num, dep_id)
+                       WHERE p.hotel_id = v.hotel_id AND p.pedido_num = v.pedido_num
+                             AND p.departamento_id IS NULL
+                       RETURNING p.id""",
+                    filas_pedidos_dep,
+                    template="(%s,%s,%s)",
+                    page_size=1000,
+                    fetch=True,
                 )
-                actualizados += 1
+            pedidos_completados = len(completados)
 
-                # (2026-09-04, v12.32.17) Propagación inmediata al pedido ya
-                # dado de alta — ver docstring. `pedido_num` se compara tal
-                # cual (sin normalizar ceros a la izquierda), mismo criterio
-                # que ya usa el backfill de _auto_migrate() para este mismo
-                # cruce.
-                dep_nombre = _SAP_DEPARTAMENTO_MAP.get(codigo)
-                if dep_nombre:
-                    dep_row = query("SELECT id FROM departamentos WHERE nombre=%s", (dep_nombre,), one=True)
-                    if dep_row:
-                        cur_dep = execute(
-                            "UPDATE pedidos SET departamento_id=%s "
-                            "WHERE hotel_id=%s AND pedido_num=%s AND departamento_id IS NULL",
-                            (dep_row["id"], hotel_id, num_sap)
-                        )
-                        if cur_dep.rowcount:
-                            pedidos_completados += cur_dep.rowcount
-
-        # ── 3: contenido línea a línea (sap_pedidos_lineas) ─────────────────
-        if lineas:
-            execute(
-                "DELETE FROM sap_pedidos_lineas WHERE hotel_id=%s AND pedido_num_sap=%s",
-                (hotel_id, num_sap)
-            )
-            for ln in lineas:
-                execute(
+    # ── 3: contenido línea a línea, en bloque (sap_pedidos_lineas) ────────────
+    nums_con_lineas = [num_sap for num_sap, info in listado.items() if info.get("lineas")]
+    if nums_con_lineas:
+        execute(
+            "DELETE FROM sap_pedidos_lineas WHERE hotel_id=%s AND pedido_num_sap = ANY(%s)",
+            (hotel_id, nums_con_lineas)
+        )
+        todas_las_lineas = []
+        for num_sap in nums_con_lineas:
+            for ln in listado[num_sap]["lineas"]:
+                todas_las_lineas.append((
+                    hotel_id, num_sap, ln.get("codigo_articulo"), ln.get("descripcion"), ln.get("unidad"),
+                    ln.get("cantidad_pedida_txt"), ln.get("cantidad_recibida_txt"), ln.get("cantidad_pendiente_txt"),
+                    ln.get("fecha_pedido"), ln.get("fecha_entrega"), ln.get("precio_txt"), ln.get("descuento_pct_txt"),
+                    ln.get("importe_linea_txt"), ln.get("departamento_sap_codigo"),
+                ))
+        if todas_las_lineas:
+            with get_db().cursor() as cur:
+                execute_values(
+                    cur,
                     """INSERT INTO sap_pedidos_lineas
                            (hotel_id, pedido_num_sap, codigo_articulo, descripcion, unidad,
                             cantidad_pedida_txt, cantidad_recibida_txt, cantidad_pendiente_txt,
                             fecha_pedido, fecha_entrega, precio_txt, descuento_pct_txt,
                             importe_linea_txt, departamento_sap_codigo)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
-                    (hotel_id, num_sap, ln.get("codigo_articulo"), ln.get("descripcion"), ln.get("unidad"),
-                     ln.get("cantidad_pedida_txt"), ln.get("cantidad_recibida_txt"), ln.get("cantidad_pendiente_txt"),
-                     ln.get("fecha_pedido"), ln.get("fecha_entrega"), ln.get("precio_txt"), ln.get("descuento_pct_txt"),
-                     ln.get("importe_linea_txt"), ln.get("departamento_sap_codigo"))
+                       VALUES %s""",
+                    todas_las_lineas,
+                    template="(%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+                    page_size=1000,
                 )
-            pedidos_con_lineas += 1
-            lineas_guardadas += len(lineas)
+        pedidos_con_lineas = len(nums_con_lineas)
+        lineas_guardadas = len(todas_las_lineas)
 
     if actualizados or lineas_guardadas or pedidos_nuevos_en_listado_sap:
         get_db().commit()
