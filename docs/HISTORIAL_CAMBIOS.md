@@ -36,6 +36,19 @@
 
 ---
 
+## 2026-09-05 — [Control Pedidos] Pieza 4 del rediseño "solo con los dos detallados": revisión en bloque de entregas pendientes cruzando Pedidos↔Albaranes detallado, con tabla de auditoría para marcar y aplicar — nunca cambia el estado sola (v12.32.32)
+
+- **Contexto**: continuación de Pieza 3 (v12.32.31), Víctor confirmó seguir. Pregunta de diseño planteada antes de construir nada (AskUserQuestion): el cruce que necesita esta pieza para prescindir del RESUMIDO solo puede hacerse por proveedor+artículo (el Listado de Albaranes nunca trae el número de pedido) — señal más débil que proveedor+importe exacto (la que ya usa "Comparar listado + Albaranes"). Víctor eligió la opción segura: "Solo sugerir, nunca cambiar estado solo".
+- **Qué hace**: nuevo botón "📋 Revisar entregas pendientes (Albaranes)" — para un hotel, calcula de golpe (sin subir PDF, usa lo ya guardado por "Departamentos y líneas" e "Importar Albaranes") qué pedidos pendientes de entrega tienen ya todas o parte de sus líneas cubiertas por algún albarán, y propone ENTREGADO o ENTREGA PARCIAL. El usuario marca con casillas qué pedidos aplicar y solo entonces se actualiza el estado.
+- **Cambio en `app.py`**: `_sugerencias_albaranes_pendientes_hotel()` — versión en bloque de `_sugerencias_albaran_pedido()` (v12.32.19), precarga todo de una vez (nunca N+1); `_aplicar_una_sugerencia_albaran_pendiente()` — actualiza `estado`, historial con nombre fijo "Automática — ..." y notifica, con el mismo guardián de `_aplicar_coincidencia_albaran()` (nunca CANCELADO/DENEGADO, nunca retrocede); a diferencia de esa función NO toca `entrada_albaran_num`/`fecha_tramitacion` en esta primera versión (señal más débil, se decidió no arriesgar un albarán equivocado); `_aplicar_sugerencias_albaranes_pendientes()` — recalcula en el momento antes de aplicar, nunca reutiliza lo ya mostrado en pantalla. Dos endpoints nuevos (`GET`/`POST .../aplicar`, admin-only el segundo).
+- **Cambio en `templates/index.html`**: botón nuevo junto a "Sugerencias de Albarán"; modal con selector de hotel, tabla con casillas + "seleccionar todas" + "Aplicar seleccionadas" (mismo patrón que "Comparar listado + Albaranes"), detalle de líneas con los mismos iconos (🔒 ✅ ❔).
+- **Verificación**: probado contra un PostgreSQL 16 real con 6 pedidos cubriendo todos los casos: cobertura total (ENTREGADO), parcial (ENTREGA PARCIAL), ambiguo sin confirmar (sin sugerencia), confirmado a mano con cantidad distinta (cubierta igual, y confirmado que no toca `entrada_albaran_num`/`fecha_tramitacion`), CANCELADO (excluido por estado) y ya-en-ese-estado (excluido por no avanzar). Aplicar dos veces la misma sugerencia no duplica nada; endpoints con validación de parámetros y rol admin comprobada. `python3 -m py_compile` sin errores.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `PENDIENTES.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `README.md` sí: versión actual.
+- **Sigue pendiente**: Pieza 5 (unificar botones), egress-tracking (pospuesta a petición de Víctor).
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`, más este historial/`CHANGELOG.md`. `render.yaml`, `models.py` y `requirements.txt` no cambian — sin columnas nuevas.
+
+---
+
 ## 2026-09-05 — [Control Pedidos] Pieza 3 del rediseño "solo con los dos detallados": Total Pedido APROXIMADO para pedidos antiguos sin importe, sumando las líneas del detallado y siempre marcado como "≈ aproximado" (v12.32.31)
 
 - **Contexto**: continuación de Pieza 1+2 (v12.32.27-30, ya confirmada en producción). Víctor había elegido "Rellenar retroactivo aproximado" para los pedidos sin importe (AskUserQuestion, 2026-09-04) y dio luz verde a seguir.

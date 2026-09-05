@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.31
+          V 12.32.32
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1578,6 +1578,7 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-sm" id="btn-actualizar-departamentos" style="background:#6f42c1;color:#fff;border:none" onclick="abrirModalActualizarDepartamentos()">🏷️ Departamentos y líneas (SAP detallado)</button>
           <button class="btn btn-sm" id="btn-importar-albaranes" style="background:#20805c;color:#fff;border:none" onclick="abrirModalImportarAlbaranes()">📥 Importar Albaranes (SAP detallado)</button>
           <button class="btn btn-sm" id="btn-sugerencias-albaran" style="background:#b8860b;color:#fff;border:none" onclick="abrirModalSugerenciasAlbaran()">🔍 Sugerencias de Albarán</button>
+          <button class="btn btn-sm" id="btn-sugerencias-albaranes-pendientes" style="background:#b8860b;color:#fff;border:none" onclick="abrirModalSugerenciasAlbaranesPendientes()">📋 Revisar entregas pendientes (Albaranes)</button>
           <button class="btn btn-sm" id="btn-confirmar-albaran" style="background:#5b3a99;color:#fff;border:none" onclick="abrirModalConfirmarAlbaran()">📎 Confirmar un albarán suelto</button>
         </div>
         <div class="search-chips" id="pedidos-chips">
@@ -3066,6 +3067,79 @@ tbody tr:last-child{border-bottom:none}
   </div>
 </div>
 
+<!-- ── MODAL REVISAR ENTREGAS PENDIENTES (Albaranes, en bloque) ──────────
+   (2026-09-05, v12.32.32) Pieza 4 del rediseño "solo con los dos
+   detallados": versión en bloque de "🔍 Sugerencias de Albarán" de
+   arriba, para TODOS los pedidos pendientes de entrega de un hotel a la
+   vez — ver _sugerencias_albaranes_pendientes_hotel() en app.py. Mismo
+   patrón de tabla con checkboxes + "aplicar seleccionadas" que la
+   comparativa "Comparar listado + Albaranes" (ver #cmp-alb-resultado),
+   pero sin PDF que subir: lee directamente lo ya guardado en BD de
+   "Departamentos y líneas" e "Importar Albaranes". NUNCA cambia nada
+   solo — decisión confirmada por Víctor: "Solo sugerir, nunca cambiar
+   estado solo".
+-->
+<div class="modal-overlay" id="modal-sugerencias-albaranes-pendientes">
+  <div class="modal" style="max-width:960px">
+    <div class="modal-header">
+      <div class="modal-title">📋 Revisar entregas pendientes (Albaranes detallado)</div>
+      <button class="close-btn" onclick="closeModal('modal-sugerencias-albaranes-pendientes')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
+        Cruza, para TODOS los pedidos pendientes de entrega de un hotel a la vez, sus líneas del
+        Listado de Pedidos detallado con el Listado de Albaranes detallado ya importado — mismo
+        cruce por proveedor + código de artículo que "🔍 Sugerencias de Albarán" de arriba, pero
+        para todos los pedidos de una vez, para no tener que abrirlos uno a uno.
+        <strong>Nunca cambia nada sola</strong>: marca abajo qué pedidos aplicar y pulsa
+        "Aplicar seleccionadas" — solo entonces se actualiza el estado. Esta primera versión solo
+        toca el estado del pedido; el número de albarán y la fecha de tramitación se siguen
+        registrando a mano si hacen falta, igual que hasta ahora.
+      </div>
+      <div class="form-grid" style="grid-template-columns:1fr auto;gap:14px;align-items:end;margin-bottom:14px">
+        <div class="form-group">
+          <label class="form-label">Hotel <span style="color:#e74c3c">*</span></label>
+          <select class="form-control" id="sug-alb-pend-hotel" onchange="buscarSugerenciasAlbaranesPendientes()"><option value="">— Selecciona —</option></select>
+        </div>
+        <button class="btn btn-gold" onclick="buscarSugerenciasAlbaranesPendientes()">🔄 Calcular sugerencias</button>
+      </div>
+
+      <div id="sug-alb-pend-loading" class="loading" style="display:none">Calculando sugerencias…</div>
+      <div id="sug-alb-pend-vacio" style="display:none;color:var(--text-secondary);font-size:.85rem">
+        Sin sugerencias pendientes para este hotel — o todavía no se ha seleccionado ninguno.
+      </div>
+
+      <div id="sug-alb-pend-resultado" style="display:none">
+        <div id="sug-alb-pend-resumen" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px"></div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px">
+          <div style="flex:1"></div>
+          <button class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none"
+                  onclick="aplicarSugerenciasAlbaranesPendientes()">✅ Aplicar seleccionadas</button>
+        </div>
+        <div class="table-wrap" style="max-height:420px">
+          <table>
+            <thead>
+              <tr>
+                <th style="width:28px"><input type="checkbox" id="sug-alb-pend-check-todas" checked onchange="_toggleTodasSugerenciasAlbaranPendientes(this)"></th>
+                <th>Pedido</th><th>Proveedor</th><th>Estado actual → propuesto</th><th>Detalle de líneas</th>
+              </tr>
+            </thead>
+            <tbody id="sug-alb-pend-tbody"></tbody>
+          </table>
+        </div>
+        <p style="font-size:.78rem;color:var(--text-secondary);margin-top:8px">
+          🔒 = albarán confirmado (PDF de confirmación o registrado en el pedido) · ✅ = coincide
+          exacta en cantidad · ❔ = candidato del mismo proveedor+artículo pero cantidad distinta ·
+          líneas en gris = sin candidato todavía.
+        </p>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-sugerencias-albaranes-pendientes')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL CONFIRMAR UN ALBARÁN SUELTO ────────────────────────────────
    (2026-09-04, v12.32.20) Sube el PDF de confirmación de UN albarán
    suelto que imprime el programa de almacén (el único documento de SAP
@@ -3466,6 +3540,10 @@ async function _entrarEnApp(r) {
   if (btnImportarAlb) btnImportarAlb.style.display = G.rol === 'admin' ? '' : 'none';
   const btnSugerenciasAlb = document.getElementById('btn-sugerencias-albaran');
   if (btnSugerenciasAlb) btnSugerenciasAlb.style.display = G.rol === 'admin' ? '' : 'none';
+  // (2026-09-05) Revisar entregas pendientes en bloque (Pieza 4): solo admin, mismo criterio —
+  // el endpoint de aplicar ya lo exige en backend, aquí solo se oculta el botón.
+  const btnSugerenciasAlbPend = document.getElementById('btn-sugerencias-albaranes-pendientes');
+  if (btnSugerenciasAlbPend) btnSugerenciasAlbPend.style.display = G.rol === 'admin' ? '' : 'none';
   const btnConfirmarAlb = document.getElementById('btn-confirmar-albaran');
   if (btnConfirmarAlb) btnConfirmarAlb.style.display = G.rol === 'admin' ? '' : 'none';
   await loadMaestros();
@@ -7603,6 +7681,131 @@ async function buscarSugerenciasAlbaran() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   Revisar entregas pendientes (Albaranes, en bloque) — Pieza 4, v12.32.32
+   Versión en bloque de "Sugerencias de Albarán" de arriba, para todos
+   los pedidos pendientes de entrega de un hotel a la vez — ver
+   _sugerencias_albaranes_pendientes_hotel() en app.py. Nunca cambia
+   nada sola: el usuario marca qué pedidos aplicar y pulsa "Aplicar
+   seleccionadas" (mismo patrón que #cmp-alb-resultado, la comparativa
+   "Comparar listado + Albaranes").
+═══════════════════════════════════════════════════════════════════════ */
+let _sugAlbPendResultado = null;
+let _sugAlbPendHotelId = null;
+
+function abrirModalSugerenciasAlbaranesPendientes() {
+  const sel = document.getElementById('sug-alb-pend-hotel');
+  sel.innerHTML = '<option value="">— Selecciona —</option>';
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  document.getElementById('sug-alb-pend-loading').style.display = 'none';
+  document.getElementById('sug-alb-pend-vacio').style.display = '';
+  document.getElementById('sug-alb-pend-resultado').style.display = 'none';
+  _sugAlbPendResultado = null;
+  _sugAlbPendHotelId = null;
+  openModal('modal-sugerencias-albaranes-pendientes');
+}
+
+async function buscarSugerenciasAlbaranesPendientes() {
+  const hotelId = val('sug-alb-pend-hotel');
+  if (!hotelId) {
+    document.getElementById('sug-alb-pend-resultado').style.display = 'none';
+    document.getElementById('sug-alb-pend-vacio').style.display = '';
+    return;
+  }
+  document.getElementById('sug-alb-pend-loading').style.display = '';
+  document.getElementById('sug-alb-pend-vacio').style.display = 'none';
+  document.getElementById('sug-alb-pend-resultado').style.display = 'none';
+  try {
+    const r = await fetch(`/api/pedidos/sugerencias-albaranes-pendientes?hotel_id=${hotelId}`, { credentials: 'same-origin' });
+    const d = await r.json();
+    document.getElementById('sug-alb-pend-loading').style.display = 'none';
+    if (!r.ok || d.error) { toast(d.error || 'Error calculando las sugerencias', 'error'); return; }
+    _sugAlbPendResultado = d;
+    _sugAlbPendHotelId = hotelId;
+    _renderSugerenciasAlbaranesPendientes(d);
+  } catch (e) {
+    document.getElementById('sug-alb-pend-loading').style.display = 'none';
+    toast('Error calculando las sugerencias: ' + e.message, 'error');
+  }
+}
+
+function _renderSugerenciasAlbaranesPendientes(d) {
+  const pedidos = d.pedidos || [];
+  if (!pedidos.length) {
+    document.getElementById('sug-alb-pend-vacio').style.display = '';
+    document.getElementById('sug-alb-pend-resultado').style.display = 'none';
+    return;
+  }
+  document.getElementById('sug-alb-pend-vacio').style.display = 'none';
+  document.getElementById('sug-alb-pend-resultado').style.display = '';
+
+  const pill = (txt, bg, fg) => `<span style="background:${bg};color:${fg};padding:4px 10px;border-radius:6px;font-size:.82rem">${txt}</span>`;
+  document.getElementById('sug-alb-pend-resumen').innerHTML =
+    pill(`${d.total_pedidos_evaluados} pedido(s) evaluado(s)`, '#eef1f7', '#1a3a6b') +
+    pill(`${d.total_con_sugerencia} con sugerencia de cambio de estado`, '#d4edda', '#155724');
+
+  const tbody = document.getElementById('sug-alb-pend-tbody');
+  tbody.innerHTML = pedidos.map(p => {
+    const detalle = (p.lineas || []).map(l => {
+      let candTxt;
+      if (!l.candidatos.length) {
+        candTxt = '<span style="color:#999">— sin candidato —</span>';
+      } else {
+        candTxt = l.candidatos.map(c => {
+          const marca = c.confirmado ? '🔒' : (c.coincide_exacto ? '✅' : '❔');
+          return `${marca} ${c.albaran_id}: ${c.cantidad_txt}`;
+        }).join(', ');
+      }
+      return `<div${l.cubierta ? '' : ' style="color:#999"'}>${l.codigo_articulo || ''} (recibido ${l.cantidad_recibida_txt || ''}): ${candTxt}</div>`;
+    }).join('');
+    return `<tr>
+      <td><input type="checkbox" value="${p.pedido_id}" checked></td>
+      <td class="monospace">${p.pedido_num}</td>
+      <td>${p.proveedor_nombre || ''}</td>
+      <td>${p.estado_actual} → <strong>${p.estado_sugerido}</strong></td>
+      <td style="font-size:.78rem">${detalle}</td>
+    </tr>`;
+  }).join('');
+  const checkTodas = document.getElementById('sug-alb-pend-check-todas');
+  if (checkTodas) checkTodas.checked = true;
+}
+
+function _toggleTodasSugerenciasAlbaranPendientes(chk) {
+  document.querySelectorAll('#sug-alb-pend-tbody input[type=checkbox]').forEach(c => c.checked = chk.checked);
+}
+
+async function aplicarSugerenciasAlbaranesPendientes() {
+  if (!_sugAlbPendHotelId) { toast('Selecciona antes un hotel', 'error'); return; }
+  const pedidoIds = Array.from(document.querySelectorAll('#sug-alb-pend-tbody input[type=checkbox]:checked'))
+    .map(c => parseInt(c.value, 10));
+  if (!pedidoIds.length) { toast('No hay ningún pedido seleccionado', 'error'); return; }
+  try {
+    const r = await fetch('/api/pedidos/sugerencias-albaranes-pendientes/aplicar', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ hotel_id: _sugAlbPendHotelId, pedido_ids: pedidoIds })
+    });
+    const d = await r.json();
+    if (!r.ok || d.error) { toast(d.error || 'Error aplicando las sugerencias', 'error'); return; }
+    const aplicadas = d.aplicadas || [], sinCambios = d.sin_cambios || [], errores = d.errores || [];
+    let msg = '';
+    if (aplicadas.length) msg += `✅ ${aplicadas.length} pedido(s) actualizado(s). `;
+    if (sinCambios.length) msg += `ℹ️ ${sinCambios.length} sin cambios (ya al día o desactualizado). `;
+    if (errores.length) msg += `⛔ ${errores.length} con error — revisa manualmente.`;
+    toast(msg.trim() || 'Sin cambios que aplicar', errores.length ? 'error' : 'success');
+    // (2026-09-05) Mismo motivo que en _procesarResultadoAplicarAlbaran(): adelanta el
+    // despacho de los correos internos de cambio de estado en vez de esperar al sondeo.
+    if (aplicadas.length) _enviarEmailsSistemaPendientes();
+    // Vuelve a calcular — los pedidos aplicados ya no deben aparecer, y puede haber
+    // aparecido alguno nuevo si algo más cambió mientras tanto.
+    buscarSugerenciasAlbaranesPendientes();
+    loadPedidos();
+  } catch (e) {
+    toast('Error aplicando las sugerencias: ' + e.message, 'error');
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    Confirmar un albarán suelto — v12.32.20
    Sube el PDF de confirmación de UN albarán (único documento de SAP que
    trae de forma directa el pedido asociado) — se procesa de forma
@@ -8621,6 +8824,8 @@ function calcDias(s) {
     if (btnImportarAlb2) btnImportarAlb2.style.display = G.rol === 'admin' ? '' : 'none';
     const btnSugerenciasAlb2 = document.getElementById('btn-sugerencias-albaran');
     if (btnSugerenciasAlb2) btnSugerenciasAlb2.style.display = G.rol === 'admin' ? '' : 'none';
+    const btnSugerenciasAlbPend2 = document.getElementById('btn-sugerencias-albaranes-pendientes');
+    if (btnSugerenciasAlbPend2) btnSugerenciasAlbPend2.style.display = G.rol === 'admin' ? '' : 'none';
     const btnConfirmarAlb2 = document.getElementById('btn-confirmar-albaran');
     if (btnConfirmarAlb2) btnConfirmarAlb2.style.display = G.rol === 'admin' ? '' : 'none';
     await loadMaestros();

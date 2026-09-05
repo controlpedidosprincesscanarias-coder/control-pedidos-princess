@@ -10783,6 +10783,69 @@ def sugerencias_albaran_pedido(pedido_id):
         return jsonify({"error": f"No se pudieron calcular sugerencias: {exc}"}), 500
     return jsonify(resultado)
 
+@app.route("/api/pedidos/sugerencias-albaranes-pendientes", methods=["GET"])
+@login_required
+def sugerencias_albaranes_pendientes():
+    """
+    (2026-09-05, v12.32.32) Versión "en bloque" de sugerencias_albaran_pedido()
+    de arriba, para TODOS los pedidos pendientes de entrega de un hotel a
+    la vez — ver _sugerencias_albaranes_pendientes_hotel(). Pieza 4 del
+    rediseño "solo con los dos detallados": permite ponerse al día de
+    golpe tras subir un Listado de Albaranes detallado, sin tener que
+    abrir pedido por pedido el botón "🔍 Sugerencias de Albarán". Solo
+    lectura, no cambia nada de ningún pedido.
+
+    GET /api/pedidos/sugerencias-albaranes-pendientes?hotel_id=<id>
+    """
+    hotel_id = request.args.get("hotel_id", type=int)
+    if not hotel_id:
+        return jsonify({"error": "Falta hotel_id"}), 400
+    try:
+        resultado = _sugerencias_albaranes_pendientes_hotel(hotel_id)
+    except Exception as exc:
+        log.exception("[SUGERENCIAS-ALBARANES-PENDIENTES] Error con hotel %s: %s", hotel_id, exc)
+        return jsonify({"error": f"No se pudieron calcular las sugerencias: {exc}"}), 500
+    return jsonify(resultado)
+
+@app.route("/api/pedidos/sugerencias-albaranes-pendientes/aplicar", methods=["POST"])
+@login_required
+def sugerencias_albaranes_pendientes_aplicar():
+    """
+    (2026-09-05, v12.32.32) Aplica el estado sugerido a los pedidos que el
+    usuario ha marcado explícitamente en la pantalla de revisión en
+    bloque — ver _aplicar_sugerencias_albaranes_pendientes(). Decisión de
+    diseño confirmada por Víctor: "Solo sugerir, nunca cambiar estado
+    solo" — por eso este endpoint nunca se llama solo, siempre requiere
+    que el usuario haya marcado qué pedidos aplicar.
+
+    Antes de escribir nada, recalcula las sugerencias en el momento
+    (nunca reutiliza lo que se le mostró antes a la pantalla) — así, si
+    algo cambió entre que se abrió la revisión y que se pulsó "Aplicar"
+    (otro albarán importado, el pedido cambiado de estado por otra vía),
+    no se aplica un dato que ya ha dejado de tener sentido.
+
+    POST body: {"hotel_id": <id>, "pedido_ids": [12, 34, ...]}
+    → {"ok": true, "aplicadas": [...], "sin_cambios": [...], "errores": [...]}
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    body = request.get_json(silent=True) or {}
+    hotel_id = body.get("hotel_id")
+    pedido_ids = body.get("pedido_ids") or []
+    if not hotel_id:
+        return jsonify({"error": "Falta hotel_id"}), 400
+    if not pedido_ids:
+        return jsonify({"error": "No se ha indicado ningún pedido a aplicar"}), 400
+    db = get_db()
+    uid = current_user_id()
+    usuario_nombre = session.get("nombre", "")
+    try:
+        resultado = _aplicar_sugerencias_albaranes_pendientes(db, hotel_id, pedido_ids, uid, usuario_nombre)
+    except Exception as exc:
+        log.exception("[SUGERENCIAS-ALBARANES-PENDIENTES] Error aplicando en hotel %s: %s", hotel_id, exc)
+        return jsonify({"error": f"Error aplicando las sugerencias: {exc}"}), 500
+    return jsonify({"ok": True, **resultado})
+
 @app.route("/api/albaranes/importar-confirmacion", methods=["POST"])
 @login_required
 def importar_confirmacion_albaran():
@@ -10879,6 +10942,13 @@ def _entrega_estado(importe_base: float, importe_recibido: float) -> str:
 # como si aplicar la coincidencia fuera a retroceder el pedido — cuando en
 # realidad _aplicar_coincidencia_albaran() ya lo protegía y no hacía nada).
 _ORDEN_ENTREGA_ESTADOS = {"ENVIADO AL PROVEEDOR": 0, "PENDIENTE COTIZACIÓN": 0, "ENTREGA PARCIAL": 1, "ENTREGADO": 2}
+
+# (2026-09-05, v12.32.32) Estados de un pedido que todavía pueden recibir
+# una entrega — todos los de _ORDEN_ENTREGA_ESTADOS excepto ENTREGADO, que
+# ya es el final de ese recorrido y no tiene sentido seguir revisando. Lo
+# usa _sugerencias_albaranes_pendientes_hotel() (Pieza 4 del rediseño) para
+# acotar qué pedidos de un hotel entran en la revisión en bloque.
+_ESTADOS_PENDIENTES_ENTREGA_ALBARAN = [k for k in _ORDEN_ENTREGA_ESTADOS if k != "ENTREGADO"]
 
 def _estado_aparente_entrega(importe_recibido: float, importe_pendiente: float) -> str:
     """
@@ -11875,6 +11945,283 @@ def _sugerencias_albaran_pedido(pedido_id: int) -> dict:
         })
 
     return {"aplica": True, "proveedor": proveedor["nombre"], "confirmados": confirmados, "lineas": resultado_lineas}
+
+
+def _sugerencias_albaranes_pendientes_hotel(hotel_id: int) -> dict:
+    """
+    (2026-09-05, v12.32.32) Versión "en bloque" de _sugerencias_albaran_pedido()
+    para TODOS los pedidos de un hotel que todavía pueden recibir una
+    entrega (estado en _ESTADOS_PENDIENTES_ENTREGA_ALBARAN — se excluye
+    ENTREGADO porque ya no queda nada que proponer) — Pieza 4 del
+    rediseño "solo con los dos detallados", a petición de Víctor, para no
+    tener que abrir pedido por pedido el botón "🔍 Sugerencias de
+    Albarán" cada vez que quiere ponerse al día con un Listado de
+    Albaranes detallado recién subido.
+
+    MISMO cruce y MISMA limitación de origen que su hermana de un solo
+    pedido (ver su docstring): el Listado de Albaranes de SAP NUNCA trae
+    el número de pedido, así que el emparejamiento es por proveedor
+    (normalizado) + código de artículo — una señal más débil que la que
+    usa "Comparar listado + Albaranes" (proveedor + importe exacto del
+    Listado de Pedidos RESUMIDO). Por eso esta función es SOLO LECTURA,
+    igual que su hermana — nunca escribe nada. La escritura real
+    (cambiar el estado de UN pedido concreto) la hace
+    _aplicar_sugerencias_albaranes_pendientes(), y solo para los pedidos
+    que el usuario ha marcado explícitamente en la pantalla — decisión de
+    diseño confirmada por Víctor: "Solo sugerir, nunca cambiar estado
+    solo".
+
+    Para no repetir N+1 consultas (una por pedido, como haría llamar a
+    _sugerencias_albaran_pedido() en bucle una vez por cada pedido
+    pendiente), aquí se precargan de una sola vez todas las líneas de
+    pedidos y todos los albaranes del hotel y se cruzan en memoria.
+
+    Por cada pedido se propone como mucho un estado, nunca se aplica
+    solo:
+      - ENTREGADO         si TODAS sus líneas quedan "cubiertas" (con un
+                          candidato confirmado, o con un único candidato
+                          sin ambigüedad y de cantidad exacta).
+      - ENTREGA PARCIAL   si SOLO ALGUNAS de sus líneas quedan cubiertas.
+      - (sin sugerencia)  si ninguna línea queda cubierta — el pedido no
+                          aparece en el resultado, no hay nada que
+                          revisar todavía.
+    Además, si la sugerencia no supondría avanzar el estado actual del
+    pedido (ver _ORDEN_ENTREGA_ESTADOS — p. ej. ya está en ENTREGA
+    PARCIAL y la sugerencia también sería ENTREGA PARCIAL), tampoco se
+    propone nada: no habría ningún cambio real que aplicar.
+
+    Devuelve:
+      {"pedidos": [ {pedido_id, pedido_num, proveedor_nombre,
+                      estado_actual, estado_sugerido,
+                      confirmados: [{fuente, albaran_id, albaran_ref}, ...],
+                      lineas: [ {codigo_articulo, descripcion,
+                                  cantidad_recibida_txt, candidatos: [...],
+                                  ambiguo, cubierta}, ... ]}, ... ],
+       "total_pedidos_evaluados": int, "total_con_sugerencia": int}
+    """
+    pedidos = rows_to_list(query(
+        """SELECT p.id, p.pedido_num, p.entrada_albaran_num, p.estado,
+                  pr.nombre AS proveedor_nombre
+           FROM pedidos p
+           JOIN proveedores pr ON pr.id = p.proveedor_id
+           WHERE p.hotel_id=%s AND p.estado = ANY(%s) AND pr.sujeto_seguimiento = TRUE
+             AND p.pedido_num IS NOT NULL AND p.pedido_num != ''""",
+        (hotel_id, _ESTADOS_PENDIENTES_ENTREGA_ALBARAN)
+    ))
+    if not pedidos:
+        return {"pedidos": [], "total_pedidos_evaluados": 0, "total_con_sugerencia": 0}
+
+    nums_pedido = [p["pedido_num"] for p in pedidos]
+    lineas_pedidos = rows_to_list(query(
+        "SELECT pedido_num_sap, codigo_articulo, descripcion, cantidad_recibida_txt "
+        "FROM sap_pedidos_lineas WHERE hotel_id=%s AND pedido_num_sap = ANY(%s)",
+        (hotel_id, nums_pedido)
+    ))
+    lineas_por_pedido = {}
+    for l in lineas_pedidos:
+        lineas_por_pedido.setdefault(_normalizar_pedido_num(l["pedido_num_sap"]), []).append(l)
+
+    albaranes = rows_to_list(query(
+        "SELECT albaran_id, albaran_ref, proveedor_nombre, codigo_articulo, "
+        "cantidad_txt, pedido_num_sap_confirmado FROM sap_albaranes_lineas WHERE hotel_id=%s",
+        (hotel_id,)
+    ))
+    idx_candidatos = {}           # (proveedor_normalizado, codigo_articulo) -> [fila, ...]
+    albaranes_por_id = {}         # albaran_id (tal cual en BD) -> [fila, ...] (para "confirmados")
+    albaran_ids_disponibles = {}  # num normalizado (sin ceros a la izq.) -> albaran_id tal cual en BD
+    confirmados_por_pedido_num = {}  # pedido_num normalizado -> {albaran_id: "pdf_individual"}
+    for a in albaranes:
+        if a["albaran_id"]:
+            albaranes_por_id.setdefault(a["albaran_id"], []).append(a)
+            albaran_ids_disponibles.setdefault(_normalizar_num_albaran(a["albaran_id"]), a["albaran_id"])
+        if a["codigo_articulo"]:
+            prov_norm = _normalizar_nombre_proveedor(a["proveedor_nombre"])
+            idx_candidatos.setdefault((prov_norm, a["codigo_articulo"]), []).append(a)
+        if a["pedido_num_sap_confirmado"] and a["albaran_id"]:
+            num_norm = _normalizar_pedido_num(a["pedido_num_sap_confirmado"])
+            confirmados_por_pedido_num.setdefault(num_norm, {})[a["albaran_id"]] = "pdf_individual"
+
+    resultado_pedidos = []
+    for p in pedidos:
+        pedido_num_norm = _normalizar_pedido_num(p["pedido_num"])
+        lineas_pedido = lineas_por_pedido.get(pedido_num_norm, [])
+        if not lineas_pedido:
+            continue  # todavía no hay líneas guardadas para este pedido (listado detallado)
+
+        albaran_ids_confirmados = dict(confirmados_por_pedido_num.get(pedido_num_norm, {}))
+        for entrada in _parse_albaran_entries(p.get("entrada_albaran_num")):
+            albaran_id_real = albaran_ids_disponibles.get(_normalizar_num_albaran(entrada["num"]))
+            if albaran_id_real and albaran_id_real not in albaran_ids_confirmados:
+                albaran_ids_confirmados[albaran_id_real] = "albaran_registrado_en_pedido"
+
+        prov_norm_pedido = _normalizar_nombre_proveedor(p["proveedor_nombre"])
+        resultado_lineas = []
+        alguna_cubierta = False
+        todas_cubiertas = True
+        for l in lineas_pedido:
+            cant_rec = _parse_importe_es(l["cantidad_recibida_txt"])
+            cands = idx_candidatos.get((prov_norm_pedido, l["codigo_articulo"]), [])
+            cands_out = []
+            for c in cands:
+                cant_alb = _parse_importe_es(c["cantidad_txt"])
+                cands_out.append({
+                    "albaran_id": c["albaran_id"],
+                    "cantidad_txt": c["cantidad_txt"],
+                    "coincide_exacto": abs(cant_alb - cant_rec) < 0.01,
+                    "confirmado": c["albaran_id"] in albaran_ids_confirmados,
+                })
+            cands_out.sort(key=lambda x: (not x["confirmado"], not x["coincide_exacto"]))
+            ambiguo = len(cands_out) > 1 and not any(c["confirmado"] for c in cands_out)
+            cubierta = any(c["confirmado"] for c in cands_out) or (
+                not ambiguo and any(c["coincide_exacto"] for c in cands_out)
+            )
+            if cubierta:
+                alguna_cubierta = True
+            else:
+                todas_cubiertas = False
+            resultado_lineas.append({
+                "codigo_articulo": l["codigo_articulo"],
+                "descripcion": l["descripcion"],
+                "cantidad_recibida_txt": l["cantidad_recibida_txt"],
+                "candidatos": cands_out,
+                "ambiguo": ambiguo,
+                "cubierta": cubierta,
+            })
+
+        if not alguna_cubierta:
+            continue  # nada que proponer todavía para este pedido
+
+        estado_sugerido = "ENTREGADO" if todas_cubiertas else "ENTREGA PARCIAL"
+        if _ORDEN_ENTREGA_ESTADOS.get(estado_sugerido, 0) <= _ORDEN_ENTREGA_ESTADOS.get(p["estado"], 0):
+            continue  # no supondría avanzar el estado actual — nada real que aplicar
+
+        confirmados_out = [
+            {
+                "fuente": fuente,
+                "albaran_id": albaran_id,
+                "albaran_ref": (albaranes_por_id.get(albaran_id) or [{}])[0].get("albaran_ref"),
+            }
+            for albaran_id, fuente in albaran_ids_confirmados.items()
+        ]
+
+        resultado_pedidos.append({
+            "pedido_id": p["id"],
+            "pedido_num": p["pedido_num"],
+            "proveedor_nombre": p["proveedor_nombre"],
+            "estado_actual": p["estado"],
+            "estado_sugerido": estado_sugerido,
+            "confirmados": confirmados_out,
+            "lineas": resultado_lineas,
+        })
+
+    return {
+        "pedidos": resultado_pedidos,
+        "total_pedidos_evaluados": len(pedidos),
+        "total_con_sugerencia": len(resultado_pedidos),
+    }
+
+
+def _aplicar_una_sugerencia_albaran_pendiente(db, entry: dict, usuario_id: int, usuario_nombre: str) -> dict:
+    """
+    (2026-09-05, v12.32.32) Aplica UNA sugerencia ya recalculada al vuelo
+    por _sugerencias_albaranes_pendientes_hotel() (ver el caller,
+    _aplicar_sugerencias_albaranes_pendientes() — nunca se aplica un dato
+    "viejo" mostrado antes en pantalla). Cambia el estado del pedido al
+    que propone el cruce por proveedor+artículo del Listado de Albaranes
+    detallado. Solo se llama cuando el usuario ha marcado explícitamente
+    este pedido en la pantalla de revisión en bloque — nunca de forma
+    automática.
+
+    A diferencia de _aplicar_coincidencia_albaran() (cruce por
+    proveedor+importe exacto, señal fuerte, sí registra número de
+    albarán y fecha de tramitación), esta función NO toca
+    entrada_albaran_num ni fecha_tramitacion — la señal por
+    proveedor+artículo es más débil (puede haber varios albaranes del
+    mismo proveedor con el mismo artículo en fechas distintas) y
+    registrar aquí un número de albarán concreto a partir de ella podría
+    guardar el albarán equivocado. En esta primera versión de esta
+    pieza (a petición de Víctor de ir pieza a pieza, despacio) solo se
+    actualiza el estado; el número de albarán se sigue registrando a
+    mano si hace falta, igual que hasta ahora — se puede ampliar más
+    adelante si hace falta.
+
+    Devuelve {"aplicado": bool, "motivo_sin_cambios": str|None}.
+    """
+    pedido_id = entry["pedido_id"]
+    estado_objetivo = entry["estado_sugerido"]
+    pedido_actual = query("SELECT estado FROM pedidos WHERE id=%s", (pedido_id,), one=True)
+    if not pedido_actual:
+        return {"aplicado": False, "motivo_sin_cambios": "El pedido ya no existe"}
+    estado_antes = pedido_actual["estado"]
+
+    # Mismo guardián que _aplicar_coincidencia_albaran(): nunca tocar un
+    # pedido que mientras tanto se canceló/denegó, ni retroceder un
+    # estado ya más avanzado que el propuesto (ver _ORDEN_ENTREGA_ESTADOS).
+    if estado_antes in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL"):
+        return {"aplicado": False, "motivo_sin_cambios": f"El pedido está {estado_antes}"}
+    if _ORDEN_ENTREGA_ESTADOS.get(estado_objetivo, 0) <= _ORDEN_ENTREGA_ESTADOS.get(estado_antes, 0):
+        return {"aplicado": False, "motivo_sin_cambios": "El pedido ya está en ese estado o en uno más avanzado"}
+
+    execute(
+        "UPDATE pedidos SET estado=%s, modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW() "
+        "WHERE id=%s",
+        (estado_objetivo, usuario_id, usuario_nombre, pedido_id)
+    )
+    # (2026-09-05) Igual que en _aplicar_coincidencia_albaran(): en el
+    # Historial de estados este cambio NO debe figurar con el nombre de
+    # quien pulsó "Aplicar" — no es una edición manual suya del pedido,
+    # es el sistema aplicando lo detectado en el Listado de Albaranes.
+    _nombre_automatico = "Automática — sugerencias de albarán (listado detallado)"
+    execute(
+        "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) "
+        "VALUES (%s,%s,%s,%s,%s,%s)",
+        (pedido_id, estado_antes, estado_objetivo, usuario_id, _nombre_automatico,
+         "Registro automático — sugerencias de albarán (Listado de Albaranes detallado), "
+         "confirmado manualmente por un administrador")
+    )
+    db.commit()
+    _notificar_cambio_estado(db, pedido_id, estado_objetivo, estado_antes, usuario_nombre=usuario_nombre,
+                              usuario_id=usuario_id, es_automatico=True)
+    return {"aplicado": True, "motivo_sin_cambios": None}
+
+
+def _aplicar_sugerencias_albaranes_pendientes(db, hotel_id: int, pedido_ids: list, usuario_id: int, usuario_nombre: str) -> dict:
+    """
+    (2026-09-05, v12.32.32) Aplica el estado sugerido a los pedidos de
+    `pedido_ids` que el usuario ha marcado explícitamente en la pantalla
+    de revisión en bloque (Pieza 4). Antes de aplicar nada, vuelve a
+    llamar a _sugerencias_albaranes_pendientes_hotel(hotel_id) para
+    recalcular las sugerencias EN ESE MOMENTO — nunca reutiliza lo que se
+    le mostró antes al usuario — así que si algo cambió entre que se
+    abrió la pantalla y que se pulsó "Aplicar" (otro albarán importado
+    mientras tanto, el pedido cambiado de estado por otra vía, etc.), lo
+    que se aplica sigue siendo correcto en ese instante.
+
+    Devuelve {"aplicadas": [...], "sin_cambios": [...], "errores": [...]}.
+    """
+    fresco = _sugerencias_albaranes_pendientes_hotel(hotel_id)
+    por_id = {p["pedido_id"]: p for p in fresco["pedidos"]}
+    aplicadas, sin_cambios, errores = [], [], []
+    for pid in pedido_ids:
+        entry = por_id.get(pid)
+        if not entry:
+            sin_cambios.append({
+                "pedido_id": pid,
+                "motivo": "Ya no hay ninguna sugerencia pendiente para este pedido — puede que ya se "
+                          "aplicara, o que el pedido haya cambiado de estado por otra vía mientras tanto",
+            })
+            continue
+        etiqueta = f"Pedido {entry['pedido_num']} — {entry['proveedor_nombre']}"
+        try:
+            res = _aplicar_una_sugerencia_albaran_pendiente(db, entry, usuario_id, usuario_nombre)
+            if res["aplicado"]:
+                aplicadas.append({"pedido_id": pid, "descripcion": etiqueta, "estado_nuevo": entry["estado_sugerido"]})
+            else:
+                sin_cambios.append({"pedido_id": pid, "descripcion": etiqueta, "motivo": res["motivo_sin_cambios"]})
+        except Exception as exc:
+            log.exception("[SUGERENCIAS-ALBARANES-PENDIENTES] Error aplicando pedido %s: %s", pid, exc)
+            errores.append({"pedido_id": pid, "descripcion": etiqueta, "error": str(exc)})
+    return {"aplicadas": aplicadas, "sin_cambios": sin_cambios, "errores": errores}
 
 
 # (2026-09-04, v12.32.20) Cabecera de metadatos del PDF de confirmación de
