@@ -36,6 +36,45 @@
 
 ---
 
+## 2026-09-07 — [Infra] Supabase — Grace period finalizado; estado de egress/BD confirmado; organización con un único proyecto
+
+- **Seguimiento de las notas anteriores** sobre el "grace period" de la
+  organización de Supabase (`controlpedidosprincesscanarias-coder's
+  Org`, plan Free) — ver entradas del 9 de agosto y v12.30.02 (14 de
+  agosto) más abajo, que lo dejaban "a vigilar sin acción por ahora".
+- **Confirmado hoy por Víctor**: el grace period ya terminó — el aviso
+  "Grace period is over" que sigue apareciendo en el panel de Supabase
+  es residual/informativo, no bloquea el servicio.
+- **Estado de uso a día 2026-09-07** (ciclo de facturación 23 ago 2026
+  – 23 sep 2026, plan Free), consultado en Project Settings → Usage:
+  - Database Size: 0,186 GB
+  - Storage Size: 0,272 GB
+  - Egress: 0,776 GB
+  - Cached Egress: 0 GB
+  - Monthly Active Users / Third-Party Users: 0 MAU
+  - Realtime, Edge Functions, Storage Image Transformations: 0
+  - Muy por debajo de las cuotas del plan Free en todos los apartados.
+- **Confirmado por Víctor**: en esta cuenta/organización de Supabase
+  **solo existe este proyecto** (`control-pedidos-princess`). Esto
+  descarta la hipótesis manejada en notas anteriores de que otro
+  proyecto de la misma organización pudiera estar agotando la cuota
+  compartida — el consumo de egress que en su día llevó al grace
+  period fue de este mismo proyecto.
+- **Duplicados de pedidos** (comprobado en la misma sesión, sin
+  relación con lo anterior): a día de hoy, 0 pedidos duplicados
+  (mismo `hotel_id` + mismo `pedido_num` normalizado) sobre un total
+  de 819 pedidos — verificado directamente en el SQL Editor de
+  Supabase. Los duplicados detectados en sesiones previas (40130,
+  27813, 27924, 32386, 10508, 10841, 12489, 34055) ya no están
+  presentes como tales.
+- **Sin cambios de código en esta entrada** — es una nota de
+  seguimiento de infraestructura/cuenta, hecha desde el SQL Editor y
+  el panel de Usage de Supabase, sin tocar `app.py` ni ningún archivo
+  del repo.
+- **Pendiente/a vigilar**: sin acción pendiente por ahora. Si el
+  egress se acerca de nuevo a la cuota del plan Free (5 GB/mes),
+  revisar qué proceso lo genera antes de plantear upgrade de plan.
+
 ## 2026-09-06 — [Control Pedidos] El PDF oficial propio del pedido pasa a ser la única "verdad absoluta" del Total Pedido (v12.32.41)
 
 - **Petición de Víctor**: "la idea es que si el valor del pedido está
