@@ -1,8 +1,19 @@
 services:
   - type: web
     name: control-pedidos-princess
-    runtime: python
-    buildCommand: pip install -r requirements.txt
+    # (2026-09-07, v12.32.42) runtime: python → docker. Motivo: el PDF de
+    # pedido oficial firmado/sellado en papel y vuelto a escanear pierde
+    # toda su capa de texto — para poder seguir aceptándolo hace falta OCR
+    # (Tesseract, ver _ocr_texto_pdf_pedido_oficial() en app.py), y
+    # Tesseract es un paquete del SISTEMA OPERATIVO (no de pip). El
+    # runtime nativo de Python de Render no permite apt-get ni ningún otro
+    # instalador de sistema (confirmado en la documentación/comunidad de
+    # Render) — solo runtime: docker lo permite, ver Dockerfile en la raíz
+    # del repo. Fuera de este cambio de runtime, el servicio sigue siendo
+    # el mismo (mismo código, mismas variables de entorno, mismo healthcheck).
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
     # (2026-08-10) --worker-class gthread --threads 4: el "Comparar
     # listado PDF" arranca un hilo en segundo plano para procesar el PDF
     # (ver app.py, _ejecutar_comparacion_pdf_bg) y el navegador sondea el
@@ -31,7 +42,12 @@ services:
     # para listados de hasta unas 300-330 páginas; si Víctor pasa a
     # subir listados semanales (más cortos) como tiene pensado, este
     # margen probablemente ya no hará falta apurarlo tanto.
-    startCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 900
+    # (2026-09-07) startCommand → dockerCommand: mismo comando de siempre,
+    # solo cambia el nombre del campo porque runtime: docker lo usa en vez
+    # de CMD del Dockerfile (que se deja vacío a propósito, ver ese
+    # archivo) — así se sigue pudiendo ajustar aquí, sin reconstruir la
+    # imagen.
+    dockerCommand: gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 900
     envVars:
       - key: DATABASE_URL
         sync: false          # Lo pegas manualmente en Render → Environment
@@ -41,4 +57,8 @@ services:
         sync: false          # Mismo valor que DALI_SSO_SECRET en dali-backend — acceso de un clic al catálogo DALI
       - key: DALI_FRONTEND_URL
         sync: false          # URL pública del frontend de DALI (el Worker de Cloudflare). Por defecto: dali-proxy.centralcompras1-canarias.workers.dev
+      - key: PORT
+        value: "10000"        # (2026-09-07) runtime: docker no autodetecta el puerto si no se fija
+                               # esta variable — con ella, Render sabe a qué puerto interno enrutar
+                               # (coincide con EXPOSE 10000 del Dockerfile, ver ese archivo)
     healthCheckPath: /ping

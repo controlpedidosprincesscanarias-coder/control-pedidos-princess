@@ -79,17 +79,44 @@ momento, sin desplegar nada.
 
 ## PASO 3 — Render: desplegar el backend
 
+> ℹ️ **v12.32.42 (vigente): runtime Docker, no Python nativo.** Desde
+> esta versión el servicio necesita Tesseract OCR para leer el PDF de
+> pedido oficial cuando llega firmado/sellado (escaneado, sin texto
+> propio — ver `CHANGELOG.md` v12.32.42 y `_ocr_texto_pdf_pedido_oficial()`
+> en `app.py`). Tesseract es un paquete del sistema operativo, no de
+> `pip`, y el runtime nativo de Python de Render **no permite instalar
+> paquetes de sistema** (sin `apt-get`, confirmado en la
+> documentación/comunidad de Render) — por eso el despliegue pasa a
+> `runtime: docker`, construyendo la imagen a partir del `Dockerfile` ya
+> incluido en este repositorio (instala `tesseract-ocr` +
+> `tesseract-ocr-spa` antes de las dependencias de `requirements.txt` de
+> siempre). Si partes de cero (blueprint desde `render.yaml`, ver más
+> abajo), Render detecta el `Dockerfile` solo — los pasos manuales de
+> abajo son solo para quien configure el servicio a mano desde el panel
+> en vez de como Blueprint.
+
 1. Entra en https://render.com → **New → Web Service**
 2. Conecta tu repositorio de GitHub (`control_pedidos_web`)
 3. Configura el servicio:
-   - **Runtime:** Python 3
-   - **Build command:** `pip install -r requirements.txt`
-   - **Start command:** `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 300`
-   - **Plan:** Free
+   - **Runtime/Language:** Docker (aunque el desplegable ofrezca
+     "Python 3" — con Docker, Render construye la imagen a partir del
+     `Dockerfile` del repo, que ya se encarga de instalar Python y todo
+     lo demás)
+   - **Dockerfile Path:** `./Dockerfile` (ruta por defecto — no hace
+     falta tocarla si el `Dockerfile` está en la raíz del repo, como en
+     este proyecto)
+   - **Docker Command** (antes "Start command" del runtime nativo, ver
+     nota `v12.29.78` justo abajo — mismo comando, campo con nombre
+     distinto): `gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 900`
+   - **Plan:** Free (Docker está disponible también en el plan Free de
+     Render — no hace falta ningún plan de pago para esto)
 
-   > ℹ️ **v12.29.78 (vigente):** este es el Start Command real, el mismo
-   > que usa `render.yaml`. **No uses `gunicorn -w 2 app:app`** (versión
+   > ℹ️ **v12.29.78 (el comando en sí sigue vigente, solo cambió de
+   > campo — ver nota de arriba):** este es el comando de arranque
+   > real, el mismo que usa `render.yaml` (`dockerCommand`, antes
+   > `startCommand`). **No uses `gunicorn -w 2 app:app`** (versión
    > antigua de esta guía, hasta v12.29.77): con varios workers "sync",
+
    > mientras el hilo en segundo plano de "Comparar listado PDF" procesa
    > un PDF (~8s), el worker que lo atiende puede dejar de responder al
    > *health check* (`/ping`) a tiempo — Render lo considera no saludable,
@@ -147,6 +174,7 @@ momento, sin desplegar nada.
    | `SUPABASE_STORAGE_BUCKET` | No | Por defecto `adjuntos-cerrados` si no se define |
    | `DALI_SSO_SECRET` | Solo si integras con DALI | Debe ser idéntica a la del backend de DALI |
    | `DALI_FRONTEND_URL` | No | Por defecto el proxy Cloudflare de DALI ya en producción |
+   | `PORT` | Sí (solo con `runtime: docker`, desde v12.32.42) | `10000` — con el runtime nativo de Python, Render la fijaba sola; con Docker hay que fijarla a mano (o dejar que `render.yaml` la fije, si despliegas como Blueprint) para que Render sepa a qué puerto interno enrutar (coincide con `EXPOSE 10000` del `Dockerfile`) |
 
 5. Haz clic en **Create Web Service** y espera el primer deploy (~2 min).
 

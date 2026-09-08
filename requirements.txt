@@ -29,6 +29,21 @@ pdfplumber==0.11.9
 pdfminer.six==20251230
 pypdfium2==5.7.1
 cryptography==46.0.7
+# (2026-09-07, v12.32.42) pytesseract: lectura por OCR del PDF de pedido oficial
+# cuando llega firmado/sellado — al escanear el papel firmado pierde toda su
+# capa de texto (ver comentario junto a _ocr_texto_pdf_pedido_oficial() en
+# app.py), así que se rasteriza cada página con pdfplumber/pypdfium2 (ya
+# dependencias de arriba, sin coste nuevo de rasterizado) y se lee esa
+# imagen con Tesseract vía este paquete. El binario de Tesseract en sí
+# (`tesseract-ocr` + `tesseract-ocr-spa`) NO es un paquete de pip — se
+# instala a nivel de sistema operativo en el `Dockerfile` (ver ese archivo y
+# `render.yaml`, que pasa a runtime Docker en esta misma entrega porque el
+# runtime nativo de Python de Render no permite instalar paquetes del
+# sistema). Versión fijada contra lo instalado en este entorno de
+# desarrollo, NO contra un log de build de Render real — igual que
+# pdfplumber arriba, esto SÍ hay que volver a fijar con el log del primer
+# deploy Docker que incluya este cambio (ver nota de cabecera del archivo).
+pytesseract==0.3.13
 
 # ── Transitivas (dependencias de las de arriba) — fijadas también   ──
 # ── para que el deploy instale SIEMPRE lo mismo, no solo lo directo ──
