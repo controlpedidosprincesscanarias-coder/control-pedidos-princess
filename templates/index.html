@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.41
+          V 12.32.43
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5523,6 +5523,15 @@ async function subirAdjuntos(input, tipo) {
           setVal('p-total-pedido', data.total_pedido != null ? Number(data.total_pedido).toFixed(2) : '');
           document.getElementById('p-total-pedido-aprox-badge').hidden = true;  // el PDF oficial siempre es el importe real
           toast(`PDF leído — Nº Pedido ${data.pedido_num}, Total ${Number(data.total_pedido).toFixed(2)} €`, 'success');
+          // (2026-09-07) El PDF firmado/sellado (impreso, sellado en papel y
+          // vuelto a escanear) no trae texto propio y se lee por OCR — ver
+          // _parsear_pdf_pedido_oficial/_ocr_texto_pdf_pedido_oficial en
+          // app.py. Solo informativo (pide revisar los datos con más
+          // atención de lo habitual): si se ha llegado hasta aquí, el OCR ya
+          // encontró Nº de Pedido y líneas de importe con garantías.
+          if (data.leido_via_ocr) {
+            toast('📷 Documento firmado/escaneado — datos leídos por OCR, revíselos con atención', '', 6000);
+          }
           _procesarFechasPdfPedidoOficial(data);
           // (2026-09-06, v12.32.35) A petición de Víctor: el proveedor
           // también se lee y asigna solo del mismo PDF (ver
@@ -13071,7 +13080,13 @@ async function _enviarEmailsSistemaPendientes() {
           to_email: p.destinatario,
           subject:  p.asunto,
           message:  p.cuerpo_html || p.cuerpo_text || '',
-          reply_to: p.destinatario,
+          // (2026-09-07) `p.reply_to` — columna nueva, NULL salvo que
+          // quien encoló la fila lo indicara explícitamente (de momento,
+          // el puente con DALI para "Documentación faltante", ver
+          // api_externo_dali_encolar_email en app.py). Si viene vacío,
+          // se mantiene el comportamiento de siempre para el resto de
+          // eventos de esta cola: responder al propio destinatario.
+          reply_to: p.reply_to || p.destinatario,
         };
         if (esCorreoInternoPedido) payloadEmailJS.cc  = p.cc_emails || '';
         else                       payloadEmailJS.bcc = p.cc_emails || '';

@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.41** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.43** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -21,7 +21,8 @@ administración de usuarios y familias de artículos.
 | Email | EmailJS, gestionado íntegramente desde el frontend (sin configuración de servidor) |
 | Tareas programadas | APScheduler (`BackgroundScheduler`) — alertas, avisos de techo, limpieza |
 | Servidor de producción | Gunicorn |
-| Despliegue | Render.com (`render.yaml`) |
+| Despliegue | Render.com, runtime Docker (`render.yaml` + `Dockerfile`) — desde v12.32.42, para poder instalar Tesseract OCR (paquete de sistema) |
+| OCR | Tesseract (`tesseract-ocr` + `tesseract-ocr-spa`, vía `pytesseract`) — desde v12.32.42, solo como último recurso para el PDF de pedido oficial firmado/escaneado, ver más abajo |
 | Notificaciones | WhatsApp / Telegram / email (según configuración) |
 
 El proyecto **no tiene build step ni dependencias de frontend**: todo el
@@ -47,7 +48,10 @@ templates/index.html     Frontend completo (SPA de una sola página):
                         sidebar, todas las vistas, JS de la aplicación.
 static/                  Assets estáticos (logos, iconos).
 requirements.txt        Dependencias Python.
-render.yaml               Configuración de despliegue en Render.
+render.yaml               Configuración de despliegue en Render (runtime
+                        Docker desde v12.32.42).
+Dockerfile                Imagen Docker (Python + Tesseract OCR) — desde
+                        v12.32.42, ver "Puesta en marcha" abajo.
 CHANGELOG.md             Historial de versiones de Control Pedidos
                         (entrada más reciente arriba).
 docs/HISTORIAL_CAMBIOS.md Historial unificado de todo el ecosistema
@@ -89,7 +93,14 @@ confundirse entre sí, ver más abajo):
   Hotel seleccionado se verifica también (v12.32.38) contra el
   "HOTEL/CENTRO" de cabecera de ese mismo PDF — si no coincide, avisa y
   bloquea igualmente el paso a ENVIADO AL PROVEEDOR hasta corregirlo
-  (evita registrar y tramitar un pedido en el hotel equivocado).
+  (evita registrar y tramitar un pedido en el hotel equivocado). Desde
+  v12.32.42, este PDF también se acepta firmado/sellado (impreso,
+  sellado en papel y vuelto a escanear) — como pierde su capa de texto
+  al reescanearse, se lee por OCR (Tesseract) en vez de por el texto
+  embebido; si el sello o la firma tapan el Nº de Pedido o las líneas
+  de artículos y el OCR no consigue leerlos con claridad, el PDF se
+  rechaza igual que uno con el formato incorrecto, pidiendo comprobar
+  que no tapen esos datos.
 - **Alertas** — avisos de plazos de entrega vencidos o próximos a vencer.
 
 **Gestión** (admin + compras, y Proveedores también hotel)
@@ -416,11 +427,20 @@ python init_db.py
 python app.py
 ```
 
-En producción se usa Gunicorn (ver `render.yaml`):
+En producción se despliega con Docker (`Dockerfile` + `render.yaml`,
+`dockerCommand` — desde v12.32.42, antes runtime nativo de Python con
+`startCommand`; ver comentario en el propio `render.yaml` del porqué del
+cambio). El comando de arranque real (mismo desde antes de v12.32.42, solo
+cambió el nombre del campo que lo define) es:
 
 ```bash
-gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --timeout 300
+gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 900
 ```
+
+En local (fuera de Docker) sigue sirviendo el comando de desarrollo de
+arriba (`python app.py`) — el `Dockerfile` solo hace falta para desplegar
+en Render con Tesseract OCR disponible; si no necesitas subir PDF
+firmados/escaneados, la app funciona igual sin Docker en local.
 
 ### Variables de entorno
 

@@ -36,6 +36,57 @@
 
 ---
 
+## 2026-09-07 — [Control Pedidos + DALI] "Responder a" configurable en la cola de emails de sistema — el correo de "Documentación faltante" ya no responde al propio proveedor (v12.32.43)
+
+- **Origen**: Víctor detectó, revisando un correo real de "Documentación
+  pendiente — BRIGONSA GROUP 2015 SL" (evento `dali_documentacion_faltante`
+  del puente con DALI, ver entrada 2026-08-27 más abajo), que el
+  "Responder a" apuntaba al propio proveedor (`felipebtoledo@brigonsacanarias.com`)
+  en vez de a la persona que gestionó la solicitud desde DALI, y preguntó
+  si era posible grabar un email de respuesta distinto por correo.
+- **Causa**: `_enviarEmailsSistemaPendientes()` (`templates/index.html`,
+  Control Pedidos) fijaba `reply_to: p.destinatario` para TODA la cola
+  `emails_sistema_pendientes`, sin excepción — inocuo para avisos
+  internos a admins/compradores, pero incorrecto para los correos que
+  salen hacia un proveedor externo.
+- **Corrección (Control Pedidos, `app.py`/`templates/index.html`)**:
+  columna nueva `reply_to` (NULL por defecto) en `emails_sistema_pendientes`
+  — si viene vacía, el poller mantiene el comportamiento de siempre
+  (`reply_to = destinatario`); `POST /api/externo/dali-sap/emails-pendientes`
+  acepta ahora un `reply_to` opcional en el body, y `GET
+  /api/emails-sistema-pendientes` lo devuelve para que el poller lo use
+  (`p.reply_to || p.destinatario`).
+- **Corrección (DALI, repo `dali-sap-articulos-app`,
+  `controlPedidosEmailBridge.js`/`documentacionController.js`)**: al
+  encolar el correo de "Documentación faltante" se manda ahora
+  `reply_to` = `req.user.email` (el mismo email de sesión que ya firma
+  el cuerpo del correo vía `resolverFirmaAdmin`) — el comprador que
+  gestionó la solicitud, no un dato nuevo que mantener.
+- **Numeración**: preparado en paralelo sobre la v12.32.41, sin conocer
+  todavía la v12.32.42 real (OCR de PDF firmado/escaneado, entrada
+  siguiente) — rehecho sobre esa base al recibir el ZIP de producción,
+  pasa a v12.32.43. Sin relación ni solapamiento con los cambios de
+  OCR/Docker de v12.32.42.
+- **Versión**: Control Pedidos → v12.32.43 (ver `CHANGELOG.md`). DALI no
+  cambia de versión — no toca ningún endpoint propio, solo un parámetro
+  opcional nuevo en una llamada saliente ya existente.
+- **Pendiente de confirmar**: Víctor, tras desplegar los dos repos, con
+  una solicitud de documentación real desde DALI y comprobando en Email
+  History (EmailJS) que el "Reply-To" de esa fila ya es el email del
+  comprador.
+
+---
+
+## 2026-09-07 — [Control Pedidos] El PDF de pedido oficial se acepta también firmado/sellado (escaneado, sin texto) — lectura por OCR (v12.32.42)
+
+- **Petición de Víctor**, adjuntando un PDF real de pedido oficial sin firmar y otro firmado/sellado del mismo formato: aceptar el firmado/sellado siempre que no tape los datos necesarios.
+- **Hallazgo**: el PDF firmado/sellado se escanea de nuevo al volver a subirlo y pierde POR COMPLETO su capa de texto (`pypdf.extract_text()` devuelve `""` — comprobado con el PDF real: 4 imágenes incrustadas, cero texto), así que `_parsear_pdf_pedido_oficial()` no tenía nada sobre lo que buscar y rechazaba el archivo entero, aunque un humano lo leyera perfectamente.
+- **Corrección**: nueva función `_ocr_texto_pdf_pedido_oficial()` (`app.py`) — cuando el texto extraído por `pypdf` sale prácticamente vacío (indicio de PDF escaneado), se intenta reconocer con OCR (Tesseract, modelo español) sobre una imagen renderizada de cada página (`pdfplumber`/`pypdfium2`, ya dependencias del proyecto). Si el OCR encuentra Nº de Pedido y líneas de importe, se acepta igual que un PDF con texto propio (`leido_via_ocr: True` en la respuesta, aviso informativo en el frontend); si no los encuentra —p. ej. sello/firma tapando esa parte—, se rechaza con un mensaje explícito pidiéndolo comprobar. Límite de 5 páginas para el intento de OCR (un pedido oficial real es siempre 1 página) y limpieza de un artefacto real de Tesseract (confunde bordes de tabla con `"|"`, intercalado entre los números de una línea de artículo) — probado contra el PDF real de Víctor: reconoce correctamente el Nº de Pedido y el importe.
+- **Infraestructura**: Tesseract es un binario de sistema, no un paquete de `pip`, y el runtime nativo de Python de Render no permite `apt-get` — el servicio pasa a `runtime: docker` (`Dockerfile` nuevo con `tesseract-ocr` + `tesseract-ocr-spa`, `render.yaml` actualizado con `dockerCommand`/`dockerfilePath`/`PORT`). Mismo comando de arranque de siempre, mismo resto de configuración.
+- **Verificación**: `py_compile` sin errores nuevos, balance de `<div>` de `templates/index.html` correcto (975/975, sin cambios), flujo OCR reproducido en desarrollo contra el PDF real firmado (con modelo de inglés, por no tener el paquete de idioma español disponible en ese entorno de prueba). Cambio de runtime a Docker no probado en vivo (sin acceso a red en el entorno de desarrollo para construir la imagen) — revisar con cuidado el primer deploy.
+- **Revisión de otros documentos**: `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `GUIA_DESPLIEGUE.md` y `README.md` sí, actualizados (runtime Docker).
+- Detalle técnico completo en `CHANGELOG.md` v12.32.42.
+
 ## 2026-09-07 — [Infra] Supabase — Grace period finalizado; estado de egress/BD confirmado; organización con un único proyecto
 
 - **Seguimiento de las notas anteriores** sobre el "grace period" de la

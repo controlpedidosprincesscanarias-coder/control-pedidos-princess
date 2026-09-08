@@ -1960,6 +1960,24 @@ def _auto_migrate():
                 "ALTER TABLE emails_sistema_pendientes "
                 "ADD COLUMN IF NOT EXISTS descartado_en TIMESTAMPTZ"
             )
+            # Migración (2026-09-07): "Responder a" configurable por fila.
+            # Hasta ahora el poller (_enviarEmailsSistemaPendientes,
+            # templates/index.html) fijaba reply_to = destinatario para
+            # TODA la cola — para los correos que salen HACIA un proveedor
+            # (reclamación automática, "Documentación faltante" de DALI...)
+            # eso significa que si el proveedor responde, el correo vuelve
+            # a su propia dirección en vez de llegar a quien gestionó la
+            # solicitud. NULL por defecto: el poller sigue haciendo
+            # reply_to = destinatario cuando esta columna viene vacía (sin
+            # cambio de comportamiento para el resto de eventos de la
+            # cola); solo se usa este valor cuando quien encola la fila lo
+            # indica explícitamente — de momento, el puente con DALI (ver
+            # api_externo_dali_encolar_email más abajo), que manda aquí el
+            # email del comprador que gestionó la solicitud en esa app.
+            cur.execute(
+                "ALTER TABLE emails_sistema_pendientes "
+                "ADD COLUMN IF NOT EXISTS reply_to TEXT"
+            )
             cur.execute("SELECT COUNT(*) as n FROM eventos_aviso")
             _row_ev = cur.fetchone()
             _n_ev = _row_ev[0] if isinstance(_row_ev, tuple) else _row_ev['n']
@@ -18538,6 +18556,82 @@ _PATRON_NOMBRE_CIF_OFICIAL = re.compile(
 # sola línea como uno partido en dos.
 _PATRON_HOTEL_NOMBRE_LINEA = re.compile(r'^[A-Za-zÁÉÍÓÚÑÜáéíóúñü0-9&.,\'\-]+(?:\s[A-Za-zÁÉÍÓÚÑÜáéíóúñü0-9&.,\'\-]+)*$')
 
+# (2026-09-07, v12.32.42) OCR de respaldo para el PDF de pedido oficial
+# firmado/sellado — a petición de Víctor: "que se acepte si viene
+# firmado/sellado, siempre que no tape ninguno de los datos necesarios".
+# Comprobado con un PDF real firmado (impreso, sellado en papel y vuelto a
+# escanear): pypdf.extract_text() devuelve "" — el documento son 4 imágenes
+# incrustadas, sin ninguna capa de texto — así que el parseo normal por
+# regex (de arriba) no tiene NADA sobre lo que buscar. _UMBRAL_TEXTO_VACIO_PDF
+# distingue ese caso ("no hay casi texto, es un escaneo") del de un PDF con
+# texto de sobra que simplemente no es un pedido oficial (otro documento
+# cualquiera): en el segundo caso el OCR no serviría de nada y solo gastaría
+# CPU de más, así que solo se intenta cuando el texto extraído es
+# prácticamente inexistente. _LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL evita
+# gastar CPU en un documento largo que ya no puede ser un pedido oficial
+# real (siempre 1 página en todos los ejemplos vistos) — un PDF escaneado
+# más largo que eso se rechaza sin llegar a intentar el OCR.
+_UMBRAL_TEXTO_VACIO_PDF = 20
+_LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL = 5
+_OCR_RESOLUCION_DPI = 300
+
+def _ocr_texto_pdf_pedido_oficial(pdf_bytes: bytes) -> str:
+    """Devuelve el texto reconocido por OCR (Tesseract, español, vía
+    pytesseract) de cada página del PDF, concatenado en el mismo orden que
+    _parsear_pdf_pedido_oficial() espera de pypdf — o "" si el PDF supera
+    _LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL, si Tesseract no está disponible en
+    este servidor (no instalado — ver Dockerfile), o si ocurre cualquier
+    otro error leyendo el PDF. Nunca lanza excepción: el llamador trata
+    "" igual que "no se ha podido reconocer nada por OCR", con el mismo
+    mensaje de rechazo que si no se hubiera intentado.
+
+    Renderiza cada página con pdfplumber (que a su vez usa pypdfium2, ya
+    dependencia de este proyecto — ver requirements.txt — así que no hace
+    falta poppler ni ninguna otra herramienta de rasterizado nueva) a
+    _OCR_RESOLUCION_DPI ppp: por debajo de eso Tesseract falla con letra
+    pequeña de tablas como esta; por encima, el coste de CPU/memoria sube
+    sin mejorar apenas el resultado (probado en desarrollo).
+    """
+    import pdfplumber, io
+    try:
+        import pytesseract
+    except Exception as exc:
+        log.warning(f"[PEDIDO-DOC-OCR] pytesseract no disponible: {exc}")
+        return ""
+    texto = ""
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            if len(pdf.pages) > _LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL:
+                log.info(
+                    f"[PEDIDO-DOC-OCR] PDF de {len(pdf.pages)} páginas — se salta el OCR "
+                    f"(límite {_LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL}, un pedido oficial real es 1 sola página)"
+                )
+                return ""
+            for pagina in pdf.pages:
+                try:
+                    imagen = pagina.to_image(resolution=_OCR_RESOLUCION_DPI).original
+                    texto += pytesseract.image_to_string(imagen, lang="spa") + "\n"
+                    # (2026-09-07) Comprobado con un PDF real firmado: Tesseract
+                    # confunde a veces los bordes verticales de la tabla con el
+                    # carácter "|" y lo intercala ENTRE los números de una
+                    # misma línea de artículo ("40,0000 | 115,00  1.150,00"),
+                    # lo que rompe _PATRON_IMPORTE_LINEA_OFICIAL (exige solo
+                    # espacio en blanco entre los tres números). El documento
+                    # real nunca trae un "|" literal en su texto, así que se
+                    # elimina siempre de lo reconocido por OCR — nunca del
+                    # texto de pypdf (ese si es fiable tal cual).
+                    texto = texto.replace("|", " ")
+                finally:
+                    # Mismo motivo que en _extraer_listado_detallado_completo()
+                    # (ver comentario ahí): libera la caché por página que
+                    # pdfplumber va acumulando, para no arrastrar memoria de
+                    # más entre páginas de un mismo documento.
+                    pagina.flush_cache()
+    except Exception as exc:
+        log.warning(f"[PEDIDO-DOC-OCR] Error en OCR del PDF adjuntado: {exc}")
+        return ""
+    return texto
+
 def _extraer_hotel_nombre_pdf_oficial(texto: str):
     """
     Ver comentario junto a _PATRON_HOTEL_NOMBRE_LINEA — devuelve el nombre
@@ -18617,11 +18711,23 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
     el Total siguen siendo los únicos campos que, si faltan, hacen
     rechazar el PDF entero.
 
+    (2026-09-07, v12.32.42) A petición de Víctor: el PDF adjuntado también se
+    acepta si viene FIRMADO/SELLADO (impreso, firmado/sellado en papel y
+    vuelto a escanear) — siempre que el sello/firma no tape los datos
+    obligatorios. Un PDF así no trae ninguna capa de texto (comprobado con
+    un ejemplo real: pypdf.extract_text() devuelve ""), así que si el
+    parseo normal por texto no encuentra nada, se intenta reconocer con
+    OCR (ver _ocr_texto_pdf_pedido_oficial) antes de rechazarlo. El
+    resultado (incluido "leido_via_ocr") es idéntico venga de una vía o de
+    la otra — el resto de la app no distingue cómo se leyó el PDF.
+
     Lanza ValueError con un mensaje pensado para mostrarse tal cual al
-    usuario (ver upload_adjunto) si el PDF no se puede leer o no tiene la
-    estructura esperada — nunca devuelve un resultado parcial o adivinado:
-    o se reconoce el documento con garantías, o se rechaza con un mensaje
-    claro pidiendo el PDF oficial correcto.
+    usuario (ver upload_adjunto) si el PDF no se puede leer, ni por texto
+    ni por OCR, o no tiene la estructura esperada — nunca devuelve un
+    resultado parcial o adivinado: o se reconoce el documento con
+    garantías, o se rechaza con un mensaje claro pidiendo el PDF oficial
+    correcto (o, si venía firmado/sellado, revisar que el sello no tape el
+    Nº de Pedido ni las líneas de artículos).
     """
     try:
         from pypdf import PdfReader
@@ -18639,12 +18745,36 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
 
     m_pedido = _PATRON_PEDIDO_NUM_OFICIAL.search(texto)
     lineas_importe = _PATRON_IMPORTE_LINEA_OFICIAL.findall(texto)
+    leido_via_ocr = False
+
     if not m_pedido or not lineas_importe:
-        raise ValueError(
-            "El PDF adjuntado no tiene el formato del pedido oficial PRINCESS — "
-            "adjunte únicamente el PDF del pedido oficial (el que genera SAP/DALI, "
-            "con el Nº de Pedido y las líneas de artículos con su importe) en este apartado."
-        )
+        # Solo se intenta OCR si el texto extraído está prácticamente
+        # vacío — ver comentario junto a _UMBRAL_TEXTO_VACIO_PDF: eso indica
+        # un PDF escaneado (p. ej. firmado/sellado), no un documento
+        # distinto con texto real que simplemente no encaja con el formato
+        # esperado (para ese segundo caso el OCR no ayudaría, y se rechaza
+        # directo sin gastar ese coste de CPU).
+        if len(texto.strip()) < _UMBRAL_TEXTO_VACIO_PDF:
+            log.info("[PEDIDO-DOC] PDF sin texto extraíble — probando OCR (posible documento firmado/escaneado)")
+            texto_ocr = _ocr_texto_pdf_pedido_oficial(pdf_bytes)
+            if texto_ocr:
+                m_pedido_ocr = _PATRON_PEDIDO_NUM_OFICIAL.search(texto_ocr)
+                lineas_importe_ocr = _PATRON_IMPORTE_LINEA_OFICIAL.findall(texto_ocr)
+                if m_pedido_ocr and lineas_importe_ocr:
+                    texto = texto_ocr
+                    m_pedido = m_pedido_ocr
+                    lineas_importe = lineas_importe_ocr
+                    leido_via_ocr = True
+
+        if not m_pedido or not lineas_importe:
+            raise ValueError(
+                "El PDF adjuntado no tiene el formato del pedido oficial PRINCESS, o viene "
+                "firmado/sellado sin que se puedan leer con claridad el Nº de Pedido y las "
+                "líneas de artículos con su importe (compruebe que el sello o la firma no "
+                "tapen esos datos) — adjunte únicamente el PDF del pedido oficial (el que "
+                "genera SAP/DALI, con el Nº de Pedido y las líneas de artículos con su "
+                "importe) en este apartado."
+            )
 
     pedido_num = _normalizar_pedido_num(m_pedido.group(1))
     total_pedido = round(sum(_parse_importe_es(l[2]) for l in lineas_importe), 2)
@@ -18663,6 +18793,9 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
 
     hotel_nombre_pdf = _extraer_hotel_nombre_pdf_oficial(texto)
 
+    if leido_via_ocr:
+        log.info(f"[PEDIDO-DOC-OCR] Pedido {pedido_num} leído por OCR (PDF firmado/sellado sin texto)")
+
     return {
         "pedido_num": pedido_num,
         "total_pedido": total_pedido,
@@ -18672,6 +18805,7 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
         "proveedor_nombre_pdf": proveedor_nombre_pdf,
         "almacen_pdf": almacen_pdf,
         "hotel_nombre_pdf": hotel_nombre_pdf,
+        "leido_via_ocr": leido_via_ocr,
     }
 
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
@@ -18955,6 +19089,14 @@ def upload_adjunto(pid):
         respuesta["proveedor_pdf_codigo"] = _prov_codigo_pdf
         respuesta["proveedor_pdf_nombre"] = _prov_nombre_pdf
         respuesta["departamento_pdf"] = _almacen_pdf
+        # (2026-09-07) leido_via_ocr: True si este PDF venía firmado/sellado
+        # (sin texto propio, ver _parsear_pdf_pedido_oficial) y se ha leído
+        # por OCR en vez de por su texto embebido — el frontend lo usa solo
+        # para mostrar un aviso informativo (revisar los datos con más
+        # atención que de costumbre), nunca para bloquear nada: si se llega
+        # hasta aquí es porque el OCR ya encontró Nº de Pedido y líneas de
+        # importe con garantías suficientes.
+        respuesta["leido_via_ocr"] = _datos_pedido_pdf.get("leido_via_ocr", False)
         # Comparación inmediata contra el Departamento que el pedido tenga
         # seleccionado AHORA MISMO (antes de guardar nada del formulario
         # todavía abierto) — solo informativa aquí; el bloqueo real de
@@ -21055,10 +21197,17 @@ def api_externo_dali_encolar_email():
     MISMA cola que usa esta app (emails_sistema_pendientes) por cuenta del
     catálogo DALI (dali-sap-articulos-app). Ver comentario largo arriba.
 
-    Body JSON: { destinatario, asunto, cuerpo_html, cuerpo_text?, cc_emails? }
+    Body JSON: { destinatario, asunto, cuerpo_html, cuerpo_text?, cc_emails?, reply_to? }
     Requiere las cabeceras X-Dali-Timestamp / X-Dali-Signature (ver
     _dali_bridge_firma_valida). Sin sesión de usuario — es una llamada
     servidor a servidor, DALI no tiene (ni debe tener) cookie de esta app.
+
+    (2026-09-07) `reply_to` — opcional; DALI manda aquí el email del
+    comprador que gestionó la solicitud (ver `controlPedidosEmailBridge.js`
+    /`documentacionController.js` en ese repo), para que si el proveedor
+    responde a este correo le llegue a esa persona en vez de a sí mismo.
+    Si se omite, el poller sigue con su comportamiento de siempre
+    (reply_to = destinatario) — ver columna homónima más arriba.
     """
     cuerpo_crudo = request.get_data()
     if not _dali_bridge_firma_valida(cuerpo_crudo):
@@ -21070,6 +21219,7 @@ def api_externo_dali_encolar_email():
     cuerpo_html = datos.get("cuerpo_html") or ""
     cuerpo_text = datos.get("cuerpo_text") or ""
     cc_emails = (datos.get("cc_emails") or "").strip() or None
+    reply_to = (datos.get("reply_to") or "").strip() or None
 
     if not destinatario or not asunto or not cuerpo_html:
         return jsonify({"ok": False, "error": "Faltan destinatario, asunto o cuerpo_html."}), 400
@@ -21077,10 +21227,10 @@ def api_externo_dali_encolar_email():
     try:
         cur = execute(
             """INSERT INTO emails_sistema_pendientes
-               (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text, cc_emails, visible_en)
-               VALUES ('dali_documentacion_faltante', %s, %s, %s, %s, %s, NOW())
+               (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text, cc_emails, reply_to, visible_en)
+               VALUES ('dali_documentacion_faltante', %s, %s, %s, %s, %s, %s, NOW())
                RETURNING id""",
-            (destinatario, asunto, cuerpo_html, cuerpo_text, cc_emails)
+            (destinatario, asunto, cuerpo_html, cuerpo_text, cc_emails, reply_to)
         )
         nuevo_id = cur.fetchone()["id"]
         get_db().commit()
@@ -21294,7 +21444,7 @@ def api_emails_sistema_pendientes():
                   FOR UPDATE SKIP LOCKED
              )
             RETURNING id, evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
-                      cc_emails, pedido_id
+                      cc_emails, pedido_id, reply_to
             """,
             (MAX_INTENTOS_EMAIL_SISTEMA,)
         )
