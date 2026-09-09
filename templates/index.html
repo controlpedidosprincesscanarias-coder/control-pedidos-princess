@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.46
+          V 12.32.47
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5542,6 +5542,15 @@ async function subirAdjuntos(input, tipo) {
           // pasar a ENVIADO AL PROVEEDOR, ver update_pedido en app.py).
           document.getElementById('p-proveedor').value = data.proveedor_id || '';
           document.getElementById('p-proveedor-input').value = data.proveedor_nombre || '';
+          // (2026-09-09, v12.32.47) FIX: faltaba fijar dataset.email aquí
+          // — igual que hace la selección manual del proveedor (más abajo,
+          // ver seleccionarProveedor()) y poblarFormulario() al reabrir un
+          // pedido guardado — así que si se intentaba pasar a ENVIADO AL
+          // PROVEEDOR justo después de subir el PDF (sin guardar y volver
+          // a abrir antes), la validación de más abajo veía dataset.email
+          // vacío y bloqueaba con "no tiene correo configurado" aunque el
+          // proveedor sí tuviera uno en su ficha.
+          document.getElementById('p-proveedor').dataset.email = data.proveedor_email || '';
           _mostrarAvisoProveedorPdf({
             proveedor_reconocido: data.proveedor_reconocido,
             proveedor_pdf_codigo: data.proveedor_pdf_codigo,

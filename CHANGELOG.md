@@ -1,3 +1,23 @@
+# v12.32.47 — 9 septiembre 2026
+
+🐛 Fix: "ENVIADO AL PROVEEDOR" bloqueaba con "no tiene correo" justo tras subir el PDF, aunque el proveedor sí tuviera email
+
+**Reporte de Víctor**: al crear un pedido, el PDF de «Nº Pedido (DALI/SAP)» asigna el proveedor solo (v12.32.35); si justo después, sin guardar y volver a abrir el pedido, se intentaba cambiar el estado a ENVIADO AL PROVEEDOR, el aviso decía que el proveedor no tenía correo configurado — pero Guardar, y luego Editar de nuevo, sí dejaba continuar.
+
+**Causa**: la validación del formulario (`templates/index.html`) lee el email del proveedor de `document.getElementById('p-proveedor').dataset.email`. Ese `dataset.email` se rellena en dos sitios — al elegir proveedor a mano (`seleccionarProveedor()`) y al reabrir un pedido guardado (`poblarFormulario()`, con el `proveedor_email` que ya trae el JSON del pedido) — pero NO en `subirAdjuntos()`, cuando el proveedor se asigna solo al leer el PDF oficial (v12.32.35): esa rama fijaba `p-proveedor` (id y nombre) pero nunca tocaba `dataset.email`, que se quedaba vacío (o con el valor de un pedido anterior) hasta el próximo Guardar + reapertura. El endpoint de subida (`upload_adjunto`, `app.py`) tampoco devolvía el email del proveedor en su respuesta, así que no había de dónde tomarlo.
+
+**Corrección**:
+- `app.py` (`upload_adjunto`, tipo `pedido_doc`): tras resolver el proveedor del PDF (`_resolver_proveedor_pdf_oficial`), se calcula su email de contacto principal con `_get_proveedor_emails_principales(proveedor_id, hotel_id)` (mismo criterio "específico del hotel si existe, si no el general" que ya usa esa función) y se añade `proveedor_email` a la respuesta JSON.
+- `templates/index.html` (`subirAdjuntos()`): al recibir la respuesta del PDF, se fija `document.getElementById('p-proveedor').dataset.email = data.proveedor_email || ''` — igual que hacen los otros dos sitios que tocan ese campo.
+
+**Alcance**: la validación real y definitiva de "ENVIADO AL PROVEEDOR requiere email" ya estaba correctamente implementada en el backend (`update_pedido`, consulta directa a `_get_proveedor_emails_principales` en el momento de guardar) — por eso Guardar nunca dejaba pasar un pedido sin email, y por eso Editar de nuevo (que recarga el pedido completo con su `proveedor_email`) sí funcionaba. El bug estaba solo en el aviso anticipado del frontend, que podía bloquear un caso válido con un mensaje engañoso antes de llegar siquiera a guardar.
+
+**De paso (`PENDIENTES.md`)**: al actualizar la nota de cierre de la última tarea pendiente con esta entrega, se detectó que el archivo tenía la cabecera (título + párrafo introductorio) duplicada de arriba abajo — sin afectar al backlog real, que solo tenía esa nota de cierre — y se ha corregido.
+
+**Entrega**: `app.py`, `templates/index.html`, `docs/HISTORIAL_CAMBIOS.md`, este changelog, `README.md` (versión actual), `PENDIENTES.md` (cabecera duplicada corregida + nota de cierre). `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.46 — 9 septiembre 2026
 
 🧹 Limpieza documental: nota obsoleta de `GUIA_DESPLIEGUE.md` retirada + aclarada la ambigüedad de `docs/hallazgo-seguridad-princess.md`

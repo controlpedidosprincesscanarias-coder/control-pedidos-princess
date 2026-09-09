@@ -49,6 +49,49 @@
 
 ---
 
+## 2026-09-09 — [Control Pedidos] Fix: ENVIADO AL PROVEEDOR bloqueaba con "sin correo" justo tras subir el PDF (v12.32.47)
+
+- **Origen**: reporte de Víctor — al crear un pedido, tras subir el PDF de
+  «Nº Pedido (DALI/SAP)» (que asigna el proveedor solo desde v12.32.35),
+  intentar cambiar directamente el estado a ENVIADO AL PROVEEDOR daba
+  "no tiene correo electrónico configurado" aunque el proveedor sí
+  tuviera email en su ficha. Guardar y volver a Editar sí dejaba
+  continuar.
+- **Causa**: `dataset.email` del select de proveedor (de donde lee la
+  validación del formulario) se rellena al elegir proveedor a mano y al
+  reabrir un pedido guardado (`poblarFormulario()`), pero `subirAdjuntos()`
+  —la rama que asigna el proveedor automáticamente desde el PDF— nunca lo
+  fijaba, y el endpoint `upload_adjunto` (`app.py`) tampoco devolvía el
+  email del proveedor en su respuesta.
+- **Corrección**: `upload_adjunto` (tipo `pedido_doc`) añade
+  `proveedor_email` a la respuesta, calculado con
+  `_get_proveedor_emails_principales(proveedor_id, hotel_id)`;
+  `subirAdjuntos()` fija `dataset.email` con ese valor, igual que los
+  otros dos sitios que lo tocan.
+- **Sin cambios en la validación real**: el backend (`update_pedido`) ya
+  comprobaba correctamente el email del proveedor al guardar — el bug
+  estaba solo en el aviso anticipado del frontend, que podía bloquear con
+  un mensaje engañoso un caso en realidad válido.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+  `docs/hallazgo-seguridad-princess.md` — no existe en este repo.
+  `README.md` sí: versión actual. `PENDIENTES.md` sí, por partida doble:
+  actualizada la nota de cierre de "la última" pendiente con esta entrega,
+  y de paso corregido un defecto propio del archivo detectado en esta
+  revisión — la cabecera (título + párrafo introductorio) estaba
+  **duplicada** de arriba abajo, probablemente de una edición anterior mal
+  fusionada; no afectaba al contenido real (el backlog en sí solo tenía
+  una entrada, la nota de cierre), pero se deja constancia aquí para que
+  quede registrado por qué `PENDIENTES.md` cambia más de lo que esta
+  entrega en sí misma requeriría.
+- **Versión**: Control Pedidos → v12.32.47 (ver `CHANGELOG.md`).
+- **Entrega**: `app.py`, `templates/index.html`, `docs/HISTORIAL_CAMBIOS.md`,
+  `CHANGELOG.md`, `README.md` (versión actual), `PENDIENTES.md`
+  (cabecera duplicada corregida + nota de cierre). `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-09 — [Control Pedidos] Limpieza documental: nota obsoleta de `GUIA_DESPLIEGUE.md` retirada + aclarada la ambigüedad de `docs/hallazgo-seguridad-princess.md` (v12.32.46)
 
 **Contexto**: a raíz de una auditoría general del proyecto (petición de Víctor), quedaron dos detalles menores de documentación por resolver.

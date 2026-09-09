@@ -19126,6 +19126,21 @@ def upload_adjunto(pid):
         respuesta["proveedor_pdf_codigo"] = _prov_codigo_pdf
         respuesta["proveedor_pdf_nombre"] = _prov_nombre_pdf
         respuesta["departamento_pdf"] = _almacen_pdf
+        # (2026-09-09, v12.32.47) FIX: el email del proveedor (contacto
+        # principal, con el mismo criterio "específico del hotel si existe,
+        # si no el general" que _get_proveedor_emails_principales/la
+        # subquery de PEDIDOS_QUERY_BASE) NO se devolvía aquí — el frontend
+        # (subirAdjuntos) se queda con el `dataset.email` del select de
+        # proveedor a cero al asignarlo automáticamente desde el PDF, así
+        # que la validación de "ENVIADO AL PROVEEDOR requiere email" (ver
+        # más abajo, formulario) lo bloqueaba SIEMPRE nada más subir el PDF,
+        # aunque el proveedor sí tuviera email en su ficha — de ahí que solo
+        # "colara" tras Guardar + reabrir en Editar, que sí recarga el
+        # pedido completo (con su proveedor_email) desde la base de datos.
+        _prov_emails = _get_proveedor_emails_principales(
+            _prov_resuelto["id"], pedido["hotel_id"]
+        ) if _prov_resuelto else []
+        respuesta["proveedor_email"] = _prov_emails[0] if _prov_emails else None
         # (2026-09-07) leido_via_ocr: True si este PDF venía firmado/sellado
         # (sin texto propio, ver _parsear_pdf_pedido_oficial) y se ha leído
         # por OCR en vez de por su texto embebido — el frontend lo usa solo
