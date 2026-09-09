@@ -1,3 +1,21 @@
+# v12.32.45 — 9 septiembre 2026
+
+📧↩️ Reply-To real también en el envío manual de reclamación desde el panel ("Re-notificar") — cierra el ciclo de la petición original
+
+**Petición de Víctor**, tras la entrega de v12.32.44: "¿podemos arreglar esto y lo dejamos todo ya correcto?", refiriéndose al pendiente anotado en `PENDIENTES.md`: el botón manual "Re-notificar" del panel de alertas (`meaEnviarEmail()`) no pasaba por la cola `emails_sistema_pendientes` (a diferencia de los tres correos ya corregidos en v12.32.43/44: puente DALI, cambio de estado, reclamación automática) y su payload EmailJS tampoco fijaba `reply_to` — si el proveedor respondía a un correo enviado así, el destino dependía de la configuración por defecto de la cuenta EmailJS (Gmail compartido de Princess), no del comprador que hizo el envío.
+
+**Corrección (`templates/index.html`, `meaEnviarEmail()`)**: cuando el envío es hacia el proveedor (`_meaData.es_proveedor === true`), se fija `reply_to` en el payload de EmailJS con el primer email de `ccList` — los compradores del hotel, que ya viajan en copia oculta en este mismo envío y son quienes deben recibir la respuesta. Si el correo es interno (`es_proveedor` false) o no hay compradores en copia, no se fija `reply_to` y se mantiene el comportamiento de siempre — sin efecto sobre ningún otro tipo de envío del panel.
+
+**Alcance y diferencia con v12.32.43/44**: este envío manual no usa la columna `reply_to` de `emails_sistema_pendientes` (no pasa por esa cola, es EmailJS directo desde el navegador en el momento del clic) — por eso el `reply_to` se calcula y se pasa en el propio payload, sin tocar `app.py` ni el esquema de base de datos. Con esto, los **cuatro** tipos de correo salientes al proveedor que existen en la app (puente DALI, cambio de estado, reclamación automática, y ahora reclamación manual) fijan ya un Reply-To real hacia el comprador correspondiente.
+
+**Verificación**: sintaxis del bloque `meaEnviarEmail()` comprobada con `node` (`new Function(...)` sobre el cuerpo completo de la función, sin errores). No probado en vivo contra producción — pendiente comprobar en Email History (EmailJS) que el "Reply-To" del próximo envío manual "Re-notificar" a un proveedor ya es el email del comprador.
+
+**Revisión de otros documentos (norma 5)**: `README.md` sí (versión actual). `PENDIENTES.md` sí — se retira la entrada de este pendiente, sin quedar ninguna otra abierta sobre `reply_to`. `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica.
+
+**Entrega**: `templates/index.html`, más este changelog/`docs/HISTORIAL_CAMBIOS.md`/`README.md`/`PENDIENTES.md`. `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.44 — 9 septiembre 2026
 
 📧↩️ Reply-To real también en los otros dos correos al proveedor generados por esta app (cambio de estado y reclamación automática)

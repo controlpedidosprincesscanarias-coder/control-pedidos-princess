@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.44
+          V 12.32.45
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -11748,13 +11748,25 @@ async function meaEnviarEmail() {
 
   try {
     // ── Capa 1: EmailJS — envío real desde Gmail de princess ────────────────
-    await enviarEmailJS({
+    const payloadMea = {
       to_email: toEmail,
       subject:  subject,
       message:  _meaData.body_html || bodyText,
       bcc:      ccList.join(',') || '',
       email:    toEmail,
-    });
+    };
+    // (v12.32.45) Mismo criterio ya aplicado en v12.32.43/44 a la cola
+    // automática (puente DALI, cambio_estado_proveedor, reclamacion_
+    // proveedor_auto): cuando este envío manual va HACIA el proveedor
+    // (es_proveedor), el "Responder a" debe ser el comprador que lo
+    // gestiona, no el propio proveedor. Los compradores del hotel ya
+    // están en ccList (copia oculta); se usa el primero como Reply-To.
+    // Si no es_proveedor (correo interno) o no hay compradores en cc, no
+    // se fija reply_to y se mantiene el comportamiento anterior.
+    if (_meaData.es_proveedor && ccList.length) {
+      payloadMea.reply_to = ccList[0];
+    }
+    await enviarEmailJS(payloadMea);
 
     // Registrar en log del backend (best-effort, no bloquea)
     api(`/api/alertas/${_meaData.pedido_id}/enviar-email`, 'POST', {

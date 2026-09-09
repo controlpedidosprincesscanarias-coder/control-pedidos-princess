@@ -18,20 +18,9 @@
 
 ---
 
-## 2026-09-09 — Reply-To del envío manual de reclamación desde el panel (`meaEnviarEmail`)
+_Sin tareas pendientes registradas por ahora._
 
-**Contexto**: v12.32.43 y v12.32.44 (ver `CHANGELOG.md`) añadieron
-`reply_to` a los tres correos que salen hacia el proveedor por la cola
-automática `emails_sistema_pendientes` (puente DALI, cambio de estado,
-reclamación automática). El botón "Re-notificar" del panel (modal de
-alerta, función `meaEnviarEmail()` en `templates/index.html`) manda el
-email directamente por EmailJS sin pasar por esa cola, y su payload
-tampoco fija `reply_to` — si el proveedor responde, hoy depende de la
-configuración por defecto de la cuenta EmailJS usada (la cuenta Gmail
-compartida de Princess), no del comprador que hizo el envío manual.
-
-**Qué haría falta**: cuando `_meaData.es_proveedor` sea `true`, fijar
-`reply_to` en el payload de `enviarEmailJS(...)` con el primer email de
-`_meaData.cc_emails` (los compradores del hotel ya vienen ahí) — mismo
-criterio que se usó para la reclamación automática.
+_(La última — Reply-To del envío manual de reclamación desde el panel
+(`meaEnviarEmail`) — se cerró el 9 de septiembre, ver `CHANGELOG.md`
+v12.32.45.)_
 

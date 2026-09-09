@@ -36,6 +36,33 @@
 
 ---
 
+## 2026-09-09 — [Control Pedidos] Reply-To real también en el envío manual de reclamación desde el panel (v12.32.45)
+
+- **Origen**: petición de Víctor de cerrar el pendiente que quedó anotado
+  al entregar v12.32.44 — el botón manual "Re-notificar"
+  (`meaEnviarEmail()`, `templates/index.html`) no pasaba por la cola
+  `emails_sistema_pendientes` y tampoco fijaba `reply_to` en su payload
+  EmailJS.
+- **Corrección**: cuando `_meaData.es_proveedor` es `true`, se añade
+  `reply_to` al payload de `enviarEmailJS(...)` con el primer email de
+  `ccList` (los compradores del hotel, ya presentes en copia oculta en
+  este mismo envío). Sin cambios si el correo es interno o no hay
+  compradores en copia.
+- **Sin cambios en `app.py`** — este envío es EmailJS directo desde el
+  navegador, no pasa por la cola ni por la columna `reply_to` de
+  `emails_sistema_pendientes` (esa parte ya se resolvió en v12.32.43/44
+  para los otros tres tipos de correo al proveedor).
+- **Con esto quedan los cuatro tipos de correo saliente al proveedor**
+  (puente DALI, cambio de estado, reclamación automática, reclamación
+  manual) fijando un Reply-To real hacia el comprador correspondiente —
+  sin pendientes abiertos sobre este asunto.
+- **Versión**: Control Pedidos → v12.32.45 (ver `CHANGELOG.md`).
+- **Pendiente de confirmar**: Víctor, comprobando en Email History
+  (EmailJS) el "Reply-To" del próximo envío manual "Re-notificar" a un
+  proveedor.
+
+---
+
 ## 2026-09-09 — [Control Pedidos] Reply-To real también en cambio de estado y reclamación automática al proveedor (v12.32.44)
 
 - **Origen**: Víctor pidió verificar el ZIP ya desplegado de v12.32.43
