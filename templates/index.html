@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.47
+          V 12.32.53
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1445,7 +1445,7 @@ tbody tr:last-child{border-bottom:none}
             + Nuevo pedido
           </button>
           <button class="btn btn-ghost btn-sm" id="btn-exportar-pedidos" onclick="exportarExcel()" title="Exportar a Excel">⬇ Exportar</button>
-          <button class="btn btn-ghost btn-sm" onclick="openImportModal()" title="Importar desde Excel">⬆ Importar</button>
+          <button class="btn btn-ghost btn-sm" id="btn-importar-pedidos" onclick="openImportModal()" title="Importar desde Excel">⬆ Importar</button>
         </div>
 
         <!-- Acciones contextuales: Proveedores -->
@@ -1574,11 +1574,7 @@ tbody tr:last-child{border-bottom:none}
           <input class="filter-input" id="f-fecha-hasta" type="date" title="Fecha solicitud hasta" style="width:140px" onchange="applyFilter()">
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
           <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
-          <button class="btn btn-sm" id="btn-comparar-listado-pdf" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCompararListado()">📄 Comparar listado PDF</button>
-          <button class="btn btn-sm" id="btn-actualizar-departamentos" style="background:#6f42c1;color:#fff;border:none" onclick="abrirModalActualizarDepartamentos()">🏷️ Departamentos y líneas (SAP detallado)</button>
-          <button class="btn btn-sm" id="btn-importar-albaranes" style="background:#20805c;color:#fff;border:none" onclick="abrirModalImportarAlbaranes()">📥 Importar Albaranes (SAP detallado)</button>
-          <button class="btn btn-sm" id="btn-sugerencias-albaran" style="background:#b8860b;color:#fff;border:none" onclick="abrirModalSugerenciasAlbaran()">🔍 Sugerencias de Albarán</button>
-          <button class="btn btn-sm" id="btn-sugerencias-albaranes-pendientes" style="background:#b8860b;color:#fff;border:none" onclick="abrirModalSugerenciasAlbaranesPendientes()">📋 Revisar entregas pendientes (Albaranes)</button>
+          <button class="btn btn-sm" id="btn-cruce-sap" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCruceSap()">🔄 Cruce con SAP (Pedidos ↔ Albaranes)</button>
           <button class="btn btn-sm" id="btn-confirmar-albaran" style="background:#5b3a99;color:#fff;border:none" onclick="abrirModalConfirmarAlbaran()">📎 Confirmar un albarán suelto</button>
         </div>
         <div class="search-chips" id="pedidos-chips">
@@ -1893,6 +1889,51 @@ tbody tr:last-child{border-bottom:none}
             <div style="margin-top:24px;padding-top:20px;border-top:1px solid var(--border)">
               <h3 style="margin:0 0 12px 0;font-size:14px;color:var(--text-secondary)">🗄️ Tamaño de Base de Datos</h3>
               <div id="db-size-content"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- ── Auditoría puntual: departamento Restaurante/Bares en GY/IT/MT/TA
+             (2026-09-09, v12.32.53) — a petición de Víctor, tras dejar la
+             pregunta anotada en PENDIENTES.md desde v12.32.34: ¿hace falta
+             revisar los pedidos ya creados que se hayan quedado con el
+             departamento combinado "RESTAURANTE & BARES" mal asignado por el
+             bug de _resolver_departamento_sap() (corregido en v12.32.34)?
+             Solo lectura — no se calcula sola al cargar la vista (a
+             diferencia de "Integridad Operativa"), es una comprobación
+             puntual que se lanza a mano. NUNCA corrige nada automáticamente:
+             cada fila lleva un enlace para abrir y corregir el pedido a
+             mano, si procede, desde su ficha normal. -->
+        <div class="card" style="margin-top:20px">
+          <div class="card-header" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+            <span class="card-title">🍽️ Auditoría puntual: departamento Restaurante/Bares (GY/IT/MT/TA)</span>
+            <button onclick="loadAuditoriaRestauranteBares()" style="margin-left:auto;padding:5px 14px;font-size:12px;border:none;border-radius:6px;cursor:pointer;background:#6f42c1;color:#fff">🔍 Calcular auditoría</button>
+          </div>
+          <div style="padding:0 16px 4px;font-size:.82rem;color:var(--text-secondary)">
+            Lista los pedidos de GY, IT, MT y TA con el departamento combinado "RESTAURANTE & BARES" —
+            desde v12.32.34 ese departamento ya no debería asignarse nunca a esos 4 hoteles (llevan
+            Restaurante y Bares por separado). No corrige nada solo: cruza cada pedido con el código de
+            departamento SAP guardado para distinguir los casos con alta confianza (el código SAP
+            00000100/00000301 confirma que el bug de v12.32.34 pudo haberlo escrito así) de los que hay
+            que revisar a mano (sin dato SAP que lo confirme). Corrige cada uno, si procede, abriendo su
+            ficha con "✏️ Editar".
+          </div>
+          <div id="audit-rb-loading" style="display:none;text-align:center;padding:24px;color:var(--text-secondary)">Calculando…</div>
+          <div id="audit-rb-vacio" style="display:none;padding:16px;color:var(--text-secondary);font-size:.85rem">
+            Pulsa "🔍 Calcular auditoría" para revisar si hay pedidos afectados.
+          </div>
+          <div id="audit-rb-resultado" style="display:none;padding:0 16px 16px">
+            <div id="audit-rb-resumen" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px"></div>
+            <div class="table-wrap" style="max-height:420px">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Hotel</th><th>Pedido</th><th>Proveedor</th><th>Estado</th>
+                    <th>Creado</th><th>Código SAP</th><th>Sugerido</th><th>Confianza</th><th></th>
+                  </tr>
+                </thead>
+                <tbody id="audit-rb-tbody"></tbody>
+              </table>
             </div>
           </div>
         </div>
@@ -2713,6 +2754,72 @@ tbody tr:last-child{border-bottom:none}
   </div>
 </div>
 
+<!-- ── MODAL CRUCE CON SAP (Pedidos ↔ Albaranes) — Pieza 5, v12.32.52 ─────
+   (2026-09-09) Punto de entrada único, en dos pasos, para las 5
+   herramientas de cruce con SAP que antes eran botones sueltos en la
+   barra de Pedidos: "Comparar listado PDF", "Departamentos y líneas
+   (SAP detallado)", "Importar Albaranes (SAP detallado)", "Sugerencias
+   de Albarán" (absorbida dentro de "Revisar entregas pendientes", ver
+   esa modal) y "Revisar entregas pendientes (Albaranes)". Petición de
+   Víctor: unificar la Pieza 5 del rediseño "solo con los dos
+   detallados" (ver PENDIENTES.md/CHANGELOG.md, decisiones tomadas por
+   AskUserQuestion el 9 de septiembre de 2026). Este modal NO reimplementa
+   ninguna lógica de negocio — cada botón abre el modal ya existente y
+   ya probado para esa acción; solo agrupa y guía en "Paso 1: cargar
+   datos" / "Paso 2: revisar y aplicar".
+-->
+<div class="modal-overlay" id="modal-cruce-sap">
+  <div class="modal" style="max-width:760px">
+    <div class="modal-header">
+      <div class="modal-title">🔄 Cruce con SAP (Pedidos ↔ Albaranes)</div>
+      <button class="close-btn" onclick="closeModal('modal-cruce-sap')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:18px">
+        Herramientas para mantener al día los pedidos y sus entregas a partir de los listados que
+        exporta SAP. Primero se cargan los datos (Paso 1); después se revisan las propuestas y se
+        aplican las que correspondan (Paso 2). Desde cualquiera de las pantallas siguientes puedes
+        volver aquí con el botón "← Cruce con SAP".
+      </div>
+
+      <div style="font-weight:700;color:#1a3a6b;margin-bottom:8px">Paso 1 · Cargar datos SAP</div>
+      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:22px">
+        <button class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none;text-align:left;white-space:normal"
+                onclick="closeModal('modal-cruce-sap');abrirModalCompararListado()">
+          📄 Comparar / cargar Listado de Pedidos (SAP resumido) — y, si hace falta, el Listado de
+          Albaranes registrados en DALI
+        </button>
+        <button class="btn btn-sm" style="background:#6f42c1;color:#fff;border:none;text-align:left;white-space:normal"
+                onclick="closeModal('modal-cruce-sap');abrirModalActualizarDepartamentos()">
+          🏷️ Departamentos y líneas (Listado de Pedidos SAP detallado)
+        </button>
+        <button class="btn btn-sm" style="background:#20805c;color:#fff;border:none;text-align:left;white-space:normal"
+                onclick="closeModal('modal-cruce-sap');abrirModalImportarAlbaranes()">
+          📥 Importar Albaranes (Listado de Albaranes SAP detallado)
+        </button>
+      </div>
+
+      <div style="font-weight:700;color:#1a3a6b;margin-bottom:8px">Paso 2 · Revisar y aplicar</div>
+      <div style="display:flex;flex-direction:column;gap:10px">
+        <button class="btn btn-sm" style="background:#b8860b;color:#fff;border:none;text-align:left;white-space:normal"
+                onclick="closeModal('modal-cruce-sap');abrirModalSugerenciasAlbaranesPendientes()">
+          📋 Revisar entregas pendientes y sugerencias de albarán (incluye la búsqueda de un pedido
+          concreto)
+        </button>
+        <div style="font-size:.8rem;color:var(--text-secondary)">
+          Los pedidos que SAP ya tiene registrados pero que todavía no están dados de alta en la
+          app se revisan y crean automáticamente desde "📄 Comparar / cargar Listado de Pedidos"
+          del Paso 1 — aparecen en cuanto seleccionas el hotel, sin necesidad de volver a subir el
+          PDF si ya hay un listado guardado.
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button class="btn btn-ghost" onclick="closeModal('modal-cruce-sap')">Cerrar</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── MODAL COMPARAR LISTADO PDF (2026-08-06, adaptado 2026-08-11 al
      listado simplificado) ────────────────────────────────────────────
      Verificación semanal: sube el "Listado de Pedidos" SIMPLIFICADO que
@@ -2724,6 +2831,7 @@ tbody tr:last-child{border-bottom:none}
 <div class="modal-overlay" id="modal-comparar-pdf">
   <div class="modal" style="max-width:1100px">
     <div class="modal-header">
+      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-comparar-pdf');abrirModalCruceSap()">← Cruce con SAP</button>
       <div class="modal-title">📄 Comparar listado PDF (SAP)</div>
       <button class="close-btn" onclick="closeModal('modal-comparar-pdf')">✕</button>
     </div>
@@ -2742,7 +2850,7 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;align-items:end">
           <div class="form-group">
             <label class="form-label">Hotel <span style="color:#e74c3c">*</span></label>
-            <select class="form-control" id="cmp-pdf-hotel" onchange="_actualizarInfoListadoSapGuardado()"><option value="">— Selecciona —</option></select>
+            <select class="form-control" id="cmp-pdf-hotel" onchange="_actualizarInfoListadoSapGuardado();_cargarPedidosPendientesCrearSap()"><option value="">— Selecciona —</option></select>
           </div>
           <div class="form-group">
             <label class="form-label">Listado de Pedidos (SAP) <span id="cmp-pdf-file-req" style="color:#e74c3c">*</span></label>
@@ -2941,6 +3049,7 @@ tbody tr:last-child{border-bottom:none}
 <div class="modal-overlay" id="modal-actualizar-departamentos">
   <div class="modal" style="max-width:640px">
     <div class="modal-header">
+      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-actualizar-departamentos');abrirModalCruceSap()">← Cruce con SAP</button>
       <div class="modal-title">🏷️ Actualizar departamentos y líneas (Listado detallado SAP)</div>
       <button class="close-btn" onclick="closeModal('modal-actualizar-departamentos')">✕</button>
     </div>
@@ -2997,6 +3106,7 @@ tbody tr:last-child{border-bottom:none}
 <div class="modal-overlay" id="modal-importar-albaranes">
   <div class="modal" style="max-width:640px">
     <div class="modal-header">
+      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-importar-albaranes');abrirModalCruceSap()">← Cruce con SAP</button>
       <div class="modal-title">📥 Importar listado de Albaranes (SAP detallado)</div>
       <button class="close-btn" onclick="closeModal('modal-importar-albaranes')">✕</button>
     </div>
@@ -3037,65 +3147,43 @@ tbody tr:last-child{border-bottom:none}
   </div>
 </div>
 
-<!-- ── MODAL SUGERENCIAS DE ALBARÁN ─────────────────────────────────────
-   (2026-09-04, v12.32.19) Para un pedido concreto (de un proveedor
-   "sujeto a seguimiento"), muestra con qué línea(s) de albarán ya
-   importadas podría corresponder cada artículo del pedido — cruzando por
-   proveedor + código de artículo. Es una SUGERENCIA para revisar a
-   mano, nunca una asociación automática: no escribe nada en el pedido.
--->
-<div class="modal-overlay" id="modal-sugerencias-albaran">
-  <div class="modal" style="max-width:700px">
-    <div class="modal-header">
-      <div class="modal-title">🔍 Sugerencias de Albarán para un pedido</div>
-      <button class="close-btn" onclick="closeModal('modal-sugerencias-albaran')">✕</button>
-    </div>
-    <div class="modal-body">
-      <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
-        Escribe el número de pedido SAP. Se compara, artículo a artículo, con los albaranes ya
-        importados del mismo proveedor — son sugerencias para revisar a mano, no una asociación
-        automática ni definitiva.
-      </div>
-      <div class="form-grid" style="grid-template-columns:2fr 1fr;gap:14px;align-items:end">
-        <div class="form-group">
-          <label class="form-label">Nº de pedido SAP</label>
-          <input class="form-control" type="text" id="sug-alb-pedido-num" placeholder="p. ej. 00038482">
-        </div>
-        <button class="btn btn-gold" onclick="buscarSugerenciasAlbaran()">Buscar</button>
-      </div>
-      <div id="sug-alb-loading" class="loading" style="display:none">Buscando sugerencias…</div>
-      <div id="sug-alb-resultado" style="margin-top:14px"></div>
-    </div>
-    <div class="modal-footer">
-      <button class="btn btn-ghost" onclick="closeModal('modal-sugerencias-albaran')">Cerrar</button>
-    </div>
-  </div>
-</div>
-
 <!-- ── MODAL REVISAR ENTREGAS PENDIENTES (Albaranes, en bloque) ──────────
    (2026-09-05, v12.32.32) Pieza 4 del rediseño "solo con los dos
-   detallados": versión en bloque de "🔍 Sugerencias de Albarán" de
-   arriba, para TODOS los pedidos pendientes de entrega de un hotel a la
-   vez — ver _sugerencias_albaranes_pendientes_hotel() en app.py. Mismo
-   patrón de tabla con checkboxes + "aplicar seleccionadas" que la
-   comparativa "Comparar listado + Albaranes" (ver #cmp-alb-resultado),
-   pero sin PDF que subir: lee directamente lo ya guardado en BD de
-   "Departamentos y líneas" e "Importar Albaranes". NUNCA cambia nada
-   solo — decisión confirmada por Víctor: "Solo sugerir, nunca cambiar
-   estado solo".
+   detallados": versión en bloque de "🔍 Sugerencias de Albarán" para
+   TODOS los pedidos pendientes de entrega de un hotel a la vez — ver
+   _sugerencias_albaranes_pendientes_hotel() en app.py. Mismo patrón de
+   tabla con checkboxes + "aplicar seleccionadas" que la comparativa
+   "Comparar listado + Albaranes" (ver #cmp-alb-resultado), pero sin PDF
+   que subir: lee directamente lo ya guardado en BD de "Departamentos y
+   líneas" e "Importar Albaranes". NUNCA cambia nada sola — decisión
+   confirmada por Víctor: "Solo sugerir, nunca cambiar estado solo".
+
+   (2026-09-09, v12.32.52 — Pieza 5) La antigua "🔍 Sugerencias de
+   Albarán" para UN pedido (modal aparte, buscaba por nº de pedido SAP
+   escrito a mano) queda absorbida aquí — a petición de Víctor, unificar
+   el cruce con SAP en dos pasos sin mantenerla como acceso
+   independiente (ver PENDIENTES.md/CHANGELOG.md). El cruce en bloque de
+   arriba solo lista pedidos con AL MENOS una línea ya cubierta por algún
+   albarán (ver docstring de _sugerencias_albaranes_pendientes_hotel), así
+   que se conserva la búsqueda de un pedido concreto — ver
+   "sug-alb-pend-buscar-*" más abajo — para los casos en que un pedido no
+   aparece en la tabla (todavía ninguna línea cubierta, o ya no está en
+   estado pendiente de entrega) y aun así se quiere revisar su detalle
+   línea a línea. Misma llamada a GET /api/pedidos/<id>/sugerencias-albaran
+   que antes, solo que integrada en esta pantalla.
 -->
 <div class="modal-overlay" id="modal-sugerencias-albaranes-pendientes">
   <div class="modal" style="max-width:960px">
     <div class="modal-header">
+      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-sugerencias-albaranes-pendientes');abrirModalCruceSap()">← Cruce con SAP</button>
       <div class="modal-title">📋 Revisar entregas pendientes (Albaranes detallado)</div>
       <button class="close-btn" onclick="closeModal('modal-sugerencias-albaranes-pendientes')">✕</button>
     </div>
     <div class="modal-body">
       <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
         Cruza, para TODOS los pedidos pendientes de entrega de un hotel a la vez, sus líneas del
-        Listado de Pedidos detallado con el Listado de Albaranes detallado ya importado — mismo
-        cruce por proveedor + código de artículo que "🔍 Sugerencias de Albarán" de arriba, pero
-        para todos los pedidos de una vez, para no tener que abrirlos uno a uno.
+        Listado de Pedidos detallado con el Listado de Albaranes detallado ya importado — cruce por
+        proveedor + código de artículo, para no tener que abrir los pedidos uno a uno.
         <strong>Nunca cambia nada sola</strong>: marca abajo qué pedidos aplicar y pulsa
         "Aplicar seleccionadas" — solo entonces se actualiza el estado. Esta primera versión solo
         toca el estado del pedido; el número de albarán y la fecha de tramitación se siguen
@@ -3107,6 +3195,22 @@ tbody tr:last-child{border-bottom:none}
           <select class="form-control" id="sug-alb-pend-hotel" onchange="buscarSugerenciasAlbaranesPendientes()"><option value="">— Selecciona —</option></select>
         </div>
         <button class="btn btn-gold" onclick="buscarSugerenciasAlbaranesPendientes()">🔄 Calcular sugerencias</button>
+      </div>
+
+      <div style="border:1px dashed var(--border,#dde1e8);border-radius:8px;padding:12px 14px;margin-bottom:16px">
+        <div class="form-grid" style="grid-template-columns:2fr 1fr;gap:14px;align-items:end">
+          <div class="form-group" style="margin-bottom:0">
+            <label class="form-label">🔍 Buscar un pedido en concreto (nº de pedido SAP)</label>
+            <input class="form-control" type="text" id="sug-alb-pend-buscar-num" placeholder="p. ej. 00038482">
+          </div>
+          <button class="btn btn-ghost" onclick="buscarSugerenciaAlbaranPedidoConcreto()">Buscar</button>
+        </div>
+        <div style="font-size:.78rem;color:var(--text-secondary);margin-top:6px">
+          Úsalo si el pedido no aparece en la tabla de abajo — por ejemplo porque ninguna de sus
+          líneas tiene todavía un candidato, o porque ya no está pendiente de entrega.
+        </div>
+        <div id="sug-alb-pend-buscar-loading" class="loading" style="display:none">Buscando…</div>
+        <div id="sug-alb-pend-buscar-resultado" style="margin-top:10px"></div>
       </div>
 
       <div id="sug-alb-pend-loading" class="loading" style="display:none">Calculando sugerencias…</div>
@@ -3534,21 +3638,17 @@ async function _entrarEnApp(r) {
   // Ocultar botón nuevo pedido para usuario hotel (solo lectura + albarán)
   const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
   if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
-  // (2026-08-10) Comparar listado PDF: solo admin (igual que el backend)
-  const btnCompararPdf = document.getElementById('btn-comparar-listado-pdf');
-  if (btnCompararPdf) btnCompararPdf.style.display = G.rol === 'admin' ? '' : 'none';
-  // (2026-09-04) Actualizar departamentos (listado detallado): solo admin, mismo criterio
-  const btnActualizarDeptos = document.getElementById('btn-actualizar-departamentos');
-  if (btnActualizarDeptos) btnActualizarDeptos.style.display = G.rol === 'admin' ? '' : 'none';
-  // (2026-09-04) Importar Albaranes / Sugerencias de Albarán: solo admin, mismo criterio
-  const btnImportarAlb = document.getElementById('btn-importar-albaranes');
-  if (btnImportarAlb) btnImportarAlb.style.display = G.rol === 'admin' ? '' : 'none';
-  const btnSugerenciasAlb = document.getElementById('btn-sugerencias-albaran');
-  if (btnSugerenciasAlb) btnSugerenciasAlb.style.display = G.rol === 'admin' ? '' : 'none';
-  // (2026-09-05) Revisar entregas pendientes en bloque (Pieza 4): solo admin, mismo criterio —
-  // el endpoint de aplicar ya lo exige en backend, aquí solo se oculta el botón.
-  const btnSugerenciasAlbPend = document.getElementById('btn-sugerencias-albaranes-pendientes');
-  if (btnSugerenciasAlbPend) btnSugerenciasAlbPend.style.display = G.rol === 'admin' ? '' : 'none';
+  // (2026-09-09, auditoría) Mismo motivo: Importar Excel da de alta pedidos
+  // en bloque, igual de fuera de alcance para el rol hotel que "+ Nuevo
+  // pedido" — el backend (importar_excel(), app.py) ya lo rechaza también.
+  const btnImportarPedidos = document.getElementById('btn-importar-pedidos');
+  if (btnImportarPedidos) btnImportarPedidos.style.display = G.rol === 'hotel' ? 'none' : '';
+  // (2026-08-10, unificado en v12.32.52 — Pieza 5) Cruce con SAP (antes 5
+  // botones sueltos: Comparar listado PDF, Departamentos y líneas,
+  // Importar Albaranes, Sugerencias de Albarán, Revisar entregas
+  // pendientes): solo admin, igual que todos los endpoints que agrupa.
+  const btnCruceSap = document.getElementById('btn-cruce-sap');
+  if (btnCruceSap) btnCruceSap.style.display = G.rol === 'admin' ? '' : 'none';
   const btnConfirmarAlb = document.getElementById('btn-confirmar-albaran');
   if (btnConfirmarAlb) btnConfirmarAlb.style.display = G.rol === 'admin' ? '' : 'none';
   await loadMaestros();
@@ -7410,6 +7510,16 @@ async function saveProveedor() {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
+   Cruce con SAP (Pedidos ↔ Albaranes) — Pieza 5, v12.32.52
+   Punto de entrada único (Paso 1 / Paso 2) que sustituye a los 5 botones
+   sueltos que había antes — ver comentario del modal "modal-cruce-sap"
+   en el HTML. No contiene lógica propia: solo abre el modal.
+═══════════════════════════════════════════════════════════════════════ */
+function abrirModalCruceSap() {
+  openModal('modal-cruce-sap');
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
    Comparar listado PDF (SAP) — 2026-08-06
    Verificación semanal: sube el "Listado de Pedidos" que exporta SAP para
    un hotel y compara los números de pedido contra pedido_num en la app.
@@ -7853,24 +7963,24 @@ async function _pollImportarAlbaranes(jobId, intentos) {
 }
 
 /* ═══════════════════════════════════════════════════════════════════════
-   Sugerencias de Albarán para un pedido — v12.32.19
+   Sugerencias de Albarán para UN pedido concreto — v12.32.19
+   (2026-09-09, v12.32.52 — Pieza 5) Antes era un modal aparte
+   ("modal-sugerencias-albaran", botón propio "🔍 Sugerencias de
+   Albarán"); ahora vive integrada dentro de "modal-sugerencias-
+   albaranes-pendientes" (Paso 2 del "Cruce con SAP"), como una búsqueda
+   auxiliar de apoyo a la tabla en bloque — ver el comentario sobre esta
+   modal en el HTML. Misma llamada GET /api/pedidos/<id>/sugerencias-
+   albaran que siempre, sin cambios en el backend.
    Cruza sap_pedidos_lineas x sap_albaranes_lineas por proveedor+código de
    artículo (ver _sugerencias_albaran_pedido en app.py). Es una sugerencia
    de revisión manual, nunca escribe nada en el pedido.
 ═══════════════════════════════════════════════════════════════════════ */
-function abrirModalSugerenciasAlbaran() {
-  document.getElementById('sug-alb-pedido-num').value = '';
-  document.getElementById('sug-alb-loading').style.display = 'none';
-  document.getElementById('sug-alb-resultado').innerHTML = '';
-  openModal('modal-sugerencias-albaran');
-}
-
-async function buscarSugerenciasAlbaran() {
-  const num = (document.getElementById('sug-alb-pedido-num').value || '').trim();
+async function buscarSugerenciaAlbaranPedidoConcreto() {
+  const num = (document.getElementById('sug-alb-pend-buscar-num').value || '').trim();
   if (!num) { toast('Escribe un número de pedido', 'error'); return; }
 
-  document.getElementById('sug-alb-loading').style.display = '';
-  document.getElementById('sug-alb-resultado').innerHTML = '';
+  document.getElementById('sug-alb-pend-buscar-loading').style.display = '';
+  document.getElementById('sug-alb-pend-buscar-resultado').innerHTML = '';
 
   try {
     // 1) Resolver el id interno del pedido a partir del nº SAP (búsqueda
@@ -7880,8 +7990,8 @@ async function buscarSugerenciasAlbaran() {
     const dBusq = await rBusq.json();
     const candidatos = (dBusq.pedidos || []).filter(p => (p.pedido_num || '').replace(/^0+/, '') === num.replace(/^0+/, ''));
     if (!candidatos.length) {
-      document.getElementById('sug-alb-loading').style.display = 'none';
-      document.getElementById('sug-alb-resultado').innerHTML = `<p style="color:#856404">No se encuentra ningún pedido dado de alta en la app con ese número — ¿está creado ya? (Admin → Pedidos → Crear pedidos desde SAP, si viene del listado resumido pero aún no está de alta.)</p>`;
+      document.getElementById('sug-alb-pend-buscar-loading').style.display = 'none';
+      document.getElementById('sug-alb-pend-buscar-resultado').innerHTML = `<p style="color:#856404">No se encuentra ningún pedido dado de alta en la app con ese número — ¿está creado ya? (Admin → Pedidos → Crear pedidos desde SAP, si viene del listado resumido pero aún no está de alta.)</p>`;
       return;
     }
     const pedido = candidatos[0];
@@ -7889,18 +7999,18 @@ async function buscarSugerenciasAlbaran() {
     // 2) Sugerencias para ese pedido.
     const r = await fetch(`/api/pedidos/${pedido.id}/sugerencias-albaran`, { credentials: 'same-origin' });
     const d = await r.json();
-    document.getElementById('sug-alb-loading').style.display = 'none';
+    document.getElementById('sug-alb-pend-buscar-loading').style.display = 'none';
 
     if (!d.aplica) {
-      document.getElementById('sug-alb-resultado').innerHTML = `<p style="color:#856404">${d.motivo || 'No aplica para este pedido.'}</p>`;
+      document.getElementById('sug-alb-pend-buscar-resultado').innerHTML = `<p style="color:#856404">${d.motivo || 'No aplica para este pedido.'}</p>`;
       return;
     }
     if (d.aviso) {
-      document.getElementById('sug-alb-resultado').innerHTML = `<p style="color:#856404">${d.aviso}</p>`;
+      document.getElementById('sug-alb-pend-buscar-resultado').innerHTML = `<p style="color:#856404">${d.aviso}</p>`;
       return;
     }
     if (!d.lineas || !d.lineas.length) {
-      document.getElementById('sug-alb-resultado').innerHTML = `<p>Sin líneas que mostrar para este pedido.</p>`;
+      document.getElementById('sug-alb-pend-buscar-resultado').innerHTML = `<p>Sin líneas que mostrar para este pedido.</p>`;
       return;
     }
 
@@ -7956,10 +8066,10 @@ async function buscarSugerenciasAlbaran() {
         en cantidad · ❔ = candidato del mismo proveedor+artículo pero cantidad distinta ·
         filas resaltadas = más de un candidato sin confirmar, revisar cuál corresponde.
       </p>`;
-    document.getElementById('sug-alb-resultado').innerHTML = html;
+    document.getElementById('sug-alb-pend-buscar-resultado').innerHTML = html;
   } catch (e) {
-    document.getElementById('sug-alb-loading').style.display = 'none';
-    document.getElementById('sug-alb-resultado').innerHTML = `<p style="color:#e74c3c">Error buscando sugerencias: ${e.message}</p>`;
+    document.getElementById('sug-alb-pend-buscar-loading').style.display = 'none';
+    document.getElementById('sug-alb-pend-buscar-resultado').innerHTML = `<p style="color:#e74c3c">Error buscando sugerencias: ${e.message}</p>`;
   }
 }
 
@@ -7984,6 +8094,11 @@ function abrirModalSugerenciasAlbaranesPendientes() {
   document.getElementById('sug-alb-pend-resultado').style.display = 'none';
   _sugAlbPendResultado = null;
   _sugAlbPendHotelId = null;
+  // (2026-09-09, v12.32.52) Búsqueda de un pedido concreto absorbida aquí — ver
+  // buscarSugerenciaAlbaranPedidoConcreto().
+  document.getElementById('sug-alb-pend-buscar-num').value = '';
+  document.getElementById('sug-alb-pend-buscar-loading').style.display = 'none';
+  document.getElementById('sug-alb-pend-buscar-resultado').innerHTML = '';
   openModal('modal-sugerencias-albaranes-pendientes');
 }
 
@@ -8140,7 +8255,7 @@ async function confirmarAlbaranSuelto() {
     if (d.otros_pedidos_en_el_pdf && d.otros_pedidos_en_el_pdf.length) {
       html += `<p style="margin-top:10px;color:#856404">⚠️ El PDF menciona otro(s) pedido(s) además del usado (${d.otros_pedidos_en_el_pdf.join(', ')}) — este caso no se ha visto todavía con datos reales; revisa a mano si corresponde también a este albarán.</p>`;
     }
-    html += `<p style="margin-top:10px;font-size:.82rem;color:var(--text-secondary)">Ya puedes consultar este pedido en "🔍 Sugerencias de Albarán" — este albarán saldrá marcado como confirmado.</p>`;
+    html += `<p style="margin-top:10px;font-size:.82rem;color:var(--text-secondary)">Ya puedes consultar este pedido en "🔄 Cruce con SAP" → "📋 Revisar entregas pendientes" (busca el pedido en concreto si no aparece en la tabla) — este albarán saldrá marcado como confirmado.</p>`;
     document.getElementById('conf-alb-resultado').innerHTML = html;
   } catch (e) {
     document.getElementById('conf-alb-loading').style.display = 'none';
@@ -9117,16 +9232,10 @@ function calcDias(s) {
     _applySidebarRoleStyles();
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');
     if (btnNuevoPedido) btnNuevoPedido.style.display = G.rol === 'hotel' ? 'none' : '';
-    const btnCompararPdf2 = document.getElementById('btn-comparar-listado-pdf');
-    if (btnCompararPdf2) btnCompararPdf2.style.display = G.rol === 'admin' ? '' : 'none';
-    const btnActualizarDeptos2 = document.getElementById('btn-actualizar-departamentos');
-    if (btnActualizarDeptos2) btnActualizarDeptos2.style.display = G.rol === 'admin' ? '' : 'none';
-    const btnImportarAlb2 = document.getElementById('btn-importar-albaranes');
-    if (btnImportarAlb2) btnImportarAlb2.style.display = G.rol === 'admin' ? '' : 'none';
-    const btnSugerenciasAlb2 = document.getElementById('btn-sugerencias-albaran');
-    if (btnSugerenciasAlb2) btnSugerenciasAlb2.style.display = G.rol === 'admin' ? '' : 'none';
-    const btnSugerenciasAlbPend2 = document.getElementById('btn-sugerencias-albaranes-pendientes');
-    if (btnSugerenciasAlbPend2) btnSugerenciasAlbPend2.style.display = G.rol === 'admin' ? '' : 'none';
+    const btnImportarPedidos2 = document.getElementById('btn-importar-pedidos');
+    if (btnImportarPedidos2) btnImportarPedidos2.style.display = G.rol === 'hotel' ? 'none' : '';
+    const btnCruceSap2 = document.getElementById('btn-cruce-sap');
+    if (btnCruceSap2) btnCruceSap2.style.display = G.rol === 'admin' ? '' : 'none';
     const btnConfirmarAlb2 = document.getElementById('btn-confirmar-albaran');
     if (btnConfirmarAlb2) btnConfirmarAlb2.style.display = G.rol === 'admin' ? '' : 'none';
     await loadMaestros();
@@ -11015,6 +11124,69 @@ async function loadIntegridad() {
 
   // Actualizar badge sidebar al cargar cualquier vista (si es admin)
   _refreshIntegridadBadge(data);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   Auditoría puntual: departamento Restaurante/Bares en GY/IT/MT/TA — v12.32.53
+   Ver _auditoria_departamento_restaurante_bares_gy_it_mt_ta() en app.py.
+   Solo lectura, se lanza a mano (no se calcula sola al entrar a la vista,
+   a diferencia de Integridad) — nunca corrige nada: cada fila abre la
+   ficha normal del pedido para corregir a mano, si procede.
+═══════════════════════════════════════════════════════════════════════ */
+async function loadAuditoriaRestauranteBares() {
+  const loading = document.getElementById('audit-rb-loading');
+  const vacio = document.getElementById('audit-rb-vacio');
+  const resultado = document.getElementById('audit-rb-resultado');
+  vacio.style.display = 'none';
+  resultado.style.display = 'none';
+  loading.style.display = '';
+  loading.textContent = 'Calculando…';
+
+  let data;
+  try {
+    const r = await fetch('/api/admin/auditoria-restaurante-bares-gy-it-mt-ta', { credentials: 'same-origin' });
+    data = await r.json();
+    if (!r.ok || !data.ok) throw new Error(data.error || `Error ${r.status}`);
+  } catch (err) {
+    loading.textContent = `❌ Error al calcular: ${err.message}`;
+    return;
+  }
+  loading.style.display = 'none';
+
+  if (!data.pedidos.length) {
+    vacio.style.display = '';
+    vacio.textContent = '✅ No hay ningún pedido de GY/IT/MT/TA con el departamento combinado "RESTAURANTE & BARES" — nada que revisar.';
+    return;
+  }
+
+  resultado.style.display = '';
+  const pill = (txt, bg, fg) => `<span style="background:${bg};color:${fg};padding:4px 10px;border-radius:6px;font-size:.82rem">${txt}</span>`;
+  document.getElementById('audit-rb-resumen').innerHTML =
+    pill(`${data.total} pedido(s) con "RESTAURANTE & BARES" en GY/IT/MT/TA`, '#eef1f7', '#1a3a6b') +
+    pill(`${data.total_confianza_alta} con confianza alta (código SAP 00000100/00000301)`, '#fff3cd', '#856404') +
+    pill(`${data.total - data.total_confianza_alta} a revisar a mano (sin código SAP que lo confirme)`, '#f1f1f1', '#555');
+
+  const tbody = document.getElementById('audit-rb-tbody');
+  tbody.innerHTML = data.pedidos.map(p => {
+    const confianzaTxt = p.confianza === 'alta'
+      ? `<span style="color:#856404;font-weight:700">⚠️ alta</span>`
+      : `<span style="color:#666">revisar a mano</span>`;
+    const sugeridoTxt = p.departamento_sugerido
+      ? `<strong>${p.departamento_sugerido}</strong>`
+      : '<span style="color:#999">—</span>';
+    const fechaTxt = p.creado_en ? new Date(p.creado_en).toLocaleDateString('es-ES') : '—';
+    return `<tr${p.confianza === 'alta' ? ' style="background:#fff8e6"' : ''}>
+      <td>${p.hotel_codigo}</td>
+      <td class="monospace">${p.pedido_num || ''} <span style="color:#999;font-size:.78rem">(nº ${p.norden})</span></td>
+      <td>${p.proveedor_nombre || ''}</td>
+      <td style="font-size:.82rem">${p.estado}</td>
+      <td style="font-size:.82rem">${fechaTxt}</td>
+      <td class="monospace" style="font-size:.82rem">${p.departamento_sap_codigo || '—'}</td>
+      <td>${sugeridoTxt}</td>
+      <td>${confianzaTxt}</td>
+      <td><button class="btn btn-ghost btn-sm" onclick="openPedidoModal(${p.pedido_id})">✏️ Editar</button></td>
+    </tr>`;
+  }).join('');
 }
 
 async function loadDbSize() {

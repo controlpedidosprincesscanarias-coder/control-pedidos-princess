@@ -49,6 +49,218 @@
 
 ---
 
+## 2026-09-09 — [Control Pedidos] Nueva auditoría puntual de solo lectura: pedidos GY/IT/MT/TA con departamento Restaurante/Bares mal asignado antes de v12.32.34 (v12.32.53)
+
+- **Origen**: pregunta pendiente desde v12.32.34, registrada en
+  `PENDIENTES.md` — Víctor eligió (AskUserQuestion) "Sí, auditar primero",
+  con la condición de que sea solo una consulta de auditoría, nunca una
+  corrección automática.
+- **Contexto**: `_resolver_departamento_sap()` (v12.32.34) corrigió que
+  los códigos SAP 00000100/00000301 se resolvieran siempre al
+  departamento combinado "RESTAURANTE & BARES" — incorrecto para
+  GY/IT/MT/TA, que lo llevan separado. La corrección solo actuó hacia
+  adelante.
+- **Criterio de la auditoría**: cruza cada pedido de esos 4 hoteles con
+  departamento "RESTAURANTE & BARES" contra el código SAP guardado en
+  `sap_pedidos_listado.departamento_sap_codigo` — si es 00000100/00000301,
+  "confianza alta" y departamento sugerido (RESTAURANTE/BARES); si no hay
+  dato SAP, "revisar a mano", sin inventar ninguna corrección.
+- **Cambios**: nueva función `_auditoria_departamento_restaurante_bares_gy_it_mt_ta()`
+  y endpoint `GET /api/admin/auditoria-restaurante-bares-gy-it-mt-ta`
+  (solo lectura, admin), nueva tarjeta en Admin → Integridad con botón
+  "🔍 Calcular auditoría" y tabla con enlace "✏️ Editar" a la ficha normal
+  de cada pedido — la corrección siempre es manual, pedido a pedido.
+- **Verificación**: 3 pedidos de prueba en GY (códigos SAP 00000100,
+  00000301, y sin dato) clasificados correctamente; endpoint devuelve 403
+  para rol "hotel"; `py_compile`, `node --check` y `GET /` sin errores.
+- **Revisión de otros documentos (norma 5)**: `README.md` sí (versión
+  actual). `PENDIENTES.md` sí — sigue abierto: esta entrega es la
+  herramienta, el cierre llega cuando Víctor revise los resultados reales.
+  `docs/hallazgo-seguridad-princess.md` — no existe en este repo.
+  `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+- **Entrega**: `app.py`, `templates/index.html`, `PENDIENTES.md`,
+  `README.md`, más `CHANGELOG.md` y esta entrada. `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
+## 2026-09-09 — [Control Pedidos] Pieza 5 del rediseño "solo con los dos detallados": los 5 botones del cruce Pedidos↔Albaranes se unifican en "🔄 Cruce con SAP" (v12.32.52)
+
+- **Origen**: Víctor aprobó (AskUserQuestion) el diseño de la Pieza 5 y pidió
+  "Empieza a construir" — dos decisiones tomadas: (1) absorber "🔍
+  Sugerencias de Albarán" dentro del Paso 2 en vez de mantenerla aparte;
+  (2) integrar "📄 Comparar listado PDF" en el flujo unificado.
+- **Alcance — solo `templates/index.html`, sin tocar `app.py`**: los 5
+  botones ya se apoyaban en funciones/endpoints propios, maduros y
+  probados, sin que nada más los llamara salvo sus propios modales.
+  Reescribir esa lógica solo para "unificarla" era un riesgo innecesario
+  sin beneficio real — la unificación pedida es de navegación, no de
+  lógica de negocio, así que se resuelve entera en la interfaz.
+- **Cambios**: nuevo botón único "🔄 Cruce con SAP (Pedidos ↔ Albaranes)"
+  que abre un modal con Paso 1 (abre, sin cambios, los 3 modales de carga:
+  Comparar listado PDF, Departamentos y líneas, Importar Albaranes) y Paso
+  2 (Revisar entregas pendientes). Cada modal de Paso 1 lleva un botón
+  "← Cruce con SAP" para volver. "Sugerencias de Albarán" individual se
+  elimina como modal propio y su búsqueda se integra dentro de "Revisar
+  entregas pendientes" (mismo endpoint `GET /api/pedidos/<id>/sugerencias-
+  albaran` de siempre). El desplegable de hotel de "Comparar listado PDF"
+  ahora también carga "pedidos pendientes de crear" solo con elegir el
+  hotel, sin depender de subir un PDF nuevo.
+- **Verificación**: `py_compile` sobre `app.py` (sin cambios, sigue
+  compilando), `node --check` sobre los `<script>` de `index.html`,
+  plantilla Jinja parseada sin errores, y `GET /` local confirmando que el
+  HTML servido trae los nuevos elementos y ya no trae ningún rastro de los
+  5 botones ni del modal antiguo.
+- **Revisión de otros documentos (norma 5)**: `README.md` sí (versión
+  actual). `PENDIENTES.md` sí: se retira la Pieza 5, ya entregada.
+  `docs/hallazgo-seguridad-princess.md` — no existe en este repo.
+  `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+- **Entrega**: `templates/index.html`, `PENDIENTES.md`, `README.md`, más
+  `CHANGELOG.md` y esta entrada. `app.py`, `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
+## 2026-09-09 — [Control Pedidos] Restaurada en PENDIENTES.md la Pieza 5 del rediseño "solo con los dos detallados" (v12.32.51)
+
+- **Origen**: Víctor preguntó por el estado del rediseño ("faltaba el paso
+  4 y 5 o solo el 5 no recuerdo").
+- **Repaso**: Pieza 1+2 (v12.32.27-30), Pieza 3 (v12.32.31) y Pieza 4
+  (v12.32.32) entregadas. Solo falta la Pieza 5 (unificar los 5 botones
+  del cruce Pedidos↔Albaranes en un flujo de dos pasos) — nunca se abordó
+  en ninguna de las 18 versiones siguientes, y se perdió también de
+  `PENDIENTES.md`.
+- **Corrección**: restaurada la Pieza 5 en `PENDIENTES.md`, con los 5
+  botones afectados y la nota de que hace falta un primer diseño antes de
+  tocar código. Solo corrección de seguimiento documental, sin cambios en
+  `app.py`.
+- **Revisión de otros documentos (norma 5)**: `README.md` sí (versión
+  actual). `PENDIENTES.md` sí: objeto de esta entrega.
+  `docs/hallazgo-seguridad-princess.md` — no existe en este repo.
+  `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+- **Entrega**: `PENDIENTES.md`, `README.md`, `templates/index.html` (solo
+  badge), más `CHANGELOG.md` y esta entrada. `app.py`, `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
+## 2026-09-09 — [Control Pedidos] Cerrado el hallazgo 2 de la auditoría (v12.32.48): Víctor confirma que el PDF nunca trae "RESTAURANTE & BARES" en GY/IT/MT/TA (v12.32.50)
+
+- **Origen**: al pedirle más detalle sobre el hallazgo, Víctor confirmó
+  "El PDF nunca traerá Restaurante &Bares" para los hoteles con
+  Restaurante/Bares separados.
+- **Contexto**: la comparación Departamento vs. Almacén del PDF (0c) usa
+  coincidencia por "contiene en ambos sentidos" (deliberado, para casos
+  reales como "SUITE PRINCESS" ⊂ "TUI Blue Suite Princess"). En teoría,
+  eso podía dar por válido, sin avisar, un Departamento "BARES" contra un
+  Almacén "RESTAURANTE & BARES" en GY/IT/MT/TA.
+- **Cierre**: confirmado que ese Almacén combinado nunca puede llegar del
+  PDF para esos 4 hoteles (SAP ya los tiene separados en origen) — el caso
+  no es alcanzable en la práctica. Cerrado como **verificado**, sin ningún
+  cambio en `app.py`.
+- **Revisión de otros documentos (norma 5)**: `README.md` sí (versión
+  actual). `PENDIENTES.md` sí: se cierran ya los dos hallazgos de la
+  auditoría de v12.32.48. `docs/hallazgo-seguridad-princess.md` — no
+  existe en este repo. `GUIA_DESPLIEGUE.md`,
+  `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+- **Entrega**: `PENDIENTES.md`, `README.md`, `templates/index.html` (solo
+  badge), más `CHANGELOG.md` y esta entrada. `app.py`, `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
+## 2026-09-09 — [Control Pedidos] `aprobar_expediente()` iguala todas las comprobaciones de "listo para enviar" de `update_pedido()` (v12.32.49)
+
+- **Origen**: Víctor confirmó ("2 si igualar función") el hallazgo 1 de la
+  auditoría de v12.32.48 — `aprobar_expediente()` (aprobación de un
+  expediente de Techo de Gastos) solo revalidaba proveedor/email antes de
+  dejar pasar el pedido a ENVIADO AL PROVEEDOR, no departamento/hotel
+  contra el PDF, ni Nº Pedido duplicado, ni adjuntos/presupuesto —
+  comprobaciones que `update_pedido()` sí exige siempre. Entre que un
+  pedido entra en el circuito de autorización y que Dirección General lo
+  aprueba puede pasar tiempo suficiente para que algo cambie.
+- **Cambio**: extraídas todas esas comprobaciones (0a-0d + Nº
+  Pedido/duplicado/adjuntos/presupuesto) de `update_pedido()` a una
+  función compartida nueva, `_validar_pedido_envio_proveedor()`, llamada
+  ahora desde ambos sitios — `update_pedido()` sin cambio de
+  comportamiento, `aprobar_expediente()` con la validación completa en vez
+  de la comprobación manual parcial de antes.
+- **Verificación**: probado contra PostgreSQL 16 real con 5 casos:
+  aprobación correcta, departamento cambiado tras entrar en el circuito
+  (ahora bloquea, antes no), corrección y reintento (aprueba), adjunto
+  borrado tras entrar en el circuito (ahora bloquea, antes no), y
+  regresión del flujo normal de `update_pedido()` (sin cambios).
+- **Revisión de otros documentos (norma 5)**: `README.md` sí (versión
+  actual). `PENDIENTES.md` sí: se cierra este hallazgo, queda solo el de
+  la comparación "contiene" para Restaurante/Bares.
+  `docs/hallazgo-seguridad-princess.md` — no existe en este repo.
+  `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+- **Entrega**: `app.py`, `PENDIENTES.md`, `README.md`, `templates/
+  index.html` (solo badge), más `CHANGELOG.md` y esta entrada. `models.py`
+  y `requirements.txt` no cambian.
+
+---
+
+## 2026-09-09 — [Control Pedidos] Auditoría general del proyecto (petición de Víctor): 3 fallos reales de control de acceso corregidos (v12.32.48)
+
+- **Origen**: Víctor subió el ZIP ya desplegado (v12.32.47) pidiendo
+  auditarlo y continuar lo pendiente. Entre la última entrega de la sesión
+  anterior (v12.32.34) y este ZIP habían pasado 13 versiones más
+  construidas aparte (v12.32.35-47), con toda la cadena de verificación
+  del PDF oficial del pedido ya en producción.
+- **Hallazgo 1 (alto)**: `create_pedido()` (`POST /api/pedidos`) aceptaba
+  `estado` del cliente sin ninguna comprobación — el desplegable "Estado"
+  ofrece ENVIADO AL PROVEEDOR igual al crear que al editar, y sin
+  proveedor/PDF (ambos siempre `NULL` al crear) se podía dar de alta un
+  pedido ya "enviado al proveedor" saltándose toda la cadena de
+  verificación (proveedor/email/departamento/hotel/duplicado), desde el
+  formulario normal.
+- **Hallazgo 2 (alto)**: la rama de guardado del rol Hotel en
+  `update_pedido()` solo bloqueaba `CANCELADO` — no `ENVIADO AL
+  PROVEEDOR`, que se podía fijar con un `UPDATE` directo sin pasar por
+  ninguna de las comprobaciones 0a-0d.
+- **Hallazgo 3 (alto)**: `POST /api/importar` no tenía restricción de rol
+  (solo `@login_required`, a diferencia de su hermano `/api/importar/reset`
+  con `@admin_required`) — cualquier usuario, incluido el rol Hotel, podía
+  importar un Excel dando de alta pedidos en bloque para cualquier hotel y
+  en cualquier estado, sin ninguna comprobación. El botón "⬆ Importar" de
+  la barra de Pedidos tampoco se ocultaba para el rol Hotel.
+- **Corrección** (`app.py`): `create_pedido()` rechaza (422) crear
+  directamente en ENVIADO AL PROVEEDOR; `update_pedido()` (rama Hotel)
+  bloquea (403) ese mismo estado, igual que ya hacía con CANCELADO;
+  `importar_excel()` rechaza (403) el rol Hotel, mismo criterio que ya
+  usaba el acceso rápido del dashboard en el frontend. `templates/
+  index.html`: botón "⬆ Importar" oculto para el rol Hotel (mismo patrón
+  que "+ Nuevo pedido"), en los dos sitios donde se aplica ese estado.
+- **Hallazgo 4 (documentación, sin corregir hoy)**: la pregunta abierta en
+  v12.32.34 (¿corregir retroactivamente el departamento de pedidos ya
+  creados en GY/IT/MT/TA?) nunca se respondió ni se retomó, y se había
+  perdido de `PENDIENTES.md` — incumplimiento de la norma 5. Restaurada en
+  `PENDIENTES.md`; sigue sin decisión de Víctor, ningún dato tocado.
+  También anotados en `PENDIENTES.md`, sin corregir hoy por necesitar
+  antes decisión de Víctor: `aprobar_expediente()` no repite las
+  comprobaciones de departamento/hotel/duplicado (limitación ya
+  documentada en el código), y un posible falso "coincide" en la
+  comparación por "contiene" de Departamento/Almacén para hoteles con
+  Restaurante/Bares separados.
+- **Verificación**: `python3 -m py_compile app.py` sin errores; `node
+  --check` sobre el `<script>` principal de `index.html` sin errores.
+  Probado de extremo a extremo contra un PostgreSQL 16 real con sesiones
+  admin y hotel simuladas: los 3 casos nuevos devuelven el rechazo
+  esperado (422/403/403) y los casos ya existentes (creación normal,
+  CANCELADO con rol hotel, importación con rol admin) siguen funcionando
+  sin regresión.
+- **Revisión de otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md`,
+  `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+  `docs/hallazgo-seguridad-princess.md` — no existe en este repo.
+  `README.md` sí: versión actual. `PENDIENTES.md` sí: restaurada la
+  pregunta de v12.32.34 y anotados los dos hallazgos sin corregir hoy.
+- **Entrega**: `app.py`, `templates/index.html`, `PENDIENTES.md`,
+  `README.md`, más `CHANGELOG.md` y esta entrada. `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-09 — [Control Pedidos] Fix: ENVIADO AL PROVEEDOR bloqueaba con "sin correo" justo tras subir el PDF (v12.32.47)
 
 - **Origen**: reporte de Víctor — al crear un pedido, tras subir el PDF de

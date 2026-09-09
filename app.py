@@ -268,6 +268,127 @@ def _resolver_departamento_sap(codigo: str, hotel_codigo: str) -> str:
         return "BARES" if separado else "RESTAURANTE & BARES"
     return _SAP_DEPARTAMENTO_MAP.get(codigo)
 
+def _auditoria_departamento_restaurante_bares_gy_it_mt_ta() -> dict:
+    """
+    (2026-09-09, v12.32.53) Auditoría de SOLO LECTURA — a petición de
+    Víctor ("Sí, auditar primero"), tras dejar registrada en
+    `PENDIENTES.md` desde v12.32.34 la pregunta de si hacía falta revisar
+    retroactivamente los pedidos de GY/IT/MT/TA que se hubieran quedado
+    con el departamento "RESTAURANTE & BARES" mal asignado por el bug que
+    corrigió esa versión (ver `_resolver_departamento_sap()`, justo
+    arriba). Esta función NUNCA escribe nada — solo propone una lista
+    para que Víctor revise caso a caso, exactamente como pidió
+    ("una consulta de auditoría, no una corrección automática silenciosa
+    ... igual que el propio SAP nunca se corrige solo en esta app, sin
+    confirmación humana").
+
+    Qué hace: para los 4 hoteles con Restaurante/Bares separados
+    (`_HOTELES_RESTAURANTE_BARES_SEPARADOS`), busca pedidos con
+    `departamento_id` = "RESTAURANTE & BARES" — un departamento que, para
+    esos hoteles, ni siquiera se ofrece ya en el desplegable manual del
+    formulario desde el 2026-08-31 (ver `HOTELES_RESTAURANTE_BARES_SEPARADOS`
+    en templates/index.html), así que cualquier pedido que lo tenga hoy
+    solo puede venir de: (a) el bug de `_resolver_departamento_sap()`
+    (código SAP 00000100/00000301 mal resuelto antes de v12.32.34), o (b)
+    una asignación manual anterior al 2026-08-31, cuando el desplegable
+    todavía no filtraba por hotel.
+
+    Para distinguir el caso (a) del (b) sin adivinar, se cruza cada
+    pedido con `sap_pedidos_listado.departamento_sap_codigo` (guardado
+    desde v12.32.16, ver `_actualizar_departamentos_desde_listado_detallado()`)
+    por (hotel_id, pedido_num normalizado — ver `_normalizar_pedido_num()`,
+    igual que el resto de cruces con SAP de esta zona del código):
+      - Si el código guardado es 00000100 o 00000301: el bug SÍ pudo
+        haberlo escrito así — se marca "confianza": "alta" y se propone
+        el departamento correcto (RESTAURANTE / BARES respectivamente).
+      - Si hay un código guardado pero es otro, o no hay ninguna fila en
+        `sap_pedidos_listado` para ese pedido: no hay forma de saber por
+        este cruce si el bug es la causa — se marca "confianza":
+        "revisar a mano" y NO se propone ningún departamento (nunca se
+        inventa una correspondencia sin dato que la respalde).
+
+    Devuelve:
+      {"ok": True, "hoteles": ["GY","IT","MT","TA"],
+       "departamento_auditado": "RESTAURANTE & BARES",
+       "pedidos": [ {pedido_id, norden, pedido_num, hotel_codigo,
+                      hotel_nombre, proveedor_nombre, estado,
+                      creado_en, modificado_en, departamento_sap_codigo,
+                      departamento_sugerido, confianza}, ... ],
+       "total": int, "total_confianza_alta": int}
+    """
+    dep_fila = query(
+        "SELECT id FROM departamentos WHERE nombre = %s", ("RESTAURANTE & BARES",), one=True
+    )
+    if not dep_fila:
+        # El propio departamento combinado no existe en el catálogo — nada que auditar.
+        return {"ok": True, "hoteles": sorted(_HOTELES_RESTAURANTE_BARES_SEPARADOS),
+                "departamento_auditado": "RESTAURANTE & BARES", "pedidos": [],
+                "total": 0, "total_confianza_alta": 0}
+    dep_id = dep_fila["id"]
+
+    pedidos = rows_to_list(query(
+        """SELECT p.id, p.norden, p.pedido_num, p.estado, p.creado_en, p.modificado_en,
+                  h.codigo AS hotel_codigo, h.nombre AS hotel_nombre, h.id AS hotel_id,
+                  pr.nombre AS proveedor_nombre
+           FROM pedidos p
+           JOIN hoteles h ON h.id = p.hotel_id
+           LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
+           WHERE h.codigo = ANY(%s) AND p.departamento_id = %s
+           ORDER BY h.codigo, p.norden""",
+        (sorted(_HOTELES_RESTAURANTE_BARES_SEPARADOS), dep_id)
+    ))
+    if not pedidos:
+        return {"ok": True, "hoteles": sorted(_HOTELES_RESTAURANTE_BARES_SEPARADOS),
+                "departamento_auditado": "RESTAURANTE & BARES", "pedidos": [],
+                "total": 0, "total_confianza_alta": 0}
+
+    # Precarga de sap_pedidos_listado para los hoteles implicados — un solo
+    # SELECT, cruce en memoria por (hotel_id, pedido_num normalizado), mismo
+    # patrón que _pedidos_sap_no_registrados()/_sugerencias_albaranes_pendientes_hotel().
+    hoteles_ids = list({p["hotel_id"] for p in pedidos})
+    listado_sap = rows_to_list(query(
+        "SELECT hotel_id, pedido_num_sap, departamento_sap_codigo "
+        "FROM sap_pedidos_listado WHERE hotel_id = ANY(%s)",
+        (hoteles_ids,)
+    ))
+    sap_por_clave = {}
+    for fila in listado_sap:
+        clave = (fila["hotel_id"], _normalizar_pedido_num(fila["pedido_num_sap"]))
+        # Si el mismo pedido aparece más de una vez (no debería, hay UNIQUE en BD),
+        # nos quedamos con el primero — no afecta a la corrección de esta auditoría.
+        sap_por_clave.setdefault(clave, fila.get("departamento_sap_codigo"))
+
+    resultado = []
+    total_confianza_alta = 0
+    for p in pedidos:
+        clave = (p["hotel_id"], _normalizar_pedido_num(p["pedido_num"]))
+        codigo_sap = sap_por_clave.get(clave)
+        if codigo_sap == "00000100":
+            sugerido, confianza = "RESTAURANTE", "alta"
+        elif codigo_sap == "00000301":
+            sugerido, confianza = "BARES", "alta"
+        else:
+            sugerido, confianza = None, "revisar a mano"
+        if confianza == "alta":
+            total_confianza_alta += 1
+        resultado.append({
+            "pedido_id": p["id"], "norden": p["norden"], "pedido_num": p["pedido_num"],
+            "hotel_codigo": p["hotel_codigo"], "hotel_nombre": p["hotel_nombre"],
+            "proveedor_nombre": p["proveedor_nombre"], "estado": p["estado"],
+            "creado_en": p["creado_en"].isoformat() if p.get("creado_en") else None,
+            "modificado_en": p["modificado_en"].isoformat() if p.get("modificado_en") else None,
+            "departamento_sap_codigo": codigo_sap,
+            "departamento_sugerido": sugerido,
+            "confianza": confianza,
+        })
+
+    return {
+        "ok": True, "hoteles": sorted(_HOTELES_RESTAURANTE_BARES_SEPARADOS),
+        "departamento_auditado": "RESTAURANTE & BARES",
+        "pedidos": resultado, "total": len(resultado),
+        "total_confianza_alta": total_confianza_alta,
+    }
+
 def _auto_migrate():
     """Añade columnas/tablas nuevas de forma idempotente."""
     try:
@@ -16380,6 +16501,27 @@ def create_pedido():
     norden = _next_norden(db)
     estado = data.get("estado", "PENDIENTE FIRMA DIRECCION COMPRAS")
 
+    # (2026-09-09, auditoría a petición de Víctor) Un pedido recién creado
+    # NUNCA puede nacer ya en ENVIADO AL PROVEEDOR: proveedor_id, pedido_num
+    # y total_pedido siempre nacen a NULL aquí (ver comentarios más abajo,
+    # en el INSERT) porque solo se rellenan al adjuntar el PDF oficial —
+    # que requiere un pedido_id que todavía no existe en este punto. Antes
+    # de esta comprobación, el desplegable "Estado" del formulario ofrecía
+    # igualmente ENVIADO AL PROVEEDOR al crear (ver poblarSelectEstados() en
+    # index.html, sin distinguir alta de edición) y create_pedido() lo
+    # aceptaba sin ninguna de las validaciones 0a-0d que si se aplican al
+    # cambiar de estado un pedido ya existente (ver update_pedido()) —
+    # permitía dar de alta un pedido "enviado al proveedor" sin proveedor,
+    # sin PDF, sin comprobar departamento/hotel/duplicado, saltándose por
+    # completo toda la cadena de verificación de v12.32.35-47.
+    if estado == "ENVIADO AL PROVEEDOR":
+        return jsonify({
+            "error": "Un pedido no puede crearse directamente como ENVIADO AL PROVEEDOR. "
+                     "Guárdelo primero en su estado inicial y cambie el estado desde la ficha del "
+                     "pedido ya creado — ahí sí se comprueban proveedor, email, departamento, hotel "
+                     "y el PDF oficial del pedido antes de permitir el envío."
+        }), 422
+
     sujeto_techo = 1 if data.get("sujeto_techo") else 0
     familia_id   = data.get("familia_id") or None
     importe      = data.get("importe") or None
@@ -16463,6 +16605,192 @@ def create_pedido():
         "requiere_autorizacion_dg": estado == "PENDIENTE Vº Bº DIRECCIÓN GENERAL",
     }), 201
 
+def _validar_pedido_envio_proveedor(pedido_actual, pid, departamento_id, hotel_id, tarifa_acordada, presupuesto_num):
+    """
+    Comprobaciones obligatorias antes de dejar pasar un pedido a ENVIADO AL
+    PROVEEDOR (proveedor asignado y con email, Departamento vs. Almacén del
+    PDF, Hotel vs. HOTEL/CENTRO del PDF, Nº Pedido/Total Pedido presentes y
+    no duplicados, adjunto del PDF oficial, Nº Presupuesto y su adjunto).
+
+    (2026-09-09, v12.32.49 — a petición de Víctor, tras la auditoría del
+    2026-09-09) Extraída de `update_pedido()`, que hasta ahora era el único
+    sitio con esta cadena completa — `aprobar_expediente()` (aprobación de
+    un expediente de Techo de Gastos) solo revalidaba proveedor/email,
+    dejando sin repetir departamento/hotel/duplicado/adjuntos/presupuesto
+    pese a que, entre que el pedido entra en el circuito de autorización y
+    que Dirección General lo aprueba, cualquiera de esos datos puede haber
+    cambiado (adjunto borrado, departamento u hotel corregidos, proveedor
+    reasignado...). Al compartir una única función, las dos vías exigen
+    exactamente las mismas garantías y no pueden volver a divergir como
+    pasó con 0c/0d.
+
+    `departamento_id`/`hotel_id`/`tarifa_acordada`/`presupuesto_num` son
+    los valores EFECTIVOS que aplicarían si el cambio de estado se
+    confirma — en `update_pedido()` son los que trae el payload de edición
+    (o los ya guardados si no vienen en él, igual que antes); en
+    `aprobar_expediente()` son siempre los ya guardados en el pedido tal
+    cual, porque esa aprobación no permite editarlo a la vez.
+
+    Devuelve la lista de errores (vacía si todo está en orden), en dos
+    tandas — igual que el código original de `update_pedido()`: si la
+    primera tanda (proveedor/departamento/hotel) ya falla, no se llega a
+    comprobar la segunda (Nº Pedido/adjuntos/presupuesto), para no mezclar
+    en un mismo mensaje avisos de fondos muy distintos.
+    """
+    errores_envio = []
+
+    # 0a. Proveedor asignado obligatorio — (2026-09-06, v12.32.35) ya NO se
+    # lee de un formulario: el proveedor es exclusivamente automático
+    # (igual que pedido_num/total_pedido), resuelto al subir el PDF de
+    # «Nº Pedido (DALI/SAP)» — ver upload_adjunto/
+    # _resolver_proveedor_pdf_oficial. Si sigue sin asignarse, el mensaje
+    # distingue dos causas: (a) el PDF todavía no se ha subido en
+    # absoluto, o (b) se subió pero el proveedor que trae no se ha
+    # reconocido en el catálogo (pedido_actual.proveedor_pdf_codigo lo deja
+    # constancia) — en ese caso se muestra el código/nombre leídos del PDF
+    # para que se busque y, si de verdad no existe, se dé de alta en
+    # Admin → Proveedores (nunca se crea solo).
+    proveedor_id_val = pedido_actual.get("proveedor_id")
+    if not proveedor_id_val:
+        _prov_cod_pdf = pedido_actual.get("proveedor_pdf_codigo")
+        _prov_nom_pdf = pedido_actual.get("proveedor_pdf_nombre")
+        if _prov_cod_pdf:
+            errores_envio.append(
+                f"No se puede pasar a ENVIADO AL PROVEEDOR: el proveedor leído del PDF oficial "
+                f"(código SAP {_prov_cod_pdf}"
+                + (f", «{_prov_nom_pdf}»" if _prov_nom_pdf else "")
+                + ") no se ha reconocido en el catálogo. Verifique en Admin → Proveedores si ya existe "
+                  "con otro código/nombre y, si no, dé de alta ese proveedor allí — el pedido lo tomará "
+                  "solo en cuanto exista."
+            )
+        else:
+            errores_envio.append(
+                "No se puede pasar a ENVIADO AL PROVEEDOR porque el pedido no tiene proveedor asignado. "
+                "El proveedor se asigna automáticamente al adjuntar el PDF del pedido oficial en la "
+                "sección «Nº Pedido (DALI/SAP)»."
+            )
+    else:
+        # 0b. El proveedor debe tener al menos un contacto principal con email
+        emails_proveedor = _get_proveedor_emails_principales(proveedor_id_val, hotel_id)
+        if not emails_proveedor:
+            prov_row = query("SELECT nombre FROM proveedores WHERE id=%s", (proveedor_id_val,), one=True)
+            prov_nombre = (prov_row["nombre"] if prov_row else f"ID {proveedor_id_val}")
+            errores_envio.append(
+                f"El proveedor «{prov_nombre}» no tiene ningún correo electrónico configurado en su ficha "
+                f"(contacto principal con email). Acceda a la ficha del proveedor, añada un email al contacto "
+                f"principal y vuelva a cambiar el estado."
+            )
+
+    # 0c. Departamento vs. "Almacén" leído del PDF oficial — (2026-09-06,
+    # v12.32.35) si el PDF trae un Almacén de cabecera (ver
+    # departamento_pdf_detectado), debe coincidir (normalizado, sin
+    # acentos/mayúsculas) con el Departamento efectivo — si no coincide, se
+    # bloquea hasta corregirlo. Un pedido sin PDF subido, o cuyo PDF no
+    # trajo Almacén, no pasa por esta comprobación (departamento_pdf_
+    # detectado es NULL, nunca se inventa una comparación).
+    _almacen_pdf_val = pedido_actual.get("departamento_pdf_detectado")
+    if _almacen_pdf_val:
+        _depto_row = query("SELECT nombre FROM departamentos WHERE id=%s", (departamento_id,), one=True) if departamento_id else None
+        _depto_nombre_val = _depto_row["nombre"] if _depto_row else None
+        _norm_pdf = _normalizar_texto_generico(_almacen_pdf_val)
+        _norm_dep = _normalizar_texto_generico(_depto_nombre_val or "")
+        _coincide = bool(_norm_dep) and (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
+        if not _coincide:
+            errores_envio.append(
+                f"El Departamento seleccionado (« {_depto_nombre_val or 'ninguno'} ») no coincide con el "
+                f"Almacén indicado en el PDF del pedido oficial («{_almacen_pdf_val}»). Corrija el "
+                f"Departamento antes de pasar a ENVIADO AL PROVEEDOR."
+            )
+
+    # 0d. Hotel vs. "HOTEL/CENTRO" leído del PDF oficial — (2026-09-06,
+    # v12.32.38) mismo criterio que 0c con Departamento/Almacén: si el PDF
+    # trae un HOTEL/CENTRO de cabecera (ver hotel_pdf_detectado), debe
+    # coincidir con el Hotel efectivo — si no coincide, se bloquea hasta
+    # corregirlo. Un pedido sin PDF subido, o cuyo PDF no trajo HOTEL/
+    # CENTRO reconocible, no pasa por esta comprobación (hotel_pdf_
+    # detectado es NULL, nunca se inventa una comparación).
+    _hotel_pdf_val = pedido_actual.get("hotel_pdf_detectado")
+    if _hotel_pdf_val:
+        _hotel_row_val = query("SELECT nombre FROM hoteles WHERE id=%s", (hotel_id,), one=True) if hotel_id else None
+        _hotel_nombre_val = _hotel_row_val["nombre"] if _hotel_row_val else None
+        _norm_hpdf = _normalizar_nombre_hotel(_hotel_pdf_val)
+        _norm_hact = _normalizar_nombre_hotel(_hotel_nombre_val or "")
+        _coincide_hotel = bool(_norm_hact) and (_norm_hpdf == _norm_hact or _norm_hpdf in _norm_hact or _norm_hact in _norm_hpdf)
+        if not _coincide_hotel:
+            errores_envio.append(
+                f"El Hotel seleccionado (« {_hotel_nombre_val or 'ninguno'} ») no coincide con el "
+                f"HOTEL/CENTRO indicado en el PDF del pedido oficial («{_hotel_pdf_val}»). Corrija el "
+                f"Hotel antes de pasar a ENVIADO AL PROVEEDOR."
+            )
+
+    if errores_envio:
+        return errores_envio
+
+    # 1. Nº Pedido (DALI/SAP) y Total Pedido obligatorios — (2026-08-28) ya
+    # no se pueden escribir a mano: solo llegan a tener valor si se ha
+    # subido y leído correctamente el PDF de pedido oficial PRINCESS (ver
+    # punto 2 y _parsear_pdf_pedido_oficial). Se leen siempre de
+    # pedido_actual, nunca de un formulario de edición.
+    pedido_num_val = pedido_actual.get("pedido_num") or ""
+    if not pedido_num_val.strip() or pedido_actual.get("total_pedido") is None:
+        errores_envio.append(
+            "Debe adjuntar el PDF del pedido oficial PRINCESS en la sección «Nº Pedido (DALI/SAP)» "
+            "para pasar a ENVIADO AL PROVEEDOR — la aplicación rellena sola el Nº de Pedido y el Total "
+            "Pedido al leerlo."
+        )
+    else:
+        # 1b. Red de seguridad — Nº de Pedido duplicado en el mismo hotel
+        # (2026-09-06, v12.32.36). El control real está en upload_adjunto()
+        # (impide guardar el PDF si el Nº de Pedido ya está registrado en
+        # otro pedido de este hotel, ver _detectar_pedido_num_duplicado) —
+        # esta comprobación es un segundo cierre por si el valor llegó a
+        # fijarse de otra forma (pedido dado de alta antes de que existiera
+        # este control, migración de datos, edición directa en la base de
+        # datos...): nunca deja pasar a ENVIADO AL PROVEEDOR un pedido cuyo
+        # Nº ya tenga otro pedido activo del mismo hotel.
+        _dup_pedido_envio = _detectar_pedido_num_duplicado(hotel_id, pedido_num_val, excluir_pedido_id=pid)
+        if _dup_pedido_envio:
+            errores_envio.append(
+                f"No se puede pasar a ENVIADO AL PROVEEDOR: el Nº de Pedido «{pedido_num_val}» ya está "
+                f"registrado en OTRO pedido de este hotel (Nº interno {_dup_pedido_envio['norden']}, "
+                f"estado «{_dup_pedido_envio['estado']}»). Verifique que no se trate del mismo pedido "
+                f"duplicado antes de continuar."
+            )
+
+    # 2. Adjunto pedido_doc: exactamente 1 documento (el PDF de pedido
+    # oficial, obligatorio — ya no admite correo .eml/.msg en este
+    # apartado, ver upload_adjunto()).
+    adjuntos_pedido = rows_to_list(query(
+        "SELECT id, nombre FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
+        (pid,)
+    ))
+    if len(adjuntos_pedido) == 0:
+        errores_envio.append(
+            "Debe adjuntar el PDF del pedido oficial PRINCESS en la sección «Nº Pedido (DALI/SAP)»."
+        )
+    elif len(adjuntos_pedido) > 1:
+        errores_envio.append("Solo se permite un documento en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(adjuntos_pedido))
+
+    # 3. Nº Presupuesto obligatorio (salvo pedidos con tarifa acordada, que
+    # por definición no requieren presupuesto)
+    if not tarifa_acordada:
+        if not (presupuesto_num or "").strip():
+            errores_envio.append("El campo «Nº Presupuesto» es obligatorio para pasar a ENVIADO AL PROVEEDOR.")
+
+        # 4. Adjunto presupuesto_doc: mínimo 1 documento (puede haber también correos)
+        adjuntos_presupuesto = rows_to_list(query(
+            "SELECT id, nombre, es_correo FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='presupuesto_doc'",
+            (pid,)
+        ))
+        docs_presupuesto = [a for a in adjuntos_presupuesto if not a["es_correo"]]
+        if len(adjuntos_presupuesto) == 0:
+            errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en la sección «Nº Presupuesto».")
+        elif len(docs_presupuesto) == 0:
+            errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en «Nº Presupuesto» (solo correo electrónico no es suficiente).")
+
+    return errores_envio
+
+
 @app.route("/api/pedidos/<int:pid>", methods=["PUT"])
 @login_required
 def update_pedido(pid):
@@ -16494,6 +16822,16 @@ def update_pedido(pid):
         estado_solicitado = data.get("estado", pedido_actual["estado"])
         if estado_solicitado == "CANCELADO":
             return jsonify({"error": "El usuario Hotel no puede cancelar pedidos"}), 403
+        # (2026-09-09, auditoría a petición de Víctor) Esta rama de "solo
+        # hotel" escribe el estado directamente (más abajo, UPDATE sin pasar
+        # por las comprobaciones 0a-0d de más adelante en esta función —
+        # proveedor asignado, proveedor con email, Departamento/Almacén,
+        # Hotel/PDF, Nº Pedido duplicado). Ya bloqueaba CANCELADO; hacía
+        # falta el mismo bloqueo para ENVIADO AL PROVEEDOR, que de otro modo
+        # se podía fijar aquí sin ninguna de esas comprobaciones con un
+        # pedido del propio hotel del usuario.
+        if estado_solicitado == "ENVIADO AL PROVEEDOR":
+            return jsonify({"error": "El usuario Hotel no puede marcar un pedido como ENVIADO AL PROVEEDOR"}), 403
         # (2026-08-28) Base imp. (€) obligatoria en cada entrada — ver
         # _validar_base_imponible_entradas().
         if estado_solicitado in ("ENTREGA PARCIAL", "ENTREGADO") and not _validar_base_imponible_entradas(_parse_albaran_entries(albaran_val)):
@@ -16543,173 +16881,16 @@ def update_pedido(pid):
 
     # ── Validación obligatoria para ENVIADO AL PROVEEDOR ─────────────────────
     if estado_nuevo == "ENVIADO AL PROVEEDOR" and estado_antes != "ENVIADO AL PROVEEDOR":
-        errores_envio = []
-
-        # 0a. Proveedor asignado obligatorio — (2026-09-06, v12.32.35) ya NO
-        # se lee de `data`: desde este cambio el proveedor es exclusivamente
-        # automático (igual que pedido_num/total_pedido), resuelto al subir
-        # el PDF de «Nº Pedido (DALI/SAP)» — ver upload_adjunto/
-        # _resolver_proveedor_pdf_oficial. Si sigue sin asignarse, el
-        # mensaje distingue dos causas: (a) el PDF todavía no se ha subido
-        # en absoluto, o (b) se subió pero el proveedor que trae no se ha
-        # reconocido en el catálogo (pedido_actual.proveedor_pdf_codigo lo
-        # deja constancia) — en ese caso se muestra el código/nombre leídos
-        # del PDF para que el admin lo busque y, si de verdad no existe, lo
-        # dé de alta él mismo en Admin → Proveedores (nunca se crea solo).
-        proveedor_id_val = pedido_actual.get("proveedor_id")
+        # (2026-09-09, v12.32.49) Comprobaciones 0a-0d + 1/1b/2/3/4 extraídas
+        # a _validar_pedido_envio_proveedor(), compartida ahora con
+        # aprobar_expediente() — ver docstring de esa función.
         hotel_id_val = data.get("hotel_id", pedido_actual.get("hotel_id"))
-        if not proveedor_id_val:
-            _prov_cod_pdf = pedido_actual.get("proveedor_pdf_codigo")
-            _prov_nom_pdf = pedido_actual.get("proveedor_pdf_nombre")
-            if _prov_cod_pdf:
-                errores_envio.append(
-                    f"No se puede pasar a ENVIADO AL PROVEEDOR: el proveedor leído del PDF oficial "
-                    f"(código SAP {_prov_cod_pdf}"
-                    + (f", «{_prov_nom_pdf}»" if _prov_nom_pdf else "")
-                    + ") no se ha reconocido en el catálogo. Verifique en Admin → Proveedores si ya existe "
-                      "con otro código/nombre y, si no, dé de alta ese proveedor allí — el pedido lo tomará "
-                      "solo en cuanto exista."
-                )
-            else:
-                errores_envio.append(
-                    "No se puede pasar a ENVIADO AL PROVEEDOR porque el pedido no tiene proveedor asignado. "
-                    "El proveedor se asigna automáticamente al adjuntar el PDF del pedido oficial en la "
-                    "sección «Nº Pedido (DALI/SAP)»."
-                )
-        else:
-            # 0b. El proveedor debe tener al menos un contacto principal con email
-            emails_proveedor = _get_proveedor_emails_principales(proveedor_id_val, hotel_id_val)
-            if not emails_proveedor:
-                # Obtener el nombre del proveedor para dar un mensaje más claro
-                prov_row = query("SELECT nombre FROM proveedores WHERE id=%s", (proveedor_id_val,), one=True)
-                prov_nombre = (prov_row["nombre"] if prov_row else f"ID {proveedor_id_val}")
-                errores_envio.append(
-                    f"El proveedor «{prov_nombre}» no tiene ningún correo electrónico configurado en su ficha "
-                    f"(contacto principal con email). Acceda a la ficha del proveedor, añada un email al contacto "
-                    f"principal y vuelva a cambiar el estado."
-                )
-
-        # 0c. Departamento vs. "Almacén" leído del PDF oficial — (2026-09-06,
-        # v12.32.35) a petición de Víctor: si el PDF trae un Almacén de
-        # cabecera (ver departamento_pdf_detectado), debe coincidir
-        # (normalizado, sin acentos/mayúsculas) con el Departamento que el
-        # usuario tenga seleccionado AHORA para este cambio de estado — si
-        # no coincide, se bloquea hasta corregirlo. Un pedido sin PDF
-        # subido, o cuyo PDF no trajo Almacén, no pasa por esta
-        # comprobación (departamento_pdf_detectado es NULL, nunca se
-        # inventa una comparación).
-        _almacen_pdf_val = pedido_actual.get("departamento_pdf_detectado")
-        if _almacen_pdf_val:
-            _depto_id_val = data.get("departamento_id", pedido_actual.get("departamento_id"))
-            _depto_row = query("SELECT nombre FROM departamentos WHERE id=%s", (_depto_id_val,), one=True) if _depto_id_val else None
-            _depto_nombre_val = _depto_row["nombre"] if _depto_row else None
-            _norm_pdf = _normalizar_texto_generico(_almacen_pdf_val)
-            _norm_dep = _normalizar_texto_generico(_depto_nombre_val or "")
-            _coincide = bool(_norm_dep) and (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
-            if not _coincide:
-                errores_envio.append(
-                    f"El Departamento seleccionado (« {_depto_nombre_val or 'ninguno'} ») no coincide con el "
-                    f"Almacén indicado en el PDF del pedido oficial («{_almacen_pdf_val}»). Corrija el "
-                    f"Departamento antes de pasar a ENVIADO AL PROVEEDOR."
-                )
-
-        # 0d. Hotel vs. "HOTEL/CENTRO" leído del PDF oficial — (2026-09-06,
-        # v12.32.38) a petición de Víctor: "¿se verifica que el hotel es el
-        # correcto contra el PDF subido? También evitaría registrar un
-        # pedido a un hotel incorrecto". Mismo criterio que el punto 0c con
-        # Departamento/Almacén: si el PDF trae un HOTEL/CENTRO de cabecera
-        # (ver hotel_pdf_detectado), debe coincidir (normalizado, sin
-        # acentos/mayúsculas/palabra "HOTEL"/símbolo "&" — ver
-        # _normalizar_nombre_hotel) con el Hotel que el usuario tenga
-        # seleccionado AHORA para este cambio de estado — si no coincide, se
-        # bloquea hasta corregirlo. Un pedido sin PDF subido, o cuyo PDF no
-        # trajo HOTEL/CENTRO reconocible, no pasa por esta comprobación
-        # (hotel_pdf_detectado es NULL, nunca se inventa una comparación).
-        _hotel_pdf_val = pedido_actual.get("hotel_pdf_detectado")
-        if _hotel_pdf_val:
-            _hotel_row_val = query("SELECT nombre FROM hoteles WHERE id=%s", (hotel_id_val,), one=True) if hotel_id_val else None
-            _hotel_nombre_val = _hotel_row_val["nombre"] if _hotel_row_val else None
-            _norm_hpdf = _normalizar_nombre_hotel(_hotel_pdf_val)
-            _norm_hact = _normalizar_nombre_hotel(_hotel_nombre_val or "")
-            _coincide_hotel = bool(_norm_hact) and (_norm_hpdf == _norm_hact or _norm_hpdf in _norm_hact or _norm_hact in _norm_hpdf)
-            if not _coincide_hotel:
-                errores_envio.append(
-                    f"El Hotel seleccionado (« {_hotel_nombre_val or 'ninguno'} ») no coincide con el "
-                    f"HOTEL/CENTRO indicado en el PDF del pedido oficial («{_hotel_pdf_val}»). Corrija el "
-                    f"Hotel antes de pasar a ENVIADO AL PROVEEDOR."
-                )
-
-        if errores_envio:
-            return jsonify({"ok": False, "error": " | ".join(errores_envio), "errores": errores_envio}), 422
-
-        # 1. Nº Pedido (DALI/SAP) y Total Pedido obligatorios — (2026-08-28)
-        #    ya no se pueden escribir a mano: solo llegan a tener valor si
-        #    se ha subido y leído correctamente el PDF de pedido oficial
-        #    PRINCESS (ver punto 2 y _parsear_pdf_pedido_oficial). Se leen
-        #    de pedido_actual, nunca de `data`: un envío manual de estos
-        #    campos en el JSON no tiene ningún efecto (ver update_pedido()
-        #    más abajo, donde el UPDATE tampoco los toma de `data`).
-        pedido_num_val = pedido_actual.get("pedido_num") or ""
-        if not pedido_num_val.strip() or pedido_actual.get("total_pedido") is None:
-            errores_envio.append(
-                "Debe adjuntar el PDF del pedido oficial PRINCESS en la sección «Nº Pedido (DALI/SAP)» "
-                "para pasar a ENVIADO AL PROVEEDOR — la aplicación rellena sola el Nº de Pedido y el Total "
-                "Pedido al leerlo."
-            )
-        else:
-            # 1b. Red de seguridad — Nº de Pedido duplicado en el mismo hotel
-            # (2026-09-06, v12.32.36). El control real está en
-            # upload_adjunto() (impide guardar el PDF si el Nº de Pedido ya
-            # está registrado en otro pedido de este hotel, ver
-            # _detectar_pedido_num_duplicado) — esta comprobación es un
-            # segundo cierre por si el valor llegó a fijarse de otra forma
-            # (pedido dado de alta antes de que existiera este control,
-            # migración de datos, edición directa en la base de datos...):
-            # nunca deja pasar a ENVIADO AL PROVEEDOR un pedido cuyo Nº ya
-            # tenga otro pedido activo del mismo hotel.
-            _hotel_id_dup = data.get("hotel_id", pedido_actual.get("hotel_id"))
-            _dup_pedido_envio = _detectar_pedido_num_duplicado(_hotel_id_dup, pedido_num_val, excluir_pedido_id=pid)
-            if _dup_pedido_envio:
-                errores_envio.append(
-                    f"No se puede pasar a ENVIADO AL PROVEEDOR: el Nº de Pedido «{pedido_num_val}» ya está "
-                    f"registrado en OTRO pedido de este hotel (Nº interno {_dup_pedido_envio['norden']}, "
-                    f"estado «{_dup_pedido_envio['estado']}»). Verifique que no se trate del mismo pedido "
-                    f"duplicado antes de continuar."
-                )
-
-        # 2. Adjunto pedido_doc: exactamente 1 documento (el PDF de pedido
-        #    oficial, obligatorio — ya no admite correo .eml/.msg en este
-        #    apartado, ver upload_adjunto()).
-        adjuntos_pedido = rows_to_list(query(
-            "SELECT id, nombre FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
-            (pid,)
-        ))
-        if len(adjuntos_pedido) == 0:
-            errores_envio.append(
-                "Debe adjuntar el PDF del pedido oficial PRINCESS en la sección «Nº Pedido (DALI/SAP)»."
-            )
-        elif len(adjuntos_pedido) > 1:
-            errores_envio.append("Solo se permite un documento en la sección «Nº Pedido (DALI/SAP)» (actualmente hay %d)." % len(adjuntos_pedido))
-
-        # 3. Nº Presupuesto obligatorio (salvo pedidos con tarifa acordada,
-        #    que por definición no requieren presupuesto)
-        tarifa_acordada_val = data.get("tarifa_acordada", pedido_actual.get("tarifa_acordada", False))
-        if not tarifa_acordada_val:
-            presupuesto_num_val = data.get("presupuesto_num", pedido_actual.get("presupuesto_num") or "")
-            if not (presupuesto_num_val or "").strip():
-                errores_envio.append("El campo «Nº Presupuesto» es obligatorio para pasar a ENVIADO AL PROVEEDOR.")
-
-            # 4. Adjunto presupuesto_doc: mínimo 1 documento (puede haber también correos)
-            adjuntos_presupuesto = rows_to_list(query(
-                "SELECT id, nombre, es_correo FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='presupuesto_doc'",
-                (pid,)
-            ))
-            docs_presupuesto = [a for a in adjuntos_presupuesto if not a["es_correo"]]
-            if len(adjuntos_presupuesto) == 0:
-                errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en la sección «Nº Presupuesto».")
-            elif len(docs_presupuesto) == 0:
-                errores_envio.append("Debe adjuntar al menos un documento (PDF/Word) en «Nº Presupuesto» (solo correo electrónico no es suficiente).")
-
+        _depto_id_val = data.get("departamento_id", pedido_actual.get("departamento_id"))
+        _tarifa_acordada_val = data.get("tarifa_acordada", pedido_actual.get("tarifa_acordada", False))
+        _presupuesto_num_val = data.get("presupuesto_num", pedido_actual.get("presupuesto_num") or "")
+        errores_envio = _validar_pedido_envio_proveedor(
+            pedido_actual, pid, _depto_id_val, hotel_id_val, _tarifa_acordada_val, _presupuesto_num_val
+        )
         if errores_envio:
             return jsonify({"ok": False, "error": " | ".join(errores_envio), "errores": errores_envio}), 422
 
@@ -16926,13 +17107,18 @@ def aprobar_expediente(eid):
     notificación (email al proveedor, avisos internos) vía
     _notificar_cambio_estado(), igual que cualquier otro cambio de estado.
 
-    Alcance de esta fase: no se repiten aquí TODAS las validaciones de
-    "listo para enviar" (nº pedido, adjuntos...) que ya se comprobaron
-    cuando el pedido entró en el circuito — solo se revalida que el
-    proveedor siga teniendo un contacto con email, por ser crítico para el
-    envío. Si algo más cambió entretanto (p.ej. se borró el adjunto
-    obligatorio), el email de confirmación al proveedor podría salir
-    incompleto; limitación conocida de esta fase, a revisar si hace falta.
+    (2026-09-09, v12.32.49 — a petición de Víctor, tras la auditoría del
+    2026-09-09) Antes de aprobar, se revalida con
+    _validar_pedido_envio_proveedor() EXACTAMENTE la misma cadena que
+    update_pedido() exige para cualquier otro cambio a ENVIADO AL
+    PROVEEDOR — proveedor y su email, Departamento vs. Almacén del PDF,
+    Hotel vs. HOTEL/CENTRO del PDF, Nº Pedido no duplicado, adjunto del PDF
+    oficial, Nº Presupuesto y su adjunto — no solo proveedor/email como
+    antes de esta versión. Tiene sentido repetirla aquí porque, entre que
+    el pedido entra en el circuito de autorización (cuando ya pasó esta
+    misma validación una vez) y que Dirección General lo aprueba, puede
+    pasar tiempo suficiente para que algo cambie (adjunto borrado,
+    departamento u hotel corregidos, proveedor reasignado...).
     """
     data = request.get_json(silent=True) or {}
     exp = row_to_dict(query("SELECT * FROM expediente_exceso WHERE id=%s", (eid,), one=True))
@@ -16947,10 +17133,16 @@ def aprobar_expediente(eid):
     if pedido["estado"] != "PENDIENTE Vº Bº DIRECCIÓN GENERAL":
         return jsonify({"error": f"El pedido ya no está pendiente de Dirección General (estado actual: {pedido['estado']})"}), 409
 
-    if not pedido.get("proveedor_id"):
-        return jsonify({"error": "El pedido ya no tiene proveedor asignado — revíselo antes de aprobar."}), 422
-    if not _get_proveedor_emails_principales(pedido["proveedor_id"], pedido["hotel_id"]):
-        return jsonify({"error": "El proveedor de este pedido ya no tiene ningún contacto con email — revíselo antes de aprobar."}), 422
+    _errores_aprobacion = _validar_pedido_envio_proveedor(
+        pedido, exp["pedido_id"],
+        pedido.get("departamento_id"), pedido.get("hotel_id"),
+        pedido.get("tarifa_acordada", False), pedido.get("presupuesto_num") or ""
+    )
+    if _errores_aprobacion:
+        return jsonify({
+            "error": " | ".join(_errores_aprobacion),
+            "errores": _errores_aprobacion,
+        }), 422
 
     uid  = current_user_id()
     db   = get_db()
@@ -18151,6 +18343,19 @@ def reset_e_importar():
 @app.route("/api/importar", methods=["POST"])
 @login_required
 def importar_excel():
+    # (2026-09-09, auditoría a petición de Víctor) Este endpoint no tenía
+    # ninguna restricción de rol (solo @login_required) — a diferencia de
+    # su endpoint hermano /api/importar/reset (@admin_required), permitía a
+    # CUALQUIER usuario autenticado, incluido el rol "hotel", dar de alta
+    # pedidos en bloque para CUALQUIER hotel (no solo el suyo) y en
+    # cualquier estado válido de la columna ESTADO del Excel — incluido
+    # ENVIADO AL PROVEEDOR — sin proveedor con email, sin PDF, sin ninguna
+    # de las comprobaciones 0a-0d de update_pedido(). Mismo criterio que ya
+    # usa el frontend para el acceso rápido "Importar Excel" del dashboard
+    # (rol !== 'hotel'), aquí aplicado también en el backend, que es quien
+    # de verdad lo tiene que impedir.
+    if session.get("rol") == "hotel":
+        return jsonify({"ok": False, "error": "El usuario Hotel no puede importar pedidos desde Excel"}), 403
     try:
         import openpyxl
         from datetime import datetime as dt
@@ -21786,6 +21991,22 @@ def get_integridad():
     GET /api/admin/integridad
     """
     resultado = _validar_integridad_operativa()
+    return jsonify(resultado)
+
+
+@app.route("/api/admin/auditoria-restaurante-bares-gy-it-mt-ta", methods=["GET"])
+@admin_required
+def get_auditoria_restaurante_bares():
+    """
+    (2026-09-09, v12.32.53) Auditoría puntual de SOLO LECTURA, a petición
+    de Víctor — ver _auditoria_departamento_restaurante_bares_gy_it_mt_ta()
+    para el criterio completo. Lista pedidos de GY/IT/MT/TA con
+    departamento_id = "RESTAURANTE & BARES" para revisar caso a caso; NUNCA
+    corrige nada automáticamente. Cada pedido de la lista se corrige a
+    mano, si procede, desde su propia ficha (edición normal de pedido).
+    GET /api/admin/auditoria-restaurante-bares-gy-it-mt-ta
+    """
+    resultado = _auditoria_departamento_restaurante_bares_gy_it_mt_ta()
     return jsonify(resultado)
 
 
