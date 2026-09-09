@@ -1,0 +1,87 @@
+# (2026-09-08) Añadido a posteriori: el CHANGELOG.md de v12.32.42 ya
+# documentaba este archivo como entregado ("Dockerfile nuevo, .dockerignore
+# nuevo..."), pero no llegó a incluirse en el paquete — sin él, `docker
+# build` copia también __pycache__/, entornos virtuales, etc. si existieran
+# en el contexto de build, además de otros archivos que no hace falta meter
+# en la imagen. Sin impacto de seguridad real (Render construye la imagen a
+# partir de lo que hay en el repositorio de Git, y los archivos con
+# secretos ya están fuera de Git por .gitignore — este .dockerignore no
+# sustituye a ese .gitignore, solo evita bytes de más en la imagen).
+#
+# IMPORTANTE: a propósito NO se excluyen `CHANGELOG.md` ni `docs/` —
+# `app.py` lee `CHANGELOG.md` en tiempo de ejecución (aviso de nueva
+# versión en el frontend); excluirlo rompería esa funcionalidad en
+# producción. Por el mismo motivo, tampoco se excluye ningún otro `*.md`
+# de forma genérica.
+
+# ── Control de versiones ──────────────────────────────────────────────
+.git/
+.github/
+
+# ── Python ─────────────────────────────────────────────────────────────
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+
+# ── Entornos virtuales ────────────────────────────────────────────────
+venv/
+.venv/
+env/
+ENV/
+
+# ── Variables de entorno / credenciales (ya fuera de Git por .gitignore;
+#    esto es solo defensa adicional si alguna llegara a estar presente
+#    en el directorio local desde el que se construya la imagen) ───────
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets.json
+credentials.json
+
+# ── Base de datos local (restos SQLite si los hubiera) ─────────────────
+*.db
+*.sqlite
+*.sqlite3
+
+# ── Logs ──────────────────────────────────────────────────────────────
+*.log
+logs/
+
+# ── Exports generados localmente (la app los genera en tiempo de
+#    ejecución — ninguno de estos vive en el repo como plantilla) ──────
+*.xlsx
+*.xls
+*.csv
+
+# ── Tests y cobertura ────────────────────────────────────────────────
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+.mypy_cache/
+.ruff_cache/
+
+# ── IDEs ──────────────────────────────────────────────────────────────
+.vscode/
+.idea/
+.cursor/
+*.swp
+*.swo
+
+# ── Sistema operativo ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+desktop.ini
+__MACOSX/
+
+# ── Miscelánea ────────────────────────────────────────────────────────
+*.bak
+*.tmp
+*.orig
+instance/
+releases/
+*.zip
