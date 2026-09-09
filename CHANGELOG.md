@@ -1,3 +1,25 @@
+# v12.32.44 — 9 septiembre 2026
+
+📧↩️ Reply-To real también en los otros dos correos al proveedor generados por esta app (cambio de estado y reclamación automática)
+
+**Petición de Víctor**, tras pedirle que verificara el ZIP ya desplegado de v12.32.43: "puedes verificar que todo esté correctamente aplicado? incluida la última consulta". Al revisar ese ZIP se confirmó que la corrección de v12.32.43 quedó **completa para el puente con DALI** (columna `reply_to`, endpoint del puente, `GET` de la cola, y el DALI-side enviando `req.user.email` — todo correcto), pero **incompleta para los otros dos tipos de correo salientes al proveedor que ya identificaba mi propio análisis anterior**: el aviso de cambio de estado (`cambio_estado_proveedor`, evento ENVIADO AL PROVEEDOR / ENTREGA PARCIAL) y la reclamación automática por plazo vencido (`reclamacion_proveedor_auto`) seguían sin pasar ningún `reply_to`, así que sus filas se quedaban con la columna a `NULL` y el poller caía en `destinatario` (el propio proveedor) — el mismo síntoma que Víctor reportó con la captura de DALI, solo que sin corregir todavía en estos dos flujos.
+
+**Corrección — se completa la cadena en los dos flujos que faltaban (`app.py`)**, reutilizando la misma columna `reply_to` de v12.32.43:
+- `_encolar_email_pedido_retrasado()` (usada por `cambio_estado_proveedor`) acepta ahora un parámetro opcional `reply_to` y lo guarda en el UPDATE/INSERT de la fila. El punto de llamada del aviso al proveedor pasa `reply_to=_email_comprador_firma` — el mismo email que ya se usa en la firma del cuerpo del correo.
+- `_encolar_email_sistema()` (usada por `reclamacion_proveedor_auto`) acepta el mismo parámetro opcional.
+- `_build_alerta_email()` devuelve ahora también `comprador_email` (4º valor del tuple devuelto) — ya se calculaba internamente para la firma, pero no se exponía al caller. Los dos puntos que llamaban a esta función se han actualizado a desempaquetar 4 valores; `_encolar_reclamacion_proveedor_auto()` pasa ese email como `reply_to` al encolar.
+- Sin migración de esquema nueva (la columna `reply_to` ya existe desde v12.32.43); sin cambios en el frontend (`p.reply_to || p.destinatario` de v12.32.43 ya sirve para estas filas también, en cuanto llevan el valor relleno).
+
+**Sigue fuera de alcance, documentado en `PENDIENTES.md`**: el envío manual de reclamación desde el panel (botón "Re-notificar" → `meaEnviarEmail()`) no pasa por la cola `emails_sistema_pendientes` y tampoco fija `reply_to` en su payload EmailJS — mismo patrón pendiente de aplicar ahí.
+
+**Verificación**: `python3 -c "import ast; ast.parse(...)"` sin errores nuevos sobre `app.py`. Revisados a mano los dos puntos de llamada de `_build_alerta_email()` (ambos ya desempaquetan 4 valores) y el único punto de llamada de `_encolar_email_pedido_retrasado()` para `cambio_estado_proveedor`. No probado en vivo contra producción — pendiente comprobar en Email History (EmailJS) que el "Reply-To" del próximo aviso de cambio de estado y de la próxima reclamación automática ya es el email del comprador, no el del proveedor.
+
+**Revisión de otros documentos (norma 5)**: `README.md` sí (versión actual). `PENDIENTES.md` sí (se retira la nota sobre estos dos flujos, se mantiene la del envío manual). `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica.
+
+**Entrega**: `app.py`, `templates/index.html` (solo el badge de versión), más este changelog/`docs/HISTORIAL_CAMBIOS.md`/`README.md`/`PENDIENTES.md`. `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.43 — 7 septiembre 2026
 
 ✉️ "Responder a" configurable por fila en la cola de emails de sistema — el correo de "Documentación faltante" de DALI ya no responde al propio proveedor

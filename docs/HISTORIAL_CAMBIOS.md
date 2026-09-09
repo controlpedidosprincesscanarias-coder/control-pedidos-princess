@@ -36,6 +36,39 @@
 
 ---
 
+## 2026-09-09 — [Control Pedidos] Reply-To real también en cambio de estado y reclamación automática al proveedor (v12.32.44)
+
+- **Origen**: Víctor pidió verificar el ZIP ya desplegado de v12.32.43
+  ("puedes verificar que todo esté correctamente aplicado? incluida la
+  última consulta"). La verificación confirmó que el puente con DALI
+  quedó bien resuelto de punta a punta (columna `reply_to`, endpoint,
+  `GET` de la cola, y el lado DALI enviando `req.user.email`), pero que
+  los otros dos correos al proveedor que mi propio análisis previo había
+  señalado — `cambio_estado_proveedor` y `reclamacion_proveedor_auto` —
+  seguían sin recibir `reply_to`, así que su "Responder a" seguía siendo
+  el propio proveedor.
+- **Corrección (`app.py`)**: `_encolar_email_pedido_retrasado()` y
+  `_encolar_email_sistema()` aceptan ahora un `reply_to` opcional y lo
+  guardan en la fila (misma columna de v12.32.43, sin migración nueva).
+  `_build_alerta_email()` devuelve también el email del comprador (4º
+  valor del tuple) para que la reclamación automática pueda pasarlo como
+  `reply_to`; sus dos puntos de llamada se actualizaron a desempaquetar 4
+  valores. El aviso de cambio de estado al proveedor pasa
+  `reply_to=_email_comprador_firma`.
+- **Sin cambios de frontend** más allá del badge de versión — el
+  fallback `p.reply_to || p.destinatario` ya introducido en v12.32.43
+  sirve también para estas filas.
+- **Pendiente**: el envío manual de reclamación desde el panel
+  (`meaEnviarEmail()`) sigue sin pasar por esta cola ni fijar `reply_to`
+  — se mantiene en `PENDIENTES.md`.
+- **Versión**: Control Pedidos → v12.32.44 (ver `CHANGELOG.md`).
+- **Pendiente de confirmar**: Víctor, comprobando en Email History
+  (EmailJS) que el "Reply-To" del próximo aviso de cambio de estado y de
+  la próxima reclamación automática al proveedor ya es el email del
+  comprador.
+
+---
+
 ## 2026-09-07 — [Control Pedidos + DALI] "Responder a" configurable en la cola de emails de sistema — el correo de "Documentación faltante" ya no responde al propio proveedor (v12.32.43)
 
 - **Origen**: Víctor detectó, revisando un correo real de "Documentación

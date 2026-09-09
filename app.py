@@ -3075,7 +3075,8 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
                                      asunto: str, cuerpo_html: str, cuerpo_text: str,
                                      cc_emails: str = "", retraso_segundos: int = 300,
                                      marca_comunicado_ab: bool = False,
-                                     marca_comunicado_jefe_dep: bool = False) -> None:
+                                     marca_comunicado_jefe_dep: bool = False,
+                                     reply_to: str = "") -> None:
     """
     (2026-08-14) Encola un correo de cambio de estado en emails_sistema_pendientes
     con retraso (columna visible_en = NOW() + retraso_segundos), en vez de
@@ -3108,6 +3109,17 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
     que el correo se ha enviado de verdad (ver api_marcar_email_sistema_
     enviado), se marquen solas las casillas "Comunicado A&B" / "Comunicado
     Jefe Dep." del pedido — nunca antes, y nunca a mano por el usuario.
+
+    reply_to (opcional, v12.32.44): mismo mecanismo que el añadido en
+    v12.32.43 para el puente con DALI (columna `reply_to` de esta misma
+    tabla) — aquí se usa para el aviso de cambio de estado al PROVEEDOR
+    (evento_codigo='cambio_estado_proveedor'), cuyo cuerpo ya le pide
+    responder a la dirección del comprador que firma el correo. Hasta
+    ahora esta función no lo pasaba, así que esa fila se quedaba con
+    reply_to NULL y el poller caía en `destinatario` (el propio
+    proveedor) — mismo síntoma que reportó Víctor para el correo de DALI,
+    pero sin corregir todavía en este flujo. Si se omite, el
+    comportamiento no cambia respecto a versiones anteriores.
     """
     try:
         db = get_db()
@@ -3115,14 +3127,14 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
         cur.execute(
             """UPDATE emails_sistema_pendientes
                SET destinatario=%s, asunto=%s, cuerpo_html=%s, cuerpo_text=%s,
-                   cc_emails=%s, creado_en=NOW(),
+                   cc_emails=%s, reply_to=%s, creado_en=NOW(),
                    marca_comunicado_ab=%s, marca_comunicado_jefe_dep=%s,
                    visible_en=NOW() + make_interval(secs => %s)
                WHERE pedido_id=%s AND evento_codigo=%s
                  AND enviado=FALSE
                  AND (en_proceso_desde IS NULL OR en_proceso_desde < NOW() - INTERVAL '2 minutes')
                RETURNING id""",
-            (destinatario, asunto, cuerpo_html, cuerpo_text, cc_emails,
+            (destinatario, asunto, cuerpo_html, cuerpo_text, cc_emails, reply_to or None,
              marca_comunicado_ab, marca_comunicado_jefe_dep,
              retraso_segundos, pedido_id, evento_codigo)
         )
@@ -3132,11 +3144,11 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
         cur.execute(
             """INSERT INTO emails_sistema_pendientes
                (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
-                cc_emails, pedido_id, marca_comunicado_ab, marca_comunicado_jefe_dep,
+                cc_emails, reply_to, pedido_id, marca_comunicado_ab, marca_comunicado_jefe_dep,
                 visible_en)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW() + make_interval(secs => %s))""",
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW() + make_interval(secs => %s))""",
             (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
-             cc_emails, pedido_id, marca_comunicado_ab, marca_comunicado_jefe_dep,
+             cc_emails, reply_to or None, pedido_id, marca_comunicado_ab, marca_comunicado_jefe_dep,
              retraso_segundos)
         )
         db.commit()
@@ -3596,6 +3608,12 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
                 cuerpo_html=body_html,
                 cuerpo_text=body_text,
                 retraso_segundos=_retraso_email_estado,
+                # v12.32.44 — el cuerpo le pide al proveedor responder a la
+                # dirección que figura en la firma (el comprador); ahora el
+                # Reply-To real del correo coincide con eso, en vez de con
+                # el propio proveedor (mismo criterio ya aplicado en
+                # v12.32.43 al puente con DALI).
+                reply_to=_email_comprador_firma,
             )
 
     # ── Correo interno (ENVIADO AL PROVEEDOR, ENTREGA PARCIAL, ENTREGADO, CANCELADO) ──
@@ -4226,7 +4244,8 @@ def _html_a_texto_plano(html: str) -> str:
 def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
                            asunto: str, cuerpo_html: str = None, cuerpo_text: str = None,
                            solicitud_acceso_id: int = None,
-                           cc_emails: list = None, pedido_id: int = None) -> None:
+                           cc_emails: list = None, pedido_id: int = None,
+                           reply_to: str = None) -> None:
     """
     Encola un email de sistema para cada destinatario. Estos avisos se
     generan desde jobs sin navegador abierto (APScheduler), y esta app no
@@ -4244,6 +4263,12 @@ def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
     guarda como string separado por comas y se envía como bcc en EmailJS.
     pedido_id (opcional, v12.19.0): vincula la fila a un pedido concreto
     (reclamaciones automáticas a proveedor) para trazabilidad.
+
+    reply_to (opcional, v12.32.44): mismo mecanismo añadido en v12.32.43
+    para el puente con DALI — aquí se usa para la reclamación automática
+    al proveedor (evento_codigo='reclamacion_proveedor_auto'), cuyo
+    cuerpo también firma con el email del comprador. Si se omite, el
+    poller cae en `destinatario`, igual que antes de esta versión.
     """
     if not destinatarios_email:
         return
@@ -4257,10 +4282,10 @@ def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
             cur.execute(
                 """INSERT INTO emails_sistema_pendientes
                    (evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
-                    solicitud_acceso_id, cc_emails, pedido_id)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s)""",
+                    solicitud_acceso_id, cc_emails, pedido_id, reply_to)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
                 (evento_codigo, email, asunto, cuerpo_html, cuerpo_text,
-                 solicitud_acceso_id, cc_str, pedido_id)
+                 solicitud_acceso_id, cc_str, pedido_id, reply_to or None)
             )
         db.commit()
     except Exception as exc:
@@ -7232,8 +7257,16 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
     return subject, body
 
 def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
-    """Selecciona la plantilla correcta según el estado del pedido y devuelve (subject, body, es_proveedor).
-    Devuelve (None, None, False) si no hay comprador con email asignado al hotel."""
+    """Selecciona la plantilla correcta según el estado del pedido y devuelve
+    (subject, body, es_proveedor, comprador_email).
+    Devuelve (None, None, False, None) si no hay comprador con email asignado al hotel.
+
+    v12.32.44: se añade comprador_email al tuple de retorno — ya se
+    calculaba internamente para la firma del correo, pero no se exponía al
+    caller, que lo necesita para fijar el Reply-To real (ver
+    _encolar_reclamacion_proveedor_auto), mismo criterio ya aplicado en
+    v12.32.43/44 al puente con DALI y a cambio_estado_proveedor.
+    """
     estado    = pedido.get("estado", "")
     urgente   = nivel == "urgente"
     # Obtener email del comprador responsable del hotel para incluir en la firma
@@ -7241,26 +7274,26 @@ def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
     if not (_compradores and _compradores[0].get("email")):
         log.warning("[ALERTA EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email de alerta omitido",
                     pedido.get("id"), pedido.get("hotel_codigo",""))
-        return None, None, False
+        return None, None, False, None
     _comprador_email  = _compradores[0]["email"]
     _comprador_nombre = _compradores[0].get("nombre") or ""
     _comprador_movil  = _compradores[0].get("movil") or ""
     if estado == "ENVIADO AL PROVEEDOR":
         s, b = _email_template_enviado_proveedor(pedido, dias, urgente, _comprador_email,
                                                    _comprador_nombre, _comprador_movil)
-        return s, b, True
+        return s, b, True, _comprador_email
     elif estado in ("PENDIENTE FIRMA DIRECCION COMPRAS", "PENDIENTE DE FIRMA DIRECCION HOTEL"):
         s, b = _email_template_pendiente_firma(pedido, dias, estado)
-        return s, b, False
+        return s, b, False, _comprador_email
     elif estado == "ENTREGA PARCIAL":
         s, b = _email_template_entrega_parcial(pedido, dias, _comprador_email,
                                                  _comprador_nombre, _comprador_movil)
-        return s, b, True
+        return s, b, True, _comprador_email
     elif estado == "PENDIENTE COTIZACIÓN":
         s, b = _email_template_pendiente_cotizacion(pedido, dias, urgente, _comprador_email,
                                                        _comprador_nombre, _comprador_movil)
-        return s, b, True
-    return None, None, False
+        return s, b, True, _comprador_email
+    return None, None, False, None
 
 
 def _email_template_cotizacion_sin_proveedor(pedido: dict, dias: int) -> tuple:
@@ -7419,7 +7452,7 @@ def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> 
                   pedido.get("id"))
         return False
 
-    subject, body_html, es_proveedor = _build_alerta_email(pedido, dias, nivel)
+    subject, body_html, es_proveedor, _comprador_email_reclamacion = _build_alerta_email(pedido, dias, nivel)
     if not subject or not es_proveedor:
         log.info("RECLAMACION-DEBUG pedido=%s omitido: subject=%s es_proveedor=%s (probable falta de comprador con email en el hotel, o estado no soportado por _build_alerta_email)",
                   pedido.get("id"), bool(subject), es_proveedor)
@@ -7460,6 +7493,10 @@ def _encolar_reclamacion_proveedor_auto(pedido: dict, dias: int, nivel: str) -> 
     _encolar_email_sistema(
         "reclamacion_proveedor_auto", [destino_proveedor], subject, body_html,
         cc_emails=cc_emails, pedido_id=pedido.get("id"),
+        # v12.32.44 — misma corrección que en cambio_estado_proveedor: el
+        # cuerpo de _build_alerta_email firma con el email del comprador,
+        # así que el Reply-To real debe ser ese, no el propio proveedor.
+        reply_to=_comprador_email_reclamacion,
     )
     log.info("[RECLAMACION-AUTO] Pedido %s — reclamación encolada (1 envío) a %s (cc: %s)",
               pedido.get("id"), destino_proveedor, cc_emails)
@@ -7539,7 +7576,7 @@ def alerta_email_preview(pedido_id):
     if not pedido:
         return jsonify({"error": "Pedido no encontrado"}), 404
 
-    subject, body_html, es_proveedor = _build_alerta_email(pedido, dias, nivel)
+    subject, body_html, es_proveedor, _ = _build_alerta_email(pedido, dias, nivel)
     if not subject:
         return jsonify({"error": "No hay plantilla para este estado"}), 400
 
