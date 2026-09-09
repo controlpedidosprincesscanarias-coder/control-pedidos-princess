@@ -86,6 +86,12 @@
 - **Verificación**: `py_compile` sin errores nuevos, balance de `<div>` de `templates/index.html` correcto (975/975, sin cambios), flujo OCR reproducido en desarrollo contra el PDF real firmado (con modelo de inglés, por no tener el paquete de idioma español disponible en ese entorno de prueba). Cambio de runtime a Docker no probado en vivo (sin acceso a red en el entorno de desarrollo para construir la imagen) — revisar con cuidado el primer deploy.
 - **Revisión de otros documentos**: `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica. `GUIA_DESPLIEGUE.md` y `README.md` sí, actualizados (runtime Docker).
 - Detalle técnico completo en `CHANGELOG.md` v12.32.42.
+- **Corrección (2026-09-08)**: el `.dockerignore` documentado como
+  entregado no llegó a incluirse en el paquete real (detectado al
+  auditar la versión ya desplegada, v12.32.43). Sin impacto de
+  seguridad (Render construye desde Git, donde los secretos ya están
+  excluidos por `.gitignore`); solo agrandaba el contexto de build sin
+  necesidad. Añadido ahora — ver nota en `CHANGELOG.md` v12.32.42.
 
 ## 2026-09-07 — [Infra] Supabase — Grace period finalizado; estado de egress/BD confirmado; organización con un único proyecto
 

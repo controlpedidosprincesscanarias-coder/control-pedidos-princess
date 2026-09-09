@@ -46,6 +46,16 @@
 
 **Entrega**: `app.py`, `templates/index.html`, `render.yaml`, `requirements.txt`, `Dockerfile` (nuevo), `.dockerignore` (nuevo), más este changelog/`docs/HISTORIAL_CAMBIOS.md`/`README.md`/`GUIA_DESPLIEGUE.md`. `models.py` no cambia (no se persiste `leido_via_ocr` en base de datos, solo se devuelve en la respuesta del momento de subir el PDF).
 
+> ⚠️ **Corrección (2026-09-08):** el `.dockerignore` mencionado arriba
+> quedó documentado como entregado pero no llegó a incluirse en el
+> paquete real (detectado al auditar la versión ya desplegada, v12.32.43,
+> a petición de Víctor). Sin impacto de seguridad — Render construye la
+> imagen a partir de lo que hay en Git, y los archivos con secretos ya
+> quedan fuera de Git por `.gitignore` — solo suponía que el contexto de
+> build incluyera algún archivo de más de la cuenta (p. ej. `.git/`,
+> `.github/`). Añadido ahora.
+
+
 ---
 
 # v12.32.41 — 6 septiembre 2026
