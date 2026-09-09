@@ -33,6 +33,37 @@
 >    Dejar constancia en la entrada de este historial de qué se revisó,
 >    aunque la conclusión sea "no aplica" (para que quede claro que se
 >    comprobó y no que se olvidó).
+>    **Nota sobre `docs/hallazgo-seguridad-princess.md`** (aclarada en
+>    v12.32.46, tras una auditoría que señaló la ambigüedad): el archivo
+>    no existe en este repo desde antes de v12.30.93 — no hay una entrada
+>    previa que registre cuándo ni por qué se quitó de aquí, lo cual es en
+>    sí mismo un incumplimiento de esta misma norma 5 que quedó sin
+>    detectar hasta ahora. Lo que sí consta, verificado en v12.30.74: el
+>    fallo que describía (contraseñas en texto plano sin hash) llevaba
+>    corregido desde v12.29.37, mucho antes de esa fecha. Este documento
+>    era, en origen, un análisis del proyecto DALI usando este backend
+>    como referencia de qué NO hacer — su versión completa (con el
+>    recuadro "✅ RESUELTO" añadido) sigue existiendo fuera de este repo.
+>    A partir de aquí, las entradas de norma 5 pueden limitarse a "no
+>    existe en este repo" sin repetir la explicación completa.
+
+---
+
+## 2026-09-09 — [Control Pedidos] Limpieza documental: nota obsoleta de `GUIA_DESPLIEGUE.md` retirada + aclarada la ambigüedad de `docs/hallazgo-seguridad-princess.md` (v12.32.46)
+
+**Contexto**: a raíz de una auditoría general del proyecto (petición de Víctor), quedaron dos detalles menores de documentación por resolver.
+
+**Hallazgo 1 — `GUIA_DESPLIEGUE.md`**: la cabecera del documento conservaba un recuadro sobre la v9.2.0 (unificación de `telefono`/`movil` en `proveedor_contactos`), una migración automática al arrancar la app que lleva completada en producción desde hace decenas de versiones. No era incorrecto, pero no aporta nada operativo a quien sigue la guía hoy — es el único resto de ese estilo en todo el documento (el resto de notas históricas, como el PASO 4 de migración de SQLite, quedan marcadas inline con "⚠️ YA NO APLICA" en su propio paso, no sueltas en la cabecera).
+
+**Corrección 1**: recuadro de la v9.2.0 retirado de la cabecera de `GUIA_DESPLIEGUE.md`. La migración en sí no se documenta en ningún otro sitio porque no requiere ninguna acción manual — es y era puramente informativa.
+
+**Hallazgo 2 — `docs/hallazgo-seguridad-princess.md`**: la auditoría señaló que decenas de entradas de este historial (desde v12.30.93) repiten "no existe en este repo" para este archivo, sin que exista una entrada anterior que registre cuándo ni por qué desapareció — un incumplimiento de la propia norma 5 que pasó desapercibido hasta ahora. Verificado contra el historial: el archivo existió en este repo al menos hasta v12.30.74 (donde se le añadió un recuadro "✅ RESUELTO" confirmando que el fallo que describía — contraseñas en texto plano — llevaba corregido desde v12.29.37); ya no existía a partir de v12.30.93. No hay constancia de una decisión ni de un motivo documentado para su salida de este repo entre esas dos versiones.
+
+**Corrección 2**: no se recrea el archivo (su contenido íntegro sigue existiendo fuera de este repo, en el proyecto DALI, que es donde se escribió). En su lugar, se añade una nota permanente junto a la norma 5, arriba en este mismo documento, dejando constancia de lo que sí se sabe con certeza (el fallo de origen está resuelto desde v12.29.37) y de lo que no (la fecha y el motivo exactos de su salida de este repo, que no quedaron registrados). A partir de esta entrada, las revisiones de norma 5 pueden limitarse a "no existe en este repo" sin repetir la explicación completa cada vez.
+
+**Revisión de otros documentos (norma 5)**: `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica. `docs/hallazgo-seguridad-princess.md` — no existe en este repo (ver nota añadida junto a la norma 5, arriba). `README.md` sí: versión actual.
+
+**Entrega**: `GUIA_DESPLIEGUE.md`, `docs/HISTORIAL_CAMBIOS.md` (esta entrada + nota de norma 5), `CHANGELOG.md`, `README.md` (versión actual), `templates/index.html` (badge de versión). `app.py`, `models.py` y `requirements.txt` no cambian.
 
 ---
 

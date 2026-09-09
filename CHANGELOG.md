@@ -1,3 +1,23 @@
+# v12.32.46 — 9 septiembre 2026
+
+🧹 Limpieza documental: nota obsoleta de `GUIA_DESPLIEGUE.md` retirada + aclarada la ambigüedad de `docs/hallazgo-seguridad-princess.md`
+
+**Contexto**: a raíz de una auditoría general del proyecto (petición de Víctor), quedaron dos detalles menores de documentación por resolver.
+
+**Hallazgo 1 — `GUIA_DESPLIEGUE.md`**: la cabecera del documento conservaba un recuadro sobre la v9.2.0 (unificación de `telefono`/`movil` en `proveedor_contactos`), una migración automática al arrancar la app que lleva completada en producción desde hace decenas de versiones. No era incorrecto, pero no aporta nada operativo a quien sigue la guía hoy.
+
+**Corrección 1**: recuadro de la v9.2.0 retirado de la cabecera de `GUIA_DESPLIEGUE.md`. La migración no requiere ninguna acción manual, así que no se documenta en ningún otro sitio.
+
+**Hallazgo 2 — `docs/hallazgo-seguridad-princess.md`**: decenas de entradas de este changelog (desde v12.30.93) repiten "no existe en este repo" para este archivo, sin que exista una entrada anterior que registre cuándo ni por qué desapareció de aquí — un incumplimiento de la norma 5 de `docs/HISTORIAL_CAMBIOS.md` que pasó desapercibido. Verificado contra el historial: el archivo existió en este repo al menos hasta **v12.30.74** (donde se le añadió un recuadro "✅ RESUELTO" confirmando que el fallo que describía — contraseñas en texto plano — llevaba corregido desde v12.29.37); ya no existía a partir de v12.30.93. No hay constancia de una decisión ni de un motivo documentado para su salida de este repo entre esas dos versiones.
+
+**Corrección 2**: no se recrea el archivo (su contenido íntegro sigue existiendo fuera de este repo, en el proyecto DALI, donde se escribió originalmente). Se añade en su lugar una nota permanente en `docs/HISTORIAL_CAMBIOS.md`, junto a la norma 5, con lo que sí consta (el fallo de origen resuelto desde v12.29.37) y lo que no (fecha/motivo exactos de su salida de este repo). Las revisiones de norma 5 a partir de ahora pueden limitarse a "no existe en este repo" sin repetir la explicación completa.
+
+**Revisión de otros documentos (norma 5)**: `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica. `docs/hallazgo-seguridad-princess.md` — no existe en este repo (ver nota añadida junto a la norma 5 en `docs/HISTORIAL_CAMBIOS.md`). `README.md` sí: versión actual.
+
+**Entrega**: `GUIA_DESPLIEGUE.md`, `docs/HISTORIAL_CAMBIOS.md`, este changelog, `README.md` (versión actual), `templates/index.html` (badge de versión). `app.py`, `models.py` y `requirements.txt` no cambian.
+
+---
+
 # v12.32.45 — 9 septiembre 2026
 
 📧↩️ Reply-To real también en el envío manual de reclamación desde el panel ("Re-notificar") — cierra el ciclo de la petición original
