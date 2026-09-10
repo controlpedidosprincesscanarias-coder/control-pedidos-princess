@@ -1417,7 +1417,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.53
+          V 12.32.54
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2539,16 +2539,30 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-section">Proveedor</div>
         <div class="form-group full">
           <label class="form-label">Proveedor</label>
-          <!-- (2026-09-06, v12.32.35) A petición de Víctor: el proveedor deja
+          <!-- (2026-09-06, v12.32.35) A petición de Víctor: el proveedor dejó
                de buscarse/seleccionarse a mano — se rellena solo al adjuntar
                el PDF de «Nº Pedido (DALI/SAP)», igual que Nº Pedido/Total
                Pedido (ver subirAdjuntos/_procesarProveedorPdfPedidoOficial).
-               El buscador antiguo (buscarProveedor/seleccionarProveedor,
-               templates/index.html más abajo) queda sin usar aquí, no se ha
-               borrado por si se recupera en algún caso especial. -->
-          <input class="form-control" id="p-proveedor-input" placeholder="Se rellena al adjuntar el PDF de «Nº Pedido (DALI/SAP)»"
-                 readonly style="background:#f5f5f5;color:#555">
+               (2026-09-10) Recuperado para el caso especial que se preveía
+               entonces: mientras el pedido NO tenga todavía ese PDF (fase de
+               cotización, PENDIENTE COTIZACIÓN u otro estado anterior al
+               envío real), el campo vuelve a ser buscable a mano —
+               buscarProveedor/seleccionarProveedor, más abajo en este mismo
+               archivo, nunca se habían borrado. En cuanto se adjunta el PDF
+               vuelve a quedar de solo lectura y el proveedor que traiga el
+               PDF manda siempre, sustituyendo a esta asignación provisional
+               — ver _actualizarBloqueoProveedorManual() y HISTORIAL.md
+               v12.32.54. -->
+          <div style="position:relative">
+            <input class="form-control" id="p-proveedor-input" placeholder="Se rellena al adjuntar el PDF de «Nº Pedido (DALI/SAP)»"
+                   oninput="buscarProveedor(this.value)" autocomplete="off"
+                   readonly style="background:#f5f5f5;color:#555">
+            <div id="prov-dropdown" style="display:none;position:absolute;left:0;right:0;top:100%;z-index:50;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:260px;overflow-y:auto;margin-top:2px"></div>
+          </div>
           <input type="hidden" id="p-proveedor">
+          <div id="p-proveedor-manual-hint" style="font-size:10.5px;color:#888;margin-top:4px;display:none">
+            Proveedor provisional para la fase de cotización — se sustituirá por el del PDF oficial en cuanto se adjunte (arriba, en «Nº Pedido (DALI / SAP)»).
+          </div>
           <div id="p-proveedor-aviso" style="display:none;margin-top:6px;padding:8px 10px;border-radius:6px;font-size:12.5px;line-height:1.4"></div>
         </div>
 
@@ -5314,6 +5328,13 @@ async function openPedidoModal(id=null) {
     document.getElementById('p-proveedor').value = p.proveedor_id || '';
     document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
     document.getElementById('p-proveedor').dataset.email = p.proveedor_email || '';
+    // (2026-09-10) Bloqueado (solo lectura) si el pedido ya tiene PDF
+    // oficial adjuntado — p.pedido_num es exactamente esa señal, es la
+    // única vía por la que llega a tener valor (ver comentario de
+    // pedido_num en app.py) — desbloqueado (buscable a mano) mientras no
+    // lo tenga, típicamente en PENDIENTE COTIZACIÓN. Ver
+    // _actualizarBloqueoProveedorManual().
+    _actualizarBloqueoProveedorManual(!!p.pedido_num);
     // (2026-09-06, v12.32.35) Aviso persistente si el proveedor leído del
     // PDF oficial no se reconoció en el catálogo, si el Departamento
     // seleccionado no coincide con el Almacén del PDF, o (2026-09-06,
@@ -5651,6 +5672,11 @@ async function subirAdjuntos(input, tipo) {
           // vacío y bloqueaba con "no tiene correo configurado" aunque el
           // proveedor sí tuviera uno en su ficha.
           document.getElementById('p-proveedor').dataset.email = data.proveedor_email || '';
+          // (2026-09-10) El PDF acaba de llegar: el proveedor vuelve a
+          // quedar de solo lectura, igual que Nº Pedido/Total Pedido — ya
+          // no se puede volver a tocar a mano (ver
+          // _actualizarBloqueoProveedorManual()).
+          _actualizarBloqueoProveedorManual(true);
           _mostrarAvisoProveedorPdf({
             proveedor_reconocido: data.proveedor_reconocido,
             proveedor_pdf_codigo: data.proveedor_pdf_codigo,
@@ -5667,6 +5693,21 @@ async function subirAdjuntos(input, tipo) {
             toast(`Proveedor reconocido — ${data.proveedor_nombre}`, 'success');
           } else if (data.proveedor_pdf_codigo) {
             toast(`Proveedor con código SAP ${data.proveedor_pdf_codigo} no reconocido — verifíquelo en Admin → Proveedores`, 'error');
+          }
+          // (2026-09-10) Si en la fase de cotización se había asignado un
+          // proveedor a mano y el PDF oficial trae uno DISTINTO, avisar en
+          // vez de sustituirlo en silencio — el PDF manda igualmente (ya se
+          // ha aplicado arriba), esto es solo para que quien lo suba se dé
+          // cuenta del cambio. proveedor_manual_coincide es null cuando no
+          // había ningún proveedor previo que comparar (caso normal, nada
+          // que avisar) — ver upload_adjunto() en app.py.
+          if (data.proveedor_manual_coincide === false) {
+            const _provPrevioNombre = data.proveedor_manual_previo_nombre || 'el asignado en la cotización';
+            toast(
+              `⚠️ El proveedor del PDF (${data.proveedor_nombre || data.proveedor_pdf_nombre || 'no reconocido'}) `
+              + `sustituye al asignado a mano durante la cotización (${_provPrevioNombre}) — verifíquelo`,
+              'error', 8000
+            );
           }
           // (2026-09-06, v12.32.38) Aviso inmediato si el HOTEL/CENTRO leído
           // del PDF no coincide con el Hotel ya seleccionado en el pedido —
@@ -6376,11 +6417,13 @@ function clearPedidoForm() {
   document.getElementById('p-proveedor').value = '';
   document.getElementById('p-proveedor').dataset.email = '';
   document.getElementById('p-proveedor-input').value = '';
-  // (2026-09-06, v12.32.35) prov-dropdown ya no existe (proveedor pasó a
-  // ser de solo lectura, ver formulario más arriba) — se quita esta línea
-  // en vez de dejarla apuntando a un elemento inexistente. Se limpia
-  // también el aviso de proveedor/departamento del pedido anterior, para
-  // que un "Nuevo pedido" no arrastre el aviso de la última ficha abierta.
+  // (2026-09-10) Un pedido nuevo nunca tiene todavía el PDF oficial, así
+  // que el campo Proveedor empieza desbloqueado (buscable a mano) — ver
+  // _actualizarBloqueoProveedorManual().
+  _actualizarBloqueoProveedorManual(false);
+  // Se limpia también el aviso de proveedor/departamento del pedido
+  // anterior, para que un "Nuevo pedido" no arrastre el aviso de la
+  // última ficha abierta.
   G.avisoProveedorInfo = null;
   const _contAvisoProv = document.getElementById('p-proveedor-aviso');
   if (_contAvisoProv) { _contAvisoProv.style.display = 'none'; _contAvisoProv.innerHTML = ''; }
@@ -6544,8 +6587,9 @@ async function savePedido() {
           ? `No se puede pasar a ENVIADO AL PROVEEDOR: el proveedor leído del PDF oficial (código SAP ${_codPdf}`
             + (_nomPdf ? `, «${_nomPdf}»` : '') + `) no se ha reconocido en el catálogo. Verifique si ya existe `
             + `con otro código/nombre y, si no, dé de alta ese proveedor en Admin → Proveedores.`
-          : 'No se puede pasar a ENVIADO AL PROVEEDOR. El proveedor se asigna automáticamente al adjuntar el '
-            + 'PDF del pedido oficial en la sección «Nº Pedido (DALI/SAP)».',
+          : 'No se puede pasar a ENVIADO AL PROVEEDOR: falta adjuntar el PDF del pedido oficial en la sección '
+            + '«Nº Pedido (DALI/SAP)» — un proveedor asignado a mano en la fase de cotización es solo '
+            + 'provisional, no sustituye al PDF.',
         { title: '⚠️ No se puede continuar', duracion: 8000 }
       );
       return;
@@ -9081,6 +9125,38 @@ function seleccionarProveedor(id, nombre, email) {
   // Almacenar el email del contacto principal para validación en savePedido
   document.getElementById('p-proveedor').dataset.email = email || '';
   document.getElementById('prov-dropdown').style.display = 'none';
+}
+
+// (2026-09-10) Bloqueo dinámico del campo Proveedor — a diferencia de Nº
+// Pedido/Total Pedido (siempre de solo lectura desde v12.32.35), el
+// Proveedor SÍ se puede volver a elegir a mano MIENTRAS el pedido todavía
+// no tiene el PDF oficial adjuntado (fase de cotización u otro estado
+// anterior al envío real) — a petición de Víctor, para poder hacer
+// seguimiento de presupuesto y reclamación al proveedor real desde el
+// primer momento, en vez de esperar a que exista el PDF. En cuanto se
+// adjunta el PDF («Nº Pedido (DALI/SAP)»), vuelve a quedar de solo
+// lectura y el proveedor que traiga el PDF manda siempre — ver
+// subirAdjuntos (rama pedido_doc, más abajo), que llama a esta misma
+// función con bloqueado=true justo después de fijar los valores leídos.
+// bloqueado se decide con el mismo criterio que usa ya el propio backend
+// (pedido_num solo se rellena al adjuntar el PDF, ver update_pedido() en
+// app.py) — así que "tiene pedido_num" y "tiene PDF" son la misma
+// pregunta en toda la app.
+function _actualizarBloqueoProveedorManual(bloqueado) {
+  const input = document.getElementById('p-proveedor-input');
+  const hint  = document.getElementById('p-proveedor-manual-hint');
+  if (!input) return;
+  input.readOnly = bloqueado;
+  input.style.background = bloqueado ? '#f5f5f5' : '#fff';
+  input.style.color = bloqueado ? '#555' : '';
+  input.placeholder = bloqueado
+    ? 'Se rellena al adjuntar el PDF de «Nº Pedido (DALI/SAP)»'
+    : 'Buscar proveedor por nombre o código…';
+  if (hint) hint.style.display = bloqueado ? 'none' : '';
+  if (bloqueado) {
+    const drop = document.getElementById('prov-dropdown');
+    if (drop) drop.style.display = 'none';
+  }
 }
 
 document.addEventListener('click', (e) => {

@@ -16526,6 +16526,30 @@ def create_pedido():
     familia_id   = data.get("familia_id") or None
     importe      = data.get("importe") or None
 
+    # (2026-09-10) Proveedor asignado A MANO en la fase de cotización — a
+    # petición de Víctor: los pedidos que se dan de alta directamente como
+    # PENDIENTE COTIZACIÓN (o cualquier otro estado anterior al PDF oficial)
+    # todavía no tienen forma de que el proveedor se detecte solo, porque
+    # eso requiere el PDF de «Nº Pedido (DALI/SAP)» (ver upload_adjunto/
+    # _resolver_proveedor_pdf_oficial) — y un pedido recién creado no puede
+    # tener ese PDF todavía. Pero sí hace falta un proveedor desde el
+    # principio para poder hacer seguimiento de presupuesto y reclamación
+    # automática de cotización pendiente (ver HISTORIAL.md v12.32.54). Se
+    # acepta aquí como asignación MANUAL y PROVISIONAL: en cuanto se
+    # adjunte el PDF oficial, el proveedor que traiga ese PDF sustituye
+    # siempre a este (ver upload_adjunto, más abajo) — exactamente igual
+    # que si el pedido hubiera nacido sin proveedor. No hay riesgo de que
+    # esto permita "colar" un pedido en ENVIADO AL PROVEEDOR sin PDF: esa
+    # transición exige además, e independientemente del proveedor, que
+    # exista pedido_num y el propio adjunto pedido_doc (ver puntos 1 y 2 de
+    # _validar_pedido_envio_proveedor()) — ninguno de los dos puede existir
+    # todavía en un pedido que se acaba de crear.
+    proveedor_id_manual = data.get("proveedor_id") or None
+    if proveedor_id_manual:
+        _prov_manual_row = query("SELECT id FROM proveedores WHERE id=%s", (proveedor_id_manual,), one=True)
+        if not _prov_manual_row:
+            return jsonify({"error": "El proveedor seleccionado no existe."}), 400
+
     # (2026-08-01 — rediseño Techo de Gastos) Ya NO se comprueba el techo al
     # crear un pedido — el momento real de "consumo" es al pasar a ENVIADO
     # AL PROVEEDOR (ver update_pedido()), no al crear/editar. _forzar_techo
@@ -16565,13 +16589,13 @@ def create_pedido():
         1 if data.get("comunicado_jefe_dep") else 0,
         1 if data.get("parte_rotura") else 0,
         1 if data.get("parte_ampliacion") else 0,
-        # (2026-09-06, v12.32.35) proveedor_id tampoco se acepta del
-        # cliente al crear, mismo motivo que pedido_num/total_pedido justo
-        # arriba: ahora es exclusivamente automático, resuelto al subir el
-        # PDF de «Nº Pedido (DALI/SAP)» (ver upload_adjunto/
-        # _resolver_proveedor_pdf_oficial) — y eso requiere un pedido_id
-        # que todavía no existe en este punto.
-        None, data.get("observaciones"),
+        # (2026-09-10) proveedor_id: NULL salvo que venga una asignación
+        # manual válida de la fase de cotización (ver bloque de validación
+        # más arriba, proveedor_id_manual) — antes de este cambio nacía
+        # SIEMPRE a NULL (v12.32.35), porque hasta ahora el único origen
+        # posible era el PDF oficial, que un pedido recién creado no puede
+        # tener todavía.
+        proveedor_id_manual, data.get("observaciones"),
         familia_id, importe, sujeto_techo,
         data.get("plazo_entrega_dias") or None,
         data.get("fecha_entrega_especifica") or None,
@@ -17026,6 +17050,27 @@ def update_pedido(pid):
         data["nota_historial"] = (_nota_usuario_cancel + " — " if _nota_usuario_cancel else "") + _nota_liberacion
         _mes_consumo_techo_val = None
 
+    # (2026-09-10) Proveedor asignado a mano — a diferencia de pedido_num/
+    # total_pedido (siempre de solo lectura desde v12.32.35), el Proveedor
+    # SÍ admite edición manual MIENTRAS el pedido todavía no tiene el PDF
+    # oficial adjuntado: pedido_actual["pedido_num"] vacío es exactamente
+    # esa señal (es la única vía por la que llega a tener valor, ver
+    # comentario de pedido_num más abajo) — fase de cotización o cualquier
+    # otro estado anterior al envío real. En cuanto existe el PDF, el
+    # proveedor vuelve a quedar bloqueado y solo cambia vía upload_adjunto()
+    # al leer ese PDF — se preserva pedido_actual["proveedor_id"] sin
+    # excepción, exactamente como antes de este cambio (v12.32.35-47). Ver
+    # también create_pedido() (mismo criterio al dar de alta) y
+    # HISTORIAL.md v12.32.54.
+    if pedido_actual.get("pedido_num"):
+        proveedor_id_final = pedido_actual["proveedor_id"]
+    else:
+        proveedor_id_final = data.get("proveedor_id", pedido_actual["proveedor_id"]) or None
+        if proveedor_id_final and proveedor_id_final != pedido_actual["proveedor_id"]:
+            _prov_manual_row = query("SELECT id FROM proveedores WHERE id=%s", (proveedor_id_final,), one=True)
+            if not _prov_manual_row:
+                return jsonify({"error": "El proveedor seleccionado no existe."}), 400
+
     execute("""
         UPDATE pedidos SET
             hotel_id=%s, departamento_id=%s,
@@ -17059,11 +17104,11 @@ def update_pedido(pid):
         1 if data.get("comunicado_jefe_dep", pedido_actual["comunicado_jefe_dep"]) else 0,
         1 if data.get("parte_rotura",        pedido_actual["parte_rotura"]) else 0,
         1 if data.get("parte_ampliacion",    pedido_actual["parte_ampliacion"]) else 0,
-        # (2026-09-06, v12.32.35) proveedor_id tampoco se toma de `data`,
-        # mismo motivo que pedido_num/total_pedido más abajo: es
-        # exclusivamente automático desde este cambio, solo cambia vía
-        # upload_adjunto() al leer el PDF de pedido oficial.
-        pedido_actual["proveedor_id"],
+        # (2026-09-10) proveedor_id_final: preservado tal cual si el pedido
+        # ya tiene PDF (bloqueado, igual que antes de este cambio), o la
+        # asignación manual de `data` si todavía no lo tiene — ver bloque de
+        # cálculo justo arriba.
+        proveedor_id_final,
         data.get("observaciones", pedido_actual["observaciones"]),
         familia_id, importe, sujeto_techo, _mes_consumo_techo_val,
         data.get("plazo_entrega_dias", pedido_actual.get("plazo_entrega_dias")) or None,
@@ -19308,6 +19353,21 @@ def upload_adjunto(pid):
         # guarda el "Almacén" de cabecera, para la validación nueva de
         # ENVIADO AL PROVEEDOR en update_pedido() (comparación contra el
         # Departamento que el usuario tenga seleccionado).
+        #
+        # (2026-09-10) Antes de sobrescribir, se guarda el proveedor que
+        # hubiera en el pedido en este momento — normalmente NULL, salvo que
+        # se hubiera asignado a mano durante la fase de cotización (ver
+        # create_pedido/update_pedido, proveedor_id_manual/proveedor_id_
+        # final) — para poder avisar si el PDF trae uno DISTINTO al elegido
+        # a mano, en vez de sustituirlo en silencio sin que nadie se entere.
+        # El PDF sigue mandando siempre (misma fuente de verdad que pedido_
+        # num/total_pedido): esto es solo un aviso informativo en la
+        # respuesta, nunca bloquea ni impide la subida.
+        _proveedor_previo_row = query(
+            "SELECT p.proveedor_id, pr.nombre AS proveedor_nombre "
+            "FROM pedidos p LEFT JOIN proveedores pr ON pr.id = p.proveedor_id "
+            "WHERE p.id=%s", (pid,), one=True
+        )
         _prov_codigo_pdf  = _datos_pedido_pdf.get("proveedor_codigo")
         _prov_nombre_pdf  = _datos_pedido_pdf.get("proveedor_nombre_pdf")
         _almacen_pdf      = _datos_pedido_pdf.get("almacen_pdf")
@@ -19330,6 +19390,18 @@ def upload_adjunto(pid):
         respuesta["proveedor_reconocido"] = _prov_resuelto is not None
         respuesta["proveedor_pdf_codigo"] = _prov_codigo_pdf
         respuesta["proveedor_pdf_nombre"] = _prov_nombre_pdf
+        # (2026-09-10) Comparación informativa contra el proveedor que hubiera
+        # ANTES de esta subida (ver _proveedor_previo_row más arriba) — null
+        # si no había ninguno (caso normal, sin nada que avisar); True/False
+        # si había uno asignado a mano y coincide o no con el que acaba de
+        # traer el PDF. El frontend la usa solo para un aviso puntual
+        # (subirAdjuntos en templates/index.html), nunca para bloquear nada.
+        respuesta["proveedor_manual_previo_id"] = _proveedor_previo_row["proveedor_id"] if _proveedor_previo_row else None
+        respuesta["proveedor_manual_previo_nombre"] = _proveedor_previo_row["proveedor_nombre"] if _proveedor_previo_row else None
+        respuesta["proveedor_manual_coincide"] = (
+            None if not respuesta["proveedor_manual_previo_id"]
+            else (respuesta["proveedor_manual_previo_id"] == respuesta["proveedor_id"])
+        )
         respuesta["departamento_pdf"] = _almacen_pdf
         # (2026-09-09, v12.32.47) FIX: el email del proveedor (contacto
         # principal, con el mismo criterio "específico del hotel si existe,

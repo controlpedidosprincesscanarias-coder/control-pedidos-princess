@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.53** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.54** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -79,11 +79,18 @@ confundirse entre sí, ver más abajo):
   por hotel y proveedor. El apartado "Presupuesto" admite un único
   documento de apoyo (PDF, Word o correo) — desde v12.32.08, intentar
   adjuntar un segundo muestra un aviso flotante explicando que hay que
-  quitar el actual primero. El Proveedor ya no se busca/selecciona a
-  mano — desde v12.32.35 se lee y asigna solo al adjuntar el PDF del
-  pedido oficial en «Nº Pedido (DALI/SAP)» (igual que Nº Pedido/Total
-  Pedido); si no se reconoce en el catálogo, avisa con el código/nombre
-  leídos para verificarlo/darlo de alta en Admin → Proveedores. El
+  quitar el actual primero. El Proveedor se lee y asigna solo al
+  adjuntar el PDF del pedido oficial en «Nº Pedido (DALI/SAP)» (igual
+  que Nº Pedido/Total Pedido, desde v12.32.35) — si no se reconoce en el
+  catálogo, avisa con el código/nombre leídos para verificarlo/darlo de
+  alta en Admin → Proveedores. Desde v12.32.54, mientras el pedido
+  todavía no tiene ese PDF (fase de cotización, típicamente
+  PENDIENTE COTIZACIÓN), el campo vuelve a ser buscable/seleccionable a
+  mano — asignación provisional, para poder hacer seguimiento de
+  presupuesto y reclamación al proveedor real desde el primer momento;
+  en cuanto se adjunta el PDF, el proveedor que traiga ese documento
+  sustituye siempre al provisional y el campo vuelve a quedar de solo
+  lectura. El
   Departamento seleccionado se verifica contra el "Almacén" de ese
   mismo PDF — si no coincide, avisa y bloquea el paso a ENVIADO AL
   PROVEEDOR hasta corregirlo. Control de duplicados (v12.32.36): el Nº

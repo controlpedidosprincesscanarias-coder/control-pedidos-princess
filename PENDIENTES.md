@@ -8,6 +8,45 @@
 
 ---
 
+### Proveedor asignado a mano en la fase de cotización — entregado (v12.32.54), pendiente de probarlo en producción
+
+**Origen**: Víctor preguntó cómo gestionar que los pedidos grabados como
+PENDIENTE COTIZACIÓN (antes de que exista el PDF oficial del pedido, que
+es lo único que hasta ahora asignaba el proveedor, desde v12.32.35)
+tuvieran igualmente un proveedor, necesario para seguimiento de
+presupuesto y reclamación automática de cotización pendiente. Propuesta
+aceptada ("sí me parece buena idea"): reactivar el buscador manual de
+proveedor (código que ya existía, desconectado desde v12.32.35 "por si se
+recupera en algún caso especial") mientras el pedido no tenga todavía el
+PDF oficial — en cuanto se adjunta, el proveedor que traiga el PDF
+sustituye siempre al asignado a mano y el campo vuelve a quedar de solo
+lectura, con un aviso si el PDF trae uno distinto al provisional.
+
+**Entregado en v12.32.54**: ver `CHANGELOG.md` para el detalle completo
+(`app.py`: `create_pedido`/`update_pedido` aceptan `proveedor_id` de
+`data` solo si el pedido no tiene `pedido_num` todavía, validando que
+exista en el catálogo; `upload_adjunto` compara el proveedor previo
+contra el que trae el PDF y lo devuelve en la respuesta —
+`proveedor_manual_previo_id/nombre`, `proveedor_manual_coincide` — sin
+cambiar el criterio de que el PDF manda siempre. `templates/index.html`:
+buscador reactivado condicionalmente, `_actualizarBloqueoProveedorManual()`).
+
+**Qué falta**: no se ha podido probar contra una base de datos Postgres
+real ni contra datos reales de producción (este entorno no tiene acceso
+a ninguna de las dos) — verificado solo `python3 -m py_compile app.py` y
+`node --check` sobre los `<script>` de `index.html`, sin errores, más
+revisión manual de cada camino tocado. Falta que Víctor pruebe en
+producción: (1) crear un pedido nuevo en PENDIENTE COTIZACIÓN y asignarle
+un proveedor a mano con el buscador; (2) guardarlo y reabrirlo,
+comprobando que el proveedor persiste y el campo sigue siendo editable;
+(3) adjuntar después el PDF oficial y comprobar que el proveedor del PDF
+sustituye al provisional (con aviso si no coincide); (4) confirmar que la
+reclamación automática de cotización pendiente (job diario de alertas)
+ya encuentra proveedor y le reclama a él en vez de avisar solo a los
+compradores del hotel, como pasaba hasta ahora sin proveedor asignado.
+
+---
+
 ### Corrección retroactiva de departamento Restaurante/Bares en GY/IT/MT/TA — auditoría entregada (v12.32.53), pendiente de que Víctor la ejecute y revise
 
 **Origen**: v12.32.34 (5 septiembre 2026, ver `CHANGELOG.md`) corrigió que el

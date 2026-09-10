@@ -49,6 +49,57 @@
 
 ---
 
+## 2026-09-10 — [Control Pedidos] Proveedor asignado a mano mientras el pedido no tenga el PDF oficial (fase de cotización) (v12.32.54)
+
+- **Origen**: Víctor preguntó cómo dar proveedor a los pedidos grabados
+  como PENDIENTE COTIZACIÓN, ya que desde v12.32.35 el proveedor solo se
+  asigna al leer el PDF oficial — y esa fase, por definición, es anterior
+  a que exista ese PDF. Sin proveedor no había seguimiento de presupuesto
+  ni a quién reclamar la cotización pendiente. Propuesta aceptada ("sí me
+  parece buena idea"): reactivar el buscador manual de proveedor (código
+  ya existente, desconectado en v12.32.35 "por si se recupera en algún
+  caso especial") mientras no exista el PDF; en cuanto se adjunta, el
+  proveedor del PDF sustituye siempre al provisional.
+- **Cambios en `app.py`**: `create_pedido()`/`update_pedido()` aceptan
+  `proveedor_id` de `data` solo si el pedido no tiene `pedido_num`
+  todavía (única señal, en toda la app, de que ya existe el PDF),
+  validando que el proveedor exista en el catálogo. `upload_adjunto()`
+  (rama `pedido_doc`) sigue sobrescribiendo siempre con el proveedor del
+  PDF —sin cambios—, pero ahora compara contra el que hubiera antes y
+  devuelve `proveedor_manual_previo_id/nombre` y `proveedor_manual_coincide`
+  (informativo, nunca bloquea).
+- **Sin riesgo de saltarse el PDF**: `_validar_pedido_envio_proveedor()`
+  ya exige, independientemente del proveedor, que `pedido_num` y el
+  propio adjunto `pedido_doc` existan para llegar a ENVIADO AL PROVEEDOR
+  (puntos 1 y 2, sin cambios) — un proveedor manual de la fase de
+  cotización no puede "colar" un envío sin el PDF real.
+- **Cambios en `templates/index.html`**: se recupera el `prov-dropdown`
+  (buscador `buscarProveedor`/`seleccionarProveedor`, nunca borrado del
+  JS) y se reconecta sobre `p-proveedor-input`. Nueva
+  `_actualizarBloqueoProveedorManual(bloqueado)` alterna el campo entre
+  solo-lectura y editable, llamada en `resetForm` (siempre editable, un
+  pedido nuevo nunca tiene PDF), `poblarFormulario` (según `!!p.pedido_num`)
+  y `subirAdjuntos`/`pedido_doc` (bloqueado tras aplicar los datos del
+  PDF). Aviso nuevo si `proveedor_manual_coincide === false`.
+- **Verificación**: `py_compile` sin errores. `node --check` sobre los 8
+  `<script>` de `index.html`, extraídos con un parser HTML real (una
+  regex ingenua se confunde con la cadena "<script>" que ya aparecía
+  dentro de un comentario CSS del propio archivo) — sin errores. Revisión
+  manual de los tres caminos tocados y de `_validar_pedido_envio_proveedor()`.
+  **No probado contra PostgreSQL real ni datos de producción** — este
+  entorno no tiene acceso a ninguno de los dos; lista de comprobaciones
+  pendientes en `PENDIENTES.md`.
+- **Revisión de otros documentos (norma 5)**: `README.md` sí (párrafo de
+  Pedidos y versión actual). `PENDIENTES.md` sí — nueva entrada, entregado
+  pendiente de prueba en producción. `GUIA_DESPLIEGUE.md`,
+  `INSTRUCCIONES_RESTAURACION.md` — no aplica. `docs/hallazgo-seguridad-princess.md`
+  — no existe en este repo.
+- **Entrega**: `app.py`, `templates/index.html`, `README.md`,
+  `PENDIENTES.md`, más `CHANGELOG.md` y esta entrada. `models.py` y
+  `requirements.txt` no cambian.
+
+---
+
 ## 2026-09-09 — [Control Pedidos] Nueva auditoría puntual de solo lectura: pedidos GY/IT/MT/TA con departamento Restaurante/Bares mal asignado antes de v12.32.34 (v12.32.53)
 
 - **Origen**: pregunta pendiente desde v12.32.34, registrada en
