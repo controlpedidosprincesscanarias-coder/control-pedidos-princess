@@ -8,6 +8,33 @@
 
 ---
 
+### Rellenar la Private Key de EmailJS — entregado (v12.32.55), pendiente de que Víctor la configure en producción
+
+**Origen**: petición de cerrar sesión diaria (ya existía) y exigir código
+de verificación tras 72 horas hábiles de inactividad. Al construirlo se
+encontraron y corrigieron dos fallos de seguridad (el crítico: el enlace
+de restablecimiento de contraseña se devolvía en la respuesta pública) —
+ver `CHANGELOG.md`/`docs/HISTORIAL_CAMBIOS.md` v12.32.55 para el detalle
+completo.
+
+**Entregado en v12.32.55**: el código de verificación de login y el
+enlace de restablecimiento de contraseña ya no viajan nunca en ninguna
+respuesta HTTP — los manda directamente el servidor con la Private Key
+de EmailJS (`_enviar_emailjs_servidor()` en `app.py`), nunca el
+navegador. Nuevo campo "Private Key (envío desde servidor)" en cada una
+de las 4 tarjetas de Admin → EmailJS.
+
+**Qué falta**: mientras no se rellene la Private Key de al menos una
+cuenta (Admin → EmailJS → Cuenta 1, recomendado — ver `GUIA_DESPLIEGUE.md`
+paso 5 de la sección EmailJS, EmailJS.com → Account → API Keys), esos dos
+correos concretos NO podrán enviarse — el resto de la app sigue
+funcionando con normalidad (todo lo demás sigue usando la Public Key de
+siempre). El fallo queda solo registrado en el log de Render, sin
+reflejarse en la respuesta pública (a propósito, por seguridad). Este
+punto se retira de aquí en cuanto Víctor confirme que lo ha rellenado.
+
+---
+
 ### Proveedor asignado a mano en la fase de cotización — entregado (v12.32.54), pendiente de probarlo en producción
 
 **Origen**: Víctor preguntó cómo gestionar que los pedidos grabados como

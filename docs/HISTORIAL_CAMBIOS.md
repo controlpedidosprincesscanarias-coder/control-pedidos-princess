@@ -112,9 +112,23 @@
   correcto; test standalone del umbral de 72h hábiles contra fechas
   concretas.
 - **Revisión de otros documentos (norma 5)**: `README.md` sí (versión
-  actual). `PENDIENTES.md` — no aplica, no estaba registrado ahí.
-  `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+  actual). `PENDIENTES.md` sí — corrección tras una auditoría posterior de
+  Víctor: se había marcado "no aplica" por error; se añadió una entrada
+  nueva ("Rellenar la Private Key de EmailJS") siguiendo el mismo patrón
+  que el resto de entregas pendientes de una acción suya en producción.
+  `GUIA_DESPLIEGUE.md` sí — misma auditoría: el paso 2 (EmailJS) seguía
+  diciendo "el email se gestiona íntegramente desde el frontend", ya no
+  del todo cierto para estos dos correos; añadido el aviso y el nuevo
+  paso 5 (Private Key). `INSTRUCCIONES_RESTAURACION.md` — no aplica.
   `docs/hallazgo-seguridad-princess.md` — no existe en este repo.
+- **Nota de auditoría (2026-09-11, posterior a esta misma entrega)**:
+  Víctor pidió revisar los dos ZIPs ya desplegados (Control Pedidos
+  v12.32.55 y DALI v1.19.71) para confirmar que código y documentación
+  cuadraban. Código verificado sin hallazgos (sintaxis y `node --check`
+  limpios en ambos repos, sin fugas de `link`/`body_html`/`código` en
+  ninguna respuesta, `npm run build` de DALI limpio). Documentación: los
+  dos huecos de encima (`PENDIENTES.md` y `GUIA_DESPLIEGUE.md`) se
+  detectaron y corrigieron en esta auditoría, no en la entrega original.
 - **Pendiente**: que Víctor rellene al menos una Private Key de EmailJS
   (Admin → EmailJS) — hasta entonces, el código de login y el enlace de
   reseteo no pueden enviarse (registrado en el log del servidor, sin que

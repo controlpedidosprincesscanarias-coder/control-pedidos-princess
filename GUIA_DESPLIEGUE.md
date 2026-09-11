@@ -43,12 +43,25 @@ servicio (pedidos) ya no necesita `CHAT_DATABASE_URL` ni el worker
 > ningún punto de `app.py` a día de hoy** (verificado por búsqueda
 > completa del fichero) — puedes dejarla sin rellenar.
 
-El email se gestiona íntegramente desde el frontend vía EmailJS, sin
-necesidad de ninguna variable de entorno en Render. Desde v12.27.8 las
-credenciales **no van hardcodeadas en el frontend**: se guardan en la
-tabla `config_alertas` y el navegador las pide en cada carga a
+La mayoría de los correos (avisos de pedidos, documentación pendiente,
+firmas, etc.) se gestionan desde el frontend vía EmailJS, sin necesidad
+de ninguna variable de entorno en Render. Desde v12.27.8 las credenciales
+**no van hardcodeadas en el frontend**: se guardan en la tabla
+`config_alertas` y el navegador las pide en cada carga a
 `GET /api/emailjs/config`, así que un cambio de cuenta se aplica al
 momento, sin desplegar nada.
+
+> ⚠️ **Excepción (2026-09-11, v12.32.55):** el código de verificación de
+> login (tras 72h hábiles de inactividad) y el enlace de restablecimiento
+> de contraseña son un caso aparte — por seguridad, esos dos correos los
+> manda el propio SERVIDOR directamente (nunca el navegador), usando la
+> **Private Key** de la cuenta en vez de la Public Key. Antes, mandarlos
+> desde el navegador obligaba a devolver el código/enlace en la propia
+> respuesta de la API, visible para cualquiera que la inspeccionara — ver
+> `CHANGELOG.md` v12.32.55 y `docs/HISTORIAL_CAMBIOS.md`. Sin rellenar el
+> paso 5 de más abajo, esos dos correos concretos no podrán enviarse (se
+> registra el motivo en el log de Render, sin afectar al resto de correos
+> de la app, que siguen funcionando igual que siempre con la Public Key).
 
 1. Crea una cuenta en https://www.emailjs.com (plan gratuito: 200
    envíos/mes) y dentro, un **Service** (conecta tu Gmail/Outlook) y una
@@ -67,6 +80,17 @@ momento, sin desplegar nada.
    requerir ningún despliegue. No hace falta rellenar las 4 desde el
    principio — con solo la Cuenta 1 la app funciona igual, simplemente
    sin failover automático si esa cuenta agota su cupo.
+5. **Necesario para el código de login y el reseteo de contraseña
+   (v12.32.55):** en la misma pantalla **"EmailJS y cola de correo"**,
+   dentro de cada tarjeta de cuenta hay ahora un campo **"Private Key
+   (envío desde servidor)"**, distinto de la Public Key del paso 2.
+   Cópiala de EmailJS.com → **Account → API Keys → Private Key** (no
+   Public Key) y pégala ahí, en al menos una cuenta (recomendado:
+   Cuenta 1). No hace falta rellenarla en las 4 para que funcione — con
+   una sola cuenta completa (Public Key + Service ID + Template ID +
+   Private Key) basta; el sistema recorre el mismo ciclo de 4 cuentas
+   que ya usa para el resto de correos hasta encontrar una con la
+   Private Key rellena.
 
 ---
 
