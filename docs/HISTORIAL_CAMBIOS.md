@@ -49,6 +49,79 @@
 
 ---
 
+## 2026-09-11 — [Control Pedidos] [CRÍTICO] Enlace de restablecimiento de contraseña ya no viaja en la respuesta pública + verificación por email tras 72h hábiles de inactividad + envío server-side con Private Key (v12.32.55)
+
+- **Origen**: petición de Víctor de cerrar sesión diaria (ya existía) y
+  exigir, tras 72 horas hábiles sin login, un código de verificación por
+  email — en ambas apps del ecosistema (Control Pedidos y DALI). Al
+  construir esta pieza en Control Pedidos se encontraron dos fallos de
+  seguridad no buscados, el segundo crítico, que Víctor autorizó corregir
+  de inmediato en cada caso (AskUserQuestion).
+- **Nota sobre el número de versión**: el primer intento de entrega de
+  este trabajo se construyó por error sobre una copia local desactualizada
+  (anterior a la v12.32.54 real de "Proveedor asignable a mano en fase de
+  cotización"), lo que produjo una colisión de número de versión que
+  Víctor detectó. Se rehicieron los mismos cambios directamente sobre el
+  v12.32.54 real y se entregan aquí como v12.32.55, sin tocar ni perder el
+  cambio de "Proveedor" de esa versión.
+- **Umbral de inactividad**: `DIAS_VERIFICACION_EMAIL = 3` (días
+  naturales) sustituido por `HORAS_VERIFICACION_EMAIL = 72` (horas reales
+  desde `ultimo_login`) + nueva `_es_dia_habil()` — la exigencia se pospone
+  al siguiente día hábil si las 72h se cumplen en fin de semana. Mismo
+  criterio que el aviso visual de catálogo desactualizado ya construido en
+  DALI (v1.51 de ese repo).
+- **Hallazgo 1 (no crítico)**: el código de verificación de login lo
+  mandaba el navegador vía EmailJS con la Public Key, lo que obligaba al
+  backend a devolverlo en la respuesta de `/api/login` — visible para
+  cualquiera que la inspeccionara. Requiere ya conocer la contraseña
+  correcta, así que no es toma de control de cuenta, pero rompe el
+  propósito de la verificación. Corrección elegida por Víctor: dar a
+  Control Pedidos su propia Private Key de EmailJS para enviar ese correo
+  desde el servidor.
+- **Hallazgo 2 [CRÍTICO]**: al construir esa infraestructura de Private
+  Key se revisó si el mismo patrón aparecía en otro sitio, y apareció en
+  `solicitar_reset_password()` (`POST /api/password-reset/solicitar`,
+  público, sin sesión): devolvía el **enlace real de restablecimiento de
+  contraseña** (token válido 2h) en su respuesta JSON, con un fallback que
+  llegaba a mostrarlo EN PANTALLA si el envío por EmailJS fallaba.
+  Cualquiera que conociera o probara un username/email ajeno podía
+  quedarse con un enlace de reseteo válido para esa cuenta sin tocar su
+  email real — toma de control de cuenta completa. Mismo fallo, mismo
+  origen y mismo arreglo que el ya corregido el mismo día en DALI
+  (`recuperarAcceso`, repo `dali-sap-articulos-app`, `HISTORIAL.md` v1.52)
+  — reportado y autorizado por Víctor de inmediato.
+- **Arreglo (ambos hallazgos, un único mecanismo)**: nueva
+  `_enviar_emailjs_servidor()` en `app.py` — llama directamente a la API
+  REST de EmailJS (`api.emailjs.com/api/v1.0/email/send`) con la Private
+  Key (`accessToken`) de la cuenta activa (o la siguiente del ciclo de 4
+  que la tenga completa), sin que el navegador intervenga; best-effort, no
+  lanza si falla, solo lo registra en el log del servidor — la respuesta
+  pública nunca debe reflejar si el envío ha funcionado ni si la cuenta
+  existe. Nuevas claves `emailjs_private_key_1..4` en `config_alertas`
+  (vacías por defecto) y campo correspondiente, enmascarado, en Admin →
+  EmailJS. `login()` y `solicitar_reset_password()` ya no devuelven en
+  ningún caso el código, el enlace, ni el HTML/asunto del correo —
+  confirmado con inspección estática de todos sus `jsonify()`.
+- **Verificación**: `ast.parse` sobre `app.py`; `node --check` sobre los
+  bloques `<script>` de `index.html` (extraídos con un parser HTML real);
+  test funcional sobre el código real de `_enviar_emailjs_servidor()`
+  (extraído de `app.py` vía `ast`, no retipeado) cubriendo: sin Private
+  Key configurada, cuenta activa completa, fallback al recorrer el ciclo
+  de 4 cuentas, error HTTP de EmailJS y excepción de red — en ningún caso
+  lanza, y el contador solo se incrementa tras un envío realmente
+  correcto; test standalone del umbral de 72h hábiles contra fechas
+  concretas.
+- **Revisión de otros documentos (norma 5)**: `README.md` sí (versión
+  actual). `PENDIENTES.md` — no aplica, no estaba registrado ahí.
+  `GUIA_DESPLIEGUE.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+  `docs/hallazgo-seguridad-princess.md` — no existe en este repo.
+- **Pendiente**: que Víctor rellene al menos una Private Key de EmailJS
+  (Admin → EmailJS) — hasta entonces, el código de login y el enlace de
+  reseteo no pueden enviarse (registrado en el log del servidor, sin que
+  la respuesta pública lo refleje, por diseño).
+
+---
+
 ## 2026-09-10 — [Control Pedidos] Proveedor asignado a mano mientras el pedido no tenga el PDF oficial (fase de cotización) (v12.32.54)
 
 - **Origen**: Víctor preguntó cómo dar proveedor a los pedidos grabados

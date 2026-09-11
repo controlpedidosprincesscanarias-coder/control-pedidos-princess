@@ -1777,6 +1777,28 @@ def _auto_migrate():
                 ('emailjs_service_id_4',    '',                  'texto',  'Cuenta 4 (backup) — Service ID',       'emailjs', 18),
                 ('emailjs_template_id_4',   '',                  'texto',  'Cuenta 4 (backup) — Template ID',      'emailjs', 19),
                 ('emailjs_reinicio_fecha_4', '',                 'fecha',  'Cuenta 4 (backup) — Reinicia cupo el',     'emailjs', 20),
+                # (2026-09-11) Private Key de cada cuenta — FIX DE SEGURIDAD:
+                # hasta ahora las 4 cuentas solo llevaban credenciales "de
+                # navegador" (Public Key), suficientes para que el propio
+                # navegador de cada usuario mande el correo directamente.
+                # Dos flujos públicos (código de verificación de login y
+                # enlace de restablecimiento de contraseña) necesitaban que
+                # el correo lo mandase el NAVEGADOR de quien hace la
+                # petición sin sesión todavía, lo que obligaba a devolver el
+                # código/enlace en la respuesta JSON para que ese navegador
+                # se lo pasara a EmailJS — visible para cualquiera que
+                # mirase esa respuesta (ver HISTORIAL_CAMBIOS.md). Con la
+                # Private Key aquí, este servidor manda esos dos correos él
+                # mismo por la API REST de EmailJS (_enviar_emailjs_servidor)
+                # y el contenido sensible ya no sale nunca de aquí. Vacía
+                # por defecto — mientras no se rellene ninguna, esos 2 flujos
+                # quedan en modo "best effort" (se loguea el motivo, la
+                # respuesta pública sigue siendo genérica) hasta que se
+                # configure al menos una cuenta con su Private Key.
+                ('emailjs_private_key_1',  '',                  'texto',  'Cuenta 1 (principal) — Private Key',   'emailjs', 21),
+                ('emailjs_private_key_2',  '',                  'texto',  'Cuenta 2 (secundaria) — Private Key',  'emailjs', 22),
+                ('emailjs_private_key_3',  '',                  'texto',  'Cuenta 3 (terciaria) — Private Key',   'emailjs', 23),
+                ('emailjs_private_key_4',  '',                  'texto',  'Cuenta 4 (backup) — Private Key',      'emailjs', 24),
             ]
             for _clave, _valor, _tipo, _label, _grupo, _orden in _emailjs_defaults:
                 cur.execute("""
@@ -5284,6 +5306,10 @@ def get_config() -> dict:
         "emailjs_cuenta_activa": 1, "emailjs_contador": 0, "emailjs_umbral_cambio": 195,
         "emailjs_cambio_automatico_en": "",
         "emailjs_reinicio_fecha_1": "", "emailjs_reinicio_fecha_2": "", "emailjs_reinicio_fecha_3": "",
+        # (2026-09-11) Private Key por cuenta — envío servidor-a-servidor,
+        # ver _emailjs_defaults más arriba.
+        "emailjs_private_key_1": "", "emailjs_private_key_2": "",
+        "emailjs_private_key_3": "", "emailjs_private_key_4": "",
     }
     for k, v in defaults.items():
         cfg.setdefault(k, v)
@@ -8007,7 +8033,21 @@ def static_files(filename):
 
 # ── API Auth ───────────────────────────────────────────────────────────────────
 
-DIAS_VERIFICACION_EMAIL = 3  # a partir de cuántos días sin login se exige código por email
+HORAS_VERIFICACION_EMAIL = 72  # horas reales transcurridas desde el último login para exigir código
+# (2026-09-11) Antes: DIAS_VERIFICACION_EMAIL = 3 días NATURALES sin login,
+# comparando solo fechas de calendario (_hoy_canarias() - fecha de
+# ultimo_login), sin importar la hora exacta de cada uno. A petición de
+# Víctor, la exigencia pasa a contarse en HORAS reales transcurridas desde
+# ultimo_login (no calendario), pero solo se exige si esas 72h se cumplen
+# en día hábil — si caen en fin de semana, se pospone al primer día hábil
+# siguiente. Mismo criterio de "posponer al día hábil" que el aviso visual
+# de catálogo desactualizado en DALI. Ver _es_dia_habil() más abajo.
+
+
+def _es_dia_habil(fecha):
+    """lunes(0)..viernes(4) hábiles; sábado(5)/domingo(6) no. `fecha` es un
+    `date` (p.ej. el que devuelve `_hoy_canarias()`)."""
+    return fecha.weekday() < 5
 
 
 def _es_hash_password(valor):
@@ -8072,13 +8112,24 @@ def login():
     # No afecta al uso diario normal (la sesión ya caduca cada día y exige
     # contraseña de nuevo); esto es una capa extra solo para el caso de
     # cuentas que llevan tiempo sin usarse (vacaciones, bajas, etc.).
-    import pytz
-    dias_inactivo = None
+    #
+    # (2026-09-11) Ver el comentario grande junto a HORAS_VERIFICACION_EMAIL:
+    # ya no se cuentan "días naturales sin login" sino horas reales
+    # transcurridas desde `ultimo_login`, con la exigencia pospuesta a un
+    # día hábil si las 72h se cumplen en fin de semana. Sin ultimo_login
+    # (usuario que nunca ha entrado, o migrado antes de que existiera esta
+    # columna) se exige igual que antes, sin necesidad de calcular horas.
+    horas_inactivo = None
     if user.get("ultimo_login"):
-        dias_inactivo = (_hoy_canarias() - user["ultimo_login"].astimezone(
-            pytz.timezone("Atlantic/Canary")).date()).days
+        ultimo_login = user["ultimo_login"]
+        if ultimo_login.tzinfo is None:
+            ultimo_login = ultimo_login.replace(tzinfo=timezone.utc)
+        horas_inactivo = (datetime.now(timezone.utc) - ultimo_login).total_seconds() / 3600
 
-    requiere_verificacion = (dias_inactivo is None) or (dias_inactivo >= DIAS_VERIFICACION_EMAIL)
+    requiere_verificacion = (
+        horas_inactivo is None
+        or (horas_inactivo >= HORAS_VERIFICACION_EMAIL and _es_dia_habil(_hoy_canarias()))
+    )
 
     if requiere_verificacion and user.get("email"):
         import secrets
@@ -8099,15 +8150,12 @@ def login():
         log.info("LOGIN — verificación por email requerida para '%s' (código no logueado)", username)
 
         subject = "Código de verificación – Control de Pedidos"
-        mensaje = (
-            f"Hola {user['nombre']},\n\n"
-            f"Detectamos que hace tiempo que no accedes a Control de Pedidos. "
-            f"Por seguridad, confirma que eres tú introduciendo este código:\n\n"
-            f"    {codigo}\n\n"
-            f"Válido durante 10 minutos.\n"
-            f"Si no has sido tú, ignora este mensaje y avisa al administrador.\n\n"
-            f"Control de Pedidos · Princess Canarias"
-        )
+        # (2026-09-11) Ya no se construye una variante en texto plano: el
+        # único campo que consume la plantilla de EmailJS es `message`
+        # (ver enviarEmailJS()/loadEmailjsConfig() en templates/index.html,
+        # que documentan los campos to_email/cc/bcc/reply_to/subject/
+        # message), y ese campo siempre llevó el HTML — la variante en
+        # texto plano de aquí nunca llegó a usarse en ningún envío real.
         body_html = _email_html_simple(
             nombre=user["nombre"],
             parrafos=[
@@ -8120,21 +8168,30 @@ def login():
                 "Si no has sido tú, ignora este mensaje y avisa al administrador.",
             ],
         )
-        # (2026-08-11) Este email lo envía el navegador vía EmailJS ANTES de
-        # que exista sesión (_completar_login() aún no se ha llamado) — sin
-        # esta marca, /api/emailjs/registrar-envio lo rechazaría con 401 y
-        # el contador de envíos no se enteraría de un email que sí se envía
-        # de verdad. Ver _permite_registrar_envio_no_autenticado().
-        session["pdte_registrar_envio_email"] = True
+        # (2026-09-11) FIX DE SEGURIDAD — este correo lo mandaba antes el
+        # NAVEGADOR de quien acaba de teclear usuario/contraseña, vía
+        # EmailJS con la Public Key; para eso hacía falta devolver el
+        # código en esta misma respuesta JSON, visible para cualquiera que
+        # mirase esa respuesta (o repitiera esta petición a mano con un
+        # usuario ajeno) sin necesidad de acceder nunca al email real. Se
+        # manda ahora directamente desde este servidor con la Private Key
+        # (_enviar_emailjs_servidor) — el código ya no sale nunca de la
+        # base de datos y este proceso. Ver esa función y
+        # HISTORIAL_CAMBIOS.md.
+        enviado, motivo = _enviar_emailjs_servidor(
+            to_email=user["email"],
+            subject=subject,
+            message=body_html,
+            reply_to=user["email"],
+        )
+        if not enviado:
+            log.warning("LOGIN — código de verificación generado para '%s' pero no se pudo enviar por email: %s",
+                        username, motivo)
+
         return jsonify({
             "ok": True,
             "requiere_verificacion": True,
             "username": user["username"],
-            "email":    user.get("email", ""),
-            "nombre":   user.get("nombre", user.get("username", "")),
-            "subject":  subject,
-            "message":  mensaje,
-            "body_html": body_html,
         })
 
     if requiere_verificacion and not user.get("email"):
@@ -8400,19 +8457,43 @@ def logout():
 
 @app.route("/api/password-reset/solicitar", methods=["POST"])
 def solicitar_reset_password():
-    """El usuario introduce su username o email y recibe un enlace de reset."""
+    """
+    El usuario introduce su username o email y recibe un enlace de reset.
+
+    (2026-09-11) FIX DE SEGURIDAD CRÍTICO — antes este endpoint devolvía el
+    enlace real de restablecimiento (y el HTML con ese mismo enlace
+    embebido en un botón) directamente en la respuesta JSON, para que el
+    NAVEGADOR de quien hace la petición lo mandara por EmailJS con la
+    Public Key. Al ser un endpoint público y sin sesión, cualquiera que
+    conociera (o probara) un username/email ajeno podía leer esa respuesta
+    y quedarse con un enlace de reseteo válido para ESA cuenta durante 2
+    horas, sin tocar nunca su email real — toma de control de cuenta
+    completa, sin dejar rastro alguno para la víctima. Mismo fallo, mismo
+    origen (envío "de navegador" para un correo de autoservicio, sin forma
+    de comprobar que quien llama es el dueño legítimo) y mismo arreglo que
+    ya se corrigió en el repo hermano DALI
+    (authController.js/recuperarAcceso, HISTORIAL.md v1.52): el enlace se
+    manda AHORA siempre desde este servidor con la Private Key de EmailJS
+    (_enviar_emailjs_servidor), y la respuesta pública ya no revela ni el
+    enlace ni si la cuenta existe de verdad — mismo mensaje genérico
+    siempre, exista o no el usuario, y tanto si el envío real ha
+    funcionado como si no (ver el porqué de esto último en el docstring de
+    _enviar_emailjs_servidor).
+    """
     body    = request.get_json(silent=True) or {}
     usuario = (body.get("usuario") or "").strip().lower()
     if not usuario:
         return jsonify({"error": "Indica tu usuario o email"}), 400
 
+    MSG_GENERICO = "Si el usuario existe, recibirás un correo."
+
     user = query(
         "SELECT * FROM usuarios WHERE (username=%s OR email=%s) AND activo=1",
         (usuario, usuario), one=True
     )
-    # Siempre respuesta OK para no revelar si el usuario existe
+    # Siempre la misma respuesta para no revelar si el usuario existe
     if not user or not user.get("email"):
-        return jsonify({"ok": True, "msg": "Si el usuario existe, recibirás un correo."})
+        return jsonify({"ok": True, "msg": MSG_GENERICO})
 
     # Generar token seguro con 2 h de validez
     token    = secrets.token_urlsafe(32)
@@ -8441,28 +8522,22 @@ def solicitar_reset_password():
         boton={"texto": "Restablecer contraseña", "url": link},
         pie_extra="Este enlace es válido durante <strong>2 horas</strong>. Si no lo solicitaste, ignora este mensaje.",
     )
-    # Siempre loguear el enlace en el servidor
+    # El enlace se loguea SIEMPRE en el servidor (único sitio, aparte del
+    # correo real, donde queda visible — nunca en una respuesta HTTP).
     log.info("PASSWORD RESET solicitado por '%s' (id=%s) — enlace: %s",
              user["username"], user["id"], link)
 
-    # El envío real lo hace el frontend vía EmailJS
-    log.info("PASSWORD RESET — datos pendientes de envío vía EmailJS a '%s' (%s)", user["username"], user.get("email"))
-    # (2026-08-11) Igual que en el código de verificación de login: este
-    # email lo envía un navegador SIN sesión iniciada (nadie ha hecho
-    # login todavía — está pidiendo restablecer su contraseña). Marca de
-    # un solo uso para que /api/emailjs/registrar-envio no lo rechace con
-    # 401 y el contador cuente también estos envíos reales.
-    session["pdte_registrar_envio_email"] = True
-    return jsonify({
-        "ok":        True,
-        "sin_email": True,
-        "link":      link,
-        "email":     user.get("email", ""),
-        "nombre":    user.get("nombre", user.get("username", "")),
-        "subject":   subject,
-        "body_html": body_html,
-        "msg":       "Email pendiente de envío vía EmailJS.",
-    })
+    enviado, motivo = _enviar_emailjs_servidor(
+        to_email=user["email"],
+        subject=subject,
+        message=body_html,
+        reply_to=user["email"],
+    )
+    if not enviado:
+        log.warning("PASSWORD RESET — enlace generado para '%s' pero no se pudo enviar por email: %s",
+                    user["username"], motivo)
+
+    return jsonify({"ok": True, "msg": MSG_GENERICO})
 
 
 @app.route("/api/password-reset/validar/<token>", methods=["GET"])
@@ -20876,26 +20951,37 @@ def api_emailjs_config():
 
 def _permite_registrar_envio_no_autenticado() -> bool:
     """
-    (2026-08-11) Hay 3 flujos que envían un email REAL vía EmailJS desde un
-    navegador SIN sesión iniciada todavía — recuperación de contraseña
-    (solicitar_reset_password), código de verificación de login (login(),
-    la sesión aún no existe en ese punto: _completar_login() no se ha
-    llamado) y confirmación de Fase 2 de "solicitar acceso"
-    (solicitar_usuario_fase2(), usuario nuevo sin cuenta). Antes de este
-    fix, /api/emailjs/registrar-envio exigía sesión sin excepción — esos 3
-    envíos SÍ consumían cuota real de EmailJS pero el contador nunca se
-    enteraba, porque la llamada fallaba con 401 y el frontend se limita a
-    loguearlo en consola sin más (a propósito, para no romper el envío ya
-    hecho — ver enviarEmailJS() en templates/index.html).
+    (2026-08-11) Había 3 flujos que enviaban un email REAL vía EmailJS
+    desde un navegador SIN sesión iniciada todavía — recuperación de
+    contraseña (solicitar_reset_password), código de verificación de
+    login (login(), la sesión aún no existe en ese punto:
+    _completar_login() no se ha llamado) y confirmación de Fase 2 de
+    "solicitar acceso" (solicitar_usuario_fase2(), usuario nuevo sin
+    cuenta). Antes de este fix, /api/emailjs/registrar-envio exigía sesión
+    sin excepción — esos 3 envíos SÍ consumían cuota real de EmailJS pero
+    el contador nunca se enteraba, porque la llamada fallaba con 401 y el
+    frontend se limita a loguearlo en consola sin más (a propósito, para
+    no romper el envío ya hecho — ver enviarEmailJS() en
+    templates/index.html).
 
-    Arreglo: cada uno de esos 3 endpoints deja, justo antes de devolver los
-    datos del email pendiente de enviar por el frontend, una marca de UN
-    SOLO USO en la sesión (Flask permite `session` sin necesidad de
-    "user_id" — no exige login por sí sola). Aquí se consume con `pop`
-    (no `get`) para que no sirva más que para ese envío concreto — no es
-    una puerta abierta a incrementar el contador a voluntad desde fuera;
-    cada marca solo la puede haber puesto el propio backend, una vez, al
-    preparar un envío real.
+    Arreglo original: cada uno de esos 3 endpoints deja, justo antes de
+    devolver los datos del email pendiente de enviar por el frontend, una
+    marca de UN SOLO USO en la sesión (Flask permite `session` sin
+    necesidad de "user_id" — no exige login por sí sola). Aquí se consume
+    con `pop` (no `get`) para que no sirva más que para ese envío
+    concreto — no es una puerta abierta a incrementar el contador a
+    voluntad desde fuera; cada marca solo la puede haber puesto el propio
+    backend, una vez, al preparar un envío real.
+
+    (2026-09-11) FIX DE SEGURIDAD — de esos 3 flujos, los 2 que mandaban
+    un secreto propio del destinatario (el código de login y el enlace de
+    reseteo de contraseña) YA NO pasan por aquí: ambos se envían ahora
+    directamente desde el servidor con la Private Key
+    (_enviar_emailjs_servidor), que registra el envío llamando
+    directamente a _registrar_envio_emailjs_interno() sin pasar por HTTP
+    ni por esta comprobación de sesión. Solo queda solicitar_usuario_fase2
+    (aviso a administradores, sin ningún secreto del destinatario, ese sí
+    lo sigue mandando el navegador con la Public Key).
     """
     return bool(session.pop("pdte_registrar_envio_email", False))
 
@@ -20930,6 +21016,13 @@ def api_emailjs_registrar_envio():
     mecanismo de siempre: solo cambió _EMAILJS_MAX_CUENTAS, esta función
     ya recorría "las _EMAILJS_MAX_CUENTAS-1 restantes" en un bucle
     genérico, sin ningún número de cuentas hardcodeado.
+
+    (2026-09-11) El núcleo (contador + rotación cíclica) se extrajo a
+    _registrar_envio_emailjs_interno() para que también lo reutilice
+    _enviar_emailjs_servidor() (envío servidor-a-servidor con Private Key)
+    tras cada correo real que manda el propio backend — mismo contador
+    para los dos orígenes de envío, "de navegador" y "de servidor", o el
+    umbral/aviso de Integridad dejarían de ser fiables.
     """
     autenticado = "user_id" in session
     if autenticado and session.get("login_date") != _hoy_canarias().isoformat():
@@ -20938,6 +21031,20 @@ def api_emailjs_registrar_envio():
     if not autenticado and not _permite_registrar_envio_no_autenticado():
         return jsonify({"error": "No autenticado"}), 401
 
+    resultado = _registrar_envio_emailjs_interno()
+    return jsonify({"ok": True, **resultado})
+
+
+def _registrar_envio_emailjs_interno() -> dict:
+    """
+    Núcleo de /api/emailjs/registrar-envio (contador atómico + rotación
+    cíclica de cuentas al llegar al umbral), extraído para que también lo
+    pueda llamar directamente _enviar_emailjs_servidor() —en el mismo
+    proceso, sin un HTTP intermedio— justo después de cada correo real
+    enviado por el propio backend con la Private Key. Ver el docstring de
+    api_emailjs_registrar_envio() para el porqué e historial de esta
+    lógica; se mantiene sin cambios de comportamiento, solo movida aquí.
+    """
     db  = get_db()
     cur = db.cursor()
     cur.execute("""
@@ -20981,8 +21088,7 @@ def api_emailjs_registrar_envio():
 
     activa_final = destino if cambiada else activa
     c2 = get_config()  # releer tras el posible cambio, para devolver las credenciales correctas
-    return jsonify({
-        "ok": True,
+    return {
         "contador":      contador,
         "umbral_cambio": umbral,
         "cuenta_activa": activa_final,
@@ -20990,7 +21096,128 @@ def api_emailjs_registrar_envio():
         "public_key":    c2.get(f"emailjs_public_key_{activa_final}", "") or "",
         "service_id":    c2.get(f"emailjs_service_id_{activa_final}", "") or "",
         "template_id":   c2.get(f"emailjs_template_id_{activa_final}", "") or "",
-    })
+    }
+
+
+def _emailjs_credenciales_admin(config: dict, n: int):
+    """
+    (2026-09-11) Credenciales COMPLETAS de la cuenta N, incluida la
+    Private Key — para el envío servidor-a-servidor (_enviar_emailjs_servidor).
+    Distinto de las credenciales "de navegador" (public_key/service_id/
+    template_id, sin private_key) que ya resuelve /api/emailjs/config:
+    aquella variante es pública por diseño (viaja al navegador) y por eso
+    nunca debe incluir la Private Key; esta es solo para uso interno del
+    servidor. `None` si falta cualquiera de las 4, incluida la Private Key
+    (mismo criterio de "cuenta incompleta" que ya usaba
+    api_emailjs_registrar_envio, ampliado con este cuarto requisito).
+    """
+    public_key  = (config.get(f"emailjs_public_key_{n}")  or "").strip()
+    service_id  = (config.get(f"emailjs_service_id_{n}")  or "").strip()
+    template_id = (config.get(f"emailjs_template_id_{n}") or "").strip()
+    private_key = (config.get(f"emailjs_private_key_{n}") or "").strip()
+    if not (public_key and service_id and template_id and private_key):
+        return None
+    return {
+        "public_key": public_key, "service_id": service_id,
+        "template_id": template_id, "private_key": private_key,
+    }
+
+
+def _emailjs_resolver_credenciales_admin(config: dict, activa: int):
+    """Prueba primero la cuenta activa y, si le falta la Private Key (o
+    cualquier otro campo), recorre el resto del ciclo — mismo criterio de
+    tolerancia que ya usa _registrar_envio_emailjs_interno() para las
+    credenciales "de navegador". Devuelve (cuenta_usada, credenciales) —
+    credenciales es None si ninguna de las 4 cuentas está completa."""
+    candidato = activa
+    credenciales = _emailjs_credenciales_admin(config, candidato)
+    if credenciales:
+        return candidato, credenciales
+    for _ in range(_EMAILJS_MAX_CUENTAS - 1):
+        candidato = _emailjs_siguiente_cuenta(candidato)
+        credenciales = _emailjs_credenciales_admin(config, candidato)
+        if credenciales:
+            return candidato, credenciales
+    return activa, None
+
+
+def _enviar_emailjs_servidor(to_email: str, subject: str, message: str, reply_to: str = None,
+                              motivo_sin_configurar: str = None):
+    """
+    (2026-09-11) FIX DE SEGURIDAD — envío servidor-a-servidor por la API
+    REST de EmailJS (Private Key / `accessToken`), para los correos de
+    "autoservicio" que hasta ahora mandaba el NAVEGADOR de quien hace la
+    petición SIN sesión iniciada todavía: código de verificación de login
+    (login()) y enlace de restablecimiento de contraseña
+    (solicitar_reset_password()). Ese diseño obligaba a devolver el
+    contenido sensible (el código, o el enlace con el token real) en la
+    propia respuesta JSON para que el navegador se lo pasara a EmailJS con
+    la Public Key — visible para cualquiera que mirase esa respuesta
+    (DevTools → Red, o simplemente repitiendo la petición con curl/Postman
+    con un username/email ajeno), sin necesidad de acceder nunca al email
+    real del destinatario. Toma de control de cuenta completa en el caso
+    del reseteo de contraseña.
+
+    Mismas 4 cuentas y misma rotación cíclica que el envío "de navegador"
+    (ver _emailjs_resolver_credenciales_admin) — la única diferencia es la
+    credencial usada (Private Key en vez de Public Key) y que la llamada a
+    la API de EmailJS la hace este servidor, nunca el navegador. Mismo
+    patrón ya usado en el repo hermano DALI
+    (backend/src/services/emailjsConfig.js,
+    enviarEmailAutoservicioDesdeServidor) — mismo motivo exacto.
+
+    Best-effort a propósito: si algo falla (ninguna cuenta con Private Key
+    configurada todavía, cuota agotada, EmailJS caído, red...) NO lanza —
+    devuelve (False, motivo) para que quien llama decida (normalmente:
+    solo loguearlo, sin romper el flujo ya completado en base de datos, y
+    SIN reflejar el fallo en la respuesta pública — esa respuesta debe
+    seguir siendo idéntica tanto si el envío ha funcionado como si no, para
+    no dar pistas de qué cuentas existen o si el envío de correo está mal
+    configurado).
+    """
+    try:
+        c = get_config()
+    except Exception as e:
+        return False, f"No se pudo leer la configuración de EmailJS: {e}"
+
+    activa = _emailjs_cuenta_valida(c.get("emailjs_cuenta_activa", 1))
+    _, credenciales = _emailjs_resolver_credenciales_admin(c, activa)
+    if not credenciales:
+        return False, motivo_sin_configurar or (
+            "El envío de correo al propio usuario todavía no está configurado del todo "
+            "(Admin → EmailJS: ninguna de las 4 cuentas tiene todavía su Private Key rellena)."
+        )
+
+    template_params = {"to_email": to_email, "subject": subject, "message": message}
+    if reply_to:
+        template_params["reply_to"] = reply_to
+
+    try:
+        resp = requests.post(
+            "https://api.emailjs.com/api/v1.0/email/send",
+            json={
+                "service_id":      credenciales["service_id"],
+                "template_id":     credenciales["template_id"],
+                "user_id":         credenciales["public_key"],
+                "accessToken":     credenciales["private_key"],
+                "template_params": template_params,
+            },
+            timeout=15,
+        )
+        if resp.status_code >= 300:
+            return False, f"EmailJS respondió {resp.status_code}: {(resp.text or '')[:300]}"
+    except Exception as e:
+        return False, f"Error de red llamando a la API de EmailJS: {e}"
+
+    # Best-effort también aquí: el correo YA se ha enviado — si esto falla
+    # solo se desincroniza el contador local hasta el próximo envío que sí
+    # se registre, no tiene sentido deshacer nada.
+    try:
+        _registrar_envio_emailjs_interno()
+    except Exception as e:
+        log.warning("[EMAILJS] Correo enviado desde el servidor pero no se pudo registrar el envío: %s", e)
+
+    return True, None
 
 
 @app.route("/api/admin/config-alertas", methods=["GET"])
