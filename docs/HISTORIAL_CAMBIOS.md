@@ -49,6 +49,52 @@
 
 ---
 
+## 2026-09-14 — [Control Pedidos] Fallback a Código DALI al reconocer el proveedor del PDF oficial + corrección de un fallo real en la lectura del nombre (v12.32.56)
+
+- **Origen**: Víctor, sobre un pedido real (43372, MABECAN SIS. PROF. DE
+  LIMPIEZA SL, proveedor ya registrado en el catálogo) — al adjuntar el
+  PDF oficial salió "Proveedor con código SAP 00000150 no reconocido —
+  verifíquelo en Admin → Proveedores": "no me lee el proveedor del PDF y
+  si lo tengo registrado."
+- **Diagnóstico**: el PDF trae `PROVEEDOR 00000150` en su cabecera — ese
+  número es el **Código DALI** de MABECAN (150, con ceros a la
+  izquierda), no su Código SAP (1001270, el registrado). La función que
+  empareja el PDF con el catálogo (`_resolver_proveedor_pdf_oficial()`,
+  ver v12.32.35 más abajo) solo comprobaba `proveedores.codigo` (SAP); el
+  siguiente intento, por nombre, también falló por un segundo fallo
+  real (ver abajo) — así que el proveedor quedó sin reconocer del todo.
+  Confirmado con Víctor: estamos en plena migración de códigos DALI a
+  SAP en el catálogo de proveedores, así que el PDF puede traer uno u
+  otro según el proveedor — "Debe buscar el codigo SAP y luego DALI".
+- **Cambio 1**: si el número del PDF no coincide con ningún `codigo`
+  (SAP), se prueba también contra `codigo_dali` — tal cual y, por si
+  trae ceros a la izquierda, también sin ellos. Sigue sin crear
+  proveedores nuevos ni adivinar nada — si nada coincide, se sigue
+  avisando para revisar a mano en Admin → Proveedores.
+- **Cambio 2** (fallo real, encontrado al investigar por qué el
+  fallback por nombre tampoco funcionó): el PDF corta el nombre del
+  proveedor justo antes de su forma jurídica — "MABECAN SIS. PROF. DE
+  LIMPIEZA \nSL\nB35434166..." ("SL" en su propia línea, justo antes del
+  CIF). `_PATRON_NOMBRE_CIF_OFICIAL` esperaba nombre y CIF en líneas
+  consecutivas, así que terminaba capturando solo "SL" como nombre —
+  inútil para comparar contra el catálogo. Se añade un grupo opcional a
+  la expresión regular para esa forma jurídica en línea propia, de forma
+  que el nombre completo se reconstruya bien. Afecta a cualquier
+  proveedor cuyo nombre se corte igual en el PDF, no solo a MABECAN.
+- **Verificación**: funciones reales extraídas de `app.py` con `ast` y
+  ejecutadas contra el PDF real de Víctor con un catálogo simulado — el
+  código se lee como `00000150`, el nombre como `MABECAN SIS. PROF. DE
+  LIMPIEZA SL` (antes: `SL`), y el proveedor se resuelve por Código
+  DALI. Confirmado sin regresión: coincidencia directa por Código SAP
+  sigue funcionando, un proveedor genuinamente no registrado sigue sin
+  resolverse, y la caja "SOCIEDAD" (entidad que emite el pedido, no el
+  proveedor) se sigue descartando como candidato de nombre.
+  `python3 -m py_compile app.py`, limpio.
+- **Ficheros editados**: `app.py`, `README.md`, `templates/index.html`
+  (versión), `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-11 — [Control Pedidos] [CRÍTICO] Enlace de restablecimiento de contraseña ya no viaja en la respuesta pública + verificación por email tras 72h hábiles de inactividad + envío server-side con Private Key (v12.32.55)
 
 - **Origen**: petición de Víctor de cerrar sesión diaria (ya existía) y

@@ -1,3 +1,21 @@
+# v12.32.56 — 14 septiembre 2026
+
+🐛 El proveedor no se reconocía al adjuntar el PDF oficial de un pedido cuando SAP imprime en él el Código DALI del proveedor en vez de su Código SAP — ahora se prueba también contra el Código DALI; de paso, se corrige un fallo real en la lectura del nombre del proveedor
+
+**Caso real que lo detectó**: Víctor, pedido 43372 (MABECAN SIS. PROF. DE LIMPIEZA SL, proveedor ya registrado) — al adjuntar el PDF oficial, salió el aviso "Proveedor con código SAP 00000150 no reconocido — verifíquelo en Admin → Proveedores", pese a tener el proveedor dado de alta. "no me lee el proveedor del PDF y si lo tengo registrado."
+
+**Diagnóstico**: el PDF trae literalmente `PROVEEDOR 00000150` en su cabecera — pero ese número es el **Código DALI** de MABECAN (150, con ceros a la izquierda), no su Código SAP (1001270, el que tiene registrado en el catálogo). `_resolver_proveedor_pdf_oficial()` solo comprobaba `proveedores.codigo` (SAP); al fallar ahí, el siguiente intento (por nombre) también falló — ver el segundo hallazgo más abajo — así que el proveedor quedó sin reconocer del todo. Confirmado con Víctor (estamos en plena migración de códigos DALI a SAP en el catálogo de proveedores): "Debe buscar el codigo SAP y luego DALI".
+
+**Cambio 1 — fallback a Código DALI**: si el número del PDF no coincide con ningún `codigo` (SAP), ahora se prueba también contra `codigo_dali` — tal cual viene del PDF y, por si trae ceros a la izquierda (como en este caso, `00000150` vs `150` en el catálogo), también sin ellos. Sigue sin crear proveedores nuevos ni adivinar nada: si ninguno de los dos códigos ni el nombre coinciden, se sigue avisando para que se revise a mano en Admin → Proveedores, como hasta ahora.
+
+**Cambio 2 — fallo real en la extracción del nombre (encontrado al investigar por qué el fallback por nombre tampoco funcionó)**: el PDF corta el nombre del proveedor justo antes de su forma jurídica ("MABECAN SIS. PROF. DE LIMPIEZA \nSL\nB35434166..." — "SL" queda solo en su propia línea, justo antes del CIF). `_PATRON_NOMBRE_CIF_OFICIAL` esperaba nombre y CIF en líneas consecutivas, así que terminaba capturando solo "SL" como nombre — un candidato inútil para comparar contra el catálogo. Se añade un grupo opcional a la expresión regular para esa forma jurídica en línea propia, de forma que el nombre completo ("MABECAN SIS. PROF. DE LIMPIEZA SL") se reconstruya correctamente. Afecta a cualquier proveedor cuyo nombre se corte igual en el PDF — no solo a MABECAN.
+
+**Verificación**: extraídas las funciones reales (`_PATRON_PROVEEDOR_COD_OFICIAL`, `_PATRON_NOMBRE_CIF_OFICIAL`, `_extraer_proveedor_nombre_pdf_oficial`, `_resolver_proveedor_pdf_oficial`) del propio `app.py` con `ast` y ejecutadas contra el PDF real de Víctor (`PEDIDO 43372 TRONAS.pdf`) con un catálogo de proveedores simulado: el código se extrae como `00000150`, el nombre como `MABECAN SIS. PROF. DE LIMPIEZA SL` (antes: `SL`), y el proveedor se resuelve correctamente vía Código DALI. Comprobado además que el caso ya existente (coincidencia directa por Código SAP) sigue funcionando, que un proveedor genuinamente no registrado sigue sin resolverse (nunca se inventa nada), y que la caja "SOCIEDAD" (entidad que emite el pedido, no el proveedor) se sigue descartando correctamente como candidato de nombre. `python3 -m py_compile app.py`, limpio.
+
+**Ficheros editados**: `app.py`, `README.md`, `templates/index.html` (versión), `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.55 — 11 septiembre 2026
 
 🔒 [CRÍTICO] El enlace de restablecimiento de contraseña ya no se devuelve en la respuesta pública — arreglado el mismo fallo que se corrigió en DALI, más el resto de la verificación por email tras inactividad (72 horas hábiles) que había quedado a medias

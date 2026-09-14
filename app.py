@@ -18896,8 +18896,16 @@ _PATRON_ALMACEN_OFICIAL = re.compile(r'\bAlmac[ée]n\s+([^\n]+)')
 # código: si no encuentra un candidato claro, devuelve None y el proveedor
 # queda sin nombre descriptivo (pero el código, que es lo que de verdad se
 # usa para emparejar con el catálogo, no depende de esto).
+# (2026-09-14) Grupo 2 opcional: cubre el caso real de MABECAN (pedido
+# 43372), donde la forma jurídica queda sola en su propia línea justo
+# antes del CIF ("MABECAN SIS. PROF. DE LIMPIEZA \nSL\nB35434166..." —
+# confirmado con el PDF real) — sin este grupo, el nombre capturado
+# terminaba siendo solo "SL" (la línea más corta que hace encajar el
+# resto del patrón), en vez del nombre completo de la empresa.
 _PATRON_NOMBRE_CIF_OFICIAL = re.compile(
-    r'([A-ZÁÉÍÓÚÑÜ][A-ZÁÉÍÓÚÑÜ0-9 .,&\-]{2,80}?)\s*\n\s*([A-Z]\d{7,9})'
+    r'([A-ZÁÉÍÓÚÑÜ][A-ZÁÉÍÓÚÑÜ0-9 .,&\-]{2,80}?)'
+    r'(?:\s*\n\s*([A-ZÁÉÍÓÚÑÜ.]{1,8}))?'
+    r'\s*\n\s*([A-Z]\d{7,9})'
 )
 
 # (2026-09-06, v12.32.38) A petición de Víctor, a partir del mismo PDF de
@@ -19026,6 +19034,9 @@ def _extraer_proveedor_nombre_pdf_oficial(texto: str):
     ninguno (el PDF no tiene por qué traer un candidato reconocible)."""
     for m in _PATRON_NOMBRE_CIF_OFICIAL.finditer(texto):
         nombre = m.group(1).strip()
+        sufijo_forma_juridica = (m.group(2) or "").strip()
+        if sufijo_forma_juridica:
+            nombre = f"{nombre} {sufijo_forma_juridica}"
         resto = texto[m.end():m.end() + 20].lstrip()
         if resto.startswith("SOCIEDAD"):
             continue
@@ -19042,6 +19053,19 @@ def _resolver_proveedor_pdf_oficial(proveedor_codigo, proveedor_nombre_pdf):
     ya usados en la comparación de listados SAP) — cubre el caso de un
     proveedor ya dado de alta en el catálogo sin su código SAP relleno.
 
+    (2026-09-14, v12.32.56) A petición de Víctor, tras un caso real
+    (MABECAN, pedido 43372): mientras dura la migración de códigos DALI a
+    códigos SAP, el campo "PROVEEDOR <número>" del PDF oficial puede traer
+    uno u otro según el proveedor — para MABECAN traía su Código DALI
+    (150, impreso como "00000150") en vez de su Código SAP (1001270), y
+    la búsqueda solo probaba contra `codigo` (SAP). Ahora, si el código
+    SAP no encuentra nada, se prueba también contra `codigo_dali` — con el
+    número tal cual lo trae el PDF y, por si acaso viene con ceros a la
+    izquierda (como en este caso: "00000150" vs "150" en el catálogo), con
+    esos ceros quitados también. Confirmado con Víctor: "Debe buscar el
+    codigo SAP y luego DALI, estamos inmersos en un cambio de base de DALI
+    a SAP."
+
     Devuelve la fila completa de `proveedores` (dict) si lo encuentra, o
     None si no — nunca crea un proveedor nuevo: eso queda para que el
     admin lo verifique y dé de alta a mano en Admin → Proveedores, a
@@ -19049,6 +19073,13 @@ def _resolver_proveedor_pdf_oficial(proveedor_codigo, proveedor_nombre_pdf):
     """
     if proveedor_codigo:
         fila = query("SELECT * FROM proveedores WHERE codigo=%s AND activo=1", (proveedor_codigo,), one=True)
+        if fila:
+            return row_to_dict(fila)
+        codigo_sin_ceros = proveedor_codigo.lstrip("0") or "0"
+        fila = query(
+            "SELECT * FROM proveedores WHERE activo=1 AND (codigo_dali=%s OR codigo_dali=%s)",
+            (proveedor_codigo, codigo_sin_ceros), one=True
+        )
         if fila:
             return row_to_dict(fila)
     if proveedor_nombre_pdf:
