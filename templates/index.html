@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.57
+          V 12.32.58
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5701,6 +5701,27 @@ function _normalizarTextoGenericoJs(s) {
   return s.toUpperCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/\s+/g, ' ').trim();
 }
 
+// (2026-09-14) Replica en JS de _resolver_departamento_almacen_pdf() en
+// app.py -- bug real: pedido 43372, hotel FV. El Almacen del PDF trae
+// "RESTAURANTE / BODEGA (Food Market)" o "BAR SALON (Discoteca...)", que
+// nunca coinciden literalmente (ni por inclusion) con el nombre del
+// departamento -- el departamento correcto depende del hotel (ver
+// HOTELES_RESTAURANTE_BARES_SEPARADOS mas arriba: para la mayoria de
+// hoteles es el combinado "RESTAURANTE & BARES"; para GY/IT/MT/TA son dos
+// departamentos separados). Se resuelve primero a ese nombre esperado; si
+// no es ninguno de estos dos casos conocidos, devuelve null y el llamador
+// sigue con la comparacion de texto de siempre (funciona bien para
+// ECONOMATO, COCINA... que si coinciden literalmente).
+function _resolverDepartamentoAlmacenPdfJs(almacenPdf, hotelId) {
+  if (!almacenPdf) return null;
+  const norm = _normalizarTextoGenericoJs(almacenPdf);
+  const hotel = (G.maestros.hoteles || []).find(h => String(h.id) === String(hotelId));
+  const separado = !!hotel && HOTELES_RESTAURANTE_BARES_SEPARADOS.has(hotel.codigo);
+  if (norm.startsWith('RESTAURANTE')) return separado ? 'RESTAURANTE' : 'RESTAURANTE & BARES';
+  if (norm.startsWith('BAR SALON')) return separado ? 'BARES' : 'RESTAURANTE & BARES';
+  return null;
+}
+
 // (2026-09-06, v12.32.40) Alias explícitos de nombre de HOTEL/CENTRO —
 // réplica en JS de _ALIAS_NOMBRE_HOTEL_PDF en app.py (ver comentario
 // allí para el porqué: el PDF SAP de LA PALMA trae "TENEGUIA" intercalado
@@ -5764,9 +5785,20 @@ function _mostrarAvisoProveedorPdf(info) {
   // PDF en JS, tanto si se llama justo tras subir el PDF como al reabrir
   // un pedido ya existente (poblarFormulario).
   if (info.departamento_pdf) {
-    const normPdf = _normalizarTextoGenericoJs(info.departamento_pdf);
+    // (2026-09-14) Ver _resolverDepartamentoAlmacenPdfJs mas arriba (bug
+    // pedido 43372, hotel FV): RESTAURANTE/BODEGA y BAR SALON se resuelven
+    // primero al nombre de departamento esperado segun el hotel; el resto
+    // de almacenes sigue con la comparacion de texto de siempre.
+    const _hotelIdInfo = document.getElementById('p-hotel') ? document.getElementById('p-hotel').value : '';
+    const _esperadoInfo = _resolverDepartamentoAlmacenPdfJs(info.departamento_pdf, _hotelIdInfo);
     const normDep = _normalizarTextoGenericoJs(info.departamento_nombre_actual || '');
-    const coincide = !!normDep && (normPdf === normDep || normPdf.includes(normDep) || normDep.includes(normPdf));
+    let coincide;
+    if (_esperadoInfo) {
+      coincide = normDep === _normalizarTextoGenericoJs(_esperadoInfo);
+    } else {
+      const normPdf = _normalizarTextoGenericoJs(info.departamento_pdf);
+      coincide = !!normDep && (normPdf === normDep || normPdf.includes(normDep) || normDep.includes(normPdf));
+    }
     if (!coincide) {
       avisos.push(
         `⚠️ El Departamento seleccionado («${esc(info.departamento_nombre_actual || 'ninguno')}») no coincide `
@@ -6563,9 +6595,20 @@ async function savePedido() {
     if (_almacenPdf) {
       const _deptoSel = document.getElementById('p-depto');
       const _deptoNombreActual = (_deptoSel && _deptoSel.selectedOptions.length) ? _deptoSel.selectedOptions[0].textContent.trim() : '';
-      const _normPdf = _normalizarTextoGenericoJs(_almacenPdf);
-      const _normDep = _normalizarTextoGenericoJs(_deptoNombreActual);
-      const _coincideDepto = !!_normDep && (_normPdf === _normDep || _normPdf.includes(_normDep) || _normDep.includes(_normPdf));
+      // (2026-09-14) Ver _resolverDepartamentoAlmacenPdfJs (bug pedido
+      // 43372, hotel FV): RESTAURANTE/BODEGA y BAR SALON se resuelven antes
+      // al nombre de departamento esperado segun el hotel seleccionado; el
+      // resto de almacenes sigue con la comparacion de texto de siempre.
+      const _hotelIdSelDepto = document.getElementById('p-hotel') ? document.getElementById('p-hotel').value : '';
+      const _esperadoDepto = _resolverDepartamentoAlmacenPdfJs(_almacenPdf, _hotelIdSelDepto);
+      let _coincideDepto;
+      if (_esperadoDepto) {
+        _coincideDepto = _normalizarTextoGenericoJs(_deptoNombreActual) === _normalizarTextoGenericoJs(_esperadoDepto);
+      } else {
+        const _normPdf = _normalizarTextoGenericoJs(_almacenPdf);
+        const _normDep = _normalizarTextoGenericoJs(_deptoNombreActual);
+        _coincideDepto = !!_normDep && (_normPdf === _normDep || _normPdf.includes(_normDep) || _normDep.includes(_normPdf));
+      }
       if (!_coincideDepto) {
         showFormAlert(
           `El Departamento seleccionado («${_deptoNombreActual || 'ninguno'}») no coincide con el Almacén `

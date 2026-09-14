@@ -49,6 +49,45 @@
 
 ---
 
+## 2026-09-14 — [Control Pedidos] Departamento vs. Almacén del PDF: RESTAURANTE/BODEGA y BAR SALON ahora se resuelven según el hotel (v12.32.58)
+
+- **Origen**: Víctor, mismo pedido 43372 (hotel FV), ya con el proveedor
+  reconocido tras v12.32.56 — al intentar pasar a ENVIADO AL PROVEEDOR
+  seguía bloqueado: "ahora si detecta el proveedor, pero el departamento
+  no, este Hotel «Fuerteventura Princess» es de los que están juntos
+  RESTAURANTE & BARES, debería asociar RESTAURANTE / BODEGA a «RESTAURANTE
+  & BARES»."
+- **Diagnóstico**: la comparación Departamento vs. Almacén (v12.32.35) es
+  de texto literal (igualdad/inclusión) — funciona para ECONOMATO, COCINA,
+  etc., pero nunca puede funcionar para "RESTAURANTE / BODEGA (Food
+  Market)" ni "BAR SALON (Discoteca...)", porque el departamento correcto
+  depende del hotel (combinado en la mayoría, separado en GY/IT/MT/TA) y
+  ninguno de los dos textos contiene al otro literalmente. Mismo origen que
+  el bug ya corregido en v12.32.34 para el listado detallado de SAP
+  (`_resolver_departamento_sap`), pero en un camino de código distinto (el
+  PDF de pedido oficial), sin corregir hasta ahora.
+- **Cambio**: nueva `_resolver_departamento_almacen_pdf()` (`app.py`, mismo
+  criterio dependiente del hotel que `_resolver_departamento_sap`) y su
+  réplica en JS `_resolverDepartamentoAlmacenPdfJs()`
+  (`templates/index.html`) — aplicadas en la validación real que bloquea
+  ENVIADO AL PROVEEDOR, en el campo informativo `departamento_coincide`, y
+  en el aviso persistente y la validación del botón en el frontend. Para
+  cualquier Almacén no reconocido (ECONOMATO, COCINA...) el comportamiento
+  no cambia.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` del
+  bloque de JS afectado, ambos limpios. Funciones reales extraídas de los
+  propios ficheros (sin reimplementarlas) y ejecutadas contra el texto real
+  de Almacén del PDF de Víctor ("RESTAURANTE  / BODEGA (Food Market)",
+  confirmado extrayendo el PDF): FV resuelve "RESTAURANTE & BARES"
+  (coincide), GY resuelve "RESTAURANTE" a secas y confirma que el
+  combinado NO coincide para GY, y ECONOMATO no cambia de comportamiento.
+- **Norma 5 (otros documentos)**: no aplica, cambio de validación puntual
+  sin implicaciones de despliegue ni pendiente relacionado.
+- **Ficheros**: `app.py`, `templates/index.html`, `README.md`,
+  `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-14 — [Control Pedidos] Botón "Reactivar" también para filas "paradas" sin descartar, en la cola de correos de sistema (v12.32.57)
 
 - **Origen**: Víctor, tras un corte de cupo de EmailJS (413) que dejó

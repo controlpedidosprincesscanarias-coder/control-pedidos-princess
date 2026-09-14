@@ -1,3 +1,19 @@
+# v12.32.58 — 14 septiembre 2026
+
+🐛 El proveedor ya se reconocía del PDF oficial (v12.32.56), pero el Departamento seguía bloqueado como "no coincide" para los almacenes RESTAURANTE/BODEGA y BAR SALON — nunca coincidían literalmente con "RESTAURANTE & BARES"
+
+**Caso real que lo detectó**: Víctor, mismo pedido 43372 (hotel FV — Fuerteventura Princess), ya con el proveedor correctamente reconocido tras la v12.32.56 — al intentar pasar a ENVIADO AL PROVEEDOR salió "El Departamento seleccionado («RESTAURANTE & BARES») no coincide con el Almacén indicado en el PDF del pedido oficial («RESTAURANTE / BODEGA (Food Market)»). Corrija el Departamento antes de continuar." pese a que RESTAURANTE & BARES es justo el departamento combinado que corresponde a FV. Víctor: "ahora si detecta el proveedor, pero el departamento no, este Hotel «Fuerteventura Princess» es de los que están juntos RESTAURANTE & BARES, debería asociar RESTAURANTE / BODEGA a «RESTAURANTE & BARES»."
+
+**Diagnóstico**: la comprobación de "Departamento vs. Almacén del PDF" (v12.32.35) compara el texto del Almacén tal cual contra el nombre del departamento, por igualdad o inclusión de subcadena — funciona bien para almacenes como ECONOMATO o COCINA, cuyo texto ya coincide literalmente con el nombre del departamento, pero nunca puede funcionar para "RESTAURANTE / BODEGA (Food Market)" ni "BAR SALON (Discoteca...)", porque el nombre correcto del departamento depende del HOTEL (RESTAURANTE & BARES combinado en la mayoría de hoteles; RESTAURANTE y BARES por separado solo en GY/IT/MT/TA) y ninguno de los dos textos contiene literalmente al otro. Es el mismo problema, con el mismo origen, que ya se corrigió en v12.32.34 para el listado detallado de SAP (`_resolver_departamento_sap`) — pero esa corrección vive en un camino de código totalmente distinto (el listado de SAP, no el PDF de pedido oficial), así que el bug seguía sin corregir aquí.
+
+**Cambio**: nueva `_resolver_departamento_almacen_pdf(almacen_pdf, hotel_codigo)` en `app.py`, con el mismo criterio dependiente del hotel que `_resolver_departamento_sap`: reconoce los textos "RESTAURANTE..." y "BAR SALON..." y devuelve el nombre de departamento esperado según el hotel; para cualquier otro Almacén devuelve `None` y se mantiene la comparación de texto de siempre, sin cambios. Se aplica en los tres sitios que comparaban Departamento vs. Almacén: la validación real que bloquea ENVIADO AL PROVEEDOR (`_validar_pedido_envio_proveedor`, bloque 0c), el campo informativo `departamento_coincide` de la respuesta al subir el PDF, y su réplica en JS (`_resolverDepartamentoAlmacenPdfJs`, usada en el aviso persistente `_mostrarAvisoProveedorPdf` y en la validación del botón de cambio de estado).
+
+**Verificación**: `python3 -m py_compile app.py` limpio; `node --check` sobre el bloque de JS que contiene el cambio, limpio. Extraídas las funciones reales (`_resolver_departamento_almacen_pdf` y `_resolverDepartamentoAlmacenPdfJs`) de los propios `app.py`/`templates/index.html` (sin reimplementarlas) y ejecutadas con el texto real de Almacén del PDF de Víctor ("RESTAURANTE  / BODEGA (Food Market)", con doble espacio, confirmado extrayendo el PDF real): para hotel FV resuelve "RESTAURANTE & BARES" (coincide, como debe); para un hotel con Restaurante/Bares separados (GY) resuelve "RESTAURANTE" a secas, y confirma que "RESTAURANTE & BARES" en GY sigue sin coincidir (ese departamento combinado no existe para esos 4 hoteles); para BAR SALON, igual criterio con BARES; y para un almacén no afectado (ECONOMATO) el resultado no cambia respecto a antes.
+
+**Ficheros editados**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.57 — 14 septiembre 2026
 
 🔁 Botón "Reactivar" añadido directamente a las filas "paradas" de la cola de correos de sistema, sin tener que descartarlas antes

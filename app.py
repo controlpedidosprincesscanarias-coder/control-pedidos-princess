@@ -268,6 +268,46 @@ def _resolver_departamento_sap(codigo: str, hotel_codigo: str) -> str:
         return "BARES" if separado else "RESTAURANTE & BARES"
     return _SAP_DEPARTAMENTO_MAP.get(codigo)
 
+# (2026-09-14) Equivalente a _resolver_departamento_sap() de arriba, pero
+# para el "Almacén" de texto libre leído del PDF oficial de pedido (ver
+# _PATRON_ALMACEN_OFICIAL/_parsear_pdf_pedido_oficial), no del código
+# numérico del listado detallado de SAP — son dos fuentes distintas del
+# mismo dato, leídas por dos funciones distintas, que hasta ahora no
+# compartían este criterio dependiente del hotel.
+#
+# Bug real reportado por Víctor (pedido 43372, hotel FV — Fuerteventura
+# Princess, uno de los hoteles con departamento combinado): el PDF trae
+# "Almacén RESTAURANTE  / BODEGA (Food Market)" (confirmado con el PDF
+# real, con doble espacio antes de la barra) y el Departamento correcto
+# para FV es el combinado "RESTAURANTE & BARES" — pero la comprobación de
+# 0c (ver _validar_pedido_envio_proveedor) comparaba ese texto tal cual,
+# normalizado, contra el nombre del departamento por igualdad/inclusión de
+# subcadena, y ninguno de los dos contiene literalmente al otro. Resultado:
+# bloqueaba con "No coincide" SIEMPRE para estos dos almacenes, en TODOS
+# los hoteles, aunque el departamento elegido fuera el correcto — mismo
+# origen que el bug ya corregido en _resolver_departamento_sap() (v12.32.34),
+# aquí sin corregir porque es un camino de código totalmente distinto (el
+# Almacén del PDF nunca pasó por _SAP_DEPARTAMENTO_MAP/_resolver_departamento_sap,
+# que solo se usa para el listado detallado de SAP, una función separada).
+#
+# Solo reconoce los dos casos vistos en un PDF real — el mismo par de
+# textos que _SAP_DEPARTAMENTO_MAP documenta para los códigos
+# 00000100/00000301 ("RESTAURANTE / ... BODEGA (Food Market)" y "BAR SALON
+# (Discoteca, ...)"). Para cualquier otro Almacén (ECONOMATO, COCINA,
+# PISOS...) devuelve None y el llamador sigue con la comparación de texto
+# de siempre, sin cambios — esos ya coinciden literalmente con el nombre
+# del departamento.
+def _resolver_departamento_almacen_pdf(almacen_pdf: str, hotel_codigo: str) -> str:
+    if not almacen_pdf:
+        return None
+    norm = _normalizar_texto_generico(almacen_pdf)
+    separado = hotel_codigo in _HOTELES_RESTAURANTE_BARES_SEPARADOS
+    if norm.startswith("RESTAURANTE"):
+        return "RESTAURANTE" if separado else "RESTAURANTE & BARES"
+    if norm.startswith("BAR SALON"):
+        return "BARES" if separado else "RESTAURANTE & BARES"
+    return None
+
 def _auditoria_departamento_restaurante_bares_gy_it_mt_ta() -> dict:
     """
     (2026-09-09, v12.32.53) Auditoría de SOLO LECTURA — a petición de
@@ -16791,9 +16831,26 @@ def _validar_pedido_envio_proveedor(pedido_actual, pid, departamento_id, hotel_i
     if _almacen_pdf_val:
         _depto_row = query("SELECT nombre FROM departamentos WHERE id=%s", (departamento_id,), one=True) if departamento_id else None
         _depto_nombre_val = _depto_row["nombre"] if _depto_row else None
-        _norm_pdf = _normalizar_texto_generico(_almacen_pdf_val)
-        _norm_dep = _normalizar_texto_generico(_depto_nombre_val or "")
-        _coincide = bool(_norm_dep) and (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
+        # (2026-09-14) Caso MABECAN/pedido 43372, hotel FV: para "RESTAURANTE
+        # / BODEGA (Food Market)" y "BAR SALON (Discoteca...)" el nombre del
+        # departamento correcto depende del hotel (ver
+        # _resolver_departamento_almacen_pdf) y nunca coincide de forma
+        # literal con el texto del PDF — se resuelve primero al nombre de
+        # departamento esperado y solo si no es ninguno de esos dos casos
+        # conocidos se cae a la comparación de texto de siempre (v12.32.35),
+        # que sigue funcionando igual para el resto de almacenes (ECONOMATO,
+        # COCINA...).
+        _hotel_row_cod = query("SELECT codigo FROM hoteles WHERE id=%s", (hotel_id,), one=True) if hotel_id else None
+        _hotel_codigo_val = _hotel_row_cod["codigo"] if _hotel_row_cod else None
+        _depto_esperado = _resolver_departamento_almacen_pdf(_almacen_pdf_val, _hotel_codigo_val)
+        if _depto_esperado:
+            _coincide = bool(_depto_nombre_val) and (
+                _normalizar_texto_generico(_depto_nombre_val) == _normalizar_texto_generico(_depto_esperado)
+            )
+        else:
+            _norm_pdf = _normalizar_texto_generico(_almacen_pdf_val)
+            _norm_dep = _normalizar_texto_generico(_depto_nombre_val or "")
+            _coincide = bool(_norm_dep) and (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
         if not _coincide:
             errores_envio.append(
                 f"El Departamento seleccionado (« {_depto_nombre_val or 'ninguno'} ») no coincide con el "
@@ -19545,9 +19602,25 @@ def upload_adjunto(pid):
             )
             _depto_actual_nombre = _depto_actual["nombre"] if _depto_actual else None
             if _depto_actual_nombre:
-                _norm_pdf = _normalizar_texto_generico(_almacen_pdf)
-                _norm_dep = _normalizar_texto_generico(_depto_actual_nombre)
-                respuesta["departamento_coincide"] = (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
+                # (2026-09-14) Mismo criterio dependiente del hotel que en 0c
+                # de _validar_pedido_envio_proveedor — ver
+                # _resolver_departamento_almacen_pdf. Esta comparación es
+                # solo informativa (nunca bloquea, el frontend ni siquiera la
+                # usa hoy — recalcula lo mismo por su cuenta en
+                # _mostrarAvisoProveedorPdf), pero se mantiene coherente con
+                # la validación real para no dejar un segundo criterio
+                # obsoleto en el propio backend.
+                _hotel_row_cod2 = query("SELECT codigo FROM hoteles WHERE id=%s", (pedido["hotel_id"],), one=True) if pedido.get("hotel_id") else None
+                _hotel_codigo_val2 = _hotel_row_cod2["codigo"] if _hotel_row_cod2 else None
+                _depto_esperado2 = _resolver_departamento_almacen_pdf(_almacen_pdf, _hotel_codigo_val2)
+                if _depto_esperado2:
+                    respuesta["departamento_coincide"] = (
+                        _normalizar_texto_generico(_depto_actual_nombre) == _normalizar_texto_generico(_depto_esperado2)
+                    )
+                else:
+                    _norm_pdf = _normalizar_texto_generico(_almacen_pdf)
+                    _norm_dep = _normalizar_texto_generico(_depto_actual_nombre)
+                    respuesta["departamento_coincide"] = (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
         # (2026-09-06, v12.32.38) Misma comparación inmediata, pero de Hotel
         # vs. HOTEL/CENTRO leído del PDF — a petición de Víctor: "¿se
         # verifica que el hotel es el correcto contra el PDF subido? También
