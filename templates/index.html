@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.58
+          V 12.32.59
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -10397,6 +10397,46 @@ async function _reactivarEmailAtascado(id) {
   } catch (_) {}
 }
 
+// (2026-09-14) Ver api_emails_sistema_pendientes_detalle en app.py -- busca
+// UNA fila de la cola por id (pendiente o ya enviada) y la muestra tal
+// cual, para diagnosticar sin consola de SQL (Render Free). Un id vacio se
+// ignora sin llamar a la API.
+async function _buscarEmailSistemaPorId() {
+  const input = document.getElementById('buscar-email-sistema-id');
+  const cont = document.getElementById('buscar-email-sistema-resultado');
+  if (!input || !cont) return;
+  const id = input.value.trim();
+  if (!id) return;
+  cont.innerHTML = 'Buscando...';
+  try {
+    const r = await api(`/api/admin/emails-sistema-pendientes/${id}`);
+    if (!r || !r.ok) {
+      cont.innerHTML = `<span style="color:#dc3545">${esc((r && r.error) || 'No encontrado.')}</span>`;
+      return;
+    }
+    const f = r.fila;
+    const asuntoTxt = f.asunto ? esc(f.asunto) : '<span style="color:#dc3545">(vacío)</span>';
+    const cuerpoTxt = f.longitud_cuerpo_html > 0
+      ? `${f.longitud_cuerpo_html} caracteres — inicio: "${esc(f.cuerpo_html)}${f.longitud_cuerpo_html > 500 ? '…' : ''}"`
+      : '<span style="color:#dc3545">(vacío)</span>';
+    cont.innerHTML = `
+      <table style="border-collapse:collapse;width:100%">
+        <tr><td style="padding:2px 8px 2px 0;color:#888">evento_codigo</td><td><b>${esc(f.evento_codigo || '')}</b></td></tr>
+        <tr><td style="padding:2px 8px 2px 0;color:#888">destinatario</td><td>${esc(f.destinatario || '')}</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;color:#888">cc_emails</td><td>${esc(f.cc_emails || '—')}</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;color:#888">asunto</td><td>${asuntoTxt}</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;color:#888">cuerpo_html</td><td>${cuerpoTxt}</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;color:#888">pedido_id</td><td>${f.pedido_id ?? '—'}</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;color:#888">reply_to</td><td>${esc(f.reply_to || '—')}</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;color:#888">enviado</td><td>${f.enviado ? `Sí — ${esc(f.enviado_en || '')}` : 'No'}</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;color:#888">intentos</td><td>${f.intentos}</td></tr>
+        <tr><td style="padding:2px 8px 2px 0;color:#888">creado_en</td><td>${esc(f.creado_en || '')}</td></tr>
+      </table>`;
+  } catch (e) {
+    cont.innerHTML = `<span style="color:#dc3545">Error de conexión buscando la fila.</span>`;
+  }
+}
+
 async function saveConfigAlertas() {
   // (2026-08-29) Acotado a los inputs de ESTA vista (antes buscaba en todo
   // el documento) — ahora que "Techo de gastos" y "EmailJS y cola de
@@ -10563,6 +10603,35 @@ async function loadEmailjsConfig() {
             minutos. Puedes descartar cualquiera a mano ahora mismo, sin esperar.
           </div>
           <div id="emailjs-atascados-list"></div>
+        </div>
+
+        <!-- (2026-09-14) Buscador de una fila por id, YA este pendiente o ya
+             enviada -- a peticion de Victor, tras investigar un correo real
+             de "Cambio de estado" que llego sin asunto ni contenido. En
+             Render Free no hay consola de SQL para consultar la tabla
+             emails_sistema_pendientes directamente, y el log de acceso de
+             Render solo revela el id de la fila (la linea de
+             "marcar-enviado"), no su contenido -- ver
+             api_emails_sistema_pendientes_detalle en app.py. Este pequeno
+             buscador reutiliza la misma sesion de admin ya abierta en el
+             navegador para completar el diagnostico sin herramientas
+             externas, y queda aqui para la proxima vez que haga falta. -->
+        <div style="margin-top:14px;padding:10px 12px;background:#f5f8ff;border:1px solid #cddcf5;border-radius:8px">
+          <div style="font-weight:700;font-size:12px;color:#1a3c6e;margin-bottom:6px">
+            🔍 Buscar correo de esta cola por id (pendiente o ya enviado)
+          </div>
+          <div style="font-size:10.5px;color:#888;margin-bottom:8px">
+            El id se ve en el log de Render, en la linea
+            <code>POST /api/emails-sistema-pendientes/&lt;ID&gt;/marcar-enviado</code>
+            que confirma que el navegador ya lo envio de verdad por EmailJS.
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="number" id="buscar-email-sistema-id" placeholder="Id (p.ej. 578)"
+                   style="width:140px;padding:5px 8px;border:1px solid #cddcf5;border-radius:5px;font-size:12px"
+                   onkeydown="if(event.key==='Enter') _buscarEmailSistemaPorId();">
+            <button class="btn btn-ghost btn-sm" onclick="_buscarEmailSistemaPorId()">Buscar</button>
+          </div>
+          <div id="buscar-email-sistema-resultado" style="margin-top:8px;font-size:11.5px"></div>
         </div>
       </div>`;
     body.innerHTML = html;

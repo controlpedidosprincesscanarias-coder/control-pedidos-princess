@@ -1,3 +1,17 @@
+# v12.32.59 — 14 septiembre 2026
+
+🔍 Nuevo buscador de una fila de la cola de correos de sistema por id (pendiente o ya enviada) — para diagnosticar sin consola de SQL en Render Free
+
+**Caso real que lo motivó**: Víctor encontró en Gmail un correo real, enviado y sin errores, pero completamente en blanco — "(sin asunto)" y sin contenido, solo el pie de "Email sent via EmailJS.com". Preguntó cómo averiguar por qué. El envío real lo hace el navegador directamente contra EmailJS (no nuestro servidor), así que el log de Render no tiene el contenido del correo — pero sí la línea `POST /api/emails-sistema-pendientes/<ID>/marcar-enviado`, que confirma el momento exacto en que se despachó y revela el id de la fila en `emails_sistema_pendientes`. Con ese id (578, encontrado así) hacía falta consultar la fila para ver su `evento_codigo` y diagnosticar el origen real — pero Víctor confirmó: "estamos en Render Free", sin consola de SQL para consultarla directamente.
+
+**Cambio**: nuevo endpoint `GET /api/admin/emails-sistema-pendientes/<id>` (`app.py`) — a diferencia de `api_emails_sistema_atascados` (que solo lista `enviado=FALSE`), devuelve CUALQUIER fila por id, esté pendiente o ya enviada, con todas sus columnas relevantes para diagnosticar (`evento_codigo`, `destinatario`, `asunto`, `cc_emails`, `pedido_id`, `reply_to`, `intentos`, `enviado`/`enviado_en`, y los primeros 500 caracteres de `cuerpo_html` junto con su longitud total). Solo admin, misma sesión ya abierta en el navegador — sin necesitar herramientas externas. Se añade también un pequeño buscador en el panel Admin → Config. Avisos → "Cola de correos de sistema pendientes" (`templates/index.html`, `_buscarEmailSistemaPorId`) para pegar el id y ver el resultado sin construir la URL a mano — queda ahí de forma permanente para la próxima vez que haga falta este mismo diagnóstico.
+
+**Verificación**: `python3 -m py_compile app.py` limpio; `node --check` sobre el bloque de JS que contiene la nueva función, limpio.
+
+**Ficheros editados**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.58 — 14 septiembre 2026
 
 🐛 El proveedor ya se reconocía del PDF oficial (v12.32.56), pero el Departamento seguía bloqueado como "no coincide" para los almacenes RESTAURANTE/BODEGA y BAR SALON — nunca coincidían literalmente con "RESTAURANTE & BARES"

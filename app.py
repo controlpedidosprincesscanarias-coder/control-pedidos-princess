@@ -22136,6 +22136,51 @@ def api_emails_sistema_pendientes():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/admin/emails-sistema-pendientes/<int:email_id>", methods=["GET"])
+@admin_required
+def api_emails_sistema_pendientes_detalle(email_id):
+    """
+    GET /api/admin/emails-sistema-pendientes/<id> — (2026-09-14) Detalle de
+    UNA fila de la cola emails_sistema_pendientes por su id, YA esté
+    pendiente o ya enviada (a diferencia de api_emails_sistema_atascados,
+    que solo lista enviado=FALSE). A petición de Víctor, para investigar un
+    correo real de "Cambio de estado" que llegó SIN asunto ni contenido: en
+    Render Free no hay consola de SQL para consultar la tabla directamente,
+    y el propio log de acceso de Render solo revela el id de la fila (la
+    línea "POST /api/emails-sistema-pendientes/<id>/marcar-enviado", que
+    confirma cuándo el navegador terminó de enviarla de verdad por
+    EmailJS) — no su contenido. Este endpoint es la vía más simple para
+    completar el diagnóstico: entrar en Admin ya dice quién eres (misma
+    sesión), así que basta con pegar la URL en el navegador.
+
+    Devuelve TODAS las columnas relevantes para diagnosticar, incluida
+    evento_codigo (identifica sin ambigüedad qué función del código
+    encoló la fila — ver los distintos evento_codigo usados en este
+    archivo: 'cambio_estado_interno', 'cambio_estado_proveedor',
+    'dali_documentacion_faltante', y los que pasan por
+    _encolar_email_sistema/_notificar_evento) y pedido_id (si la fila
+    está vinculada a un pedido concreto). cuerpo_html se recorta a 500
+    caracteres (con longitud_cuerpo_html aparte) para no disparar el
+    tamaño de la respuesta — de sobra para ver si de verdad estaba vacío
+    o si el problema es más sutil (contenido presente pero con algún
+    dato en blanco).
+    """
+    fila = query(
+        """SELECT id, evento_codigo, destinatario, asunto, cuerpo_html, cuerpo_text,
+                  cc_emails, reply_to, pedido_id, solicitud_acceso_id, intentos,
+                  enviado, enviado_en, enviado_no_confirmado, descartado_en, creado_en, visible_en
+           FROM emails_sistema_pendientes WHERE id=%s""",
+        (email_id,), one=True
+    )
+    if not fila:
+        return jsonify({"ok": False, "error": f"No existe ninguna fila con id={email_id}."}), 404
+    resultado = row_to_dict(fila)
+    _html_val = resultado.get("cuerpo_html") or ""
+    resultado["longitud_cuerpo_html"] = len(_html_val)
+    resultado["cuerpo_html"] = _html_val[:500]
+    return jsonify({"ok": True, "fila": resultado})
+
+
 @app.route("/api/admin/emails-sistema-atascados", methods=["GET"])
 @admin_required
 def api_emails_sistema_atascados():

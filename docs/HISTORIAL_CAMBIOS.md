@@ -49,6 +49,32 @@
 
 ---
 
+## 2026-09-14 — [Control Pedidos] Buscador de una fila de la cola de correos de sistema por id, pendiente o ya enviada (v12.32.59)
+
+- **Origen**: Víctor encontró un correo real ya enviado, sin errores, pero
+  completamente en blanco (sin asunto ni contenido) y preguntó cómo
+  averiguar por qué. Guiado por el log de acceso de Render (línea
+  `marcar-enviado`) se identificó el id de la fila (578) en
+  `emails_sistema_pendientes`, pero para ver su contenido hacía falta
+  consultar la tabla — y Víctor confirmó que están en Render Free, sin
+  consola de SQL.
+- **Cambio**: nuevo `GET /api/admin/emails-sistema-pendientes/<id>`
+  (`app.py`) — detalle de cualquier fila por id (pendiente o ya enviada,
+  a diferencia del listado de atascadas que solo cubre `enviado=FALSE`),
+  con `evento_codigo`, destinatario, asunto, cc_emails, pedido_id,
+  reply_to, intentos, enviado/enviado_en y un extracto de cuerpo_html.
+  Solo admin, misma sesión del navegador. Añadido también un pequeño
+  buscador por id en el panel de "Cola de correos de sistema pendientes"
+  (`templates/index.html`) para no tener que construir la URL a mano.
+- **Verificación**: `python3 -m py_compile app.py` y `node --check` del
+  bloque de JS afectado, ambos limpios.
+- **Norma 5 (otros documentos)**: no aplica, herramienta de diagnóstico
+  puntual sin implicaciones de despliegue ni pendiente relacionado.
+- **Ficheros**: `app.py`, `templates/index.html`, `README.md`,
+  `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-14 — [Control Pedidos] Departamento vs. Almacén del PDF: RESTAURANTE/BODEGA y BAR SALON ahora se resuelven según el hotel (v12.32.58)
 
 - **Origen**: Víctor, mismo pedido 43372 (hotel FV), ya con el proveedor
