@@ -1,3 +1,21 @@
+# v12.32.57 — 14 septiembre 2026
+
+🔁 Botón "Reactivar" añadido directamente a las filas "paradas" de la cola de correos de sistema, sin tener que descartarlas antes
+
+**Caso real que lo detectó**: Víctor, tras un corte de cupo de EmailJS (413) que dejó varias filas "paradas (agotó reintentos)" en el panel "Cola de correos de sistema pendientes" — la siguiente cuenta EmailJS aún no había empezado su periodo de facturación. "se caducaron porque se agoto emailjs y la siguiente no habia comenzado plazo, como recupero estos envios? ¿se puede?"
+
+**Diagnóstico**: sí es posible — el endpoint `POST /api/admin/emails-sistema-pendientes/<id>/reactivar` (construido en v12.30.90 a petición de Víctor) ya resetea `intentos` a 0 cuando ha llegado al máximo, permitiendo que la fila vuelva a entrar en el ciclo normal de reintentos (contra la cuenta EmailJS que tenga cupo en ese momento). El problema era solo de interfaz: el botón "↻ Reactivar" únicamente se pintaba para filas ya **descartadas** (`descartado_en` relleno) — para una fila simplemente "parada" (aún sin descartar, el caso exacto de las capturas de Víctor), el panel solo ofrecía "Marcar como enviado" y "Descartar", obligando a un rodeo (descartar y luego reactivar) que no era evidente y que además el propio backend nunca exigió, ya que el `UPDATE` de `api_reactivar_email_sistema` funciona igual con `descartado_en` ya a `NULL`.
+
+**Cambio**: en `_cargarEmailsAtascados()` (`templates/index.html`), la rama de filas "paradas" (`a.atascado`, sin `descartado_en`) añade ahora el mismo botón "↻ Reactivar" que ya existía para las descartadas, junto a "Marcar como enviado" y "Descartar". Sin cambios en el backend (el endpoint ya soportaba este caso); se amplía el docstring de `api_reactivar_email_sistema` en `app.py` para dejar constancia de que también se invoca así.
+
+**Verificación**: `python3 -m py_compile app.py`, limpio. Revisado manualmente el árbol de condiciones de `_cargarEmailsAtascados()` para las 4 combinaciones posibles (`enviado_no_confirmado`, `descartado_en`, `atascado` sin descartar, reintentando aún) — cada una sigue mostrando exactamente los botones que le corresponden, sin duplicar "Reactivar" para el caso `enviado_no_confirmado` (donde no debe ofrecerse: el correo ya se entregó de verdad).
+
+**Nota práctica para Víctor**: "Reactivar" limpia el contador de reintentos y deja que la fila vuelva a intentarse de forma automática en el siguiente ciclo de la cola — no fuerza un envío inmediato ni garantiza que la cuenta EmailJS activa en ese momento ya tenga cupo. Conviene pulsarlo una vez confirmado que hay una cuenta con cupo disponible (o que el periodo de facturación de la siguiente ya ha empezado).
+
+**Ficheros editados**: `templates/index.html`, `app.py` (solo docstring), `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.56 — 14 septiembre 2026
 
 🐛 El proveedor no se reconocía al adjuntar el PDF oficial de un pedido cuando SAP imprime en él el Código DALI del proveedor en vez de su Código SAP — ahora se prueba también contra el Código DALI; de paso, se corrige un fallo real en la lectura del nombre del proveedor

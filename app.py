@@ -22145,6 +22145,14 @@ def api_reactivar_email_sistema(email_id):
     intentos a 0 — si no se reseteara, "Reactivar" no reactivaría nada de
     verdad: seguiría excluida de la cola por haber agotado el cupo, solo
     que etiquetada "parado" en vez de "descartado" en el panel.
+
+    (2026-09-14) El UPDATE nunca exigió descartado_en relleno — funciona
+    igual de bien sobre una fila "parada" que aún no se ha descartado (el
+    SET descartado_en=NULL es entonces un no-op). Por eso, tras la pregunta
+    de Víctor sobre un corte de cupo de EmailJS que dejó varias filas
+    "paradas" sin haber pasado por "Descartar", el panel ahora ofrece este
+    mismo botón directamente sobre las filas "paradas", sin exigir
+    descartarlas antes (ver _cargarEmailsAtascados en templates/index.html).
     POST /api/admin/emails-sistema-pendientes/<id>/reactivar
     """
     try:

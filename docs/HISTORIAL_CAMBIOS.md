@@ -49,6 +49,36 @@
 
 ---
 
+## 2026-09-14 — [Control Pedidos] Botón "Reactivar" también para filas "paradas" sin descartar, en la cola de correos de sistema (v12.32.57)
+
+- **Origen**: Víctor, tras un corte de cupo de EmailJS (413) que dejó
+  varias filas "paradas (agotó reintentos)" sin que la siguiente cuenta
+  hubiera empezado su periodo de facturación: "se caducaron porque se
+  agoto emailjs y la siguiente no habia comenzado plazo, como recupero
+  estos envios? ¿se puede?"
+- **Diagnóstico**: sí se puede — el endpoint de reactivación ya existía
+  (v12.30.90) y resetea `intentos` a 0, pero el botón "↻ Reactivar" solo
+  se pintaba para filas ya descartadas. Para una fila "parada" sin
+  descartar (el caso de Víctor) solo había "Marcar como enviado" y
+  "Descartar" — un rodeo innecesario, ya que el backend nunca exigió
+  `descartado_en` relleno.
+- **Cambio**: se añade el botón "↻ Reactivar" también a la rama de filas
+  "paradas" sin descartar en `_cargarEmailsAtascados()`
+  (`templates/index.html`). Sin cambios de comportamiento en el backend;
+  se amplía el docstring de `api_reactivar_email_sistema` (`app.py`) para
+  documentar este segundo punto de entrada.
+- **Verificación**: `python3 -m py_compile app.py` limpio; revisadas a
+  mano las 4 combinaciones de estado del panel para confirmar que cada
+  una sigue mostrando los botones correctos (sin ofrecer "Reactivar"
+  sobre `enviado_no_confirmado`, donde no debe reenviarse nunca).
+- **Norma 5 (otros documentos)**: revisado `GUIA_DESPLIEGUE.md` y
+  `PENDIENTES.md` — no aplica, cambio de UI puntual sin implicaciones de
+  despliegue ni pendiente relacionado.
+- **Ficheros**: `templates/index.html`, `app.py` (solo docstring),
+  `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-14 — [Control Pedidos] Fallback a Código DALI al reconocer el proveedor del PDF oficial + corrección de un fallo real en la lectura del nombre (v12.32.56)
 
 - **Origen**: Víctor, sobre un pedido real (43372, MABECAN SIS. PROF. DE

@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.56
+          V 12.32.57
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -10292,7 +10292,16 @@ async function _cargarEmailsAtascados() {
           // del caso enviado_no_confirmado — no hay garantía automática de
           // que el correo llegara: el admin debe confirmarlo por su cuenta
           // (p. ej. Gmail) antes de pulsarlo.
-          ? `<button class="btn btn-ghost btn-sm" onclick="_marcarEmailAtascadoComoEnviado(${a.id})" title="Solo si has confirmado por otra vía (p. ej. bandeja de enviados) que este correo SÍ llegó de verdad — si no estás seguro, usa Descartar">✅ Marcar como enviado</button>
+          // (2026-09-14) Víctor, tras un corte de cupo de EmailJS (413) que dejó
+          // varias filas "paradas" antes de que la siguiente cuenta empezara su
+          // periodo: "se caducaron [...] como recupero estos envios? ¿se puede?".
+          // Hasta ahora, para una fila "parada" pero AÚN NO descartada, solo se
+          // podía llegar a "Reactivar" pasando antes por "Descartar" (rodeo
+          // innecesario: api_reactivar_email_sistema ya resetea intentos a 0 sin
+          // exigir que descartado_en esté relleno). Se añade aquí el mismo botón
+          // "↻ Reactivar" para reintentarla de verdad sin ese paso intermedio.
+          ? `<button class="btn btn-ghost btn-sm" onclick="_marcarEmailAtascadoComoEnviado(${a.id})" title="Solo si has confirmado por otra vía (p. ej. bandeja de enviados) que este correo SÍ llegó de verdad — si no estás seguro, usa Reactivar o Descartar">✅ Marcar como enviado</button>
+             <button class="btn btn-ghost btn-sm" onclick="_reactivarEmailAtascado(${a.id})" title="Vuelve a intentar enviarlo de verdad (p. ej. una vez la cuenta EmailJS con cupo ya esté activa)">↻ Reactivar</button>
              <button class="btn btn-ghost btn-sm" onclick="_descartarEmailAtascado(${a.id})">Descartar</button>`
           : `<button class="btn btn-ghost btn-sm" onclick="_descartarEmailAtascado(${a.id})">Descartar</button>`}
       </div>`).join('');
