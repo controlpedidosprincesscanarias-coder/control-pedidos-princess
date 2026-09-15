@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.59
+          V 12.32.60
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -12007,7 +12007,23 @@ async function enviarEmailJS(payload) {
   if (!cfg || !cfg.ok || !cfg.service_id || !cfg.template_id) {
     throw new Error('Configuración de EmailJS no disponible — revisa Admin → EmailJS.');
   }
-  const resultado = await emailjs.send(cfg.service_id, cfg.template_id, payload);
+  // (2026-09-15) La public key se pasa aquí explícitamente como 4º
+  // argumento (soportado por @emailjs/browser@4) en vez de depender de la
+  // que haya quedado activada globalmente por la última llamada a
+  // emailjs.init() — antes, si esta función se ejecutaba mientras OTRA
+  // pasada del poller (_enviarEmailsSistemaPendientes) acababa de cambiar
+  // de cuenta y llamar a emailjs.init() con la public key nueva, este envío
+  // podía acabar mandando el service_id/template_id de una cuenta con la
+  // public key de otra — el origen real del correo real que llegó sin
+  // asunto ni contenido (Víctor, pedido GY 40207): EmailJS aceptó el envío
+  // (200 OK) pero sin reconocer bien la plantilla. Pasar cfg.public_key
+  // explícitamente aquí hace que cada envío use SIEMPRE la cuenta completa
+  // y coherente que se leyó en este mismo cfg, sin importar qué haga
+  // mientras tanto otra pasada solapada — cinturón y tirantes junto con el
+  // candado de reentrada añadido en _enviarEmailsSistemaPendientes.
+  const resultado = cfg.public_key
+    ? await emailjs.send(cfg.service_id, cfg.template_id, payload, cfg.public_key)
+    : await emailjs.send(cfg.service_id, cfg.template_id, payload);
   // Registrar el envío en el backend (contador + posible cambio automático de
   // cuenta). No debe bloquear ni romper el envío ya realizado si falla.
   try {
@@ -13405,7 +13421,61 @@ function _startEmailsSistemaPolling() {
   _emailsSistemaPollTimer = setInterval(_enviarEmailsSistemaPendientes, 5 * 60 * 1000);
 }
 
+// (2026-09-15) Candado de reentrada — a peticion de Victor, tras
+// diagnosticar un correo real que llego a Gmail sin asunto ni contenido
+// (evento_codigo cambio_estado_interno, pedido GY 40207) pese a que la fila
+// en emails_sistema_pendientes tenia el asunto y el cuerpo perfectamente
+// guardados (comprobado con el nuevo buscador por id, ver
+// api_emails_sistema_pendientes_detalle en app.py). Su propio diagnostico:
+// "esto ocurrio en el salto de una cuenta a otra y la reactivacion de
+// correos en cola caducados".
+//
+// _enviarEmailsSistemaPendientes() se dispara desde 6 sitios distintos en
+// este archivo: el timer cada 5 min (_startEmailsSistemaPolling) y otras 4
+// llamadas directas justo despues de guardar ciertas acciones (para no
+// esperar al timer) -- ninguna de ellas comprobaba si YA habia una pasada
+// en curso. enviarEmailJS() (mas abajo) lee y actualiza el estado
+// compartido window._emailjsCfg y llama a emailjs.init() con la nueva
+// public key EXACTAMENTE cuando el contador de envios cruza el umbral y
+// toca cambiar de cuenta -- si en ese mismo instante hay UNA SEGUNDA pasada
+// de este poller en curso en la MISMA pestana (p. ej. el timer de 5 min
+// solapado con una llamada directa disparada por otra accion, un lote
+// grande con varios correos "parados" cuya reserva acababa de caducar y
+// volvian a estar disponibles a la vez que el timer), esa segunda pasada ya
+// habia leido `cfg` de la cuenta ANTERIOR antes del cambio y llama a
+// emailjs.send(cfg.service_id, cfg.template_id, payload) SIN pasar la
+// public key -- usa la que haya quedado activada globalmente por
+// emailjs.init() en ESE momento, que para entonces ya es la de la cuenta
+// NUEVA. El resultado es un envio con el service_id/template_id de una
+// cuenta mezclados con la public key de otra: EmailJS puede aceptarlo
+// igualmente (devolver 200, como paso aqui) pero sin reconocer bien la
+// plantilla, entregando el correo vacio -- exactamente el sintoma
+// reportado. La correccion no es evitar el cambio de cuenta ni el
+// reintento de filas caducadas (ambos correctos y necesarios) sino que
+// nunca corran DOS pasadas de este poller a la vez en la misma pestana: si
+// ya hay una en curso, esta llamada se limita a marcar que hace falta
+// repetir en cuanto termine, en vez de arrancar una segunda en paralelo.
+let _emailsSistemaEnvioEnCurso = false;
+let _emailsSistemaEnvioPendienteReintento = false;
+
 async function _enviarEmailsSistemaPendientes() {
+  if (_emailsSistemaEnvioEnCurso) {
+    _emailsSistemaEnvioPendienteReintento = true;
+    return;
+  }
+  _emailsSistemaEnvioEnCurso = true;
+  try {
+    await _enviarEmailsSistemaPendientesInner();
+  } finally {
+    _emailsSistemaEnvioEnCurso = false;
+    if (_emailsSistemaEnvioPendienteReintento) {
+      _emailsSistemaEnvioPendienteReintento = false;
+      _enviarEmailsSistemaPendientes();
+    }
+  }
+}
+
+async function _enviarEmailsSistemaPendientesInner() {
   try {
     const r = await api('/api/emails-sistema-pendientes', 'GET');
     if (!r || !r.ok || !r.pendientes || !r.pendientes.length) return;

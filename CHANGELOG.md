@@ -1,3 +1,19 @@
+# v12.32.60 — 15 septiembre 2026
+
+🐛 Correo real sin asunto ni contenido: mezcla de cuenta EmailJS a mitad de un cambio automático — corregido con un candado de reentrada y pasando la public key explícita en cada envío
+
+**Caso real que lo detectó**: Víctor encontró un correo de "Cambio de estado" (pedido GY 40207, id de cola 578) recibido en Gmail sin asunto ni contenido — solo el pie de "Email sent via EmailJS.com". Con el buscador por id añadido en v12.32.59 se confirmó que la fila en `emails_sistema_pendientes` tenía el asunto y el cuerpo perfectamente guardados (3482 caracteres) — así que el fallo NO estaba en los datos ni en el código que los generó. Consultadas las 4 plantillas de EmailJS, Víctor confirmó que "está todo debidamente configurado" — descartando también un problema de plantilla. Su propio diagnóstico, exacto: "esto ocurrió en el salto de una cuenta a otra y la reactivación de correos en cola caducados".
+
+**Diagnóstico**: `_enviarEmailsSistemaPendientes()` (el poller que despacha esta cola por EmailJS desde el navegador) se dispara desde 6 sitios distintos de `templates/index.html` — el timer cada 5 minutos y otras 4 llamadas directas justo tras ciertas acciones, para no esperar al timer — sin ningún candado que impidiera que dos de esas llamadas corrieran a la vez en la misma pestaña. `enviarEmailJS()` lee y actualiza un estado global compartido (`window._emailjsCfg`) y llama a `emailjs.init()` con la public key nueva exactamente en el instante en que el contador de envíos cruza el umbral y toca cambiar de cuenta. Si en ese instante había UNA SEGUNDA pasada del poller en curso (p. ej. el timer solapado con un lote de correos "parados" cuya reserva de 2 minutos acababa de caducar y volvían a estar disponibles a la vez), esa segunda pasada ya había leído el `service_id`/`template_id` de la cuenta ANTERIOR antes del cambio, pero al llamar a `emailjs.send()` sin pasar la public key como argumento, usaba la que quedara activada globalmente en ESE momento — que para entonces ya era la de la cuenta NUEVA. El envío salía con credenciales de dos cuentas distintas mezcladas: EmailJS lo aceptaba (200 OK, como pasó aquí) pero sin reconocer bien la plantilla, entregando el correo vacío.
+
+**Cambio** (`templates/index.html`): (1) candado de reentrada en `_enviarEmailsSistemaPendientes()` — si ya hay una pasada en curso en la misma pestaña, una nueva llamada solo marca que hace falta repetir en cuanto termine, en vez de arrancar una segunda pasada en paralelo; (2) `enviarEmailJS()` pasa ahora `cfg.public_key` explícitamente como 4º argumento de `emailjs.send()` (soportado por `@emailjs/browser@4`), en vez de depender de la que haya quedado activada por la última llamada a `emailjs.init()` — así cada envío usa siempre la cuenta completa y coherente leída en su propio `cfg`, pase lo que pase con cualquier otra pasada solapada. No se toca ni el cambio automático de cuenta ni el reintento de correos con reserva caducada — ambos siguen funcionando igual, solo dejan de poder pisarse entre sí.
+
+**Verificación**: `node --check` sobre el bloque de JS afectado, limpio. Extraído el candado de reentrada real de `templates/index.html` (sin reimplementarlo) y simulado en Node el escenario exacto — una llamada en curso más otras dos llegando por encima mientras tanto — confirmando que nunca corren dos pasadas a la vez y que se ejecuta exactamente una repetición al terminar la primera, en vez de las tres que se habrían disparado antes del fix.
+
+**Ficheros editados**: `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.59 — 14 septiembre 2026
 
 🔍 Nuevo buscador de una fila de la cola de correos de sistema por id (pendiente o ya enviada) — para diagnosticar sin consola de SQL en Render Free

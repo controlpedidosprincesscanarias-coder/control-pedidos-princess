@@ -49,6 +49,41 @@
 
 ---
 
+## 2026-09-15 — [Control Pedidos] Correo real sin asunto ni contenido: candado de reentrada en el poller de EmailJS + public key explícita en cada envío (v12.32.60)
+
+- **Origen**: Víctor, sobre el correo en blanco investigado con el
+  buscador de la versión anterior (id 578, pedido GY 40207) — confirmado
+  que la fila tenía asunto y cuerpo correctos, y que las 4 plantillas de
+  EmailJS están bien configuradas: "esto ocurrió en el salto de una
+  cuenta a otra y la reactivación de correos en cola caducados".
+- **Diagnóstico**: `_enviarEmailsSistemaPendientes()` se dispara desde 6
+  sitios (timer de 5 min + 4 llamadas directas) sin candado de
+  reentrada. `enviarEmailJS()` comparte un estado global
+  (`window._emailjsCfg` + `emailjs.init()`) que se actualiza justo al
+  cruzar el umbral de cambio de cuenta — si dos pasadas del poller
+  corrían a la vez en la misma pestaña (timer solapado con un lote de
+  correos "parados" recién reactivados por caducidad de su reserva), una
+  de ellas podía enviar con el `service_id`/`template_id` de una cuenta
+  mezclados con la public key de otra, ya activada globalmente por la
+  otra pasada — EmailJS lo aceptaba (200 OK) pero sin reconocer bien la
+  plantilla, entregando el correo vacío.
+- **Cambio**: candado de reentrada en `_enviarEmailsSistemaPendientes()`
+  (una llamada mientras otra está en curso solo marca repetir al
+  terminar, nunca corre en paralelo) y `enviarEmailJS()` pasa
+  `cfg.public_key` explícitamente a `emailjs.send()` en vez de depender
+  del estado global de `emailjs.init()`. El cambio automático de cuenta y
+  el reintento de correos caducados siguen funcionando igual.
+- **Verificación**: `node --check` limpio; candado de reentrada real
+  extraído de `templates/index.html` y probado en Node simulando el
+  solapamiento exacto — nunca dos pasadas a la vez, una única repetición
+  al terminar la primera.
+- **Norma 5 (otros documentos)**: no aplica, corrección puntual de una
+  condición de carrera en el frontend, sin implicaciones de despliegue.
+- **Ficheros**: `templates/index.html`, `README.md`, `CHANGELOG.md`,
+  `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-14 — [Control Pedidos] Buscador de una fila de la cola de correos de sistema por id, pendiente o ya enviada (v12.32.59)
 
 - **Origen**: Víctor encontró un correo real ya enviado, sin errores, pero
