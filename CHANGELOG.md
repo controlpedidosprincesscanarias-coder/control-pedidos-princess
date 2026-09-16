@@ -1,3 +1,19 @@
+# v12.32.66 — 16 septiembre 2026
+
+🎯 Causa raíz encontrada del pedido 40758: el fallback de Reply-To se auto-referenciaba al propio proveedor, y su sistema de correo lo descartaba cayendo en el Gmail compartido
+
+**Caso real que lo detectó**: Víctor localizó en la carpeta "Enviados" del Gmail compartido el correo ORIGINAL de la reclamación del pedido 40758 (4 de septiembre, 12 días antes de la respuesta de Khama Hotel) e hizo "Mostrar original". Su cabecera real: `de: controlpedidosprincess.canarias@gmail.com` / `responder a: ventas@ecus.es` / `para: ventas@ecus.es`. El "Responder a" (Reply-To) de ese correo era exactamente la misma dirección que el "Para" — el propio proveedor.
+
+**Diagnóstico**: confirmado con el buscador por Nº de pedido añadido en v12.32.65 — esa fila concreta (id 447, 4 de septiembre) tiene `reply_to` vacío en base de datos (encolada antes de que `_encolar_reclamacion_proveedor_auto()` empezara a pasar siempre el email real del comprador, v12.32.44). Con `reply_to` vacío, el poller de entonces (`reply_to: p.reply_to || p.destinatario`) caía en `p.destinatario` — que para un correo A UN PROVEEDOR es el propio proveedor. Un Reply-To auto-referenciado (pedirle a alguien que se responda a sí mismo) no tiene ningún sentido, y el sistema de correo que lo recibió (un tenant Microsoft 365 gestionado por "ecus", el proveedor de correo de Khama Hotel) lo descartó como inválido: al pulsar "Responder", cayó en el "De:" real del mensaje — el Gmail compartido —, exactamente el síntoma reportado, aunque con 12 días de diferencia entre el envío original y la respuesta.
+
+**Cambio**: `_enviarEmailsSistemaPendientesInner()` (`templates/index.html`) ya no usa `p.destinatario` como fallback de Reply-To para los eventos que van A UN PROVEEDOR (`reclamacion_proveedor_auto`, `cambio_estado_proveedor`) — auto-referenciarse ahí nunca tiene sentido. Para esos dos eventos, si `p.reply_to` viniera vacío (no debería, ya que ambos lo garantizan desde v12.32.44/v12.32.65, pero por si quedara alguna fila antigua u otro caso futuro), el correo sale sin Reply-To explícito, dejando que el cliente de correo del proveedor responda con su comportamiento normal al remitente real, en vez de a un valor sin sentido que algunos sistemas descartan cayendo en el peor sitio posible. El resto de eventos de esta cola (internos, DALI...) mantienen exactamente el comportamiento de siempre (fallback a destinatario).
+
+**Verificación**: reproducidos exactamente los dos casos reales del pedido 40758 con la función real `_enviarEmailsSistemaPendientesInner()` extraída de `templates/index.html` (sin reimplementarla): la fila `id 447` (reply_to NULL, evento a proveedor) ya no cae en `ventas@ecus.es` — queda vacía; la fila `id 600` (reply_to ya correcto) sigue usando `centralcompras6.canarias@princess-hotels.com` sin cambios. Comprobado también que un evento interno sin reply_to sigue cayendo en destinatario (comportamiento intacto) y que el buzón compartido sigue bloqueado en cualquier caso. `node --check` del bloque de JS afectado, limpio.
+
+**Ficheros editados**: `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.65 — 16 septiembre 2026
 
 🛡️ Red de seguridad: el Gmail compartido nunca puede quedar como Reply-To de un correo a proveedor + buscador de diagnóstico por Nº de pedido

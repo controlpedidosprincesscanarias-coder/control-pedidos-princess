@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.65
+          V 12.32.66
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -13656,17 +13656,44 @@ async function _enviarEmailsSistemaPendientesInner() {
         // la transparencia que pidió Víctor se cumpla igualmente aunque
         // el encabezado CC no llegue a estar bien configurado todavía.
         const esCorreoInternoPedido = p.evento_codigo === 'cambio_estado_interno';
+        // (2026-09-16) Pedido 40758, correo del 4 de septiembre: encontrada
+        // en la propia carpeta de Enviados la prueba directa de por qué el
+        // "Responder a" de ESE correo en concreto no sirvió de nada. Su
+        // cabecera real decía "responder a: ventas@ecus.es" -- exactamente
+        // el mismo email que el "para:" (el propio proveedor). Esa fila se
+        // encoló con `reply_to` vacío en BD (de antes de que esta función
+        // pasara siempre el email del comprador, ver v12.32.44/v12.32.65) y
+        // el fallback de entonces (`p.reply_to || p.destinatario`) cayó en
+        // `p.destinatario` -- que PARA UN CORREO A PROVEEDOR es el propio
+        // proveedor. Un Reply-To auto-referenciado (responder al mismo a
+        // quien se le escribe) no tiene ningún sentido, y aparentemente
+        // basta para que el sistema de correo del que lo recibe (aquí, un
+        // tenant Microsoft 365 gestionado por "ecus") lo descarte como
+        // inválido y "Responder" caiga entonces al "De:" real del mensaje
+        // -- el Gmail compartido. Con la cola ya garantizando reply_to real
+        // para todo evento a proveedor desde v12.32.44, esto no debería
+        // volver a pasar, pero por si quedara alguna fila antigua sin
+        // reply_to, o algún evento futuro que tampoco lo traiga: para los
+        // eventos que van a un proveedor externo (reclamación automática,
+        // aviso de cambio de estado) el fallback YA NUNCA es el propio
+        // destinatario -- se deja sin Reply-To explícito, para que el
+        // cliente de correo del proveedor caiga en el comportamiento
+        // normal de responder al remitente real, en vez de a un valor
+        // auto-referenciado sin sentido.
+        const esEventoAProveedor = p.evento_codigo === 'reclamacion_proveedor_auto'
+                                 || p.evento_codigo === 'cambio_estado_proveedor';
+        const replyToFallback = esEventoAProveedor ? '' : p.destinatario;
         const payloadEmailJS = {
           to_email: p.destinatario,
           subject:  p.asunto,
           message:  p.cuerpo_html || p.cuerpo_text || '',
           // (2026-09-07) `p.reply_to` — columna nueva, NULL salvo que
-          // quien encoló la fila lo indicara explícitamente (de momento,
-          // el puente con DALI para "Documentación faltante", ver
-          // api_externo_dali_encolar_email en app.py). Si viene vacío,
-          // se mantiene el comportamiento de siempre para el resto de
-          // eventos de esta cola: responder al propio destinatario.
-          reply_to: _replyToSeguro(p.reply_to, p.destinatario),
+          // quien encoló la fila lo indicara explícitamente. Si viene
+          // vacío, el resto de eventos de esta cola (internos, DALI...)
+          // mantienen el comportamiento de siempre: responder al propio
+          // destinatario. Los eventos a proveedor NUNCA usan ese fallback
+          // (ver comentario grande de arriba).
+          reply_to: _replyToSeguro(p.reply_to, replyToFallback),
         };
         if (esCorreoInternoPedido) payloadEmailJS.cc  = p.cc_emails || '';
         else                       payloadEmailJS.bcc = p.cc_emails || '';

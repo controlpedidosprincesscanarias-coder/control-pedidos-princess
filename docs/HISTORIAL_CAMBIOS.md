@@ -49,6 +49,48 @@
 
 ---
 
+## 2026-09-16 — [Control Pedidos] Causa raíz del pedido 40758: el fallback de Reply-To se auto-referenciaba al propio proveedor (v12.32.66)
+
+- **Origen**: Víctor localizó en la carpeta "Enviados" del Gmail compartido
+  el correo ORIGINAL de la reclamación del pedido 40758 (4 de septiembre,
+  12 días antes de la respuesta real de Khama Hotel) e hizo "Mostrar
+  original". Cabecera real: `de: controlpedidosprincess.canarias@gmail.com`
+  / `responder a: ventas@ecus.es` / `para: ventas@ecus.es` — el Reply-To
+  de ese correo era exactamente la misma dirección que el destinatario:
+  el propio proveedor.
+- **Diagnóstico**: con el buscador por Nº de pedido de v12.32.65 se
+  confirmó que esa fila (id 447, 4 de septiembre) tiene `reply_to` vacío
+  en base de datos — encolada antes de que `_encolar_reclamacion_proveedor_auto()`
+  empezara a pasar siempre el email real del comprador (v12.32.44). Con
+  `reply_to` vacío, el poller de entonces (`p.reply_to || p.destinatario`)
+  caía en `p.destinatario`, que para un correo A UN PROVEEDOR es el propio
+  proveedor — un Reply-To auto-referenciado sin ningún sentido. El sistema
+  de correo que lo recibió (un tenant Microsoft 365 gestionado por "ecus",
+  el proveedor de correo de Khama Hotel) lo descartó como inválido: al
+  pulsar "Responder", cayó en el "De:" real del mensaje — el Gmail
+  compartido —, exactamente el síntoma reportado, con 12 días de
+  diferencia entre el envío original y la respuesta real.
+- **Cambio**: `_enviarEmailsSistemaPendientesInner()`
+  (`templates/index.html`) ya no usa `p.destinatario` como fallback de
+  Reply-To para los eventos que van A UN PROVEEDOR
+  (`reclamacion_proveedor_auto`, `cambio_estado_proveedor`) — para esos
+  dos, si `reply_to` viniera vacío (no debería ya, pero por si quedara
+  alguna fila antigua u otro caso futuro), el correo sale sin Reply-To
+  explícito en vez de con un valor auto-referenciado. El resto de eventos
+  de la cola (internos, DALI...) mantiene el fallback de siempre.
+- **Verificación**: reproducidos los dos casos reales del pedido 40758
+  (id 447 y id 600) con la función real extraída de `templates/index.html`
+  — la fila sin reply_to ya no cae en el proveedor, la que ya tenía
+  reply_to correcto sigue igual; un evento interno sin reply_to conserva
+  su comportamiento de siempre; el buzón compartido sigue bloqueado en
+  cualquier caso. `node --check` limpio.
+- **Norma 5 (otros documentos)**: no aplica, cambio interno de la cola de
+  correo sin implicaciones de despliegue ni pendiente relacionado.
+- **Ficheros**: `templates/index.html`, `README.md`, `CHANGELOG.md`,
+  `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-16 — [Control Pedidos] Red de seguridad: el Gmail compartido nunca puede quedar como Reply-To a un proveedor + buscador de diagnóstico por Nº de pedido (v12.32.65)
 
 - **Origen**: pedido 40758 (hotel Guayarmina Princess, proveedor Khama
