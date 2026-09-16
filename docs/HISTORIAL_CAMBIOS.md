@@ -49,6 +49,41 @@
 
 ---
 
+## 2026-09-16 — [Control Pedidos] Departamento vs. Almacén del PDF: "SERVICIO TECNICO" ahora se resuelve a "SSTT" (v12.32.61)
+
+- **Origen**: Víctor, pedido 41417 (hotel GY — Guayarmina Princess), cuyo
+  PDF trae "Almacén SERVICIO TECNICO": "al cargar este PDF no reconoce el
+  departamento como SSTT que es servicio tecnico."
+- **Diagnóstico**: mismo mecanismo que el bug de RESTAURANTE/BODEGA y BAR
+  SALON de v12.32.58 — `_resolver_departamento_almacen_pdf()` solo
+  reconocía esos dos almacenes; para cualquier otro (incluido "SERVICIO
+  TECNICO") devolvía `None` y el llamador caía a la comparación de texto
+  de siempre (igualdad o subcadena). Esa comparación de respaldo funciona
+  para la mayoría de almacenes (p. ej. "COCINA PERSONAL" contiene
+  "COCINA"), pero "SERVICIO TECNICO" y "SSTT" no comparten ninguna
+  subcadena — es una sigla, no una abreviatura por corte de texto — así
+  que bloqueaba SIEMPRE este almacén con "No coincide", en TODOS los
+  hoteles (a diferencia de RESTAURANTE/BAR SALON, aquí la traducción no
+  depende del hotel: el código SAP 00000800 es "SSTT" para los 21 hoteles
+  por igual, ver `_SAP_DEPARTAMENTO_MAP`).
+- **Cambio**: se añade el caso "SERVICIO TECNICO" → "SSTT" (fijo, sin
+  hotel) a `_resolver_departamento_almacen_pdf()` (`app.py`) y a su
+  réplica en JS `_resolverDepartamentoAlmacenPdfJs()`
+  (`templates/index.html`), junto a los dos casos ya existentes.
+- **Verificación**: `_resolver_departamento_almacen_pdf()` extraída del
+  propio `app.py` por AST (sin reimplementarla) y ejecutada con el texto
+  real del PDF ("SERVICIO TECNICO", confirmado extrayendo el PDF de
+  Víctor) en varios hoteles: devuelve "SSTT" en todos; los casos ya
+  existentes (RESTAURANTE/BODEGA, BAR SALON, ECONOMATO) no cambian de
+  comportamiento. `python3 -m py_compile app.py` y `node --check` del
+  bloque de JS afectado, ambos limpios.
+- **Norma 5 (otros documentos)**: no aplica, cambio de validación puntual
+  sin implicaciones de despliegue ni pendiente relacionado.
+- **Ficheros**: `app.py`, `templates/index.html`, `README.md`,
+  `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-15 — [Control Pedidos] Correo real sin asunto ni contenido: candado de reentrada en el poller de EmailJS + public key explícita en cada envío (v12.32.60)
 
 - **Origen**: Víctor, sobre el correo en blanco investigado con el

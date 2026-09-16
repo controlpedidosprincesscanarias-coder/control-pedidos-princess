@@ -1,3 +1,19 @@
+# v12.32.61 — 16 septiembre 2026
+
+🐛 "Almacén SERVICIO TECNICO" del PDF no coincidía con el departamento SSTT — bloqueaba ENVIADO AL PROVEEDOR en todos los hoteles
+
+**Caso real que lo detectó**: Víctor subió el PDF del pedido 41417 (hotel GY — Guayarmina Princess), cuyo Almacén de cabecera es "SERVICIO TECNICO", y reportó: "al cargar este PDF no reconoce el departamento como SSTT que es servicio tecnico".
+
+**Diagnóstico**: mismo mecanismo que el bug de RESTAURANTE/BODEGA y BAR SALON corregido en v12.32.58 — `_resolver_departamento_almacen_pdf()`/`_resolverDepartamentoAlmacenPdfJs()` solo reconocían esos dos almacenes; para cualquier otro devolvían `None` y el llamador caía a la comparación de texto de siempre (igualdad o subcadena en cualquier sentido). Esa comparación de respaldo funciona bien para la mayoría (p. ej. "COCINA PERSONAL" contiene "COCINA"), pero "SERVICIO TECNICO" y "SSTT" no comparten ninguna subcadena — es una sigla, no una abreviatura por corte de texto — así que nunca coincidían y el pedido quedaba bloqueado con "El Departamento seleccionado («SSTT») no coincide con el Almacén indicado en el PDF («SERVICIO TECNICO»)" en TODOS los hoteles, no solo GY. A diferencia de RESTAURANTE/BAR SALON, esta traducción no depende del hotel — el código SAP 00000800 siempre es "SSTT" en `_SAP_DEPARTAMENTO_MAP`, para los 21 hoteles por igual.
+
+**Cambio**: se añade el caso "SERVICIO TECNICO" → "SSTT" (fijo, sin depender del hotel) a `_resolver_departamento_almacen_pdf()` (`app.py`) y a su gemela en JS `_resolverDepartamentoAlmacenPdfJs()` (`templates/index.html`), junto a los dos casos ya existentes de RESTAURANTE/BODEGA y BAR SALON.
+
+**Verificación**: extraída la función real `_resolver_departamento_almacen_pdf()` por AST (sin reimplementarla) y probada con el texto real del PDF ("SERVICIO TECNICO") en varios hoteles — devuelve "SSTT" en todos, y los casos de RESTAURANTE/BAR SALON/ECONOMATO ya existentes siguen exactamente igual. `python3 -m py_compile app.py` y `node --check` sobre el bloque de JS afectado, limpios.
+
+**Ficheros editados**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.60 — 15 septiembre 2026
 
 🐛 Correo real sin asunto ni contenido: mezcla de cuenta EmailJS a mitad de un cambio automático — corregido con un candado de reentrada y pasando la public key explícita en cada envío

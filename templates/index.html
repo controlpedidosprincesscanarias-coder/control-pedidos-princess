@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.60
+          V 12.32.61
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5712,6 +5712,11 @@ function _normalizarTextoGenericoJs(s) {
 // no es ninguno de estos dos casos conocidos, devuelve null y el llamador
 // sigue con la comparacion de texto de siempre (funciona bien para
 // ECONOMATO, COCINA... que si coinciden literalmente).
+// (2026-09-16) "SERVICIO TECNICO" -> "SSTT" (pedido 41417, hotel GY):
+// traduccion FIJA, no depende del hotel (a diferencia de RESTAURANTE/BAR
+// SALON de arriba) -- pero al ser sigla sin relacion textual con el
+// nombre completo, tampoco la reconoce la comparacion de texto de
+// siempre, asi que bloqueaba con "No coincide" en todos los hoteles.
 function _resolverDepartamentoAlmacenPdfJs(almacenPdf, hotelId) {
   if (!almacenPdf) return null;
   const norm = _normalizarTextoGenericoJs(almacenPdf);
@@ -5719,6 +5724,7 @@ function _resolverDepartamentoAlmacenPdfJs(almacenPdf, hotelId) {
   const separado = !!hotel && HOTELES_RESTAURANTE_BARES_SEPARADOS.has(hotel.codigo);
   if (norm.startsWith('RESTAURANTE')) return separado ? 'RESTAURANTE' : 'RESTAURANTE & BARES';
   if (norm.startsWith('BAR SALON')) return separado ? 'BARES' : 'RESTAURANTE & BARES';
+  if (norm.startsWith('SERVICIO TECNICO')) return 'SSTT';
   return null;
 }
 

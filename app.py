@@ -290,13 +290,25 @@ def _resolver_departamento_sap(codigo: str, hotel_codigo: str) -> str:
 # Almacén del PDF nunca pasó por _SAP_DEPARTAMENTO_MAP/_resolver_departamento_sap,
 # que solo se usa para el listado detallado de SAP, una función separada).
 #
-# Solo reconoce los dos casos vistos en un PDF real — el mismo par de
-# textos que _SAP_DEPARTAMENTO_MAP documenta para los códigos
-# 00000100/00000301 ("RESTAURANTE / ... BODEGA (Food Market)" y "BAR SALON
-# (Discoteca, ...)"). Para cualquier otro Almacén (ECONOMATO, COCINA,
-# PISOS...) devuelve None y el llamador sigue con la comparación de texto
-# de siempre, sin cambios — esos ya coinciden literalmente con el nombre
-# del departamento.
+# Solo reconoce los casos vistos en un PDF real. RESTAURANTE/BODEGA y BAR
+# SALON son los dos que documenta _SAP_DEPARTAMENTO_MAP para los códigos
+# 00000100/00000301, y SÍ dependen del hotel (ver arriba). Para cualquier
+# otro Almacén (ECONOMATO, COCINA, PISOS...) devuelve None y el llamador
+# sigue con la comparación de texto de siempre, sin cambios — esos ya
+# coinciden literalmente (o por subcadena, p.ej. "COCINA PERSONAL"
+# contiene "COCINA") con el nombre del departamento.
+#
+# (2026-09-16) Excepción añadida: "SERVICIO TECNICO" → "SSTT" (pedido
+# 41417, hotel GY). A diferencia de RESTAURANTE/BAR SALON, esta traducción
+# es FIJA — no depende del hotel, igual que "00000800": "SSTT" en
+# _SAP_DEPARTAMENTO_MAP nunca varía por hotel — pero, al ser una sigla sin
+# relación textual con el nombre completo, tampoco la reconocía la
+# comparación de texto de siempre (ni "SERVICIO TECNICO" contiene "SSTT"
+# ni al revés), bloqueando SIEMPRE este almacén en todos los hoteles con
+# "No coincide", igual que le pasaba antes a RESTAURANTE/BODEGA y BAR
+# SALON (v12.32.58) — mismo síntoma, causa distinta (aquí no hace falta
+# _HOTELES_RESTAURANTE_BARES_SEPARADOS porque SSTT es el mismo
+# departamento en los 21 hoteles).
 def _resolver_departamento_almacen_pdf(almacen_pdf: str, hotel_codigo: str) -> str:
     if not almacen_pdf:
         return None
@@ -306,6 +318,8 @@ def _resolver_departamento_almacen_pdf(almacen_pdf: str, hotel_codigo: str) -> s
         return "RESTAURANTE" if separado else "RESTAURANTE & BARES"
     if norm.startswith("BAR SALON"):
         return "BARES" if separado else "RESTAURANTE & BARES"
+    if norm.startswith("SERVICIO TECNICO"):
+        return "SSTT"
     return None
 
 def _auditoria_departamento_restaurante_bares_gy_it_mt_ta() -> dict:
