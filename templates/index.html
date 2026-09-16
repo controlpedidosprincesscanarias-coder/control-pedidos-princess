@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.63
+          V 12.32.64
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -12150,12 +12150,31 @@ async function meaEnviarEmail() {
     // automática (puente DALI, cambio_estado_proveedor, reclamacion_
     // proveedor_auto): cuando este envío manual va HACIA el proveedor
     // (es_proveedor), el "Responder a" debe ser el comprador que lo
-    // gestiona, no el propio proveedor. Los compradores del hotel ya
-    // están en ccList (copia oculta); se usa el primero como Reply-To.
-    // Si no es_proveedor (correo interno) o no hay compradores en cc, no
-    // se fija reply_to y se mantiene el comportamiento anterior.
-    if (_meaData.es_proveedor && ccList.length) {
-      payloadMea.reply_to = ccList[0];
+    // gestiona, no el propio proveedor.
+    //
+    // (2026-09-17) FIX: la v12.32.45 original sacaba el Reply-To de
+    // `ccList[0]` — la lista de copia oculta tal cual está en el momento
+    // de pulsar "Enviar". Víctor reportó que la respuesta de un proveedor
+    // a una reclamación seguía llegando al Gmail compartido de envío en
+    // vez de al comprador — comprobado que el "Reply To" de la plantilla
+    // de EmailJS SÍ está bien enlazado a {{reply_to}}, así que el fallo
+    // estaba en este lado. Causa real: `meaRemoveCC()` permite quitar
+    // cualquier destinatario de copia desde el propio modal antes de
+    // enviar (p. ej. para no poner a todo el mundo en copia en un envío
+    // puntual) — si se quita el único comprador de la lista, `ccList`
+    // queda vacío y este bloque nunca fijaba `reply_to`, así que EmailJS
+    // mandaba ese campo de la plantilla vacío y el cliente de correo del
+    // proveedor caía de vuelta al remitente real (el Gmail compartido).
+    // El comprador responsable NO debería depender de si sigue o no en la
+    // copia visible — son dos decisiones independientes (a quién se avisa
+    // en copia vs. a quién debe responder el proveedor). Se usa ahora
+    // `_meaData.compradores` (la lista de compradores del hotel que ya
+    // trae el preview del servidor, ver alerta_email_preview en app.py —
+    // estable, no se toca al editar la copia oculta) en vez de `ccList`.
+    if (_meaData.es_proveedor && _meaData.compradores && _meaData.compradores.length) {
+      const _comprador0 = _meaData.compradores[0];
+      const _replyToComprador = (_comprador0.email || '').trim();
+      if (_replyToComprador) payloadMea.reply_to = _replyToComprador;
     }
     await enviarEmailJS(payloadMea);
 

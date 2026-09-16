@@ -1,3 +1,19 @@
+# v12.32.64 — 17 septiembre 2026
+
+🐛 La respuesta del proveedor a una reclamación llegaba al Gmail compartido en vez de al comprador — dependía de si alguien quitaba al comprador de la copia oculta antes de enviar
+
+**Caso real que lo detectó**: Víctor: "¿porque cuando un proveedor contesta a una reclamación, sigue llegando la misma a gmail y no al correo del comprador?" — con capturas de una respuesta de proveedor llegando a la bandeja del Gmail compartido de envío.
+
+**Diagnóstico**: descartada la hipótesis de plantilla de EmailJS mal configurada — comprobado con Víctor que el campo "Reply To" de la plantilla SÍ está enlazado a `{{reply_to}}` correctamente. El fallo real estaba en `meaEnviarEmail()` (envío manual de alerta al proveedor desde el modal de Alertas, `templates/index.html`): desde v12.32.45, el Reply-To se calculaba como `ccList[0]` — el primer email de la lista de copia oculta TAL CUAL está en el modal en el momento de pulsar "Enviar". El modal permite quitar cualquier destinatario de esa copia con `meaRemoveCC()` (por ejemplo, para no poner a todo el mundo en copia en un envío puntual) — si se quita al único comprador de la lista, `ccList` queda vacío y el código nunca fijaba `reply_to`, así que EmailJS mandaba ese campo de la plantilla vacío y el cliente de correo del proveedor caía de vuelta al remitente real del mensaje (el Gmail compartido). El comprador responsable de responder no debería depender de si sigue o no en la copia visible — son dos decisiones independientes.
+
+**Cambio**: `meaEnviarEmail()` calcula ahora el Reply-To desde `_meaData.compradores` — la lista de compradores del hotel que ya trae el preview del servidor (`alerta_email_preview`, `app.py`, sin cambios) — en vez de `ccList`. Esta lista es estable y no se ve afectada por editar la copia oculta en el modal, así que el "Responder a" siempre apunta al comprador responsable del pedido, se quite o no de la copia visible.
+
+**Verificación**: extraída la función real `meaEnviarEmail()` de `templates/index.html` (sin reimplementarla) y ejecutada en Node con un DOM y un EmailJS simulados, reproduciendo primero el escenario exacto de Víctor (comprador quitado de la copia → antes del fix, `reply_to` quedaba `undefined`) y confirmando que con el fix el Reply-To sigue siendo el email del comprador en ese mismo escenario, que un correo interno (`es_proveedor=false`) sigue sin fijar Reply-To, y que un hotel sin comprador asignado tampoco lo fija (mismo comportamiento seguro de siempre). `node --check` del bloque de JS afectado, limpio.
+
+**Ficheros editados**: `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.63 — 17 septiembre 2026
 
 🔄 Revertida la exclusión del propio usuario en el correo interno de cambio de estado

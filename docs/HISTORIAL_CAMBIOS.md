@@ -49,6 +49,46 @@
 
 ---
 
+## 2026-09-17 — [Control Pedidos] Reply-To al proveedor dependía de si el comprador seguía en la copia oculta del envío manual (v12.32.64)
+
+- **Origen**: Víctor: "¿porque cuando un proveedor contesta a una
+  reclamación, sigue llegando la misma a gmail y no al correo del
+  comprador?", con capturas de una respuesta real de proveedor llegando a
+  la bandeja del Gmail compartido de envío.
+- **Descartado primero**: plantilla de EmailJS mal configurada —
+  comprobado con Víctor (captura de Admin → EmailJS Templates) que el
+  campo "Reply To" SÍ está enlazado a `{{reply_to}}` correctamente.
+- **Diagnóstico real**: `meaEnviarEmail()` (envío manual de alerta al
+  proveedor, `templates/index.html`) calculaba el Reply-To desde
+  `ccList[0]` — el primer email de la copia oculta tal cual está en el
+  modal al pulsar "Enviar". El modal permite quitar cualquier
+  destinatario de esa copia (`meaRemoveCC()`) antes de enviar — si se
+  quita al único comprador de la lista, `ccList` queda vacío y el código
+  nunca fijaba `reply_to`; EmailJS mandaba entonces ese campo de la
+  plantilla vacío y el cliente de correo del proveedor caía de vuelta al
+  remitente real (el Gmail compartido). A quién debe responder el
+  proveedor no debería depender de si ese comprador sigue o no en la
+  copia visible — son dos decisiones independientes.
+- **Cambio**: el Reply-To se calcula ahora desde `_meaData.compradores` —
+  la lista de compradores del hotel que ya trae el preview del servidor
+  (`alerta_email_preview`, sin cambios en `app.py`) — en vez de `ccList`.
+  Esa lista es estable y no se ve afectada por editar la copia oculta en
+  el modal.
+- **Verificación**: `meaEnviarEmail()` real extraída de
+  `templates/index.html` (sin reimplementarla) y ejecutada en Node con
+  DOM/EmailJS simulados — reproducido primero el escenario exacto de
+  Víctor (comprador quitado de la copia → `reply_to` quedaba `undefined`
+  con el código anterior) y confirmado que con el fix el Reply-To sigue
+  siendo el comprador en ese mismo escenario; un correo interno y un
+  hotel sin comprador asignado siguen sin fijar Reply-To (comportamiento
+  seguro de siempre). `node --check` del bloque de JS afectado, limpio.
+- **Norma 5 (otros documentos)**: no aplica, cambio de lógica de negocio
+  puntual sin implicaciones de despliegue ni pendiente relacionado.
+- **Ficheros**: `templates/index.html`, `README.md`, `CHANGELOG.md`,
+  `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-17 — [Control Pedidos] Revertida la exclusión del propio usuario en el correo interno de cambio de estado (v12.32.63)
 
 - **Origen**: Víctor: "Podemos revertir la decisión de los envíos en
