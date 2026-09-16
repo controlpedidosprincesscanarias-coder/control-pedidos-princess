@@ -3364,6 +3364,7 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
     pero sin corregir todavía en este flujo. Si se omite, el
     comportamiento no cambia respecto a versiones anteriores.
     """
+    reply_to = _reply_to_seguro(reply_to, contexto=f"_encolar_email_pedido_retrasado evento={evento_codigo} pedido={pedido_id}")
     try:
         db = get_db()
         cur = db.cursor()
@@ -4468,6 +4469,38 @@ def _html_a_texto_plano(html: str) -> str:
     return texto.strip()
 
 
+# (2026-09-16) A petición de Víctor, tras el caso del pedido 40758: una
+# reclamación automática al proveedor Khama Hotel volvió al buzón
+# compartido de Gmail en vez de al comprador que firma el correo (Maria
+# Cruz, centralcompras6.canarias@princess-hotels.com), sin que se haya
+# podido demostrar con certeza el motivo exacto — el código que calcula
+# el Reply-To para este flujo (_build_alerta_email / _get_compradores_cc)
+# no tiene ningún punto donde pueda devolver este buzón, así que la causa
+# más probable está fuera del propio código (plantilla EmailJS de otra
+# cuenta, o alguien respondiendo/reenviando a mano desde ese Gmail). Sea
+# cual sea la causa real, Víctor pidió una red de seguridad explícita e
+# incondicional: "que sea imposible contestarle" a este buzón — así que,
+# a partir de aquí, este valor concreto NUNCA se deja pasar como Reply-To
+# de un correo saliente a un proveedor, se calcule como se calcule y
+# venga de donde venga. Si alguna vía (bug futuro, dato mal cargado,
+# nueva integración...) llegase a calcularlo, se descarta aquí y cae al
+# comportamiento seguro de siempre: responder al propio destinatario.
+EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO = "controlpedidosprincess.canarias@gmail.com"
+
+def _reply_to_seguro(reply_to: str, contexto: str = "") -> str:
+    """Filtro de última línea antes de guardar cualquier reply_to en
+    emails_sistema_pendientes — ver EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO
+    arriba. Devuelve el mismo valor recibido salvo que coincida (sin
+    distinguir mayúsculas ni espacios) con el buzón compartido prohibido,
+    en cuyo caso devuelve None (el poller cae entonces en destinatario)."""
+    if reply_to and reply_to.strip().lower() == EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO:
+        log.error("[REPLY-TO-BLOQUEADO] Se ha intentado encolar %s como Reply-To (%s) — "
+                   "descartado por seguridad, se usará el destinatario en su lugar.",
+                   EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO, contexto or "sin contexto")
+        return None
+    return reply_to
+
+
 def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
                            asunto: str, cuerpo_html: str = None, cuerpo_text: str = None,
                            solicitud_acceso_id: int = None,
@@ -4502,6 +4535,7 @@ def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
     if not cuerpo_text and cuerpo_html:
         cuerpo_text = _html_a_texto_plano(cuerpo_html)
     cc_str = ",".join([e for e in (cc_emails or []) if e]) or None
+    reply_to = _reply_to_seguro(reply_to, contexto=f"_encolar_email_sistema evento={evento_codigo} pedido={pedido_id}")
     try:
         db = get_db()
         cur = db.cursor()
@@ -22222,6 +22256,42 @@ def api_emails_sistema_pendientes_detalle(email_id):
     resultado["longitud_cuerpo_html"] = len(_html_val)
     resultado["cuerpo_html"] = _html_val[:500]
     return jsonify({"ok": True, "fila": resultado})
+
+
+@app.route("/api/admin/emails-sistema-pendientes/por-pedido/<pedido_num>", methods=["GET"])
+@admin_required
+def api_emails_sistema_pendientes_por_pedido(pedido_num):
+    """
+    GET /api/admin/emails-sistema-pendientes/por-pedido/<pedido_num> —
+    (2026-09-16) Mismo espíritu que api_emails_sistema_pendientes_detalle
+    (buscar en la cola sin consola de SQL), pero a partir del Nº de pedido
+    SAP que Víctor sí conoce de memoria (p.ej. "40758"), no del id interno
+    de la fila de emails_sistema_pendientes que solo se ve en el log de
+    Render — a petición de Víctor, investigando por qué una reclamación
+    automática al proveedor (pedido 40758) recibió la respuesta en el
+    buzón compartido de Gmail en vez de en el email del comprador, para
+    poder ver de un vistazo el `reply_to` que de verdad quedó grabado en
+    esa fila concreta en vez de seguir revisando el código a ciegas.
+
+    Puede haber varias filas para el mismo pedido (cambio de estado,
+    reclamación automática, re-notificación manual...) — se devuelven
+    TODAS, más recientes primero, cada una con su propio evento_codigo y
+    reply_to, para poder distinguir cuál es cuál.
+    """
+    fila_pedido = query("SELECT id FROM pedidos WHERE pedido_num=%s", (pedido_num,), one=True)
+    if not fila_pedido:
+        return jsonify({"ok": False, "error": f"No existe ningún pedido con Nº {pedido_num}."}), 404
+    pedido_id = row_to_dict(fila_pedido)["id"]
+    filas = rows_to_list(query(
+        """SELECT id, evento_codigo, destinatario, cc_emails, reply_to,
+                  enviado, enviado_en, intentos, creado_en
+             FROM emails_sistema_pendientes
+            WHERE pedido_id=%s
+            ORDER BY id DESC
+            LIMIT 30""",
+        (pedido_id,)
+    )) or []
+    return jsonify({"ok": True, "pedido_id": pedido_id, "filas": filas})
 
 
 @app.route("/api/admin/emails-sistema-atascados", methods=["GET"])

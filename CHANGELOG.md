@@ -1,3 +1,21 @@
+# v12.32.65 — 16 septiembre 2026
+
+🛡️ Red de seguridad: el Gmail compartido nunca puede quedar como Reply-To de un correo a proveedor + buscador de diagnóstico por Nº de pedido
+
+**Caso real que lo detectó**: pedido 40758 (hotel Guayarmina Princess, proveedor Khama Hotel) — la respuesta del proveedor a la reclamación automática "[URGENTE] Seguimiento pedido Nº 40758" llegó al buzón compartido `controlpedidosprincess.canarias@gmail.com` en vez de a Maria Cruz (`centralcompras6.canarias@princess-hotels.com`), la comprador que firma el correo. Víctor confirmó que la Cuenta 3 de EmailJS (la activa, usada para este envío) tiene el campo "Reply To" de su plantilla correctamente enlazado a `{{reply_to}}` desde el día 14, y preguntó si el propio código contempla todos los envíos automáticos existentes, y si se puede impedir de raíz que ese buzón compartido pueda quedar nunca como destino de una respuesta.
+
+**Diagnóstico**: revisados los dos únicos sitios del código que generan este correo (la reclamación automática diaria, `_encolar_reclamacion_proveedor_auto()`, y la vista previa que alimenta el envío manual "Re-notificar", `alerta_email_preview()`) — ambos calculan el Reply-To a partir del email real del comprador en base de datos (`_get_compradores_cc()` → tabla `usuarios`), igual que el email que firma el cuerpo del correo; no existe en ningún punto del código una referencia al buzón compartido de Gmail que pudiera explicar por sí sola este resultado. No se ha podido demostrar con certeza la causa exacta de este caso concreto (plantilla de una cuenta EmailJS distinta a la activa en el momento del envío, o un reenvío/respuesta hecho a mano directamente desde ese Gmail) — así que, en vez de seguir revisando el código a ciegas, se añaden dos piezas: un buscador de diagnóstico para ver de un vistazo el reply_to real grabado en la cola para cualquier pedido, y — a petición explícita de Víctor — una red de seguridad incondicional que hace irrelevante cuál sea la causa.
+
+**Cambio**:
+- `_reply_to_seguro()` (nueva, `app.py`): filtro de última línea aplicado en los dos puntos donde se graba `reply_to` en `emails_sistema_pendientes` (`_encolar_email_sistema()` y `_encolar_email_pedido_retrasado()`) — si el valor coincide con `controlpedidosprincess.canarias@gmail.com` (constante `EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO`), se descarta y cae al comportamiento seguro de siempre (responder al propio destinatario). Mismo filtro replicado en JavaScript (`_replyToSeguro()`, `templates/index.html`) tanto en el poller automático (`_enviarEmailsSistemaPendientesInner`) como en el envío manual (`meaEnviarEmail()`), como segunda comprobación independiente en el navegador.
+- Nuevo buscador en Admin → EmailJS y Cola de Correo: "Buscar correos de esta cola por Nº de pedido (SAP)" — a partir del número de pedido que se conoce de memoria (antes solo se podía buscar por el id interno de la fila, visible únicamente en el log de Render), lista todas las filas encoladas para ese pedido con su evento_codigo, destinatario y el reply_to real que quedó grabado. Nuevo endpoint `GET /api/admin/emails-sistema-pendientes/por-pedido/<pedido_num>` (`app.py`).
+
+**Verificación**: `python3 -m py_compile app.py` limpio. Revisado que `_reply_to_seguro()` se llama antes de cada INSERT/UPDATE que graba `reply_to` en las dos funciones que lo aceptan como parámetro. Probado el filtro con el propio buzón compartido (en mayúsculas, con espacios alrededor, y exacto) y confirmado que se descarta en los tres casos y que cualquier otro email pasa sin tocar.
+
+**Ficheros editados**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.64 — 17 septiembre 2026
 
 🐛 La respuesta del proveedor a una reclamación llegaba al Gmail compartido en vez de al comprador — dependía de si alguien quitaba al comprador de la copia oculta antes de enviar

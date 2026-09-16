@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.64
+          V 12.32.65
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -10465,6 +10465,56 @@ async function _buscarEmailSistemaPorId() {
   }
 }
 
+// (2026-09-16) Ver api_emails_sistema_pendientes_por_pedido en app.py --
+// mismo buscador de arriba pero por Nº de pedido SAP (el que se conoce de
+// memoria, no el id interno de la fila que solo se ve en el log de
+// Render) -- a peticion de Victor, investigando por que la reclamacion
+// automatica al proveedor del pedido 40758 recibio la respuesta en el
+// Gmail compartido en vez de en el email del comprador: con esto se ve de
+// un vistazo el reply_to que de verdad quedo grabado en la fila, sin
+// seguir revisando el codigo a ciegas.
+async function _buscarEmailSistemaPorPedido() {
+  const input = document.getElementById('buscar-email-sistema-pedido');
+  const cont = document.getElementById('buscar-email-sistema-pedido-resultado');
+  if (!input || !cont) return;
+  const pedidoNum = input.value.trim();
+  if (!pedidoNum) return;
+  cont.innerHTML = 'Buscando...';
+  try {
+    const r = await api(`/api/admin/emails-sistema-pendientes/por-pedido/${encodeURIComponent(pedidoNum)}`);
+    if (!r || !r.ok) {
+      cont.innerHTML = `<span style="color:#dc3545">${esc((r && r.error) || 'No encontrado.')}</span>`;
+      return;
+    }
+    if (!r.filas.length) {
+      cont.innerHTML = `<span style="color:#888">Ese pedido no tiene ninguna fila en la cola de correos de sistema.</span>`;
+      return;
+    }
+    cont.innerHTML = `
+      <table style="border-collapse:collapse;width:100%;font-size:11.5px">
+        <tr style="color:#888;text-align:left">
+          <th style="padding:2px 8px 2px 0">id</th>
+          <th style="padding:2px 8px 2px 0">evento_codigo</th>
+          <th style="padding:2px 8px 2px 0">destinatario</th>
+          <th style="padding:2px 8px 2px 0">reply_to</th>
+          <th style="padding:2px 8px 2px 0">enviado</th>
+          <th style="padding:2px 8px 2px 0">creado_en</th>
+        </tr>
+        ${r.filas.map(f => `
+          <tr>
+            <td style="padding:2px 8px 2px 0">${f.id}</td>
+            <td style="padding:2px 8px 2px 0">${esc(f.evento_codigo || '')}</td>
+            <td style="padding:2px 8px 2px 0">${esc(f.destinatario || '')}</td>
+            <td style="padding:2px 8px 2px 0"><b>${esc(f.reply_to || '—')}</b></td>
+            <td style="padding:2px 8px 2px 0">${f.enviado ? `Sí — ${esc(f.enviado_en || '')}` : 'No'}</td>
+            <td style="padding:2px 8px 2px 0">${esc(f.creado_en || '')}</td>
+          </tr>`).join('')}
+      </table>`;
+  } catch (e) {
+    cont.innerHTML = `<span style="color:#dc3545">Error de conexión buscando el pedido.</span>`;
+  }
+}
+
 async function saveConfigAlertas() {
   // (2026-08-29) Acotado a los inputs de ESTA vista (antes buscaba en todo
   // el documento) — ahora que "Techo de gastos" y "EmailJS y cola de
@@ -10660,6 +10710,33 @@ async function loadEmailjsConfig() {
             <button class="btn btn-ghost btn-sm" onclick="_buscarEmailSistemaPorId()">Buscar</button>
           </div>
           <div id="buscar-email-sistema-resultado" style="margin-top:8px;font-size:11.5px"></div>
+        </div>
+
+        <!-- (2026-09-16) Mismo buscador que el de arriba, pero por Nº de
+             pedido SAP (el que se conoce de memoria) en vez de por id
+             interno de la fila -- ver api_emails_sistema_pendientes_por_pedido
+             en app.py. Lista TODAS las filas de ese pedido (puede haber
+             varias: cambio de estado, reclamación automática,
+             re-notificación manual...) con su evento_codigo y reply_to,
+             para poder ver de un vistazo cuál se mandó y qué Reply-To
+             quedó grabado de verdad, sin tener que adivinar a partir del
+             código. -->
+        <div style="margin-top:14px;padding:10px 12px;background:#f5f8ff;border:1px solid #cddcf5;border-radius:8px">
+          <div style="font-weight:700;font-size:12px;color:#1a3c6e;margin-bottom:6px">
+            🔍 Buscar correos de esta cola por Nº de pedido (SAP)
+          </div>
+          <div style="font-size:10.5px;color:#888;margin-bottom:8px">
+            Muestra todas las filas encoladas para ese pedido (cambio de estado, reclamación
+            automática, re-notificación manual...) con su evento_codigo y el reply_to que
+            quedó grabado en cada una — el mismo dato que EmailJS usó de verdad al enviar.
+          </div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input type="text" id="buscar-email-sistema-pedido" placeholder="Nº de pedido (p.ej. 40758)"
+                   style="width:180px;padding:5px 8px;border:1px solid #cddcf5;border-radius:5px;font-size:12px"
+                   onkeydown="if(event.key==='Enter') _buscarEmailSistemaPorPedido();">
+            <button class="btn btn-ghost btn-sm" onclick="_buscarEmailSistemaPorPedido()">Buscar</button>
+          </div>
+          <div id="buscar-email-sistema-pedido-resultado" style="margin-top:8px;font-size:11.5px"></div>
         </div>
       </div>`;
     body.innerHTML = html;
@@ -12174,7 +12251,15 @@ async function meaEnviarEmail() {
     if (_meaData.es_proveedor && _meaData.compradores && _meaData.compradores.length) {
       const _comprador0 = _meaData.compradores[0];
       const _replyToComprador = (_comprador0.email || '').trim();
-      if (_replyToComprador) payloadMea.reply_to = _replyToComprador;
+      // (2026-09-16) Misma red de seguridad que en el envío automático
+      // (ver _replyToSeguro / EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO) --
+      // si por lo que sea el email del comprador resultase ser el propio
+      // buzón compartido (p.ej. alguien registrado con ese email por
+      // error), no se fija como Reply-To: se deja sin fijar, y el envío
+      // cae al comportamiento seguro de siempre.
+      if (_replyToComprador && _replyToComprador.toLowerCase() !== EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO) {
+        payloadMea.reply_to = _replyToComprador;
+      }
     }
     await enviarEmailJS(payloadMea);
 
@@ -13502,6 +13587,25 @@ function _startEmailsSistemaPolling() {
 // nunca corran DOS pasadas de este poller a la vez en la misma pestana: si
 // ya hay una en curso, esta llamada se limita a marcar que hace falta
 // repetir en cuanto termine, en vez de arrancar una segunda en paralelo.
+// (2026-09-16) A petición de Víctor, tras el pedido 40758: red de
+// seguridad incondicional, independiente de si el reply_to llega bien
+// calculado desde el backend o no -- este buzón NUNCA debe poder quedar
+// como Reply-To de un correo saliente a un proveedor. Mismo valor y mismo
+// criterio que EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO / _reply_to_seguro
+// en app.py -- doble comprobación (servidor al encolar + navegador al
+// enviar) para que ni una fila vieja ya encolada antes de este fix, ni un
+// bug futuro en cualquiera de los dos lados, puedan colar este buzón como
+// Reply-To real.
+const EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO = 'controlpedidosprincess.canarias@gmail.com';
+function _replyToSeguro(replyTo, fallback) {
+  const v = (replyTo || '').trim().toLowerCase();
+  if (v && v === EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO) {
+    console.error('[REPLY-TO-BLOQUEADO] Se ha intentado usar el buzón compartido como Reply-To -- descartado, se usa el destinatario.');
+    return fallback || '';
+  }
+  return replyTo || fallback || '';
+}
+
 let _emailsSistemaEnvioEnCurso = false;
 let _emailsSistemaEnvioPendienteReintento = false;
 
@@ -13562,7 +13666,7 @@ async function _enviarEmailsSistemaPendientesInner() {
           // api_externo_dali_encolar_email en app.py). Si viene vacío,
           // se mantiene el comportamiento de siempre para el resto de
           // eventos de esta cola: responder al propio destinatario.
-          reply_to: p.reply_to || p.destinatario,
+          reply_to: _replyToSeguro(p.reply_to, p.destinatario),
         };
         if (esCorreoInternoPedido) payloadEmailJS.cc  = p.cc_emails || '';
         else                       payloadEmailJS.bcc = p.cc_emails || '';

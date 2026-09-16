@@ -49,6 +49,68 @@
 
 ---
 
+## 2026-09-16 — [Control Pedidos] Red de seguridad: el Gmail compartido nunca puede quedar como Reply-To a un proveedor + buscador de diagnóstico por Nº de pedido (v12.32.65)
+
+- **Origen**: pedido 40758 (hotel Guayarmina Princess, proveedor Khama
+  Hotel) — la respuesta del proveedor a la reclamación automática
+  "[URGENTE] Seguimiento pedido Nº 40758" llegó al buzón compartido
+  `controlpedidosprincess.canarias@gmail.com` en vez de a Maria Cruz
+  (`centralcompras6.canarias@princess-hotels.com`), la comprador que firma
+  el correo. Víctor confirmó que la Cuenta 3 de EmailJS (la activa, usada
+  en este envío) tiene el "Reply To" de su plantilla bien enlazado a
+  `{{reply_to}}` desde el día 14, y preguntó (1) si el código contempla de
+  verdad todas las formas de correo automático que existen en la
+  aplicación, y (2) si se puede excluir el Gmail compartido de raíz para
+  que sea imposible responderle, sea cual sea la causa.
+- **Diagnóstico**: revisados los dos únicos puntos del código que generan
+  este correo — `_encolar_reclamacion_proveedor_auto()` (automático,
+  job diario) y `alerta_email_preview()` (vista previa que alimenta el
+  envío manual "Re-notificar") — ambos calculan el Reply-To a partir del
+  email real del comprador en base de datos (`_get_compradores_cc()` →
+  tabla `usuarios`), el mismo que firma el cuerpo del correo; no hay en
+  ningún punto del código una referencia al buzón compartido que explique
+  por sí sola este resultado. No se ha podido demostrar con certeza la
+  causa exacta de este caso (plantilla de otra cuenta EmailJS distinta a
+  la activa en el momento exacto del envío, o alguien respondiendo/
+  reenviando a mano directamente desde ese Gmail) — se descarta también
+  "responder a todos" por parte del proveedor, ya que la cabecera de su
+  respuesta solo trae un destinatario. En vez de seguir revisando el
+  código a ciegas, se añaden dos piezas independientes de la causa exacta.
+- **Cambio 1 (diagnóstico)**: nuevo endpoint `GET /api/admin/emails-sistema-pendientes/por-pedido/<pedido_num>`
+  (`app.py`) y buscador correspondiente en Admin → EmailJS y Cola de
+  Correo ("Buscar correos de esta cola por Nº de pedido (SAP)",
+  `templates/index.html`) — a partir del número de pedido que se conoce
+  de memoria (antes solo se podía buscar por el id interno de la fila,
+  visible únicamente en el log de Render), lista todas las filas
+  encoladas para ese pedido con evento_codigo, destinatario y el reply_to
+  real que quedó grabado.
+- **Cambio 2 (red de seguridad, a petición explícita de Víctor)**:
+  `_reply_to_seguro()` (nueva, `app.py`) — filtro de última línea
+  aplicado en los dos puntos donde se graba `reply_to` en
+  `emails_sistema_pendientes` (`_encolar_email_sistema()` y
+  `_encolar_email_pedido_retrasado()`): si el valor coincide con
+  `controlpedidosprincess.canarias@gmail.com`
+  (`EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO`), se descarta y cae al
+  comportamiento seguro de siempre (responder al propio destinatario).
+  Mismo filtro replicado en JavaScript (`_replyToSeguro()`,
+  `templates/index.html`) en el poller automático
+  (`_enviarEmailsSistemaPendientesInner`) y en el envío manual
+  (`meaEnviarEmail()`) — segunda comprobación independiente en el
+  navegador, para que ni una fila ya encolada antes de este fix ni un
+  bug futuro en cualquiera de los dos lados puedan colar este buzón como
+  Reply-To real de un correo a un proveedor.
+- **Verificación**: `python3 -m py_compile app.py` limpio. Comprobado que
+  `_reply_to_seguro()` se llama antes de cada INSERT/UPDATE que graba
+  `reply_to`. Probado el filtro (Python y JS) con el buzón compartido en
+  minúsculas, mayúsculas y con espacios alrededor — descartado en los tres
+  casos — y confirmado que cualquier otro email pasa sin tocar.
+- **Norma 5 (otros documentos)**: no aplica, cambio interno de la cola de
+  correo sin implicaciones de despliegue ni pendiente relacionado.
+- **Ficheros**: `app.py`, `templates/index.html`, `README.md`,
+  `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-17 — [Control Pedidos] Reply-To al proveedor dependía de si el comprador seguía en la copia oculta del envío manual (v12.32.64)
 
 - **Origen**: Víctor: "¿porque cuando un proveedor contesta a una
