@@ -49,6 +49,46 @@
 
 ---
 
+## 2026-09-17 — [Control Pedidos] ENTREGADO/ENTREGA PARCIAL exigen ahora al menos una entrada real (albarán + importe) (v12.32.62)
+
+- **Origen**: Víctor: "veo que se puede cambiar el estado a ENTRREGADO sin
+  oblicacion de introducir el nuemero de albaran y total sin igic, esto es
+  un error ya que o queda documentada la trazabilidad correctamente."
+- **Diagnóstico**: `_validar_base_imponible_entradas()` (v12.31,
+  2026-08-28) exige Base imp. (€) en cada entrada de «Nº Entrada DALI /
+  SAP», pero una lista de entradas VACÍA es válida por diseño ("nada que
+  exigir todavía", su propio docstring) — pensado para no bloquear otros
+  estados sin entradas todavía. El problema: es la ÚNICA comprobación al
+  pasar a ENTREGA PARCIAL/ENTREGADO (backend `update_pedido`, dos ramas;
+  frontend `_validarBaseImponibleAlbaran()`, que además ignora las filas
+  sin número al recorrerlas) — así que un pedido sin ninguna entrada
+  registrada pasaba a ENTREGADO sin ningún albarán ni importe, porque
+  "cero entradas que comprobar" se consideraba siempre correcto
+  (`all([])` es `True`; el bucle de JS nunca encontraba nada incompleto
+  si no había ninguna fila con número).
+- **Cambio**: nueva `_validar_entradas_para_entrega()` (`app.py`) que
+  exige AL MENOS una entrada real (número de albarán no vacío) antes de
+  comprobar la Base imp. de cada una — sustituye a la llamada directa a
+  `_validar_base_imponible_entradas()` en los dos sitios de
+  `update_pedido()` (rama de rol Hotel y rama general). Mismo criterio en
+  `_validarBaseImponibleAlbaran()` (`templates/index.html`): sin ninguna
+  fila con número relleno, avisa y bloquea el guardado.
+- **Verificación**: `_validar_entradas_para_entrega()`/
+  `_parse_albaran_entries()` extraídas de `app.py` por AST (sin
+  reimplementarlas) y probadas con el escenario exacto de Víctor (campo
+  vacío → bloquea con el mensaje correcto), con número sin importe
+  (bloquea pidiendo Base imp.), y con número e importe (pasa). Misma
+  batería contra la función JS real extraída de `templates/index.html`,
+  ejecutada en Node con un DOM simulado — mismo resultado en los cuatro
+  casos. `python3 -m py_compile app.py` y `node --check` del bloque de JS
+  afectado, ambos limpios.
+- **Norma 5 (otros documentos)**: no aplica, cambio de validación puntual
+  sin implicaciones de despliegue ni pendiente relacionado.
+- **Ficheros**: `app.py`, `templates/index.html`, `README.md`,
+  `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-16 — [Control Pedidos] Departamento vs. Almacén del PDF: "SERVICIO TECNICO" ahora se resuelve a "SSTT" (v12.32.61)
 
 - **Origen**: Víctor, pedido 41417 (hotel GY — Guayarmina Princess), cuyo

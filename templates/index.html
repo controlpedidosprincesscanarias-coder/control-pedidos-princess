@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.61
+          V 12.32.62
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6013,15 +6013,37 @@ function getAlbaranCombined() {
 // caller (savePedido, tanto en modo Hotel como el resto de roles) debe
 // abortar el guardado en ese caso.
 function _validarBaseImponibleAlbaran() {
+  const filasConNumero = [];
   const filasIncompletas = [];
   document.querySelectorAll('#albaran-list .albaran-row').forEach(row => {
     const numInput = row.querySelector('.albaran-input');
     const impInput = row.querySelector('.albaran-base-imponible');
     const num = numInput ? numInput.value.trim() : '';
     if (!num) return; // fila vacía sin Nº de entrada, no es una entrada real
+    filasConNumero.push(numInput);
     const imp = impInput ? parseFloat(impInput.value) : NaN;
     if (!imp || imp <= 0) filasIncompletas.push(impInput);
   });
+  // (2026-09-17) A peticion de Victor: "se puede cambiar el estado a
+  // ENTREGADO sin obligacion de introducir el numero de albaran y total
+  // sin igic". Sin ninguna fila con Nº de entrada rellenado, el bucle de
+  // arriba no encuentra nada que comprobar y esta funcion dejaba pasar el
+  // cambio de estado sin ningun albaran ni importe registrado -- ahora
+  // exige al menos una entrada real antes de continuar.
+  if (!filasConNumero.length) {
+    showFormAlert(
+      'Debe registrar al menos una entrada en «Nº Entrada DALI / SAP» (número de albarán y '
+      + 'Base imp. €) antes de continuar — sin ninguna entrada no queda documentada la entrega.',
+      { title: '⚠️ Falta el albarán', duracion: 8000 }
+    );
+    const primerNumInput = document.querySelector('#albaran-list .albaran-row .albaran-input');
+    if (primerNumInput) {
+      primerNumInput.style.borderColor = '#dc3545';
+      primerNumInput.focus();
+      primerNumInput.addEventListener('input', () => primerNumInput.style.borderColor = '', { once: true });
+    }
+    return false;
+  }
   if (filasIncompletas.length) {
     showFormAlert(
       'La Base imp. (€) es obligatoria en cada entrada de «Nº Entrada DALI / SAP» — tanto en una entrada '

@@ -3036,6 +3036,52 @@ def _validar_base_imponible_entradas(entradas: list) -> bool:
     )
 
 
+def _validar_entradas_para_entrega(entradas: list) -> str:
+    """
+    (2026-09-17) A petición de Víctor, sobre un pedido real: "se puede
+    cambiar el estado a ENTREGADO sin obligación de introducir el número
+    de albarán y total sin igic, esto es un error ya que no queda
+    documentada la trazabilidad correctamente".
+
+    _validar_base_imponible_entradas() (justo arriba, v12.31/2026-08-28)
+    ya exige Base imp. (€) en cada entrada — pero solo valida las
+    entradas que YA EXISTEN, y por diseño una lista VACÍA es válida ("nada
+    que exigir todavía", ver su docstring): si el pedido no tiene ninguna
+    entrada en «Nº Entrada DALI / SAP» todavía, esa función no bloquea
+    nada — dejando pasar el cambio a ENTREGA PARCIAL/ENTREGADO sin haber
+    registrado ni un solo albarán ni importe, sin ninguna traza real de la
+    entrega.
+
+    Esta función añade la comprobación que faltaba: para ENTREGA
+    PARCIAL/ENTREGADO hace falta AL MENOS una entrada real (con su número
+    de albarán) además de su Base imp. (€) en todas. Se usa en los dos
+    sitios donde ya se llamaba a _validar_base_imponible_entradas() para
+    esta misma comprobación (update_pedido: rama de rol Hotel y rama
+    general) — sustituye a esa llamada, no se usa junto a ella.
+
+    Devuelve el mensaje de error a mostrar (string) si algo falta, o
+    cadena vacía si todo está en orden.
+    """
+    if not entradas:
+        return (
+            "Debe registrar al menos una entrada en «Nº Entrada DALI / SAP» (número de "
+            "albarán y Base imp. €) antes de continuar — sin ninguna entrada no queda "
+            "documentada la entrega."
+        )
+    if any((not e.get("num")) or e["num"] == "—" for e in entradas):
+        return (
+            "El número de albarán es obligatorio en cada entrada de «Nº Entrada DALI / SAP» — "
+            "tanto en una entrada parcial como en la entrada final (total) — para poder "
+            "continuar."
+        )
+    if not _validar_base_imponible_entradas(entradas):
+        return (
+            "La Base imp. (€) es obligatoria en cada entrada de «Nº Entrada DALI / SAP» — tanto "
+            "en una entrada parcial como en la entrada final (total) — para poder continuar."
+        )
+    return ""
+
+
 def _fecha_es(fecha_val):
     """Convierte una fecha 'YYYY-MM-DD' (o similar) en 'DD/MM/YYYY'. None si no hay valor."""
     if not fecha_val:
@@ -17002,14 +17048,13 @@ def update_pedido(pid):
         # pedido del propio hotel del usuario.
         if estado_solicitado == "ENVIADO AL PROVEEDOR":
             return jsonify({"error": "El usuario Hotel no puede marcar un pedido como ENVIADO AL PROVEEDOR"}), 403
-        # (2026-08-28) Base imp. (€) obligatoria en cada entrada — ver
-        # _validar_base_imponible_entradas().
-        if estado_solicitado in ("ENTREGA PARCIAL", "ENTREGADO") and not _validar_base_imponible_entradas(_parse_albaran_entries(albaran_val)):
-            return jsonify({
-                "ok": False,
-                "error": "La Base imp. (€) es obligatoria en cada entrada de «Nº Entrada DALI / SAP» — tanto "
-                         "en una entrada parcial como en la entrada final (total) — para poder continuar."
-            }), 422
+        # (2026-08-28) Base imp. (€) obligatoria en cada entrada, y
+        # (2026-09-17) al menos una entrada real (nº de albarán) — ver
+        # _validar_entradas_para_entrega().
+        if estado_solicitado in ("ENTREGA PARCIAL", "ENTREGADO"):
+            _error_entradas = _validar_entradas_para_entrega(_parse_albaran_entries(albaran_val))
+            if _error_entradas:
+                return jsonify({"ok": False, "error": _error_entradas}), 422
         execute("""
             UPDATE pedidos SET
                 entrada_albaran_num=%s, estado=%s,
@@ -17145,16 +17190,14 @@ def update_pedido(pid):
                     )
     # ── Fin validación ENVIADO AL PROVEEDOR ──────────────────────────────────
 
-    # ── Validación: Base imp. (€) obligatoria en cada entrada de «Nº Entrada
-    #    DALI / SAP» (parcial o final) — ver _validar_base_imponible_entradas() ──
+    # ── Validación: al menos una entrada real, con nº de albarán y Base
+    #    imp. (€), en «Nº Entrada DALI / SAP» (parcial o final) — ver
+    #    _validar_entradas_para_entrega() ──
     if estado_nuevo in ("ENTREGA PARCIAL", "ENTREGADO"):
         _albaran_val_validar = data.get("entrada_albaran_num", pedido_actual["entrada_albaran_num"])
-        if not _validar_base_imponible_entradas(_parse_albaran_entries(_albaran_val_validar)):
-            return jsonify({
-                "ok": False,
-                "error": "La Base imp. (€) es obligatoria en cada entrada de «Nº Entrada DALI / SAP» — tanto "
-                         "en una entrada parcial como en la entrada final (total) — para poder continuar."
-            }), 422
+        _error_entradas = _validar_entradas_para_entrega(_parse_albaran_entries(_albaran_val_validar))
+        if _error_entradas:
+            return jsonify({"ok": False, "error": _error_entradas}), 422
 
     ESTADOS_SIN_TRAMITAR = {
         "PENDIENTE FIRMA DIRECCION COMPRAS",

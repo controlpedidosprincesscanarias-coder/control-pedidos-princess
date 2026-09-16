@@ -1,3 +1,19 @@
+# v12.32.62 — 17 septiembre 2026
+
+🐛 Se podía pasar a ENTREGADO/ENTREGA PARCIAL sin registrar ningún albarán ni importe — la validación de "Base imp. (€)" era vacuamente válida sin entradas
+
+**Caso real que lo detectó**: Víctor: "veo que se puede cambiar el estado a ENTRREGADO sin oblicacion de introducir el nuemero de albaran y total sin igic, esto es un error ya que o queda documentada la trazabilidad correctamente".
+
+**Diagnóstico**: `_validar_base_imponible_entradas()` (v12.31, 2026-08-28) exige Base imp. (€) en cada entrada de «Nº Entrada DALI / SAP», pero por diseño una lista de entradas VACÍA es válida ("nada que exigir todavía", literal en su propio docstring) — pensado para no bloquear pedidos en otros estados que todavía no tienen ninguna entrada. El problema: esa misma función es la única comprobación que se hace al pasar a ENTREGA PARCIAL/ENTREGADO, tanto en el backend (`update_pedido`, rama de rol Hotel y rama general) como en el frontend (`_validarBaseImponibleAlbaran()`, que directamente ignora las filas sin número de albarán al recorrerlas). Resultado: un pedido sin ninguna entrada registrada — cero filas de «Nº Entrada DALI / SAP» rellenadas — podía pasar a ENTREGADO sin ningún albarán ni importe, porque "cero entradas que comprobar" siempre se consideraba correcto (`all([])` es `True` en Python; el bucle de JS nunca encontraba filas incompletas si no había ninguna fila con número).
+
+**Cambio**: nueva `_validar_entradas_para_entrega()` (`app.py`) que añade la comprobación que faltaba — exige AL MENOS una entrada real (con número de albarán no vacío) antes de aceptar Base imp. (€) en cada una — y sustituye a la llamada directa a `_validar_base_imponible_entradas()` en los dos sitios de `update_pedido()` donde se usaba para este fin. Mismo criterio replicado en `_validarBaseImponibleAlbaran()` (`templates/index.html`): si no hay ninguna fila con número de albarán relleno, ahora avisa y bloquea el guardado en vez de dejarlo pasar sin más.
+
+**Verificación**: extraídas las funciones reales (`_validar_entradas_para_entrega`, `_parse_albaran_entries`) por AST de `app.py` (sin reimplementarlas) y probadas con el escenario exacto de Víctor (campo vacío) — bloquea con el mensaje correcto; con número sin importe, bloquea pidiendo la Base imp.; con número e importe, pasa. Misma batería de casos contra la función JS real extraída de `templates/index.html` y ejecutada en Node con un DOM simulado, mismo resultado en los cuatro casos. `python3 -m py_compile app.py` y `node --check` del bloque de JS afectado, ambos limpios.
+
+**Ficheros editados**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.61 — 16 septiembre 2026
 
 🐛 "Almacén SERVICIO TECNICO" del PDF no coincidía con el departamento SSTT — bloqueaba ENVIADO AL PROVEEDOR en todos los hoteles
