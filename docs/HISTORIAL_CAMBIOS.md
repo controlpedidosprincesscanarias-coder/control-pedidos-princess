@@ -49,6 +49,36 @@
 
 ---
 
+## 2026-09-17 — [Control Pedidos] Revertida la exclusión del propio usuario en el correo interno de cambio de estado (v12.32.63)
+
+- **Origen**: Víctor: "Podemos revertir la decisión de los envíos en
+  cambio de estado? No omitir tampoco al usuario que lo a realizado, para
+  mayor control ya que se me quejan que no saben si han sido informados
+  los departamentos."
+- **Contexto**: desde 2026-08-19 (ajustado 2026-09-03 para respetar el
+  email2), `enviar_emails_estado()` excluía del correo interno de cambio
+  de estado a la persona concreta que había hecho el cambio — pensado
+  entonces para no duplicar aviso, ya que esa persona se enteraba por el
+  popup/Telegram (canal aparte). Con el uso real ha resultado
+  contraproducente: sin su propia copia, quien hace el cambio no puede
+  comprobar que el resto de destinatarios (departamentos incluidos) ha
+  recibido de verdad el aviso.
+- **Cambio**: eliminado el bloque de exclusión en `enviar_emails_estado()`
+  (`app.py`) — el correo interno se manda ahora siempre a todos los
+  internos, incluida la persona que hizo el cambio, manual o automático.
+  `usuario_id`/`es_automatico` mantienen su firma (siguen decidiendo el
+  retraso de encolado) pero ya no filtran destinatarios. El Telegram/popup
+  de `_telegram_cambio_estado` no se toca — nunca excluyó a nadie.
+- **Verificación**: `python3 -m py_compile app.py` limpio; confirmado que
+  no queda ninguna referencia residual a la variable de exclusión
+  eliminada (`_emails_actor`).
+- **Norma 5 (otros documentos)**: no aplica, cambio de lógica de negocio
+  puntual sin implicaciones de despliegue ni pendiente relacionado.
+- **Ficheros**: `app.py`, `README.md`, `CHANGELOG.md`,
+  `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-17 — [Control Pedidos] ENTREGADO/ENTREGA PARCIAL exigen ahora al menos una entrada real (albarán + importe) (v12.32.62)
 
 - **Origen**: Víctor: "veo que se puede cambiar el estado a ENTRREGADO sin

@@ -1,3 +1,19 @@
+# v12.32.63 — 17 septiembre 2026
+
+🔄 Revertida la exclusión del propio usuario en el correo interno de cambio de estado
+
+**Petición de Víctor**: "Podemos revertir la decisión de los envíos en cambio de estado? No omitir tampoco al usuario que lo a realizado, para mayor control ya que se me quejan que no saben si han sido informados los departamentos."
+
+**Contexto**: desde el 2026-08-19 (ajustado el 2026-09-03 para respetar el email2), `enviar_emails_estado()` excluía del correo interno de cambio de estado a la persona concreta que había hecho el cambio — la idea entonces era que ya se enteraba por el popup/Telegram, un canal aparte. Con el uso real esto ha resultado contraproducente: sin su propia copia del correo, quien hace el cambio no tiene forma de comprobar con sus propios ojos que el resto de destinatarios (departamentos incluidos) ha recibido exactamente ese aviso, y ha generado quejas de incertidumbre.
+
+**Cambio**: se elimina el bloque de exclusión en `enviar_emails_estado()` (`app.py`) — el correo interno de cambio de estado se manda ahora SIEMPRE a todos los internos (compradores + usuarios hotel + departamento + contactos adicionales configurados), incluida la persona que hizo el cambio, sea manual o automático. Los parámetros `usuario_id`/`es_automatico` se conservan sin cambios de firma (siguen usados para decidir el retraso de encolado: 2s automático vs. 300s manual), pero ya no filtran destinatarios. No afecta al Telegram/popup de `_telegram_cambio_estado`, que nunca excluyó a nadie.
+
+**Verificación**: `python3 -m py_compile app.py` limpio. Revisado que no queda ninguna referencia residual a la variable de exclusión eliminada (`_emails_actor`) en el resto del archivo.
+
+**Ficheros editados**: `app.py`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.62 — 17 septiembre 2026
 
 🐛 Se podía pasar a ENTREGADO/ENTREGA PARCIAL sin registrar ningún albarán ni importe — la validación de "Base imp. (€)" era vacuamente válida sin entradas

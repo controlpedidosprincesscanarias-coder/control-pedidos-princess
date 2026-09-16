@@ -3500,37 +3500,31 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     en el correo interno ("Realizado por:"), nunca en el correo al
     proveedor (es un dato interno, no debe salir fuera de la empresa).
 
-    (2026-08-19) usuario_id / es_automatico — a petición de Víctor, el
-    correo interno de cambio de estado ya NO se manda a las dos partes por
-    igual en un cambio manual: se excluye de los destinatarios a la
-    PERSONA CONCRETA que ha realizado el cambio (no a todo su rol/lado —
-    si comparte hotel con más compañeros de compras o de hotel, esos
-    siguen recibiendo el correo con normalidad), porque esa persona ya
-    sabe lo que acaba de hacer. Quien hizo el cambio se sigue enterando
-    por el popup/Telegram de "cambio_estado_pedido" (canal totalmente
-    aparte, ver _telegram_cambio_estado — no se toca aquí), tal como
-    pidió. (2026-08-19, ajuste: la primera versión excluía a todo el
-    lado/rol de quien hacía el cambio — Víctor pidió que fuera solo la
-    persona concreta.)
-    - usuario_id: id de quien realizó el cambio; se consulta su email
-      (y email2) y se quita de la lista de destinatarios del correo
-      interno. Si no se indica, o no tiene email, se manda a todos los
-      internos como antes (comportamiento más seguro por defecto que
-      dejar a alguien sin avisar).
-    - es_automatico=True: el cambio no lo ha decidido una persona en ese
-      momento (p. ej. _aplicar_coincidencia_albaran(), al confirmar una
-      coincidencia de "Comparar Pedidos + Albaranes") — se manda SIEMPRE
-      a todos los internos, igual que antes, sin excluir a nadie.
-      (2026-09-03) Además, con es_automatico=True el correo se encola con
-      un retraso mínimo (2s) en vez de los 300s (5 min) de un cambio
-      manual — ver _retraso_email_estado más abajo: el retraso largo
-      existe para agrupar varias ediciones manuales SEGUIDAS sobre el
-      mismo pedido en un único correo, algo que no aplica a un cambio
-      automático (una única escritura determinista por pedido). Motivo
-      del cambio: un cambio automático (hotel GY) se quedó en la cola sin
-      enviarse porque nadie dejó la app abierta 5 minutos más tras pulsar
-      "Aplicar" — a diferencia del correo de resumen de la comparación,
-      que si despacha la cola de inmediato desde el propio navegador.
+    (2026-08-19 → REVERTIDO 2026-09-17) usuario_id / es_automatico — entre
+    el 2026-08-19 y el 2026-09-17 el correo interno de cambio de estado
+    excluía de los destinatarios a la PERSONA CONCRETA que había realizado
+    el cambio manual (ajustado el 2026-09-03 para no excluir su email2),
+    porque esa persona ya se enteraba por el popup/Telegram de
+    "cambio_estado_pedido" (canal aparte, ver _telegram_cambio_estado). A
+    petición de Víctor esa exclusión queda REVERTIDA: "no omitir tampoco al
+    usuario que lo a realizado, para mayor control ya que se me quejan que
+    no saben si han sido informados los departamentos" — sin su propia
+    copia, quien hace el cambio no podía comprobar con sus propios ojos que
+    el resto (departamentos incluidos) había recibido el aviso. Ahora el
+    correo interno se manda SIEMPRE a todos los internos, incluida la
+    persona que hizo el cambio, sea manual o automático.
+    - usuario_id / es_automatico se mantienen como parámetros porque
+      es_automatico todavía decide el retraso de encolado (ver
+      _retraso_email_estado más abajo: 2s para un cambio automático, 300s/
+      5 min para uno manual, para agrupar varias ediciones manuales
+      SEGUIDAS sobre el mismo pedido en un único correo — algo que no
+      aplica a un cambio automático, una única escritura determinista por
+      pedido). Motivo original de esa distinción de retraso: un cambio
+      automático (hotel GY) se quedó en la cola sin enviarse porque nadie
+      dejó la app abierta 5 minutos más tras pulsar "Aplicar" — a
+      diferencia del correo de resumen de la comparación, que sí despacha
+      la cola de inmediato desde el propio navegador. Ninguno de los dos
+      parámetros filtra ya destinatarios.
 
     Devuelve: [] siempre — se mantiene por compatibilidad con los callers
     (create_pedido / update_pedido), que incluyen el valor en su respuesta
@@ -3618,33 +3612,23 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     _emails_compradores = [e for u in _usuarios_hotel["compradores"] for e in _emails_usuario(u)]
     _emails_hotel_users = [e for u in _usuarios_hotel["hotel_users"]  for e in _emails_usuario(u)]
 
-    # (2026-08-19) Se excluye del correo interno SOLO a la persona concreta
-    # que ha realizado el cambio (no a todo su rol/lado — un comprador o
-    # usuario hotel puede compartir hotel con más compañeros de su mismo
-    # rol, y esos sí deben seguir recibiendo el correo). Esa persona ya
-    # sabe lo que acaba de hacer y se entera por el popup/Telegram de
-    # "cambio_estado_pedido" (canal aparte, no tocado aquí). Si es un
-    # cambio automático, o no se sabe quién lo ha hecho, no se excluye a
-    # nadie (más seguro que dejar a alguien sin avisar por error).
-    #
-    # (2026-09-03) A petición de Víctor: SOLO se excluye el email PRINCIPAL
-    # del actor, nunca su email2. El email2 es un correo de control de esa
-    # misma cuenta (recibe copia de los avisos de sus hoteles asignados sin
-    # que tenga por qué coincidir con quien está operando el pedido), así
-    # que debe seguir recibiendo siempre la info referente a esos hoteles
-    # con independencia de quién haga el cambio — incluido el caso en que
-    # el propio dueño del email2 sea quien lo hizo: entonces solo se le
-    # quita el principal y el email2 sigue en la lista.
-    _emails_actor = []
-    if not es_automatico and usuario_id:
-        _actor = row_to_dict(query("SELECT email FROM usuarios WHERE id=%s", (usuario_id,), one=True))
-        _email_actor_principal = ((_actor or {}).get("email") or "").strip()
-        if _email_actor_principal:
-            _emails_actor = [_email_actor_principal]
-
+    # (2026-08-19 → REVERTIDO 2026-09-17) Desde el 2026-08-19 se excluía del
+    # correo interno a la persona concreta que había realizado el cambio
+    # (después ajustado el 2026-09-03 para no excluir su email2) — la idea
+    # era que esa persona ya sabía lo que acababa de hacer y se enteraba por
+    # el popup/Telegram, un canal aparte. A petición de Víctor se revierte
+    # esa decisión: "no omitir tampoco al usuario que lo a realizado, para
+    # mayor control ya que se me quejan que no saben si han sido informados
+    # los departamentos" — sin la copia del propio correo, quien hace el
+    # cambio no tiene forma de comprobar con sus propios ojos que el resto
+    # (departamentos incluidos) ha recibido exactamente ese aviso, y varias
+    # personas se han quejado de la incertidumbre. Ahora el correo interno
+    # de cambio de estado se manda SIEMPRE a todos los internos, incluida la
+    # persona que hizo el cambio — usuario_id/es_automatico se conservan
+    # como parámetros (los siguen usando otras partes de esta función, como
+    # el retraso de encolado más abajo) pero ya no se usan para excluir a
+    # nadie de esta lista.
     _todos_internos = list(dict.fromkeys(_emails_compradores + _emails_hotel_users))  # sin duplicados
-    if _emails_actor:
-        _todos_internos = [e for e in _todos_internos if e not in _emails_actor]
 
     # (2026-08-28) Copia al departamento solicitante del pedido — a petición
     # de Víctor (ver PENDIENTES.md): cada hotel puede tener registrado un
@@ -5311,10 +5295,12 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
     - es_cambio_manual=True queda encapsulado: el caller no necesita saber
       el detalle de la supresión de alertas contradictorias.
 
-    usuario_id / es_automatico: ver enviar_emails_estado() — deciden a qué
-    lado (comprador/hotel) se excluye del correo interno porque es quien ha
-    hecho el cambio. No afecta al Telegram/popup de _telegram_cambio_estado,
-    que sigue igual (canal aparte, no filtrado por quién hizo el cambio).
+    usuario_id / es_automatico: ver enviar_emails_estado() — desde
+    2026-09-17 ya no excluyen a nadie del correo interno (ver esa función
+    para el histórico de esa decisión, revertida a petición de Víctor);
+    es_automatico sigue decidiendo únicamente el retraso de encolado. No
+    afecta al Telegram/popup de _telegram_cambio_estado, que sigue igual
+    (canal aparte, no filtrado por quién hizo el cambio).
 
     (v12.32.03) El Telegram/popup se dispara SIEMPRE, incluso si falla la
     construcción/encolado del correo interno — antes, una excepción dentro
