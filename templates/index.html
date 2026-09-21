@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.66
+          V 12.32.68
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3755,6 +3755,59 @@ function _forzarVueltaALogin(mensaje) {
   const err = document.getElementById('login-error');
   if (mensaje) { err.textContent = mensaje; err.style.display = 'block'; }
 }
+
+/**
+ * (2026-09-21) Interceptor global de fetch(): esta app tiene decenas de
+ * llamadas a fetch() repartidas por todo este archivo (listados,
+ * exportaciones, importaciones, comparativas de PDF/Excel, backups,
+ * config de alertas, notificaciones de contactos...) que NO pasan por
+ * el helper api() de arriba — cada una comprueba r.ok/d.ok a su manera
+ * y, si falla, se limita a ocultar algún mensaje o mostrar un error
+ * puntual, sin saber nunca que el motivo real es que la sesión ha
+ * caducado por cambio de día (ver login_required/admin_required en
+ * app.py, _hoy_canarias()) — solo las llamadas que pasan por api()
+ * reaccionaban a ese aviso llamando a _forzarVueltaALogin().
+ *
+ * A petición de Víctor: "cuando se dejan la aplicacion abierta, la idea
+ * es que a las 00:00 se cierre automaticamente y vuelva a pedir
+ * credenciales, pero actualmente se queda abierta pero no responde
+ * correctamente hasta que se cierra y se vuelve a registrar" — el
+ * backend YA invalidaba la sesión correctamente en cuanto cambiaba el
+ * día (401 con `sesion_caducada: true`), pero las decenas de fetch()
+ * sueltos ignoraban ese aviso por completo, dejando la pestaña "abierta
+ * pero rota" (cada función fallando en silencio o con un error suelto)
+ * en vez de devolver a la pantalla de login — exactamente el síntoma
+ * reportado, resuelto hasta ahora solo cerrando la pestaña y volviendo
+ * a entrar.
+ *
+ * En vez de tocar una a una las decenas de llamadas sueltas (alto
+ * riesgo de dejarse alguna, aquí o en cualquier función que se añada
+ * en el futuro), se intercepta fetch() UNA sola vez, de forma global:
+ * cualquier respuesta 401 se inspecciona sobre una COPIA del cuerpo
+ * (`.clone()`, para no consumirlo — el código que hizo la llamada
+ * original tiene que poder seguir leyéndolo con total normalidad) y,
+ * si trae `sesion_caducada`, se fuerza la vuelta a login exactamente
+ * igual que ya hacía api() — así da igual qué función dispare la
+ * llamada, sea una que ya existe hoy o una que se añada más adelante.
+ * Si el cuerpo no es JSON (p.ej. la descarga de un fichero) o ya venía
+ * consumido, simplemente no se hace nada más y el caller original
+ * gestiona el error como ya hacía.
+ */
+const _fetchSinInterceptar = window.fetch.bind(window);
+window.fetch = async function (...args) {
+  const respuesta = await _fetchSinInterceptar(...args);
+  if (respuesta.status === 401) {
+    try {
+      const datos = await respuesta.clone().json();
+      if (datos && datos.sesion_caducada) {
+        _forzarVueltaALogin('Tu sesión ha caducado, vuelve a iniciar sesión');
+      }
+    } catch (_) {
+      // Cuerpo no era JSON o ya se había consumido — se ignora.
+    }
+  }
+  return respuesta;
+};
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Restablecimiento de contraseña

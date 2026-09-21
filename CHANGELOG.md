@@ -1,3 +1,38 @@
+# v12.32.68 — 21 septiembre 2026
+
+🔐 De 72 horas a 15 días sin sesión, y verificación cada 6 meses a TODOS los usuarios (aunque entren a diario)
+
+**Petición de Víctor** (verbatim): "para no ser tan exhaustivos, vamos a modificar la solicitud de codigo verificación de 72 horas a 15 dias sin registro y a cada 6 meses a todos los usuarios". Este mismo cambio se aplica también en DALI (`authController.js`), donde existe la misma funcionalidad desde v1.19.71 y se ha mantenido siempre sincronizada con esta app — no se especificó una sola de las dos apps, así que se ha aplicado a ambas por precedente histórico; avisar si en realidad solo debía tocar una de ellas.
+
+**Cambio**:
+- El umbral por INACTIVIDAD sube de 72 horas (3 días) a **15 días**: `HORAS_VERIFICACION_EMAIL = 15 * 24` (antes `72`) en `app.py`. Mismo mecanismo de siempre (código de 6 dígitos, 10 minutos de validez, pospuesto a día hábil si el umbral se cumple en fin de semana) — solo cambia el número.
+- Umbral NUEVO, independiente de la actividad: cada **6 meses** (`DIAS_VERIFICACION_PERIODICA = 182`, misma cifra que en DALI), a TODOS los usuarios, aunque entren a diario y nunca lleguen a los 15 días de inactividad. No puede medirse desde `ultimo_login` (se actualiza en CUALQUIER login, incluidos los que no piden código — alguien activo a diario nunca lo alcanzaría), así que usa una columna nueva, `usuarios.ultima_verificacion_login`, que solo se actualiza cuando el usuario COMPLETA de verdad un código: `_completar_login(user, verificado=True)`, únicamente desde `verificar_codigo_login()` — el login normal y `/api/bridge/login` (cuenta de servicio de main_agenda, que se salta este paso a propósito por no haber nadie delante para introducir un código) siguen llamando a `_completar_login(user)` sin marcarlo, así que no hacen avanzar este segundo contador.
+- `_auto_migrate()` (`app.py`) añade la columna `ultima_verificacion_login TIMESTAMPTZ` y la rellena, solo para filas donde esté vacía, con el valor que ya tuviera `ultimo_login` — evita forzar una verificación sorpresa a toda la plantilla el día del despliegue, justo lo contrario de lo que pedía Víctor ("no ser tan exhaustivos").
+- El caso "nunca ha entrado" (`ultimo_login` nulo) se sigue exigiendo siempre, sin depender de si es día hábil — solo el aplazamiento a día hábil aplica a los dos umbrales de arriba (inactividad y periódico). Esto ya era así antes de este cambio y se ha revisado con cuidado para no alterarlo al reestructurar la condición.
+- Badge de versión (`templates/index.html`): `V 12.32.67` → `V 12.32.68`.
+
+**Verificación**: extraída tal cual (sin reimplementar) la lógica real de `requiere_verificacion` de `login()` en `app.py`, ejecutada en un test Python contra 9 escenarios simulados: nunca ha entrado (exige siempre, incluso en fin de semana); inactivo 20 días en día hábil (exige); inactivo 20 días en fin de semana (se pospone); inactivo 10 días y verificó hace 2 meses (no exige); activo a diario pero verificó hace 213 días/>6 meses (exige, por el umbral periódico); activo a diario y verificó hace 150 días/<6 meses (no exige); activo a diario y nunca ha verificado con código (exige); límite exacto en 15.01 días (exige) y 14.9 días (no exige) — los 9 casos correctos. `python3 -m py_compile app.py` limpio.
+
+**Ficheros editados**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
+# v12.32.67 — 21 septiembre 2026
+
+🔒 La sesión SÍ caducaba a medianoche por dentro, pero la pantalla se quedaba "abierta pero rota" en vez de pedir credenciales de nuevo
+
+**Caso real que lo detectó**: Víctor: "cuando se dejan la aplicacion abierta, la idea es que a las 00:00 se cierre automaticamente y vuelva a pedir credenciales, pero actualmente se queda abierta pero no responde correctamente hasta que se cierra y se vuelve a registrar".
+
+**Diagnóstico**: el backend ya invalidaba la sesión correctamente en cuanto cambiaba el día en hora Canarias (`login_required`/`admin_required`, `app.py`): si `session["login_date"]` no coincide con hoy, responde 401 con `sesion_caducada: true`. El problema estaba solo en el frontend — el helper `api()` (`templates/index.html`) sí reacciona a ese aviso llamando a `_forzarVueltaALogin()`, pero la app tiene varias decenas de llamadas a `fetch()` sueltas repartidas por todo el fichero (listados, exportaciones, importaciones, comparativas de PDF/Excel, backups, config de alertas, notificaciones de contactos...) que NO pasan por `api()` — cada una comprueba el resultado a su manera y, al recibir el 401, se limitaba a ocultar algún mensaje o mostrar un error puntual sin saber nunca que el motivo real era la sesión caducada. El resultado: pasada la medianoche, cada función iba fallando en silencio por su cuenta según se usaba, en vez de devolver de golpe a la pantalla de login — la pestaña se quedaba "abierta pero rota", solo se arreglaba cerrándola y volviendo a entrar (lo que sí crea una sesión nueva desde cero).
+
+**Cambio**: en vez de tocar una a una las decenas de llamadas sueltas (alto riesgo de dejarse alguna, aquí o en cualquier función que se añada en el futuro), se intercepta `fetch()` UNA sola vez, de forma global, justo después de `_forzarVueltaALogin()`: cualquier respuesta 401 se inspecciona sobre una COPIA del cuerpo (`.clone()`, para no consumirlo — el código que hizo la llamada original sigue leyéndolo con total normalidad) y, si trae `sesion_caducada`, se fuerza la vuelta a login exactamente igual que ya hacía `api()` — da igual qué función dispare la llamada, sea una que ya existe hoy o una que se añada más adelante. Si el cuerpo no es JSON (p.ej. una descarga de fichero que falla) o el 401 no trae ese aviso (p.ej. nunca se ha iniciado sesión), no se hace nada más y el caller original gestiona el error como ya hacía. `templates/index.html`.
+
+**Verificación**: extraídas y ejecutadas las funciones reales (`_forzarVueltaALogin()` y el interceptor de `fetch()`) tal cual, sin reimplementarlas, contra respuestas simuladas con el `fetch`/`Response` nativos de Node: un 401 con `sesion_caducada: true` fuerza la pantalla de login y muestra el aviso, dejando el cuerpo de la respuesta perfectamente legible para el caller original; un 401 sin ese aviso (nunca autenticado) no toca nada; una respuesta 200 normal pasa intacta; y un 401 con cuerpo no-JSON (p.ej. una página de error de un proxy) no revienta ni fuerza nada. `node --check` de los 7 bloques `<script>` reales del fichero, limpio.
+
+**Ficheros editados**: `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.66 — 16 septiembre 2026
 
 🎯 Causa raíz encontrada del pedido 40758: el fallback de Reply-To se auto-referenciaba al propio proveedor, y su sistema de correo lo descartaba cayendo en el Gmail compartido

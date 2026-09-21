@@ -49,6 +49,109 @@
 
 ---
 
+## 2026-09-21 — [Control Pedidos] Verificación por email: de 72 horas a 15 días sin sesión, y nueva verificación cada 6 meses a todos los usuarios (v12.32.68)
+
+- **Origen**: Víctor (verbatim): "para no ser tan exhaustivos, vamos a
+  modificar la solicitud de codigo verificación de 72 horas a 15 dias sin
+  registro y a cada 6 meses a todos los usuarios". El mismo cambio se
+  aplica también en DALI (`authController.js`, v1.19.79), donde existe
+  esta misma funcionalidad desde v1.19.71 y se ha mantenido siempre
+  sincronizada con esta app — la petición no especificaba una sola de las
+  dos, así que se aplica a ambas por precedente histórico; a confirmar
+  con Víctor si en realidad solo debía tocar una.
+- **Cambio**:
+  - Umbral por INACTIVIDAD: 72 horas (3 días) → **15 días**
+    (`HORAS_VERIFICACION_EMAIL = 15 * 24`, `app.py`). Mismo mecanismo de
+    siempre (código de 6 dígitos, 10 min de validez, pospuesto a día
+    hábil si el umbral se cumple en fin de semana).
+  - Umbral NUEVO, independiente de la actividad: **cada 6 meses**
+    (`DIAS_VERIFICACION_PERIODICA = 182`, misma cifra que en DALI), a
+    TODOS los usuarios, aunque entren a diario. Medido desde una columna
+    nueva, `usuarios.ultima_verificacion_login` — no desde `ultimo_login`
+    (se actualiza en cualquier login, así que alguien activo a diario
+    nunca llegaría a un umbral medido desde ahí). Solo se actualiza
+    cuando el usuario COMPLETA de verdad un código:
+    `_completar_login(user, verificado=True)`, únicamente desde
+    `verificar_codigo_login()` — el login normal y `/api/bridge/login`
+    (cuenta de servicio de main_agenda, que se salta este paso a
+    propósito por no haber nadie delante para introducir un código) no lo
+    marcan como verificado.
+  - `_auto_migrate()` añade `ultima_verificacion_login TIMESTAMPTZ` y la
+    rellena, solo donde esté vacía, con el valor ya existente de
+    `ultimo_login` — evita forzar una verificación sorpresa a toda la
+    plantilla el día del despliegue.
+  - El caso "nunca ha entrado" sigue exigiéndose siempre, sin depender del
+    día de la semana — solo el aplazamiento a día hábil aplica a los
+    umbrales de inactividad y periódico. Se revisó con cuidado para no
+    alterar este comportamiento preexistente al reestructurar la
+    condición (un primer intento lo rompía por error, corregido antes de
+    entregar).
+- **Verificación**: extraída tal cual (sin reimplementar) la lógica real
+  de `requiere_verificacion` de `login()`, ejecutada en un test Python
+  contra 9 escenarios: nunca ha entrado (exige siempre, incluso en fin de
+  semana); inactivo 20 días en día hábil (exige) y en fin de semana (se
+  pospone); inactivo 10 días y verificó hace 2 meses (no exige); activo a
+  diario pero verificó hace 213 días/>6 meses (exige, umbral periódico);
+  activo a diario y verificó hace 150 días/<6 meses (no exige); activo a
+  diario y nunca ha verificado con código (exige); límites exactos en
+  15.01 días (exige) y 14.9 días (no exige) — los 9 casos correctos.
+  `python3 -m py_compile app.py` limpio.
+- **Norma 5 (otros documentos)**: revisados `GUIA_DESPLIEGUE.md`,
+  `INSTRUCCIONES_RESTAURACION.md` — no aplica, cambio de lógica de
+  aplicación sin implicaciones de despliegue ni restauración (la
+  migración es idempotente y ya está cubierta por `_auto_migrate()`, ver
+  README.md "Migraciones de base de datos"). `PENDIENTES.md` menciona
+  "72 horas" en la entrada de la Private Key de EmailJS (v12.32.55), pero
+  solo como referencia histórica de cuándo se construyó el mecanismo
+  original — no describe el umbral actual como una tarea pendiente, así
+  que tampoco necesita tocarse.
+- **Ficheros**: `app.py`, `templates/index.html`, `README.md`,
+  `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
+## 2026-09-21 — [Control Pedidos] La sesión caducaba bien a medianoche por dentro, pero la app se quedaba "abierta pero rota" en vez de pedir credenciales (v12.32.67)
+
+- **Origen**: Víctor: "cuando se dejan la aplicacion abierta, la idea es
+  que a las 00:00 se cierre automaticamente y vuelva a pedir
+  credenciales, pero actualmente se queda abierta pero no responde
+  correctamente hasta que se cierra y se vuelve a registrar".
+- **Diagnóstico**: el backend ya invalidaba bien la sesión al cambiar el
+  día en hora Canarias (`login_required`/`admin_required`, `app.py`,
+  comparando `session["login_date"]` contra hoy) — responde 401 con
+  `sesion_caducada: true`. El helper `api()` (`templates/index.html`) sí
+  reacciona a ese aviso llamando a `_forzarVueltaALogin()`, pero la app
+  tiene decenas de llamadas a `fetch()` sueltas por todo el fichero
+  (listados, exportaciones, importaciones, comparativas de PDF/Excel,
+  backups, config de alertas, notificaciones de contactos...) que NO
+  pasan por `api()` — cada una comprobaba el resultado a su manera y, al
+  recibir el 401, se limitaba a ocultar algún mensaje o mostrar un error
+  puntual, sin saber nunca que el motivo real era la sesión caducada.
+  Pasada la medianoche, cada función iba fallando en silencio por su
+  cuenta según se usaba — la pestaña se quedaba "abierta pero rota",
+  solo se arreglaba cerrándola y volviendo a entrar.
+- **Cambio**: se intercepta `fetch()` UNA sola vez, de forma global, en
+  vez de tocar una a una las decenas de llamadas sueltas — cualquier
+  respuesta 401 se inspecciona sobre una copia del cuerpo (`.clone()`,
+  sin consumirlo, para que el caller original lo siga leyendo con
+  normalidad) y, si trae `sesion_caducada`, fuerza la vuelta a login
+  igual que ya hacía `api()`, sin importar qué función hiciera la
+  llamada.
+- **Verificación**: extraídas y ejecutadas las funciones reales
+  (`_forzarVueltaALogin()` y el interceptor) tal cual, con el
+  `fetch`/`Response` nativos de Node: un 401 con `sesion_caducada` fuerza
+  login y deja el cuerpo legible para el caller; un 401 sin ese aviso, o
+  una respuesta 200 normal, no tocan nada; un 401 con cuerpo no-JSON
+  (p.ej. una página de error de un proxy) no revienta. `node --check` de
+  los 7 bloques `<script>` reales del fichero, limpio.
+- **Norma 5 (otros documentos)**: revisados `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, cambio de
+  frontend puro sin implicaciones de despliegue ni restauración.
+- **Ficheros**: `templates/index.html`, `README.md`, `CHANGELOG.md`,
+  `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-16 — [Control Pedidos] Causa raíz del pedido 40758: el fallback de Reply-To se auto-referenciaba al propio proveedor (v12.32.66)
 
 - **Origen**: Víctor localizó en la carpeta "Enviados" del Gmail compartido

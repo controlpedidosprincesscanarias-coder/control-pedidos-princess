@@ -2039,6 +2039,30 @@ def _auto_migrate():
                     creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 )
             """)
+            # (2026-09-21) Verificación periódica cada 6 meses (ver
+            # DIAS_VERIFICACION_PERIODICA más arriba): a diferencia de
+            # ultimo_login (se actualiza en CUALQUIER login), esta columna
+            # solo se actualiza cuando el usuario COMPLETA de verdad un
+            # código (_completar_login(user, verificado=True), solo desde
+            # verificar_codigo_login()) — así el umbral de 6 meses avanza
+            # igual para todo el mundo, use la app a diario o no.
+            cur.execute(
+                "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultima_verificacion_login TIMESTAMPTZ"
+            )
+            # Backfill para cuentas ya existentes: se usa ultimo_login como
+            # estimación razonable de "la última vez que sabemos que esta
+            # persona entró de verdad" — evita forzar una oleada de
+            # verificaciones sorpresa el día que se despliegue este cambio
+            # (justo lo contrario de "no ser tan exhaustivos", que es lo que
+            # pidió Víctor). `WHERE ultima_verificacion_login IS NULL` hace
+            # que sea seguro volver a ejecutar esto en cada arranque sin
+            # pisar un valor ya real más adelante.
+            cur.execute("""
+                UPDATE usuarios
+                   SET ultima_verificacion_login = ultimo_login
+                 WHERE ultima_verificacion_login IS NULL
+                   AND ultimo_login IS NOT NULL
+            """)
             # ── Configuración de Avisos (v12.4.0) ────────────────────────────
             # Sustituye la lógica hardcodeada de qué administradores reciben
             # cada tipo de alerta de sistema (antes: TIPOS_SUPERVISION_ADMIN +
@@ -8153,15 +8177,33 @@ def static_files(filename):
 
 # ── API Auth ───────────────────────────────────────────────────────────────────
 
-HORAS_VERIFICACION_EMAIL = 72  # horas reales transcurridas desde el último login para exigir código
+HORAS_VERIFICACION_EMAIL = 15 * 24  # umbral por INACTIVIDAD: horas reales transcurridas desde el último login
 # (2026-09-11) Antes: DIAS_VERIFICACION_EMAIL = 3 días NATURALES sin login,
 # comparando solo fechas de calendario (_hoy_canarias() - fecha de
 # ultimo_login), sin importar la hora exacta de cada uno. A petición de
 # Víctor, la exigencia pasa a contarse en HORAS reales transcurridas desde
-# ultimo_login (no calendario), pero solo se exige si esas 72h se cumplen
+# ultimo_login (no calendario), pero solo se exige si esas horas se cumplen
 # en día hábil — si caen en fin de semana, se pospone al primer día hábil
 # siguiente. Mismo criterio de "posponer al día hábil" que el aviso visual
 # de catálogo desactualizado en DALI. Ver _es_dia_habil() más abajo.
+#
+# (2026-09-21) A petición de Víctor: "para no ser tan exhaustivos, vamos a
+# modificar la solicitud de codigo verificación de 72 horas a 15 dias sin
+# registro y a cada 6 meses a todos los usuarios" — dos cambios:
+#   1. El umbral por INACTIVIDAD sube de 72 horas (3 días) a 15 días —
+#      mismo mecanismo de siempre, solo cambia el número (de ahí
+#      "15 * 24" arriba en vez de un 72 suelto: el número que importa
+#      ahora es días, no horas).
+#   2. Umbral nuevo, independiente de la actividad: cada 6 meses, a TODOS
+#      los usuarios, aunque entren todos los días y nunca lleguen a los 15
+#      días de inactividad. Se mide desde la última vez que el usuario
+#      completó de verdad un código (`usuarios.ultima_verificacion_login`,
+#      columna nueva, ver _auto_migrate() más abajo), NO desde
+#      `ultimo_login` sin más — esa columna se actualiza en CUALQUIER
+#      login, incluidos los que no piden código, así que nunca dejaría
+#      avanzar este segundo contador para alguien activo a diario (ver
+#      _completar_login(), que es quien distingue los dos casos).
+DIAS_VERIFICACION_PERIODICA = 182  # ≈ 6 meses de calendario — mismo número que en DALI (authController.js), para que las dos apps exijan la verificación periódica con la misma cadencia real
 
 
 def _es_dia_habil(fecha):
@@ -8228,28 +8270,52 @@ def login():
     if not user or not _verifica_y_migra_password(user, password):
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
-    # ── Verificación por email tras varios días de inactividad ──────────────
+    # ── Verificación por email tras varios días de inactividad, o cada 6
+    #    meses a todos los usuarios ──────────────────────────────────────
     # No afecta al uso diario normal (la sesión ya caduca cada día y exige
     # contraseña de nuevo); esto es una capa extra solo para el caso de
-    # cuentas que llevan tiempo sin usarse (vacaciones, bajas, etc.).
+    # cuentas que llevan tiempo sin usarse (vacaciones, bajas, etc.) — y,
+    # desde 2026-09-21, también para reconfirmar periódicamente el acceso
+    # de cuentas que SÍ se usan a diario.
     #
     # (2026-09-11) Ver el comentario grande junto a HORAS_VERIFICACION_EMAIL:
     # ya no se cuentan "días naturales sin login" sino horas reales
     # transcurridas desde `ultimo_login`, con la exigencia pospuesta a un
-    # día hábil si las 72h se cumplen en fin de semana. Sin ultimo_login
+    # día hábil si el umbral se cumple en fin de semana. Sin ultimo_login
     # (usuario que nunca ha entrado, o migrado antes de que existiera esta
     # columna) se exige igual que antes, sin necesidad de calcular horas.
-    horas_inactivo = None
-    if user.get("ultimo_login"):
+    #
+    # (2026-09-21) Segundo motivo, independiente del anterior: si han
+    # pasado ≥DIAS_VERIFICACION_PERIODICA días desde la última vez que el
+    # usuario completó de verdad un código (`ultima_verificacion_login`,
+    # ver _completar_login() más abajo), también se exige — aunque
+    # `ultimo_login` sea de ayer mismo. Se comprueba solo si el motivo de
+    # inactividad todavía no la exige, para no calcular de más.
+    # Nota: "nunca ha entrado" exige SIEMPRE, sin esperar a día hábil — solo
+    # el aplazamiento por fin de semana aplica al caso de inactividad/
+    # verificación periódica (igual que en la versión original de este
+    # bloque, y que el equivalente en DALI: _requiereVerificacionLogin()).
+    if not user.get("ultimo_login"):
+        requiere_verificacion = True
+    elif not _es_dia_habil(_hoy_canarias()):
+        requiere_verificacion = False
+    else:
         ultimo_login = user["ultimo_login"]
         if ultimo_login.tzinfo is None:
             ultimo_login = ultimo_login.replace(tzinfo=timezone.utc)
         horas_inactivo = (datetime.now(timezone.utc) - ultimo_login).total_seconds() / 3600
 
-    requiere_verificacion = (
-        horas_inactivo is None
-        or (horas_inactivo >= HORAS_VERIFICACION_EMAIL and _es_dia_habil(_hoy_canarias()))
-    )
+        if horas_inactivo >= HORAS_VERIFICACION_EMAIL:
+            requiere_verificacion = True
+        else:
+            ultima_verificacion = user.get("ultima_verificacion_login")
+            if not ultima_verificacion:
+                requiere_verificacion = True
+            else:
+                if ultima_verificacion.tzinfo is None:
+                    ultima_verificacion = ultima_verificacion.replace(tzinfo=timezone.utc)
+                dias_desde_verificacion = (datetime.now(timezone.utc) - ultima_verificacion).total_seconds() / 86400
+                requiere_verificacion = dias_desde_verificacion >= DIAS_VERIFICACION_PERIODICA
 
     if requiere_verificacion and user.get("email"):
         import secrets
@@ -8322,9 +8388,13 @@ def login():
     return _completar_login(user)
 
 
-def _completar_login(user):
-    """Fija la sesión y actualiza ultimo_login. Compartido entre el login
-    normal y la confirmación de código de verificación."""
+def _completar_login(user, verificado=False):
+    """Fija la sesión y actualiza ultimo_login (y, cuando verificado=True,
+    también ultima_verificacion_login). Compartido entre el login normal
+    (verificado=False — incluye el bridge de main_agenda, que se salta a
+    propósito el paso de verificación) y la confirmación de código de
+    verificación (verificado=True — único caso que cuenta como una
+    verificación real a efectos del umbral periódico de 6 meses)."""
     hoy = _hoy_canarias()
     session.clear()
     session["user_id"]    = user["id"]
@@ -8339,7 +8409,10 @@ def _completar_login(user):
     session["hoteles_ids"] = hoteles_ids
 
     db = get_db()
-    execute("UPDATE usuarios SET ultimo_login=NOW() WHERE id=%s", (user["id"],))
+    if verificado:
+        execute("UPDATE usuarios SET ultimo_login=NOW(), ultima_verificacion_login=NOW() WHERE id=%s", (user["id"],))
+    else:
+        execute("UPDATE usuarios SET ultimo_login=NOW() WHERE id=%s", (user["id"],))
     db.commit()
 
     return jsonify({"ok": True, "id": user["id"], "username": user["username"],
@@ -8460,7 +8533,7 @@ def verificar_codigo_login():
     execute("UPDATE login_verification_codes SET usado=1 WHERE id=%s", (row["id"],))
     db.commit()
 
-    return _completar_login(user)
+    return _completar_login(user, verificado=True)
 
 
 @app.route("/api/bridge/login", methods=["POST"])

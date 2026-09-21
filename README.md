@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.66** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.68** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -311,6 +311,63 @@ confundirse entre sí, ver más abajo):
 - `hotel` — acceso limitado a su propio hotel; sin acceso a Techo de
   Gastos ni a vistas de administración.
 - `user` — rol genérico adicional usado en algunos flujos de permisos.
+
+### Sesión y autenticación
+
+La sesión (Flask `session`, cookie de servidor) caduca automáticamente al
+cambiar el día en hora Canarias, no por tiempo transcurrido — pensado para
+que una pestaña olvidada abierta en la oficina no se quede autenticada
+indefinidamente, y para forzar credenciales nuevas cada jornada. Al
+iniciar sesión se guarda `session["login_date"]` (fecha de hoy, hora
+Canarias); `login_required`/`admin_required` (`app.py`) comparan esa
+fecha contra la de hoy en cada petición protegida y, si no coincide,
+invalidan la sesión (`session.clear()`) y responden 401 con
+`sesion_caducada: true`.
+
+**(2026-09-21, v12.32.67)** Esa invalidación siempre fue correcta por el
+lado del servidor, pero el frontend solo la traducía en "volver a la
+pantalla de login" cuando la llamada pasaba por el helper `api()`
+(`templates/index.html`) — las decenas de `fetch()` sueltos del resto del
+fichero (listados, exportaciones, comparativas, backups...) no lo
+comprobaban, así que la app se quedaba "abierta pero rota" tras la
+medianoche hasta que alguien cerraba la pestaña y volvía a entrar. Ahora
+`fetch()` está interceptado globalmente (una sola vez, justo después de
+`_forzarVueltaALogin()`): cualquier 401 con `sesion_caducada` fuerza la
+pantalla de login sin importar qué función hiciera la llamada — ver
+`CHANGELOG.md` v12.32.67 para el detalle y la verificación.
+
+**Verificación por email tras inactividad, y cada 6 meses a todos los
+usuarios** (`POST /api/login`, `POST /api/verificar-codigo-login`) — tras
+usuario/contraseña correctos, si no hay `usuarios.ultimo_login` (nunca ha
+entrado) se exige siempre un código de 6 dígitos por email (10 minutos de
+validez, tabla `login_verification_codes`); si sí lo hay, se exige cuando
+se cumple cualquiera de estos dos umbrales, siempre pospuesto al primer
+día hábil si cae en fin de semana (`_es_dia_habil()`):
+
+1. **Por inactividad**: han pasado ≥`HORAS_VERIFICACION_EMAIL` horas
+   reales desde `ultimo_login`.
+2. **Periódico** (nuevo, 2026-09-21): han pasado
+   ≥`DIAS_VERIFICACION_PERIODICA` días desde la última vez que el usuario
+   completó de verdad un código — columna `usuarios.ultima_verificacion_login`,
+   que solo actualiza `_completar_login(user, verificado=True)`, y solo
+   desde `verificar_codigo_login()` (el login normal y `/api/bridge/login`
+   llaman a `_completar_login(user)` sin marcarlo como verificado, así que
+   no hacen avanzar este segundo contador).
+
+**(2026-09-21)** A petición de Víctor, "para no ser tan exhaustivos": el
+umbral por inactividad sube de 72 horas (3 días) a **15 días**
+(`HORAS_VERIFICACION_EMAIL = 15 * 24`), y se añade el umbral periódico de
+**6 meses** (`DIAS_VERIFICACION_PERIODICA = 182`, misma cifra que en DALI
+para que ambas apps exijan la verificación con la misma cadencia real).
+El umbral periódico se calcula solo si el de inactividad todavía no la
+exige, para no calcular de más. Migración: `_auto_migrate()` añade la
+columna `ultima_verificacion_login` y la rellena, para las cuentas ya
+existentes, con el valor que ya tuvieran en `ultimo_login` (evita forzar
+una verificación sorpresa a todo el mundo el día del despliegue). No
+aplica a `/api/bridge/login` (cuenta de servicio de main_agenda, sin
+ninguna persona delante para introducir un código — se salta este paso a
+propósito, ver el docstring de esa ruta en `app.py`). Ver `CHANGELOG.md`
+v12.32.68 para el detalle y la verificación.
 
 ---
 
