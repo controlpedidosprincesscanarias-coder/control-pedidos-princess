@@ -49,6 +49,62 @@
 
 ---
 
+## 2026-09-25 — [Control Pedidos] PDF de pedido oficial rechazado por un cambio de comportamiento de pypdf entre Cantidad y Precio (v12.32.69)
+
+- **Origen**: Víctor reportó el pedido 16756 (proveedor CUBE ROOT CARDS
+  SL, hotel La Palma Teneguía) rechazado al subir su PDF en «Nº Pedido
+  (DALI/SAP)», con el error "El PDF adjuntado no tiene el formato del
+  pedido oficial PRINCESS, o viene firmado/sellado sin que se puedan leer
+  con claridad el Nº de Pedido y las líneas de artículos con su importe
+  (...)" — adjuntó el PDF real (`F.D. PEDIDO 16756.pdf`) y el ZIP del
+  código realmente desplegado.
+- **Diagnóstico**: comprobado con el PDF real de Víctor y `pypdf==6.16.2`
+  (la versión fijada en `requirements.txt`) — `PdfReader.extract_text()`
+  SÍ reconoce "PEDIDO 00016756" con normalidad, pero la línea de artículo
+  sale sin ningún espacio entre Cantidad y Precio: "10.000,00000,26
+  2.553,00" en vez de "10.000,0000 0,26 2.553,00". `_PATRON_IMPORTE_LINEA_
+  OFICIAL` exigía `\s+` (uno o más espacios) entre esos dos números, así
+  que no encontraba ninguna línea de artículo (`lineas_importe` vacío) y
+  el PDF se rechazaba entero, aunque el documento era exactamente el
+  pedido oficial correcto. Es EL MISMO problema, en el mismo tipo de PDF
+  de SAP, ya diagnosticado y corregido el 2026-08-11 en
+  `_PATRON_LISTADO_SIMPLIFICADO` (pypdf ≥4 dejó de rellenar con un
+  espacio el hueco entre ciertas celdas contiguas cuando no hay
+  suficiente separación visual en el PDF original) — pero esa misma
+  lección no se aplicó 17 días después, el 2026-08-28, al construir
+  `_PATRON_IMPORTE_LINEA_OFICIAL` para leer el PDF de pedido oficial, que
+  se quedó con el `\s+` original. No es un fallo del PDF de Víctor ni de
+  ningún otro dato — cualquier pedido oficial cuya columna Cantidad/Precio
+  quedara con poco margen visual en el PDF de origen habría fallado igual.
+- **Cambio**: `_PATRON_IMPORTE_LINEA_OFICIAL` (`app.py`) pasa sus dos
+  separadores (Cantidad→Precio y Precio→Importe) de `\s+` a `\s*` (cero o
+  más) — mismo arreglo, mismo razonamiento, que el ya aplicado en
+  `_PATRON_LISTADO_SIMPLIFICADO`: sigue funcionando igual si hay espacio
+  real (no cambia ningún PDF que ya se leyera bien) y ya no rompe si no lo
+  hay. La ambigüedad de dónde termina un número y empieza el siguiente la
+  resuelve el propio backtracking de la expresión regular contra la coma
+  decimal de cada número — no hace falta ningún criterio adicional.
+- **Verificación**: ejecutado `_parsear_pdf_pedido_oficial()` (extraído
+  tal cual, sin reimplementar, con sus mismas funciones auxiliares) contra
+  el PDF real del pedido 16756, con `pypdf==6.16.2`: antes del cambio, 0
+  líneas de artículo encontradas (rechazo, reproduce el error real);
+  después, la línea se lee correctamente (Cantidad 10.000,0000 · Precio
+  0,26 · Importe 2.553,00) y el resultado completo sale correcto — Nº
+  Pedido 16756, Total 2.553,00 €, Fecha Pedido/Entrega 23/09/2027 (tal
+  cual la trae el propio PDF), Proveedor código 00000507 "CUBE ROOT CARDS
+  SL", Almacén "ECONOMATO", Hotel "HOTEL LA PALMA TENEGUIA PRINCESS".
+  `python3 -m py_compile app.py` limpio.
+- **Norma 5 (otros documentos)**: revisados `GUIA_DESPLIEGUE.md`,
+  `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica, cambio
+  puntual de una expresión regular sin implicaciones de despliegue,
+  tareas pendientes ni restauración; `GUIA_DESPLIEGUE.md` sí menciona el
+  PDF de pedido oficial (contexto del OCR de respaldo, v12.32.42), pero
+  esa parte no cambia con este arreglo.
+- **Ficheros**: `app.py`, `templates/index.html`, `README.md`,
+  `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 ## 2026-09-21 — [Control Pedidos] Verificación por email: de 72 horas a 15 días sin sesión, y nueva verificación cada 6 meses a todos los usuarios (v12.32.68)
 
 - **Origen**: Víctor (verbatim): "para no ser tan exhaustivos, vamos a

@@ -1,3 +1,21 @@
+# v12.32.69 — 25 septiembre 2026
+
+🧾 PDF de pedido oficial rechazado por un cambio de comportamiento de pypdf entre Cantidad y Precio
+
+**Víctor reportó**: el pedido 16756 (CUBE ROOT CARDS SL, Hotel La Palma Teneguía) rechazado al adjuntar su PDF oficial en «Nº Pedido (DALI/SAP)», con "El PDF adjuntado no tiene el formato del pedido oficial PRINCESS...", adjuntando el PDF real y el ZIP del código desplegado.
+
+**Diagnóstico**: comprobado con el PDF real y `pypdf==6.16.2` (la versión fijada en `requirements.txt`): el Nº de Pedido se leía bien, pero la línea de artículo salía sin espacio entre Cantidad y Precio — "10.000,00000,26 2.553,00" en vez de "10.000,0000 0,26 2.553,00" — y `_PATRON_IMPORTE_LINEA_OFICIAL` exigía un espacio real (`\s+`) ahí, así que no encontraba ninguna línea y rechazaba el PDF entero, aunque era el pedido oficial correcto. Es el mismo problema, en el mismo tipo de documento, ya diagnosticado y corregido el 2026-08-11 en `_PATRON_LISTADO_SIMPLIFICADO` (pypdf ≥4 dejó de insertar un espacio entre celdas contiguas con poco margen visual) — esa misma lección no se aplicó 17 días después al construir este patrón nuevo para el PDF de pedido oficial.
+
+**Cambio**:
+- `_PATRON_IMPORTE_LINEA_OFICIAL` (`app.py`): sus dos separadores (Cantidad→Precio, Precio→Importe) pasan de `\s+` a `\s*` — mismo arreglo ya aplicado en `_PATRON_LISTADO_SIMPLIFICADO`. Sigue leyendo igual los PDF que ya funcionaban (con espacio real) y ahora también los que salen sin él.
+- Badge de versión (`templates/index.html`): `V 12.32.68` → `V 12.32.69`.
+
+**Verificación**: `_parsear_pdf_pedido_oficial()` ejecutada tal cual contra el PDF real del pedido 16756 — antes del cambio, 0 líneas de artículo (reproduce el rechazo real); después, se lee correctamente Nº Pedido 16756, Total 2.553,00 €, Proveedor "CUBE ROOT CARDS SL" (código 00000507), Almacén "ECONOMATO", Hotel "HOTEL LA PALMA TENEGUIA PRINCESS", fechas 23/09/2027 (tal cual las trae el PDF). `python3 -m py_compile app.py` limpio.
+
+**Ficheros editados**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.68 — 21 septiembre 2026
 
 🔐 De 72 horas a 15 días sin sesión, y verificación cada 6 meses a TODOS los usuarios (aunque entren a diario)

@@ -19058,10 +19058,31 @@ def _generar_thumbnail(datos_originales, mime_type):
 # se buscan directamente los tríos "Cantidad(,dddd) Precio(,dd) Importe(,dd)"
 # consecutivos — el único sitio del documento donde aparecen tres importes
 # seguidos con ese patrón de decimales es una línea de artículo real.
+#
+# (2026-09-25) FIX: Víctor reportó el pedido 16756 (CUBE ROOT CARDS SL)
+# rechazado con "El PDF adjuntado no tiene el formato del pedido oficial
+# PRINCESS...", con el PDF real adjunto — comprobado con ese mismo PDF: el
+# Nº de Pedido SÍ se leía bien, pero `lineas_importe` salía vacío. Motivo:
+# entre Cantidad y Precio, `pypdf.extract_text()` (v6.16.2, la fijada en
+# requirements.txt) no inserta ningún espacio cuando esas dos celdas están
+# muy juntas en el PDF original — el texto sale "10.000,00000,26 2.553,00"
+# en vez de "10.000,0000 0,26 2.553,00" — y el `\s+` exigido entre Cantidad
+# y Precio no tenía nada que emparejar. Es EXACTAMENTE el mismo problema ya
+# documentado (y ya arreglado) en `_PATRON_LISTADO_SIMPLIFICADO` el
+# 2026-08-11 (pypdf ≥4 dejó de rellenar ese hueco con un espacio) — aquí se
+# había quedado sin aplicar esa misma lección al construir este patrón
+# nuevo el 2026-08-28. Mismo arreglo: separadores con `\s*` (cero o más) en
+# vez de `\s+` — sigue funcionando igual si hay espacio real (no cambia
+# ningún PDF que ya se leyera bien) y ya no rompe si no lo hay. La
+# ambigüedad de dónde termina un número y empieza el siguiente la resuelve
+# el propio backtracking de la expresión regular contra la coma decimal de
+# cada número (probado contra el PDF real del pedido 16756: sin este
+# cambio, 0 líneas encontradas; con él, la única línea de artículo se lee
+# correctamente — Cantidad 10.000,0000, Precio 0,26, Importe 2.553,00).
 _PATRON_PEDIDO_NUM_OFICIAL = re.compile(r'\bPEDIDO\s+(\d+)\b')
 _PATRON_IMPORTE_LINEA_OFICIAL = re.compile(
-    r'(\d{1,3}(?:\.\d{3})*,\d{2,4})\s+'   # Cantidad
-    r'(-?\d{1,3}(?:\.\d{3})*,\d{2})\s+'   # Precio
+    r'(\d{1,3}(?:\.\d{3})*,\d{2,4})\s*'   # Cantidad
+    r'(-?\d{1,3}(?:\.\d{3})*,\d{2})\s*'   # Precio
     r'(-?\d{1,3}(?:\.\d{3})*,\d{2})'      # Importe (el que nos interesa sumar)
 )
 # (2026-08-28) A petición de Víctor: además de Nº de Pedido y Total, se lee
