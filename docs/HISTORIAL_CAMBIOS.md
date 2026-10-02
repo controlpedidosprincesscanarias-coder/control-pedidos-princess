@@ -49,6 +49,104 @@
 
 ---
 
+## 2026-10-02 — [Control Pedidos] Rutómetro: un hotel puede tener varios repartos distintos la misma semana (v12.32.71)
+
+- **Origen**: corrección de Víctor sobre la v12.32.70 entregada unas horas
+  antes el mismo día, verbatim: "un proveedor puede tener varios repartos
+  en la misma semana y hotel".
+- **Problema**: la v12.32.70 original diseñó el rutómetro como "una fila =
+  el horario completo de un hotel" (`UNIQUE(proveedor_id, hotel_id)`), con
+  un conjunto de días de pedido y otro de días de reparto sin relación
+  entre sí. No permite expresar dos ciclos reales distintos en el mismo
+  hotel la misma semana (p.ej. pedido L → reparto X, y también pedido J →
+  reparto V) sin perder qué pedido corresponde a qué reparto — y el UNIQUE
+  ni siquiera dejaba intentarlo con dos filas.
+- **Corrección**: se quita la restricción de una fila por hotel. Cada fila
+  pasa a ser un ciclo pedido→reparto independiente; el mismo hotel puede
+  repetirse en tantas filas como ciclos reales tenga.
+- **Cambio**: `models.py` (tabla `proveedor_rutas` sin el `UNIQUE` en
+  instalaciones nuevas); `_auto_migrate()` en `app.py` (nuevo bloque
+  protegido, `ALTER TABLE ... DROP CONSTRAINT IF EXISTS
+  proveedor_rutas_proveedor_id_hotel_id_key`, por si alguna base de datos
+  llegó a desplegar la v12.32.70 tal cual); `_guardar_rutas_proveedor()`
+  ya no rechaza hoteles repetidos en el payload; `_prov_with_contactos()`
+  reordena el rutómetro por hotel primero para que las filas de un mismo
+  hotel salgan agrupadas; `templates/index.html` quita la lógica que
+  deshabilitaba hoteles ya elegidos en otras filas (ya no aplica) y
+  actualiza el texto de ayuda del apartado.
+- **Revisión norma 5**: igual que la entrada anterior (v12.32.70) — no
+  aplica a `GUIA_DESPLIEGUE.md`/`INSTRUCCIONES_RESTAURACION.md`/
+  `PENDIENTES.md`.
+- **Verificación**: `python3 -m py_compile app.py models.py init_db.py`
+  limpio. Lógica de guardado reproducida aparte con el caso real de
+  Víctor (mismo hotel, dos ciclos pedido→reparto) — las filas se
+  conservan sin mezclar días entre ciclos. `node --check` limpio sobre
+  los 7 `<script>` reales de `templates/index.html`. Sigue pendiente de
+  probarse contra Postgres real.
+- **Ficheros**: `models.py`, `app.py`, `templates/index.html`, `README.md`,
+  `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md` (este).
+
+---
+
+## 2026-10-02 — [Control Pedidos] Rutómetro en la ficha de proveedor: días de pedido y reparto por hotel (v12.32.70)
+
+- **Origen**: Víctor, verbatim: "Necesito que añadas a la ficha del
+  proveedor un apartado para rutometro, de manera profesional y clara, la
+  idea es que se pueda indicar dias de pedido y reparto correspondiente
+  por hotel", con dos capturas del modal "Editar proveedor" (ficha de
+  EMICELA SA) como referencia del sitio donde debía ir.
+- **Diseño**: una fila por hotel (nunca dos para el mismo hotel — el
+  select del hotel deshabilita en las demás filas el que ya está elegido
+  en una, y el servidor aplica la misma regla por si acaso), con chips de
+  días de la semana (L-M-X-J-V-S-D) independientes para "días de pedido"
+  y "días de reparto", más una observación libre opcional por fila. Mismo
+  patrón visual y de interacción que "Contactos", en la misma ficha, para
+  que resulte familiar. Puramente informativo: no dispara avisos, no
+  bloquea ni modifica ningún pedido, no interviene en "Comparar listado
+  PDF" ni en ninguna otra lógica existente.
+- **Cambio**:
+  - Tabla nueva `proveedor_rutas` (`models.py` para instalaciones desde
+    cero, `_auto_migrate()` en `app.py` para las ya desplegadas, puesta en
+    el bloque protegido con su propio try/except — misma norma que
+    `codigo_dali`/`sujeto_seguimiento`/`total_pedido`, ver esas entradas
+    anteriores). `UNIQUE(proveedor_id, hotel_id)`: un proveedor no puede
+    tener dos horarios distintos para el mismo hotel.
+  - `_normalizar_dias_semana()`, `_guardar_rutas_proveedor()` (`app.py`,
+    nuevas) — normalizan y guardan el rutómetro al crear/editar un
+    proveedor, comprobando ANTES de tocar la base de datos que ningún
+    hotel se repita en el payload (para no dejar la transacción abortada
+    a mitad de guardar el resto de la ficha).
+  - `_prov_with_contactos()` (`app.py`) ahora también adjunta `rutas` a
+    cada proveedor — usada por los 4 endpoints que devuelven fichas
+    completas, así que el rutómetro queda disponible en todos sin tocarlos
+    uno por uno.
+  - Permisos: admin y compras pueden editar el rutómetro (igual que
+    contactos/observaciones), no solo admin — es logística operativa, no
+    un dato de identidad del proveedor como nombre/código SAP/DALI.
+  - `templates/index.html`: apartado nuevo "🚚 Rutómetro" en el modal
+    "Editar proveedor" (entre Contactos y Observaciones), funciones `rt*`.
+- **Revisión norma 5**: `GUIA_DESPLIEGUE.md` e
+  `INSTRUCCIONES_RESTAURACION.md` solo refieren el schema de forma
+  genérica ("ejecuta `models.py`"/`SQL_STATEMENTS`), sin listar tablas
+  concretas — no aplica ningún cambio. `PENDIENTES.md` no aplica (no era
+  una tarea ahí registrada, se implementa directamente en la misma
+  petición).
+- **Verificación**: `python3 -m py_compile app.py models.py init_db.py`
+  limpio. `_normalizar_dias_semana()` y la detección de hotel duplicado
+  extraídas a un script aparte, probadas con 9 casos (orden, mayúsculas/
+  minúsculas, códigos inválidos, vacíos, duplicado real) — todos
+  correctos. Los 7 `<script>` reales de `templates/index.html`
+  (descartando coincidencias falsas de la palabra "script" dentro de
+  comentarios HTML) extraídos y comprobados con `node --check`, limpio.
+  No se ha podido probar contra una base de datos Postgres real — falta
+  que Víctor pruebe en producción (crear/editar un proveedor con 2-3
+  hoteles y días distintos, comprobar que persisten, que un hotel ya
+  elegido no se puede repetir, y que compras puede editarlo).
+- **Ficheros**: `models.py`, `app.py`, `templates/index.html`, `README.md`,
+  `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md` (este).
+
+---
+
 ## 2026-09-25 — [Control Pedidos] PDF de pedido oficial rechazado por un cambio de comportamiento de pypdf entre Cantidad y Precio (v12.32.69)
 
 - **Origen**: Víctor reportó el pedido 16756 (proveedor CUBE ROOT CARDS

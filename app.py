@@ -1172,6 +1172,63 @@ def _auto_migrate():
                 )
             except Exception as e:
                 log.warning(f"No se pudo crear la tabla notificacion_contacto_reglas: {e}")
+            # ── Rutómetro de proveedor (2026-10-02) ──────────────────────────
+            # A petición de Víctor: "añadir a la ficha del proveedor un
+            # apartado para rutometro (...) se pueda indicar dias de pedido
+            # y reparto correspondiente por hotel". Una fila por hotel con
+            # los días de pedido/reparto de ese proveedor en ese hotel — ver
+            # models.py (instalación desde cero) y el comentario extenso ahí
+            # sobre el formato de `dias_pedido`/`dias_reparto`. Puesta aquí,
+            # en el bloque protegido con su propio try/except, por el mismo
+            # motivo ya documentado arriba (sujeto_seguimiento/total_pedido/
+            # codigo_dali): toda tabla/columna nueva va aquí, nunca al final
+            # de la función, para que un fallo cualquiera más abajo (111+
+            # sentencias, la mayoría sin try/except propio) no se lleve por
+            # delante esta migración sin avisar.
+            try:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS proveedor_rutas (
+                        id            SERIAL PRIMARY KEY,
+                        proveedor_id  INTEGER NOT NULL REFERENCES proveedores(id) ON DELETE CASCADE,
+                        hotel_id      INTEGER NOT NULL REFERENCES hoteles(id) ON DELETE CASCADE,
+                        dias_pedido   TEXT,
+                        dias_reparto  TEXT,
+                        observaciones TEXT,
+                        orden         INTEGER NOT NULL DEFAULT 0
+                    )
+                """)
+                cur.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_prov_rutas_proveedor ON proveedor_rutas(proveedor_id)"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo crear la tabla proveedor_rutas: {e}")
+            # ── Rutómetro: quitar el UNIQUE(proveedor_id,hotel_id) — v12.32.71
+            # (2026-10-02) ────────────────────────────────────────────────────
+            # La v12.32.70 original (hace unas horas) creó proveedor_rutas con
+            # UNIQUE(proveedor_id, hotel_id), pensado como "una fila = el
+            # horario completo de ese hotel". Víctor corrigió el planteamiento
+            # nada más verlo: "un proveedor puede tener varios repartos en la
+            # misma semana y hotel" — p.ej. pedido Lunes → reparto Miércoles,
+            # Y TAMBIÉN pedido Jueves → reparto Viernes, dos ciclos distintos
+            # en el mismo hotel la misma semana, que con un único par de
+            # "días de pedido"/"días de reparto" por fila no se puede
+            # expresar sin perder qué pedido va con qué reparto. La solución:
+            # varias filas para el mismo hotel, cada una un ciclo pedido→
+            # reparto independiente — ver _guardar_rutas_proveedor() más
+            # abajo, que ya no bloquea hoteles repetidos. Este bloque quita
+            # el UNIQUE de cualquier base de datos que llegara a desplegar la
+            # v12.32.70 tal cual (CREATE TABLE IF NOT EXISTS de arriba no lo
+            # habría quitado solo, al ya existir la tabla) — nombre de
+            # restricción con el que Postgres nombra un UNIQUE sin nombre
+            # explícito (`<tabla>_<columnas>_key`); IF EXISTS lo deja sin
+            # efecto en instalaciones nuevas, que ya nacen sin él.
+            try:
+                cur.execute(
+                    "ALTER TABLE proveedor_rutas "
+                    "DROP CONSTRAINT IF EXISTS proveedor_rutas_proveedor_id_hotel_id_key"
+                )
+            except Exception as e:
+                log.warning(f"No se pudo quitar el UNIQUE de proveedor_rutas: {e}")
             # ══════════════════════════════════════════════════════════════
             # Columnas legacy de proveedores (para DBs antiguas)
             for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT"),
@@ -10324,9 +10381,36 @@ def delete_usuario(uid):
 
 # ── API Proveedores ────────────────────────────────────────────────────────────
 
+# (2026-10-02) Códigos de día de la semana para el rutómetro de proveedor
+# — Lunes a Domingo. "X" para Miércoles porque "M" ya lo usa Martes (mismo
+# criterio que la abreviatura habitual L-M-X-J-V-S-D). Ver
+# proveedor_rutas en models.py/_auto_migrate() y _normalizar_dias_semana()
+# justo abajo.
+DIAS_SEMANA_RUTOMETRO = ("L", "M", "X", "J", "V", "S", "D")
+
+def _normalizar_dias_semana(valor):
+    """
+    Normaliza una lista de días del rutómetro (p.ej. ["X","L","L","Z"],
+    o el mismo contenido como string "X,L,L,Z") a un string separado por
+    comas, sin duplicados, en orden de semana (L,M,X,J,V,S,D) y solo con
+    códigos válidos — cualquier otra cosa que llegue en el payload (vacío,
+    códigos inventados) se descarta en silencio en vez de dar error, igual
+    de permisivo que el resto de checkboxes de esta ficha (hotel_ids de
+    contactos, por ejemplo). Devuelve "" si no queda ningún día válido.
+    """
+    if not valor:
+        return ""
+    if isinstance(valor, str):
+        partes = [v.strip().upper() for v in valor.split(",")]
+    else:
+        partes = [str(v).strip().upper() for v in valor]
+    seleccionados = set(p for p in partes if p in DIAS_SEMANA_RUTOMETRO)
+    return ",".join(d for d in DIAS_SEMANA_RUTOMETRO if d in seleccionados)
+
 def _prov_with_contactos(rows):
-    """Añade lista de contactos a cada proveedor (con los hoteles
-    específicos asignados a cada uno, si tiene)."""
+    """Añade lista de contactos (con los hoteles específicos asignados a
+    cada uno, si tiene) y el rutómetro (días de pedido/reparto por hotel,
+    ver proveedor_rutas) a cada proveedor."""
     result = rows_to_list(rows)
     if not result:
         return result
@@ -10364,6 +10448,34 @@ def _prov_with_contactos(rows):
         p["email"]          = principal.get("email", "")
         p["telefono"]       = principal.get("telefono", "")
         p["movil_principal"] = principal.get("movil", "")
+    # Rutómetro: días de pedido/reparto por hotel (proveedor_rutas) — puede
+    # haber VARIAS filas para el mismo hotel (varios ciclos pedido→reparto
+    # en la misma semana, ver _guardar_rutas_proveedor), por eso se ordena
+    # por hotel primero (agrupa visualmente las filas del mismo hotel) y
+    # por `orden` dentro de cada hotel (conserva el orden en que se
+    # guardaron). Código y nombre del hotel ya incluidos para no obligar
+    # al frontend a cruzarlo con /api/maestros.
+    rutas_rows = rows_to_list(query(
+        f"""SELECT pr.proveedor_id, pr.hotel_id, h.codigo AS hotel_codigo, h.nombre AS hotel_nombre,
+                   pr.dias_pedido, pr.dias_reparto, pr.observaciones
+            FROM proveedor_rutas pr
+            JOIN hoteles h ON h.id = pr.hotel_id
+            WHERE pr.proveedor_id IN ({placeholders})
+            ORDER BY pr.proveedor_id, h.codigo, pr.orden""",
+        tuple(ids)
+    ))
+    rmap = defaultdict(list)
+    for r in rutas_rows:
+        rmap[r["proveedor_id"]].append({
+            "hotel_id":      r["hotel_id"],
+            "hotel_codigo":  r["hotel_codigo"],
+            "hotel_nombre":  r["hotel_nombre"],
+            "dias_pedido":   [d for d in (r["dias_pedido"] or "").split(",") if d],
+            "dias_reparto":  [d for d in (r["dias_reparto"] or "").split(",") if d],
+            "observaciones": r["observaciones"] or "",
+        })
+    for p in result:
+        p["rutas"] = rmap.get(p["id"], [])
     return result
 
 @app.route("/api/proveedores", methods=["GET"])
@@ -10443,6 +10555,50 @@ def _buscar_proveedor_duplicado(campo: str, valor: str, excluir_id: int = None) 
         sql += " AND id!=%s"
         args.append(excluir_id)
     return row_to_dict(query(sql, tuple(args), one=True))
+
+
+def _guardar_rutas_proveedor(proveedor_id: int, rutas: list) -> str:
+    """
+    (2026-10-02, revisado v12.32.71) Usada por create_proveedor/
+    update_proveedor para guardar el rutómetro — a petición de Víctor:
+    "añadir a la ficha del proveedor un apartado para rutometro (...) se
+    pueda indicar dias de pedido y reparto correspondiente por hotel".
+
+    Un INSERT por fila del payload, SIN restricción de una sola fila por
+    hotel: Víctor corrigió el diseño original nada más verlo ("un
+    proveedor puede tener varios repartos en la misma semana y hotel") —
+    dos ciclos pedido→reparto distintos para el mismo hotel la misma
+    semana (p.ej. pedido L → reparto X, y también pedido J → reparto V)
+    necesitan dos filas separadas, porque un único par de "días de
+    pedido"/"días de reparto" no puede expresar qué pedido corresponde a
+    qué reparto si hay más de un ciclo. Ver el DROP CONSTRAINT en
+    _auto_migrate() (quita el UNIQUE que sí lo impedía en la v12.32.70
+    original) y models.py (tabla ya sin él en instalaciones nuevas).
+
+    Filas sin hotel_id, o completamente vacías (sin días ni
+    observaciones), se descartan en silencio. Siempre devuelve "" — ya no
+    hay ningún caso de error que detectar aquí (la única razón de volver
+    algo era el duplicado de hotel, que ya no existe).
+    """
+    pendientes = []
+    for r in (rutas or []):
+        try:
+            hotel_id = int(r.get("hotel_id"))
+        except (TypeError, ValueError):
+            continue
+        dias_pedido  = _normalizar_dias_semana(r.get("dias_pedido"))
+        dias_reparto = _normalizar_dias_semana(r.get("dias_reparto"))
+        obs          = (r.get("observaciones") or "").strip() or None
+        if not dias_pedido and not dias_reparto and not obs:
+            continue
+        pendientes.append((hotel_id, dias_pedido, dias_reparto, obs))
+    for i, (hotel_id, dias_pedido, dias_reparto, obs) in enumerate(pendientes):
+        execute(
+            "INSERT INTO proveedor_rutas (proveedor_id,hotel_id,dias_pedido,dias_reparto,observaciones,orden) "
+            "VALUES (%s,%s,%s,%s,%s,%s)",
+            (proveedor_id, hotel_id, dias_pedido or None, dias_reparto or None, obs, i)
+        )
+    return ""
 
 
 @app.route("/api/proveedores", methods=["POST"])
@@ -10531,6 +10687,12 @@ def create_proveedor():
                     "INSERT INTO proveedor_contacto_hoteles (contacto_id, hotel_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
                     (contacto_id, hid)
                 )
+    # Rutómetro — ver _guardar_rutas_proveedor(). Comprobado antes del
+    # commit: si devuelve error, nada de lo anterior (proveedor + contactos
+    # recién insertados) se llega a confirmar.
+    error_rutas = _guardar_rutas_proveedor(new_id, data.get("rutas", []))
+    if error_rutas:
+        return jsonify({"error": error_rutas}), 400
     db.commit()
     return jsonify({"ok": True, "id": new_id, "nombre": nombre}), 201
 
@@ -10637,6 +10799,14 @@ def update_proveedor(pid):
                     "INSERT INTO proveedor_contacto_hoteles (contacto_id, hotel_id) VALUES (%s,%s) ON CONFLICT DO NOTHING",
                     (contacto_id, hid)
                 )
+    # Rutómetro — editable por admin y compras, igual que contactos/
+    # observaciones (no es un dato de identidad del proveedor como
+    # nombre/código, es logística operativa). Reemplaza todas las filas,
+    # mismo patrón que proveedor_contactos justo arriba.
+    execute("DELETE FROM proveedor_rutas WHERE proveedor_id=%s", (pid,))
+    error_rutas = _guardar_rutas_proveedor(pid, data.get("rutas", []))
+    if error_rutas:
+        return jsonify({"error": error_rutas}), 400
     db.commit()
     return jsonify({"ok": True})
 

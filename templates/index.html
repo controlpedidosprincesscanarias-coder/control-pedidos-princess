@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.69
+          V 12.32.71
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2721,6 +2721,33 @@ tbody tr:last-child{border-bottom:none}
       <div id="pv-contactos-list" style="display:flex;flex-direction:column;gap:10px;max-height:420px;overflow-y:auto;padding-right:4px"></div>
       <div id="pv-contactos-empty" style="color:var(--text-secondary);font-size:.85rem;padding:8px 0 4px">
         Sin contactos. Pulsa "+ Añadir contacto" para incluir personas de contacto, teléfonos, móvil/WhatsApp o correos. El primer contacto se marcará como ★ principal (usado para alertas automáticas).
+      </div>
+
+      <!-- ── RUTÓMETRO (2026-10-02, revisado v12.32.71) ──────────────── -->
+      <!-- Víctor: "añadir a la ficha del proveedor un apartado para -->
+      <!-- rutometro, de manera profesional y clara, la idea es que se -->
+      <!-- pueda indicar dias de pedido y reparto correspondiente por -->
+      <!-- hotel". Cada fila es UN ciclo de pedido→reparto para un hotel; -->
+      <!-- un mismo hotel puede tener varias filas (v12.32.71, Víctor: -->
+      <!-- "un proveedor puede tener varios repartos en la misma semana y -->
+      <!-- hotel") — ya NO hay límite de una fila por hotel, a propósito. -->
+      <!-- Ver rtAddRuta()/saveProveedor() y -->
+      <!-- _guardar_rutas_proveedor()/proveedor_rutas en app.py. -->
+      <div style="margin:14px 0 6px 0;display:flex;align-items:center;gap:10px">
+        <label class="form-label" style="margin:0;font-weight:700">🚚 Rutómetro</label>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="rtAddRuta()"
+                style="padding:2px 10px;font-size:.82rem">+ Añadir ruta</button>
+      </div>
+      <div style="font-size:.78rem;color:var(--text-secondary);margin:-2px 0 8px">
+        Días de pedido y de reparto habituales de este proveedor, por hotel — información de
+        referencia para organizar pedidos, no afecta a ningún pedido ya creado ni envía avisos.
+        Si un hotel recibe más de un reparto distinto a la semana (p.ej. pedido Lunes → reparto
+        Miércoles, y también pedido Jueves → reparto Viernes), añade una fila por cada ciclo —
+        puedes repetir el mismo hotel en varias filas.
+      </div>
+      <div id="pv-rutas-list" style="display:flex;flex-direction:column;gap:10px;max-height:320px;overflow-y:auto;padding-right:4px"></div>
+      <div id="pv-rutas-empty" style="color:var(--text-secondary);font-size:.85rem;padding:8px 0 4px">
+        Sin rutómetro definido. Pulsa "+ Añadir ruta" para indicar los días de pedido y reparto de un hotel concreto.
       </div>
 
       <!-- Observaciones -->
@@ -7470,6 +7497,101 @@ function pvSetContactos(contactos) {
     list.children.length ? 'none' : '';
 }
 
+/* ── Rutómetro (2026-10-02, revisado v12.32.71): días de pedido/reparto
+   por hotel ── Mismo patrón "lista de filas" que los contactos de arriba
+   (pv*), con su propio prefijo rt* para no mezclarse. Cada fila es UN
+   ciclo pedido→reparto para un hotel concreto — a propósito, el mismo
+   hotel SÍ puede repetirse en varias filas (v12.32.71, Víctor: "un
+   proveedor puede tener varios repartos en la misma semana y hotel"), así
+   que el select de hotel ya NO deshabilita opciones ya elegidas en otras
+   filas (sí lo hacía en la v12.32.70 original, quitado a propósito). Ver
+   _guardar_rutas_proveedor() en app.py, que guarda tal cual todas las
+   filas del payload sin exigir hoteles distintos. */
+const DIAS_SEMANA_RUTOMETRO = [
+  { code: 'L', label: 'Lunes' }, { code: 'M', label: 'Martes' }, { code: 'X', label: 'Miércoles' },
+  { code: 'J', label: 'Jueves' }, { code: 'V', label: 'Viernes' }, { code: 'S', label: 'Sábado' },
+  { code: 'D', label: 'Domingo' },
+];
+function rtDiaChip(codigo, label, activo) {
+  const borderColor = activo ? 'var(--gold,#d4a800)' : 'var(--border,#e2e8f0)';
+  return `<button type="button" class="rt-dia-btn" data-dia="${codigo}" data-active="${activo ? '1' : '0'}"
+            onclick="rtToggleDia(this)" title="${label}"
+            style="width:26px;height:26px;border-radius:6px;border:1px solid ${borderColor};
+                   background:${activo ? 'var(--gold,#d4a800)' : '#fff'};color:${activo ? '#fff' : '#555'};
+                   font-size:.76rem;font-weight:700;cursor:pointer;line-height:1;padding:0">${codigo}</button>`;
+}
+function rtToggleDia(btn) {
+  const activo = btn.getAttribute('data-active') !== '1';
+  btn.setAttribute('data-active', activo ? '1' : '0');
+  btn.style.background    = activo ? 'var(--gold,#d4a800)' : '#fff';
+  btn.style.borderColor   = activo ? 'var(--gold,#d4a800)' : 'var(--border,#e2e8f0)';
+  btn.style.color         = activo ? '#fff' : '#555';
+}
+function rtGetDias(container) {
+  return Array.from(container.querySelectorAll('.rt-dia-btn[data-active="1"]')).map(b => b.dataset.dia);
+}
+function rtRutaRow(r = {}, idx) {
+  const diasPedido  = DIAS_SEMANA_RUTOMETRO.map(d => rtDiaChip(d.code, d.label, (r.dias_pedido || []).includes(d.code))).join('');
+  const diasReparto = DIAS_SEMANA_RUTOMETRO.map(d => rtDiaChip(d.code, d.label, (r.dias_reparto || []).includes(d.code))).join('');
+  return `<div class="rt-ruta-row" data-idx="${idx}" style="background:var(--bg-card,#f8f9fa);border:1px solid var(--border,#e2e8f0);border-radius:10px;padding:10px 12px;display:flex;flex-direction:column;gap:8px">
+    <div style="display:flex;align-items:center;gap:8px">
+      <span style="font-size:.95rem">🏨</span>
+      <select class="form-control rt-hotel-select" style="font-size:.9rem;font-weight:600;flex:1;max-width:280px">
+        <option value="">Cargando hoteles…</option>
+      </select>
+      <button type="button" onclick="rtRemoveRuta(this)" title="Eliminar esta ruta"
+              style="background:none;border:none;color:#e74c3c;cursor:pointer;font-size:1.1rem;padding:0 2px;flex-shrink:0;margin-left:auto">✕</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div>
+        <div style="font-size:.76rem;color:#888;margin-bottom:3px">📦 Días de pedido</div>
+        <div class="rt-dias-pedido" style="display:flex;gap:4px">${diasPedido}</div>
+      </div>
+      <div>
+        <div style="font-size:.76rem;color:#888;margin-bottom:3px">🚚 Días de reparto</div>
+        <div class="rt-dias-reparto" style="display:flex;gap:4px">${diasReparto}</div>
+      </div>
+    </div>
+    <input class="form-control rt-obs" placeholder="Observaciones de esta ruta (opcional)…" value="${esc(r.observaciones || '')}" style="font-size:.85rem">
+  </div>`;
+}
+function rtAddRuta(r = {}) {
+  const list = document.getElementById('pv-rutas-list');
+  const idx  = list.children.length;
+  list.insertAdjacentHTML('beforeend', rtRutaRow(r, idx));
+  document.getElementById('pv-rutas-empty').style.display = 'none';
+  const fila = list.lastElementChild;
+  const sel  = fila.querySelector('.rt-hotel-select');
+  _pvGetHoteles().then(hoteles => {
+    sel.innerHTML = '<option value="">Selecciona hotel…</option>' +
+      hoteles.map(h => `<option value="${h.id}">${esc(h.codigo)} — ${esc(h.nombre)}</option>`).join('');
+    if (r.hotel_id) sel.value = r.hotel_id;
+  });
+}
+function rtRemoveRuta(btn) {
+  btn.closest('.rt-ruta-row').remove();
+  const list = document.getElementById('pv-rutas-list');
+  if (!list.children.length) document.getElementById('pv-rutas-empty').style.display = '';
+}
+function rtGetRutas() {
+  return Array.from(document.querySelectorAll('.rt-ruta-row')).map(row => {
+    const hotelId = row.querySelector('.rt-hotel-select').value;
+    return {
+      hotel_id:       hotelId ? parseInt(hotelId) : null,
+      dias_pedido:    rtGetDias(row.querySelector('.rt-dias-pedido')),
+      dias_reparto:   rtGetDias(row.querySelector('.rt-dias-reparto')),
+      observaciones:  row.querySelector('.rt-obs').value.trim(),
+    };
+  }).filter(r => r.hotel_id); // una fila sin hotel elegido no se guarda
+}
+function rtSetRutas(rutas) {
+  const list = document.getElementById('pv-rutas-list');
+  list.innerHTML = '';
+  (rutas || []).forEach(r => rtAddRuta(r));
+  document.getElementById('pv-rutas-empty').style.display =
+    list.children.length ? 'none' : '';
+}
+
 function openProveedorModal(pid) {
   const p = _provCache[pid];
   if (!p) return;
@@ -7495,6 +7617,7 @@ function openProveedorModal(pid) {
     document.getElementById('pv-create-fields').style.display = 'none';
   }
   pvSetContactos(p.contactos || []);
+  rtSetRutas(p.rutas || []);
   document.getElementById('pv-obs').value = p.observaciones||'';
   document.getElementById('pv-sujeto-seguimiento').checked = p.sujeto_seguimiento === true;
   _pvAplicarPermisoSeguimiento(isAdmin);
@@ -7533,6 +7656,7 @@ function openNuevoProveedorModal() {
   setVal('pv-codigo-input', '');
   setVal('pv-codigo-dali-input', '');
   pvSetContactos([]);
+  rtSetRutas([]);
   document.getElementById('pv-obs').value = '';
   document.getElementById('pv-sujeto-seguimiento').checked = false;
   _pvAplicarPermisoSeguimiento(G.rol === 'admin');
@@ -7557,6 +7681,7 @@ async function saveProveedor() {
     observaciones: document.getElementById('pv-obs').value.trim(),
     sujeto_seguimiento: document.getElementById('pv-sujeto-seguimiento').checked,
     contactos:     pvGetContactos(),
+    rutas:         rtGetRutas(),
   };
 
   if (isNew) {

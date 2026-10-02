@@ -99,6 +99,35 @@ SQL_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_prov_contacto_hoteles_hotel ON proveedor_contacto_hoteles(hotel_id)",
+    # ── Rutómetro de proveedor (2026-10-02, SIN unicidad por hotel desde
+    # v12.32.71) ─────────────────────────────────────────────────────────
+    # Días de pedido y de reparto por hotel, para proveedores con ruta fija
+    # (p.ej. "FV: pedido L, reparto X"). VARIAS filas pueden compartir el
+    # mismo hotel — a petición de Víctor: "un proveedor puede tener varios
+    # repartos en la misma semana y hotel" (p.ej. pedido L → reparto X, Y
+    # TAMBIÉN pedido J → reparto V, dos ciclos distintos en el mismo hotel
+    # la misma semana). La v12.32.70 original traía un UNIQUE
+    # (proveedor_id, hotel_id) que lo impedía — quitado en v12.32.71 (ver
+    # _auto_migrate() en app.py para el DROP CONSTRAINT en bases de datos
+    # que ya lo tuvieran creado). `dias_pedido`/`dias_reparto` guardan una
+    # lista de códigos de día separados por coma (L,M,X,J,V,S,D — Lunes a
+    # Domingo, "X" para Miércoles al estar "M" ya usado por Martes),
+    # validados y normalizados en el backend (_normalizar_dias_semana(),
+    # app.py) antes de guardar. Ver proveedor_contactos/
+    # proveedor_contacto_hoteles arriba, mismo patrón de "reemplazar todas
+    # las filas al guardar la ficha".
+    """
+    CREATE TABLE IF NOT EXISTS proveedor_rutas (
+        id            SERIAL PRIMARY KEY,
+        proveedor_id  INTEGER NOT NULL REFERENCES proveedores(id) ON DELETE CASCADE,
+        hotel_id      INTEGER NOT NULL REFERENCES hoteles(id) ON DELETE CASCADE,
+        dias_pedido   TEXT,
+        dias_reparto  TEXT,
+        observaciones TEXT,
+        orden         INTEGER NOT NULL DEFAULT 0
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_prov_rutas_proveedor ON proveedor_rutas(proveedor_id)",
     # ── Usuarios ──────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS usuarios (

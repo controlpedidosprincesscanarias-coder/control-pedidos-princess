@@ -1,3 +1,50 @@
+# v12.32.71 — 2 octubre 2026
+
+🚚 Rutómetro: un hotel puede tener varios repartos distintos la misma semana
+
+**Víctor corrigió** el diseño de la v12.32.70 (entregada un rato antes el mismo día), verbatim: "un proveedor puede tener varios repartos en la misma semana y hotel".
+
+**El problema**: la v12.32.70 original guardaba `UNIQUE(proveedor_id, hotel_id)` — una sola fila por hotel, con un conjunto de "días de pedido" y otro de "días de reparto" sin relación entre sí. Eso impide representar, por ejemplo, un hotel con dos ciclos reales distintos la misma semana (pedido Lunes → reparto Miércoles, Y TAMBIÉN pedido Jueves → reparto Viernes): con un único conjunto de días por campo se podían marcar L y J como "días de pedido" y X y V como "días de reparto", pero se perdía qué pedido corresponde a qué reparto — y, sobre todo, el UNIQUE ni siquiera dejaba intentarlo con dos filas separadas.
+
+**La corrección**: se quita la restricción de una fila por hotel. Cada fila del rutómetro pasa a representar UN ciclo pedido→reparto independiente; un mismo hotel puede tener tantas filas como ciclos reales tenga esa semana, cada una con sus propios días de pedido y de reparto.
+
+**Cambio**:
+- `proveedor_rutas` (`models.py`): quitado el `UNIQUE(proveedor_id, hotel_id)` en instalaciones nuevas.
+- `_auto_migrate()` (`app.py`): nuevo bloque protegido (try/except propio) que hace `ALTER TABLE proveedor_rutas DROP CONSTRAINT IF EXISTS proveedor_rutas_proveedor_id_hotel_id_key` — por si alguna base de datos llegó a desplegar la v12.32.70 tal cual con el UNIQUE puesto; `IF EXISTS` lo deja sin efecto en las que no lo tengan.
+- `_guardar_rutas_proveedor()` (`app.py`): ya no comprueba ni rechaza hoteles repetidos en el payload — inserta todas las filas tal cual vienen. Sigue descartando en silencio las filas sin hotel o completamente vacías.
+- `_prov_with_contactos()` (`app.py`): el `ORDER BY` del rutómetro pasa a `proveedor_id, h.codigo, pr.orden` (antes `proveedor_id, pr.orden, h.codigo`) para que, con varias filas del mismo hotel, salgan agrupadas una junto a otra en vez de intercaladas con las de otros hoteles.
+- `templates/index.html`: quitada la lógica que deshabilitaba, en el desplegable de hotel de cada fila, los hoteles ya elegidos en otras filas (`rtRefrescarSelectsHoteles()`, eliminada por completo — ya no tiene sentido, un hotel repetido es ahora un caso válido). Botón "+ Añadir hotel" → "+ Añadir ruta" y texto de ayuda actualizado explicando que se puede repetir hotel para varios ciclos.
+- Badge de versión (`templates/index.html`): `V 12.32.70` → `V 12.32.71`.
+
+**Verificación**: `python3 -m py_compile app.py models.py init_db.py` limpio. Lógica de `_guardar_rutas_proveedor()` reproducida en un script aparte con el caso real de Víctor (mismo hotel, dos ciclos pedido→reparto distintos) — las 3 filas (2 del mismo hotel + 1 de otro) se conservan correctamente, con sus días propios sin mezclarse entre ciclos. JS de `templates/index.html` (7 `<script>` reales) comprobado con `node --check`, limpio. Sigue sin poder probarse contra Postgres real — si la v12.32.70 llegó a desplegarse, falta confirmar en producción que el `DROP CONSTRAINT` se aplica sin error y que ya se puede guardar el mismo hotel dos veces.
+
+**Ficheros editados**: `models.py`, `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
+# v12.32.70 — 2 octubre 2026
+
+🚚 Rutómetro en la ficha de proveedor: días de pedido y reparto por hotel
+
+**Petición de Víctor** (verbatim): "Necesito que añadas a la ficha del proveedor un apartado para rutometro, de manera profesional y clara, la idea es que se pueda indicar dias de pedido y reparto correspondiente por hotel".
+
+**Diseño**: una fila por hotel (nunca dos para el mismo hotel — ver más abajo), con dos selectores de días de la semana (L-M-X-J-V-S-D, chips independientes para días de pedido y días de reparto) más una observación libre opcional. Mismo patrón visual y de interacción que "Contactos" en la misma ficha (lista de filas, "+ Añadir", ✕ para quitar), para que resulte familiar de usar. Es información de referencia: no dispara avisos, no bloquea ningún pedido y no afecta a la lógica de "Comparar listado PDF" ni a ninguna otra — solo se guarda y se muestra en la ficha del proveedor.
+
+**Cambio**:
+- `models.py` / `_auto_migrate()` (`app.py`): tabla nueva `proveedor_rutas` (`proveedor_id`, `hotel_id`, `dias_pedido`, `dias_reparto`, `observaciones`, `orden`), `UNIQUE(proveedor_id, hotel_id)` — un proveedor no puede tener dos horarios distintos para el mismo hotel, el admin edita la fila existente en vez de duplicarla. Puesta en el bloque protegido de `_auto_migrate()` (con su propio try/except), igual que toda tabla/columna nueva desde que esa lección se aprendió por las malas con `codigo_dali`/`sujeto_seguimiento` (ver comentarios de esas migraciones) — para que un fallo cualquiera más abajo en la función no se lleve esta migración por delante sin avisar.
+- `_normalizar_dias_semana()` (`app.py`, nueva): normaliza los días que llegan del frontend (lista o string) a un formato fijo, sin duplicados, en orden de semana — descarta en silencio cualquier código inválido, igual de permisivo que el resto de checkboxes de esta ficha.
+- `_prov_with_contactos()` (`app.py`): además de los contactos, ahora también añade `rutas` a cada proveedor devuelto (días de pedido/reparto por hotel, con el código y nombre del hotel ya resueltos) — usada por los 4 endpoints que devuelven fichas de proveedor completas, así que el rutómetro queda disponible en todos ellos sin tocarlos uno por uno.
+- `_guardar_rutas_proveedor()` (`app.py`, nueva): guarda el rutómetro al crear/editar un proveedor — comprueba PRIMERO, antes de tocar la base de datos, que ningún hotel aparezca dos veces en el payload (si violara el `UNIQUE` a mitad de la función dejaría la transacción abortada y se perdería también el resto del guardado de la ficha, nombre/código/contactos incluidos). `create_proveedor`/`update_proveedor` la llaman después de guardar los contactos y antes del `commit()`.
+- Permisos: igual que contactos/observaciones (admin y compras pueden editar el rutómetro), no como nombre/código SAP/DALI (solo-admin) — es logística operativa de la ficha, no un dato de identidad del proveedor.
+- `templates/index.html`: nuevo apartado "🚚 Rutómetro" en el modal "Editar proveedor" (entre Contactos y Observaciones), funciones `rt*` (`rtAddRuta`, `rtRemoveRuta`, `rtToggleDia`, `rtGetRutas`, `rtSetRutas`, `rtRefrescarSelectsHoteles` — esta última deshabilita en cada fila el hotel ya elegido en las demás, misma regla que aplica el backend). `openProveedorModal`/`openNuevoProveedorModal`/`saveProveedor` actualizados para cargar y guardar `rutas` junto al resto de la ficha.
+- Badge de versión (`templates/index.html`): `V 12.32.69` → `V 12.32.70`.
+
+**Verificación**: `python3 -m py_compile app.py models.py init_db.py` limpio. `_normalizar_dias_semana()` y la detección de hotel duplicado extraídas a un script aparte y probadas con 9 casos (días repetidos/en desorden/inválidos/vacíos/mayúsculas-minúsculas, payload con hotel duplicado y sin duplicar) — todos correctos. JS de `templates/index.html` (los 7 `<script>` reales de la página, descartando coincidencias falsas de la palabra "script" dentro de comentarios HTML) extraído y comprobado con `node --check`, limpio. No se ha podido probar contra una base de datos Postgres real (este entorno no tiene acceso a ninguna, igual que en entregas anteriores) — falta que Víctor pruebe en producción: crear/editar un proveedor añadiendo 2-3 hoteles con días distintos, comprobar que persisten al reabrir la ficha, que un hotel ya elegido en una fila no se puede volver a elegir en otra, y que compras puede editar el rutómetro con normalidad.
+
+**Ficheros editados**: `models.py`, `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+
+---
+
 # v12.32.69 — 25 septiembre 2026
 
 🧾 PDF de pedido oficial rechazado por un cambio de comportamiento de pypdf entre Cantidad y Precio

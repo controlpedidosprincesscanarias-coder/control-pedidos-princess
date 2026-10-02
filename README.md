@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.69** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.71** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -112,7 +112,12 @@ confundirse entre sí, ver más abajo):
 
 **Gestión** (admin + compras, y Proveedores también hotel)
 - **Proveedores** — ficha de proveedores, contactos múltiples por
-  proveedor, asignación a hoteles.
+  proveedor, asignación a hoteles. Desde v12.32.70, **rutómetro**: días
+  de pedido y de reparto habituales por hotel (informativo, no dispara
+  avisos ni afecta a ningún pedido) — una fila por cada ciclo de pedido→
+  reparto; un mismo hotel puede tener varias filas si recibe más de un
+  reparto distinto a la semana (v12.32.71). Editable por admin y compras
+  igual que el resto de la ficha salvo nombre/código (solo-admin).
 - **Comparar Pedidos + Albaranes (SAP)** (admin, botón "📄 Comparar
   listado PDF" — base desde 2026-08-06, ampliada desde entonces) — la
   herramienta admite subir hasta dos PDF que exporta SAP para un hotel:
