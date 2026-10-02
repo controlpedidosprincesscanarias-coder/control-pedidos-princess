@@ -1,3 +1,24 @@
+# v12.32.72 — 2 octubre 2026
+
+🌉 Puente DALI: el Rutómetro decide qué artículos ve activos cada usuario según su hotel
+
+**Petición de Víctor** (verbatim): "necesito que cada usuario solo vea activo los articulos de los proveedores que tienen servicio en su hotel, por ejemplo, Fran y Chemi (1001411) solo tiene reparto en la isla de Fuerteventura (FV y JN); el sistema deberá verificar en la ficha del proveedor el rutómetro y si no tiene reparto en un hotel, los artículos asignados a este proveedor pasan a no activos automáticamente a los que no tienen ruta (...) si no tiene rutómetro activo, entonces no hay variación y se ven todos los artículos activos como hasta ahora". También pidió una ficha lateral con el detalle del rutómetro al pulsar el nombre de un proveedor en el catálogo DALI.
+
+**Dónde vive cada cosa**: el Rutómetro (días de pedido/reparto por hotel) es un dato de ESTA app (`proveedor_rutas`, v12.32.70/71); los "artículos" y los usuarios con un hotel asignado (`usuarios.hoteles_ids`) son de DALI (`dali-sap-articulos-app`, repo aparte). Las dos apps ya se cruzan por NOMBRE exacto de proveedor desde el puente existente (`GET /api/externo/dali-sap/proveedores`, v12.30.26 y siguientes) — no hacía falta un endpoint nuevo, solo que este ya devolviera también el rutómetro de cada proveedor.
+
+**Decisión de Víctor sobre cómo se consulta**: se le preguntó si prefería que DALI guardara una copia sincronizada (con botón manual o refresco automático) o consultara esta app en vivo cada vez. Eligió **consulta en vivo** explícitamente, porque además quiere la ficha lateral de detalle al pulsar el proveedor (tiene que reflejar el dato real de esta app en el momento, no una copia). Implica que el catálogo de DALI depende de que esta app responda a tiempo — asumido a propósito por Víctor; ver el lado de DALI (su propio CHANGELOG.md/HISTORIAL.md) para cómo falla "abierto" (sin restricción) si esta app no responde.
+
+**Cambio**:
+- `app.py`, `GET /api/externo/dali-sap/proveedores`: cada proveedor de la respuesta añade `rutas` (array, uno por cada fila de `proveedor_rutas`: `hotel_codigo`, `hotel_nombre`, `dias_pedido`, `dias_reparto`, `observaciones`) — reutiliza tal cual lo que ya calculaba `_prov_with_contactos()` para la ficha propia de esta app, sin consulta nueva. `rutas: []` significa "sin rutómetro configurado para este proveedor" (Víctor: "si no tiene rutómetro activo, entonces no hay variación"), nunca "cubre cero hoteles" — esa distinción la respeta DALI en su propio lado.
+- Sin cambios de base de datos ni de permisos en esta app — es información que ya existía y ya se exponía por nombre/contactos, solo se añade un campo más a la misma respuesta.
+- Badge de versión (`templates/index.html`): `V 12.32.71` → `V 12.32.72`.
+
+**Verificación**: `python3 -m py_compile app.py` limpio. Revisado a mano que `rutas` sale vacío para un proveedor sin ninguna fila en `proveedor_rutas` (p.ej. cualquiera dado de alta antes de v12.32.70) y con sus filas reales para uno que sí tiene rutómetro configurado, agrupadas por hotel igual que en la propia ficha de esta app.
+
+**Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`. (El resto del trabajo — filtrado del catálogo y ficha de rutómetro — vive en el repo de DALI, `dali-sap-articulos-app`, documentado en su propio CHANGELOG.md/HISTORIAL.md.)
+
+---
+
 # v12.32.71 — 2 octubre 2026
 
 🚚 Rutómetro: un hotel puede tener varios repartos distintos la misma semana

@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.71** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.72** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -117,7 +117,13 @@ confundirse entre sí, ver más abajo):
   avisos ni afecta a ningún pedido) — una fila por cada ciclo de pedido→
   reparto; un mismo hotel puede tener varias filas si recibe más de un
   reparto distinto a la semana (v12.32.71). Editable por admin y compras
-  igual que el resto de la ficha salvo nombre/código (solo-admin).
+  igual que el resto de la ficha salvo nombre/código (solo-admin). Desde
+  v12.32.72, el catálogo DALI (`dali-sap-articulos-app`, repo aparte)
+  consulta este rutómetro en vivo (cruzando por nombre de proveedor, vía
+  `GET /api/externo/dali-sap/proveedores`) para decidir, hotel a hotel, si
+  los artículos de un proveedor siguen viéndose activos para los usuarios
+  de ese hotel — un proveedor sin ningún rutómetro configurado no cambia
+  nada, se sigue viendo igual que antes en DALI.
 - **Comparar Pedidos + Albaranes (SAP)** (admin, botón "📄 Comparar
   listado PDF" — base desde 2026-08-06, ampliada desde entonces) — la
   herramienta admite subir hasta dos PDF que exporta SAP para un hotel:

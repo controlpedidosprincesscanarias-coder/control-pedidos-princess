@@ -49,6 +49,68 @@
 
 ---
 
+## 2026-10-02 — [Control Pedidos / DALI] El Rutómetro decide qué artículos ve activos cada usuario según su hotel (v12.32.72)
+
+- **Origen**: Víctor, verbatim: "necesito que cada usuario solo vea activo
+  los articulos de los proveedores que tienen servicio en su hotel, por
+  ejemplo, Fran y Chemi (1001411) solo tiene reparto en la isla de
+  Fuerteventura (FV y JN); el sistema deberá verificar en la ficha del
+  proveedor el rutómetro y si no tiene reparto en un hotel, los artículos
+  asignados a este proveedor pasan a no activos automáticamente (...) si
+  no tiene rutómetro activo, entonces no hay variación". También pidió
+  una ficha lateral con el rutómetro al pulsar el nombre de un proveedor
+  en el catálogo DALI — lo preparó dejando asignar un hotel a cada
+  usuario de DALI (`usuarios.hoteles_ids`, 2026-10-02, entrega anterior
+  ese mismo día) sin decir todavía para qué, "luego indicaré que función
+  puede tener esto".
+- **Dónde vive cada cosa**: el Rutómetro es un dato de Control Pedidos
+  (`proveedor_rutas`); los artículos y los usuarios con hotel asignado
+  son de DALI. Se cruzan por NOMBRE exacto de proveedor, por el puente ya
+  existente entre las dos apps (`GET /api/externo/dali-sap/proveedores`,
+  v12.30.26 y siguientes) — bastaba con que ese endpoint devolviera
+  también el rutómetro de cada proveedor, sin crear uno nuevo.
+- **Decisión de arquitectura**: se preguntó a Víctor si prefería que DALI
+  guardara una copia sincronizada (botón manual o refresco automático) o
+  consultara Control Pedidos en vivo en cada petición. Eligió **consulta
+  en vivo**, explícitamente, porque además quiere la ficha lateral de
+  detalle al pulsar el proveedor con el dato real del momento. Asumido a
+  propósito: el catálogo de DALI pasa a depender de que Control Pedidos
+  responda a tiempo; si no responde, DALI falla "abierto" (sin
+  restricción, como si el proveedor no tuviera rutómetro) en vez de
+  romper la carga del catálogo — ver el HISTORIAL.md de DALI.
+- **Cambio en este repo**: `GET /api/externo/dali-sap/proveedores`
+  (`app.py`) añade `rutas` a cada proveedor de la respuesta (uno por fila
+  de `proveedor_rutas`: hotel, días de pedido, días de reparto,
+  observaciones), reutilizando `_prov_with_contactos()` tal cual —
+  `rutas: []` significa "sin rutómetro configurado" (Víctor: "si no tiene
+  rutómetro activo, entonces no hay variación"), nunca "cubre cero
+  hoteles". Sin cambios de base de datos ni de permisos aquí.
+- **Cambio en DALI** (repo aparte, `dali-sap-articulos-app` — resumen,
+  ver su propio HISTORIAL.md/CHANGELOG.md para el detalle): la sesión de
+  cada usuario pasa a incluir `hoteles_ids`; el listado principal del
+  catálogo (`GET /articulos`), para usuarios con rol 'hotel' (nunca para
+  admin), excluye los artículos de un proveedor cuando ese proveedor SÍ
+  tiene rutómetro en Control Pedidos pero ninguna de sus rutas cubre los
+  hoteles del usuario — consulta en vivo al puente en cada petición, sin
+  copia propia. Nueva ficha lateral (`ProveedorRutometroDetail.jsx`,
+  consulta en vivo también) al pulsar el nombre de un proveedor, tanto en
+  la tabla principal como en el detalle de artículo.
+- **Revisión norma 5**: no aplica a `GUIA_DESPLIEGUE.md` /
+  `INSTRUCCIONES_RESTAURACION.md` / `PENDIENTES.md` en este repo — el
+  endpoint ya existía, solo se amplía su respuesta.
+- **Verificación**: `python3 -m py_compile app.py` limpio en este repo.
+  Comprobado a mano que `rutas` sale vacío para un proveedor sin ninguna
+  fila en `proveedor_rutas` y con sus filas reales, agrupadas por hotel,
+  para uno que sí tiene rutómetro. Lado DALI: `node --check` en los
+  archivos backend tocados, `vite build` real (con y sin `VITE_API_URL`)
+  y un script aparte verificando la lógica de intersección de hoteles —
+  ver su propio HISTORIAL.md/CHANGELOG.md para el detalle completo.
+- **Ficheros**: en este repo — `app.py`, `templates/index.html`,
+  `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md` (este). En
+  DALI — ver su propio HISTORIAL.md/CHANGELOG.md.
+
+---
+
 ## 2026-10-02 — [Control Pedidos] Rutómetro: un hotel puede tener varios repartos distintos la misma semana (v12.32.71)
 
 - **Origen**: corrección de Víctor sobre la v12.32.70 entregada unas horas

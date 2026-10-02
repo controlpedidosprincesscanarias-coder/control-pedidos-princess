@@ -22272,6 +22272,28 @@ def api_externo_dali_proveedores():
 
     Sin sesión de usuario (llamada servidor a servidor) — misma firma
     HMAC que el endpoint de encolar, aquí con cuerpo vacío (GET).
+
+    (2026-10-02) Campo `rutas` añadido — a petición de Víctor: "necesito
+    que cada usuario solo vea activo los artículos de los proveedores
+    que tienen servicio en su hotel (...) el sistema deberá verificar en
+    la ficha del proveedor el rutómetro y si no tiene reparto en un
+    hotel, los artículos asignados a este proveedor pasan a no activos
+    automáticamente (...) si no tiene rutómetro activo, entonces no hay
+    variación". DALI usa este mismo endpoint (el único punto de cruce
+    entre las dos apps, ya por nombre normalizado, ver el comentario
+    grande de arriba) para dos cosas nuevas: calcular en el catálogo
+    principal qué artículos ocultar a cada usuario según el hotel que
+    tiene asignado (`usuarios.hoteles_ids` en DALI) y pintar una ficha de
+    rutómetro al pulsar el nombre de un proveedor — Víctor pidió
+    explícitamente que sea una CONSULTA EN VIVO en los dos casos, sin
+    guardar copia propia en DALI, así que esta app sigue siendo la única
+    fuente de este dato, igual que ya lo es de los contactos/email.
+    `rutas` reutiliza tal cual lo que ya calcula `_prov_with_contactos()`
+    para la propia ficha de proveedor de esta app (ver el Rutómetro,
+    v12.32.70/71) — un array vacío significa "sin rutómetro configurado"
+    (Víctor: "si no tiene rutómetro activo, entonces no hay variación y
+    se ven todos los artículos activos como hasta ahora"), nunca "cubre
+    cero hoteles".
     """
     if not _dali_bridge_firma_valida(request.get_data()):
         return jsonify({"ok": False, "error": "Firma inválida o caducada."}), 401
@@ -22286,6 +22308,16 @@ def api_externo_dali_proveedores():
                     {"nombre": c["nombre"], "email": c["email"], "es_principal": c["es_principal"]}
                     for c in p["contactos"]
                     if c.get("email")
+                ],
+                "rutas": [
+                    {
+                        "hotel_codigo":  r["hotel_codigo"],
+                        "hotel_nombre":  r["hotel_nombre"],
+                        "dias_pedido":   r["dias_pedido"],
+                        "dias_reparto":  r["dias_reparto"],
+                        "observaciones": r["observaciones"],
+                    }
+                    for r in p["rutas"]
                 ],
             }
             for p in result
