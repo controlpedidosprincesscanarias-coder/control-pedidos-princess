@@ -1328,6 +1328,9 @@ tbody tr:last-child{border-bottom:none}
     <div class="sb-item" data-view="pedidos" data-roles="admin,compras,hotel" onclick="showViewGuarded('pedidos',this)">
       <span class="icon">📋</span> Pedidos
     </div>
+    <div class="sb-item" data-view="buscador" data-roles="admin,compras,hotel" onclick="showViewGuarded('buscador',this)">
+      <span class="icon">🔎</span> Buscar artículo
+    </div>
     <div class="sb-item" data-view="alertas" data-roles="admin,compras,hotel" onclick="showViewGuarded('alertas',this)">
       <span class="icon">⚠️</span> Alertas
       <span class="sb-badge" id="sb-alert-count" style="display:none">0</span>
@@ -1408,7 +1411,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.75
+          V 12.32.76
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1545,6 +1548,42 @@ tbody tr:last-child{border-bottom:none}
             <div class="card-header"><span class="card-title">🕒 Últimos pedidos</span></div>
             <div class="card-body" style="padding:0"><div id="dash-ultimos-pedidos"><div class="dash-loading" style="padding:16px 20px">Cargando…</div></div></div>
           </div>
+        </div>
+      </div>
+
+      <!-- VIEW: BUSCAR ARTÍCULO (v12.32.76) ─────────────────────────────── -->
+      <div id="view-buscador" class="section-hidden">
+        <div class="filters">
+          <select class="filter-select" id="bq-hotel" onchange="buscarArticuloPedidos()">
+            <option value="">Todos los hoteles</option>
+          </select>
+          <input class="filter-input" id="bq-q" style="min-width:300px" placeholder="🔎 Referencia del proveedor, código o descripción…"
+                 onkeydown="if(event.key==='Enter')buscarArticuloPedidos()">
+          <select class="filter-select" id="bq-estado" onchange="buscarArticuloPedidos()">
+            <option value="">Todos los estados</option>
+          </select>
+          <button class="btn btn-sm" style="background:#1a3a6b;color:#fff;border:none" onclick="buscarArticuloPedidos()">Buscar</button>
+          <button class="btn btn-ghost btn-sm" onclick="limpiarBuscadorArticulo()">✕ Limpiar</button>
+        </div>
+        <div id="bq-aviso" style="display:none"></div>
+        <div class="card">
+          <div class="card-header">
+            <span class="card-title">📦 Artículos en pedidos</span>
+            <span id="bq-resumen" style="margin-left:auto;font-size:12px;color:var(--text-secondary)">Busca por referencia del proveedor, código o descripción; filtra por hotel y estado.</span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead>
+                <tr>
+                  <th>Hotel</th><th>Nº Pedido</th><th>Estado</th><th>Proveedor</th>
+                  <th>Ref. Prov.</th><th>Código</th><th>Descripción</th>
+                  <th style="text-align:right">Cantidad</th><th>Ud.</th><th>F. solicitud</th>
+                </tr>
+              </thead>
+              <tbody id="bq-tbody"></tbody>
+            </table>
+          </div>
+          <div id="bq-empty" class="empty-state section-hidden">Sin resultados.</div>
         </div>
       </div>
 
@@ -4645,7 +4684,7 @@ function showView(view, el) {
   document.getElementById(`view-${view}`).classList.remove('section-hidden');
   G.currentView = view;
 
-  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos','departamentos-email':'📧 Departamentos — correo por hotel','notificaciones-contactos':'✉️ Notificaciones adicionales',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Parámetros de Alertas','config-avisos':'🔔 Avisos por Usuario','config-emailjs':'📤 EmailJS y Cola de Correo',restore:'🔄 Restaurar Backup'};
+  const titles = {dashboard:'Dashboard',pedidos:'Pedidos',buscador:'🔎 Buscar artículo en pedidos',alertas:'Alertas',proveedores:'Proveedores',eliminados:'Pedidos Eliminados',techo:'Techo de Gastos',familias:'Familias de Artículos','departamentos-email':'📧 Departamentos — correo por hotel','notificaciones-contactos':'✉️ Notificaciones adicionales',usuarios:'Usuarios',integridad:'🔍 Integridad del Sistema','config-alertas':'⚙️ Parámetros de Alertas','config-avisos':'🔔 Avisos por Usuario','config-emailjs':'📤 EmailJS y Cola de Correo',restore:'🔄 Restaurar Backup'};
   document.getElementById('topbar-title').textContent = titles[view]||view;
 
   // Botones contextuales del topbar
@@ -4656,6 +4695,7 @@ function showView(view, el) {
 
   if (view==='dashboard')   { loadStats(); _loadAndApplyDashboardPrefs(); }
   if (view==='pedidos')     { loadPedidos(); _ajustarStickyPedidos(); }
+  if (view==='buscador')    prepararBuscadorArticulo();
   if (view==='alertas')     { loadAlertas(); loadTechoAlertas(); _ajustarStickyAlertas(); }
   if (view==='proveedores') { loadProveedores(); _refreshProvAdminControls(); _ajustarStickyProveedores(); }
   if (view==='eliminados')  loadEliminados();
@@ -6561,6 +6601,82 @@ async function cargarLineasPedido(forzar = false) {
       </table>
     </div>
   </details>`;
+}
+
+/* (v12.32.76) Buscador de artículos en las líneas de los pedidos: por hotel y
+   referencia (o código/descripción) → Nº de pedido, cantidad y estado. */
+function prepararBuscadorArticulo() {
+  const fh = document.getElementById('bq-hotel');
+  if (fh && fh.options.length <= 1 && G.maestros) {
+    (G.maestros.hoteles || []).forEach(h => fh.insertAdjacentHTML('beforeend', `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`));
+  }
+  const fe = document.getElementById('bq-estado');
+  if (fe && fe.options.length <= 1 && G.maestros) {
+    (G.maestros.estados || []).forEach(e => fe.insertAdjacentHTML('beforeend', `<option value="${_htmlLinea(e)}">${_htmlLinea(e)}</option>`));
+  }
+  const q = document.getElementById('bq-q'); if (q) q.focus();
+}
+function limpiarBuscadorArticulo() {
+  ['bq-hotel','bq-q','bq-estado'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
+  document.getElementById('bq-tbody').innerHTML = '';
+  document.getElementById('bq-empty').classList.add('section-hidden');
+  document.getElementById('bq-resumen').textContent = 'Busca por referencia del proveedor, código o descripción; filtra por hotel y estado.';
+}
+let _bqReq = 0;
+async function buscarArticuloPedidos() {
+  const q = document.getElementById('bq-q').value.trim();
+  const tb = document.getElementById('bq-tbody');
+  const vacio = document.getElementById('bq-empty');
+  const resumen = document.getElementById('bq-resumen');
+  if (q.length < 2) { resumen.textContent = 'Escribe al menos 2 caracteres de la referencia, código o descripción.'; return; }
+  const req = ++_bqReq;
+  resumen.textContent = 'Buscando…';
+  const params = new URLSearchParams({ q });
+  const h = document.getElementById('bq-hotel').value; if (h) params.set('hotel_id', h);
+  const e = document.getElementById('bq-estado').value; if (e) params.set('estado', e);
+  let d;
+  try { d = await api('/api/pedidos/lineas/buscar?' + params.toString()); } catch (x) { d = null; }
+  if (req !== _bqReq) return;
+  if (!d || !d.ok) { resumen.textContent = (d && d.error) || 'No se ha podido buscar.'; tb.innerHTML = ''; return; }
+  const num = v => v == null ? '—' : Number(v).toLocaleString('es-ES', { maximumFractionDigits: 4, useGrouping: 'always' });
+  tb.innerHTML = d.resultados.map(r => `<tr style="cursor:pointer" title="Abrir el pedido" onclick="openPedidoModal(${r.pedido_id})">
+      <td><strong>${_htmlLinea(r.hotel_codigo || '')}</strong></td>
+      <td class="monospace">${_htmlLinea(r.pedido_num || '—')}<div style="font-size:10px;color:#888">Nº orden ${_htmlLinea(r.norden)}</div></td>
+      <td>${estadoBadge(r.estado)}</td>
+      <td>${_htmlLinea(r.proveedor_nombre || '—')}</td>
+      <td class="monospace">${_htmlLinea(r.ref_proveedor || '—')}</td>
+      <td class="monospace">${_htmlLinea(r.codigo || '')}</td>
+      <td>${_htmlLinea(r.descripcion || '')}</td>
+      <td style="text-align:right;font-weight:600">${num(r.cantidad)}</td>
+      <td>${_htmlLinea(r.unidad || '')}</td>
+      <td>${_htmlLinea((r.fecha_solicitud || '').slice(0, 10).split('-').reverse().join('/'))}</td>
+    </tr>`).join('');
+  vacio.classList.toggle('section-hidden', d.resultados.length > 0);
+  const total = d.resultados.reduce((a, r) => a + (r.cantidad || 0), 0);
+  const pedidos = new Set(d.resultados.map(r => r.pedido_id)).size;
+  resumen.textContent = d.resultados.length
+    ? `${d.resultados.length}${d.truncado ? '+' : ''} línea(s) en ${pedidos} pedido(s) — cantidad total ${num(total)}${d.truncado ? ' (se muestran las 300 más recientes: afina la búsqueda)' : ''}`
+    : 'Sin resultados.';
+  // Aviso de cobertura: PDF anteriores a v12.32.75 todavía sin leer
+  const av = document.getElementById('bq-aviso');
+  if (d.pedidos_sin_leer > 0) {
+    av.style.display = '';
+    av.innerHTML = `<div style="font-size:12px;color:#7a5b00;background:#fff8e1;border:1px solid #ffe08a;border-radius:6px;padding:8px 10px;margin:0 0 10px">
+      ⚠️ Hay ${d.pedidos_sin_leer} pedido(s) con PDF oficial cuyas líneas todavía no se han leído, así que pueden no salir aquí.
+      ${G.rol === 'admin' ? '<button class="btn btn-sm" style="margin-left:8px;background:#1a3a6b;color:#fff;border:none" onclick="leerLineasPendientes(this)">Leerlos ahora</button>' : 'Pide a un administrador que los lea.'}</div>`;
+  } else { av.style.display = 'none'; av.innerHTML = ''; }
+}
+async function leerLineasPendientes(btn) {
+  btn.disabled = true;
+  let conLineas = 0, sinLineas = 0, pendientes = 1;
+  while (pendientes > 0) {
+    btn.textContent = `Leyendo… (${conLineas + sinLineas} hechos, quedan ${pendientes === 1 && !conLineas && !sinLineas ? '…' : pendientes})`;
+    const r = await api('/api/pedidos/lineas/leer-pendientes', 'POST');
+    if (!r || !r.ok || !r.procesados) { if (!r || !r.ok) toast((r && r.error) || 'Error al leer los PDF', 'error'); break; }
+    conLineas += r.con_lineas; sinLineas += r.sin_lineas; pendientes = r.pendientes;
+  }
+  toast(`Líneas leídas en ${conLineas} pedido(s)` + (sinLineas ? `; ${sinLineas} PDF no permitieron leerlas (escaneados o con otro formato)` : ''), conLineas ? 'success' : '', 6000);
+  buscarArticuloPedidos();
 }
 
 function clearPedidoForm() {

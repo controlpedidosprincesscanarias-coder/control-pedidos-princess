@@ -1,3 +1,18 @@
+# v12.32.76 — 7 octubre 2026
+
+🔎 Nuevo buscador de artículos en los pedidos: por hotel y referencia, con nº de pedido, cantidad y estado
+
+**Petición de Víctor** (verbatim): "seria interezante un buscador en el que podamos buscar por hotel y referencia, nos indique nuemero de pedido, cantidad y estado".
+
+**Cambio**:
+- `app.py`: nuevo `GET /api/pedidos/lineas/buscar` (parámetros `q` — mínimo 2 caracteres —, `hotel_id`, `estado`). Busca en referencia del proveedor, código y descripción de las líneas guardadas desde v12.32.75 y devuelve por línea: pedido, nº de pedido, estado, fecha, hotel, proveedor, código, referencia, descripción, unidad y cantidad (máx. 300 resultados, con aviso si hay más). Avisa de cuántos pedidos con PDF aún no tienen sus líneas leídas. Rol hotel: solo sus hoteles y sin precios; hotel de pruebas `PR` oculto salvo a quien corresponde.
+- Nuevo `POST /api/pedidos/lineas/leer-pendientes` (solo admin): lee por lotes de 10 las líneas de los PDF subidos antes de v12.32.75, para que entren en el buscador sin abrir cada pedido.
+- `templates/index.html`: nueva opción de menú "🔎 Buscar artículo" (admin, compras, hotel) con filtros hotel / referencia-código-descripción / estado, tabla de resultados (clic en una fila abre el pedido), resumen "N líneas en M pedidos — cantidad total X" y botón "Leerlos ahora" para admin cuando hay pedidos sin leer. Badge `V 12.32.75` → `V 12.32.76`.
+
+**Verificación**: contra PostgreSQL real: búsqueda por referencia en varios hoteles, filtro por hotel y por estado, búsqueda por descripción, mínimo de 2 caracteres, aviso de pedidos sin leer, lectura masiva (403 a no-admin), `compras` no ve `PR`, rol hotel solo ve su hotel y sin precios. Sin SQL manual ni cambios de despliegue.
+
+---
+
 # v12.32.75 — 7 octubre 2026
 
 📦 PDF de pedido oficial: ahora también se leen y se guardan las líneas (código, referencia del proveedor, descripción, cantidad, precio, importe)

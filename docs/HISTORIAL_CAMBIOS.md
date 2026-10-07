@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] Buscador de artículos en pedidos: hotel + referencia → nº pedido, cantidad y estado (v12.32.76)
+
+- **Origen**: Víctor: "seria interezante un buscador en el que podamos buscar por hotel y referencia, nos indique nuemero de pedido, cantidad y estado".
+- **Hallazgo**: con las líneas guardadas desde v12.32.75 (`pedido_lineas`) el buscador es una consulta directa; los pedidos con PDF anterior a esa versión no tienen líneas hasta que se abren o se lanza la lectura masiva.
+- **Corrección**: `GET /api/pedidos/lineas/buscar` + `POST /api/pedidos/lineas/leer-pendientes` (admin, lotes de 10) + vista "🔎 Buscar artículo" (ver CHANGELOG v12.32.76). Rol hotel acotado a sus hoteles y sin precios; hotel `PR` oculto a quien no corresponde; límite 300 filas con aviso; aviso de cobertura (pedidos con PDF sin líneas leídas).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables de entorno nuevas ni SQL manual; revisados `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`: no aplica.
+- **Pendiente / ideas**: contrastar cantidades pedidas con las recibidas; exportar resultados a Excel.
+
+---
+
 ## 2026-10-07 — [Control Pedidos] PDF de pedido oficial: se leen y guardan las líneas (referencias, cantidades, precios) (v12.32.75)
 
 - **Origen**: Víctor: "cuando se carga un pedido PDF, el sistema deberá leer el contenido del pedido, deberemos saber siempre referencias, cantidades etc; actualmente solo lee nombre proveedor almacén número pedido etc".

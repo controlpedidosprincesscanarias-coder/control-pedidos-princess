@@ -19968,6 +19968,24 @@ def _guardar_lineas_pedido(pedido_id: int, adjunto_id: int, lineas) -> int:
     return n
 
 
+def _leer_y_guardar_lineas_de_adjunto(pedido_id: int, adj, conservar_si_falla: bool = False):
+    """Lee las líneas del PDF de pedido oficial guardado (base de datos o
+    Storage) y las guarda (sin commit). Devuelve (nº de líneas, aviso|None).
+    Si no se pueden leer, deja el adjunto marcado como ya intentado — salvo
+    que `conservar_si_falla` (relectura forzada sobre líneas ya guardadas)."""
+    try:
+        contenido = _storage_descargar(adj["storage_path"]) if adj["storage_path"] else (bytes(adj["datos"]) if adj["datos"] else None)
+        datos = _parsear_pdf_pedido_oficial(contenido) if contenido else None
+    except ValueError:
+        datos = None
+    if datos is not None and datos.get("lineas"):
+        return _guardar_lineas_pedido(pedido_id, adj["id"], datos["lineas"]), None
+    aviso = (datos or {}).get("lineas_aviso") or "No se han podido leer las líneas de artículo de este PDF."
+    if not conservar_si_falla:
+        _guardar_lineas_pedido(pedido_id, adj["id"], None)
+    return 0, aviso
+
+
 @app.route("/api/pedidos/<int:pid>/lineas", methods=["GET"])
 @login_required
 def get_lineas_pedido(pid):
@@ -19990,16 +20008,7 @@ def get_lineas_pedido(pid):
     hay = query("SELECT 1 AS x FROM pedido_lineas WHERE pedido_id=%s LIMIT 1", (pid,), one=True)
     forzar = request.args.get("releer") == "1" and not es_hotel
     if adj and (forzar or (not hay and not adj["lineas_leidas"])):
-        try:
-            contenido = _storage_descargar(adj["storage_path"]) if adj["storage_path"] else (bytes(adj["datos"]) if adj["datos"] else None)
-            datos = _parsear_pdf_pedido_oficial(contenido) if contenido else None
-        except ValueError:
-            datos = None
-        if datos is not None and datos.get("lineas"):
-            _guardar_lineas_pedido(pid, adj["id"], datos["lineas"])
-        else:
-            aviso = (datos or {}).get("lineas_aviso") or "No se han podido leer las líneas de artículo de este PDF."
-            _guardar_lineas_pedido(pid, adj["id"], None) if not hay else None
+        n_leidas, aviso = _leer_y_guardar_lineas_de_adjunto(pid, adj, conservar_si_falla=bool(hay))
         get_db().commit()
 
     filas = rows_to_list(query(
@@ -20019,6 +20028,109 @@ def get_lineas_pedido(pid):
         "total_importe": None if es_hotel else round(sum((f["importe"] or 0) for f in filas), 2),
         "aviso": aviso,
     })
+
+
+def _filtro_hoteles_visibles_sql(alias="p"):
+    """(sql, args) que limita pedidos a los hoteles que puede ver la sesión:
+    el rol hotel solo los suyos; el hotel de pruebas PR solo quien puede verlo."""
+    cond, args = [], []
+    if session.get("rol") == "hotel":
+        hs = list(session.get("hoteles_ids", []) or [])
+        cond.append(f"{alias}.hotel_id = ANY(%s)")
+        args.append(hs)
+    if not _puede_ver_hotel_pruebas():
+        cond.append(f"{alias}.hotel_id NOT IN (SELECT id FROM hoteles WHERE codigo=%s)")
+        args.append(HOTEL_CODIGO_PRUEBAS)
+    return (" AND " + " AND ".join(cond)) if cond else "", args
+
+
+@app.route("/api/pedidos/lineas/buscar", methods=["GET"])
+@login_required
+def buscar_lineas_pedidos():
+    """Buscador de artículos en las líneas de los pedidos: por referencia del
+    proveedor, código o descripción, y opcionalmente por hotel/estado.
+    Devuelve por cada línea: hotel, Nº de pedido, estado, cantidad, etc."""
+    q = (request.args.get("q") or "").strip()
+    hotel_id = request.args.get("hotel_id", type=int)
+    estado = (request.args.get("estado") or "").strip()
+    if len(q) < 2:
+        return jsonify({"ok": False, "error": "Escribe al menos 2 caracteres de la referencia, código o descripción."}), 400
+    es_hotel = session.get("rol") == "hotel"
+    extra, args_extra = _filtro_hoteles_visibles_sql("p")
+    patron = f"%{q}%"
+    sql = f"""
+        SELECT p.id AS pedido_id, p.norden, p.pedido_num, p.estado, p.fecha_solicitud, p.fecha_tramitacion,
+               h.codigo AS hotel_codigo, h.nombre AS hotel_nombre, pr.nombre AS proveedor_nombre,
+               l.codigo, l.ref_proveedor, l.descripcion, l.unidad, l.cantidad, l.precio, l.importe
+        FROM pedido_lineas l
+        JOIN pedidos p ON p.id = l.pedido_id
+        LEFT JOIN hoteles h ON h.id = p.hotel_id
+        LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
+        WHERE (l.ref_proveedor ILIKE %s OR l.codigo ILIKE %s OR l.descripcion ILIKE %s)
+        {extra}
+    """
+    args = [patron, patron, patron] + args_extra
+    if hotel_id:
+        sql += " AND p.hotel_id = %s"; args.append(hotel_id)
+    if estado:
+        sql += " AND p.estado = %s"; args.append(estado)
+    sql += " ORDER BY COALESCE(p.fecha_solicitud, p.fecha_tramitacion) DESC NULLS LAST, p.id DESC, l.orden LIMIT 301"
+    filas = rows_to_list(query(sql, tuple(args)))
+    truncado = len(filas) > 300
+    filas = filas[:300]
+    for f in filas:
+        for k in ("cantidad", "precio", "importe"):
+            f[k] = float(f[k]) if f[k] is not None else None
+        for k in ("fecha_solicitud", "fecha_tramitacion"):
+            if f.get(k) is not None:
+                f[k] = str(f[k])
+        if es_hotel:
+            f["precio"] = None
+            f["importe"] = None
+    # Cobertura: pedidos con PDF oficial cuyas líneas aún no se han leído
+    # (PDF subidos antes de v12.32.75) — para avisar de que la búsqueda
+    # puede no verlos todavía.
+    cob_extra, cob_args = _filtro_hoteles_visibles_sql("p")
+    cob = query(
+        f"""SELECT COUNT(*) AS n FROM pedido_adjuntos a JOIN pedidos p ON p.id = a.pedido_id
+            WHERE a.tipo='pedido_doc' AND NOT a.lineas_leidas
+              AND NOT EXISTS (SELECT 1 FROM pedido_lineas l WHERE l.pedido_id = p.id) {cob_extra}""",
+        tuple(cob_args), one=True
+    )
+    return jsonify({
+        "ok": True, "resultados": filas, "truncado": truncado,
+        "pedidos_sin_leer": int(cob["n"]) if cob else 0,
+    })
+
+
+@app.route("/api/pedidos/lineas/leer-pendientes", methods=["POST"])
+@login_required
+def leer_lineas_pendientes():
+    """Lee las líneas de los PDF de pedido oficial subidos antes de v12.32.75
+    (solo administrador). Procesa un lote pequeño por llamada; el frontend
+    repite mientras queden pendientes."""
+    if session.get("rol") != "admin":
+        return jsonify({"ok": False, "error": "Solo administradores"}), 403
+    LOTE = 10
+    pend = rows_to_list(query(
+        """SELECT a.id, a.pedido_id, a.datos, a.storage_path FROM pedido_adjuntos a
+           WHERE a.tipo='pedido_doc' AND NOT a.lineas_leidas
+           ORDER BY a.id DESC LIMIT %s""", (LOTE,)
+    ))
+    con, sin = 0, 0
+    for a in pend:
+        try:
+            n, _aviso = _leer_y_guardar_lineas_de_adjunto(a["pedido_id"], a)
+        except Exception as exc:
+            log.warning(f"[PEDIDO-LINEAS] Lectura pendiente fallida (adjunto {a['id']}): {exc}")
+            get_db().rollback()
+            execute("UPDATE pedido_adjuntos SET lineas_leidas=TRUE WHERE id=%s", (a["id"],))
+            n = 0
+        get_db().commit()
+        con += 1 if n else 0
+        sin += 0 if n else 1
+    restantes = query("SELECT COUNT(*) AS n FROM pedido_adjuntos WHERE tipo='pedido_doc' AND NOT lineas_leidas", one=True)["n"]
+    return jsonify({"ok": True, "procesados": len(pend), "con_lineas": con, "sin_lineas": sin, "pendientes": int(restantes)})
 
 
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
