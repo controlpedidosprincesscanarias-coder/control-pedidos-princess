@@ -19602,7 +19602,7 @@ _OCR_RESOLUCION_DPI = 300
 
 _OCR_PASADAS_PSM = (6, 4, 3)
 
-def _ocr_pasadas_pdf_pedido_oficial(pdf_bytes: bytes):
+def _ocr_pasadas_pdf_pedido_oficial(pdf_bytes: bytes, diag: dict = None):
     """Generador: texto OCR del PDF (Tesseract, español, vía pytesseract) de
     cada pasada de `_OCR_PASADAS_PSM`, una por modo de segmentación de página.
 
@@ -19622,10 +19622,12 @@ def _ocr_pasadas_pdf_pedido_oficial(pdf_bytes: bytes):
     escala de grises (con la imagen en color, en un escaneo real, el modo 6
     leyó "000168386" en vez de "00016886")."""
     import pdfplumber, io
+    diag = diag if diag is not None else {}
     try:
         import pytesseract
     except Exception as exc:
         log.warning(f"[PEDIDO-DOC-OCR] pytesseract no disponible: {exc}")
+        diag["motivo"] = "pytesseract no disponible en el servidor"
         return
     imagenes = []
     try:
@@ -19635,6 +19637,7 @@ def _ocr_pasadas_pdf_pedido_oficial(pdf_bytes: bytes):
                     f"[PEDIDO-DOC-OCR] PDF de {len(pdf.pages)} páginas — se salta el OCR "
                     f"(límite {_LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL}, un pedido oficial real es 1 sola página)"
                 )
+                diag["motivo"] = f"PDF de {len(pdf.pages)} páginas (límite {_LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL})"
                 return
             for pagina in pdf.pages:
                 try:
@@ -19645,14 +19648,27 @@ def _ocr_pasadas_pdf_pedido_oficial(pdf_bytes: bytes):
                     pagina.flush_cache()
     except Exception as exc:
         log.warning(f"[PEDIDO-DOC-OCR] Error en OCR del PDF adjuntado: {exc}")
+        diag["motivo"] = f"error al preparar las imágenes del PDF ({type(exc).__name__})"
         return
+    idioma = "spa"
     for psm in _OCR_PASADAS_PSM:
         texto = ""
         try:
             for img in imagenes:
-                texto += pytesseract.image_to_string(img, lang="spa", config=f"--psm {psm}") + "\n"
+                try:
+                    texto += pytesseract.image_to_string(img, lang=idioma, config=f"--psm {psm}") + "\n"
+                except Exception as exc:
+                    if idioma != "spa":
+                        raise
+                    # Respaldo: si falta el paquete de idioma español, el inglés lee igual los
+                    # dígitos y las etiquetas del pedido (lo que se necesita aquí).
+                    log.warning(f"[PEDIDO-DOC-OCR] OCR en español no disponible ({exc}) — se prueba con inglés")
+                    diag["idioma_respaldo"] = True
+                    idioma = "eng"
+                    texto += pytesseract.image_to_string(img, lang=idioma, config=f"--psm {psm}") + "\n"
         except Exception as exc:
             log.warning(f"[PEDIDO-DOC-OCR] Pasada psm {psm} fallida: {exc}")
+            diag["motivo"] = f"Tesseract falla ({type(exc).__name__}: {str(exc)[:80]})"
             continue
         # (2026-09-07) Tesseract confunde a veces los bordes verticales de la
         # tabla con "|" y lo intercala entre los números de una línea; el
@@ -19668,19 +19684,28 @@ def _ocr_textos_pdf_pedido_oficial(pdf_bytes: bytes) -> list:
     return list(_ocr_pasadas_pdf_pedido_oficial(pdf_bytes))
 
 
-def _leer_pdf_por_ocr(pdf_bytes: bytes):
+def _leer_pdf_por_ocr(pdf_bytes: bytes, diag: dict = None):
     """OCR por pasadas sucesivas hasta que el Nº de pedido y el Total Pedido
     coinciden en dos pasadas (suele bastar con 2: se ahorra la tercera, ~5 s
     de CPU); si no, se usan las tres. Devuelve lo mismo que
     _leer_pedido_por_ocr() o None."""
+    diag = diag if diag is not None else {}
     textos = []
-    for t in _ocr_pasadas_pdf_pedido_oficial(pdf_bytes):
+    for t in _ocr_pasadas_pdf_pedido_oficial(pdf_bytes, diag):
         textos.append(t)
         if len(textos) >= 2:
             lectura = _leer_pedido_por_ocr(textos)
             if lectura and lectura.get("acuerdo_total"):
                 return lectura
-    return _leer_pedido_por_ocr(textos)
+    lectura = _leer_pedido_por_ocr(textos)
+    if not lectura and "motivo" not in diag:
+        nums = []
+        for t in textos:
+            m = _PATRON_PEDIDO_NUM_OFICIAL.search(t)
+            nums.append(m.group(1) if m else "-")
+        diag["motivo"] = (f"{len(textos)} pasada(s) de OCR; Nº de pedido leído: {', '.join(nums) or 'ninguna'} "
+                          "(sin coincidencia suficiente)")
+    return lectura
 
 
 def _ocr_texto_pdf_pedido_oficial(pdf_bytes: bytes) -> str:
@@ -20153,19 +20178,28 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
             # (v12.32.80) Varias pasadas de OCR y comprobación cruzada (ver
             # _leer_pedido_por_ocr): Nº de pedido y Total Pedido impreso por
             # coincidencia entre pasadas, líneas por cantidad × precio = importe.
-            lectura_ocr = _leer_pdf_por_ocr(pdf_bytes)
+            _diag_ocr = {}
+            _motivo_ocr = "OCR no ejecutado"
+            lectura_ocr = _leer_pdf_por_ocr(pdf_bytes, _diag_ocr)
             if lectura_ocr:
                 texto = lectura_ocr["texto"]
                 leido_via_ocr = True
+            else:
+                _motivo_ocr = _diag_ocr.get("motivo") or "sin detalle"
+                log.warning(f"[PEDIDO-DOC-OCR] PDF escaneado rechazado: {_motivo_ocr}")
 
         if not leido_via_ocr:
+            # (v12.32.81) Si era un escaneado (sin texto), se añade el motivo técnico del OCR
+            # para poder diagnosticarlo sin mirar los logs del servidor.
+            _detalle = (f" [Documento escaneado — detalle del OCR: {_motivo_ocr}]"
+                        if len(texto.strip()) < _UMBRAL_TEXTO_VACIO_PDF else "")
             raise ValueError(
                 "El PDF adjuntado no tiene el formato del pedido oficial PRINCESS, o viene "
                 "firmado/sellado sin que se puedan leer con claridad el Nº de Pedido y las "
                 "líneas de artículos con su importe (compruebe que el sello o la firma no "
                 "tapen esos datos) — adjunte únicamente el PDF del pedido oficial (el que "
                 "genera SAP/DALI, con el Nº de Pedido y las líneas de artículos con su "
-                "importe) en este apartado."
+                "importe) en este apartado." + _detalle
             )
 
     if leido_via_ocr:

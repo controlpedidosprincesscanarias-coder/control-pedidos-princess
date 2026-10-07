@@ -1,3 +1,19 @@
+# v12.32.81 — 7 octubre 2026
+
+🔧 PDF escaneado rechazado: el error ahora dice por qué, y el OCR tiene respaldo si falta el idioma español
+
+**Aviso de Víctor** (captura): al subir "16885.pdf" sigue saliendo el error genérico de "no tiene el formato del pedido oficial", con Nº 16885 y total 1.492,26 ya en el formulario.
+
+**Hallazgo**: con los PDF de Víctor la v12.32.80 los lee bien en el entorno de pruebas, así que o aún no estaba desplegada en Render, o el OCR del servidor se comporta distinto — con el mensaje anterior no se podía distinguir.
+
+**Cambio** (`app.py`, `_ocr_pasadas_pdf_pedido_oficial`/`_leer_pdf_por_ocr`/`_parsear_pdf_pedido_oficial`):
+- Si un PDF sin texto (escaneado) se rechaza, el mensaje añade al final el detalle técnico: `[Documento escaneado — detalle del OCR: …]` (Tesseract no ejecutable, pytesseract ausente, nº de pasadas y Nº de pedido leído en cada una…) y se registra en el log del servidor.
+- Respaldo de idioma: si el paquete `spa` de Tesseract falla en el servidor, se reintenta con inglés (lee igual Nº de pedido y Total; sin líneas fiables). Badge `V 12.32.80` → `V 12.32.81`.
+
+**Verificación**: los 3 PDF de Víctor siguen leyéndose igual; PDF en blanco → rechazo con detalle; simulando fallo del idioma español, el 16886 se lee (Nº y total) con inglés. Sin SQL.
+
+---
+
 # v12.32.80 — 7 octubre 2026
 
 📷 PDF de pedido firmado/escaneado (pedido 16886): lectura por OCR fiable, con comprobación cruzada y líneas de artículo

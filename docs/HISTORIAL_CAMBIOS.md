@@ -49,6 +49,16 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] OCR de pedidos escaneados: motivo del rechazo visible y respaldo de idioma (v12.32.81)
+
+- **Origen**: Víctor, captura con el error de "16885.pdf" tras entregar la v12.32.80.
+- **Hallazgo**: en pruebas se lee bien; sin detalle en el mensaje no se puede saber si es versión sin desplegar o diferencia del OCR del servidor.
+- **Corrección**: detalle técnico del OCR en el error y en el log; respaldo a inglés si falla `spa` (ver CHANGELOG v12.32.81).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html` (badge), `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; no aplica.
+
+---
+
 ## 2026-10-07 — [Control Pedidos] PDF de pedido escaneado/firmado (16886): OCR por consenso + líneas verificadas (v12.32.80)
 
 - **Origen**: Víctor, captura del error al subir el 16886 firmado (+ PDFs 16885, 16886 y 16886 original).
