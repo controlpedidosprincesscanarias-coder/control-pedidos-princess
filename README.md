@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.74** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.75** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -127,7 +127,7 @@ confundirse entre sí, ver más abajo):
   decisión sale del **servicio por hotel**: cada proveedor sirve por
   defecto a los 10 hoteles (el hotel de pruebas PR no cuenta) y admin/
   compras desmarcan en la ficha los hoteles sin servicio (tabla
-  `proveedor_hoteles_sin_servicio`, migración automática); el Excel que exporta la ficha de proveedores (v12.32.74) incluye CODIGO DALI, los hoteles de cada contacto, el servicio por hotel y el rutómetro; el puente
+  `proveedor_hoteles_sin_servicio`, migración automática); al adjuntar el PDF del pedido oficial se guardan también sus líneas (código, ref. proveedor, descripción, cantidad, precio e importe; v12.32.75); el Excel que exporta la ficha de proveedores (v12.32.74) incluye CODIGO DALI, los hoteles de cada contacto, el servicio por hotel y el rutómetro; el puente
   devuelve `hoteles_sin_servicio`/`hoteles_con_servicio` y DALI oculta
   los artículos del proveedor a los hoteles desmarcados.
 - **Comparar Pedidos + Albaranes (SAP)** (admin, botón "📄 Comparar

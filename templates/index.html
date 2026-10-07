@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.74
+          V 12.32.75
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2451,9 +2451,11 @@ tbody tr:last-child{border-bottom:none}
             📎 Adjuntar PDF del pedido oficial
           </label>
           <div style="font-size:10.5px;color:#888;margin-top:4px">
-            Solo se admite el PDF de pedido oficial PRINCESS (el que genera SAP/DALI, con el mismo formato siempre) — al adjuntarlo, la app lee sola el Nº de Pedido y el Total Pedido.
+            Solo se admite el PDF de pedido oficial PRINCESS (el que genera SAP/DALI, con el mismo formato siempre) — al adjuntarlo, la app lee sola el Nº de Pedido, el Total Pedido y las líneas del pedido (códigos, referencias, cantidades y precios).
           </div>
           <div id="adj-pedido-list" class="adj-fecha-list"></div>
+          <!-- (v12.32.75) Líneas del pedido leídas del PDF oficial: código, referencia del proveedor, descripción, cantidad, precio e importe -->
+          <div id="pedido-lineas-panel" style="display:none;margin-top:8px"></div>
         </div>
         <div class="form-group" id="presupuesto-section">
           <label class="form-label">Nº Presupuesto</label>
@@ -5390,6 +5392,7 @@ async function openPedidoModal(id=null) {
     // lo tenga, típicamente en PENDIENTE COTIZACIÓN. Ver
     // _actualizarBloqueoProveedorManual().
     _actualizarBloqueoProveedorManual(!!p.pedido_num);
+    cargarLineasPedido();   // (v12.32.75) líneas del PDF oficial
     // (2026-09-06, v12.32.35) Aviso persistente si el proveedor leído del
     // PDF oficial no se reconoció en el catálogo, si el Departamento
     // seleccionado no coincide con el Almacén del PDF, o (2026-09-06,
@@ -5698,7 +5701,9 @@ async function subirAdjuntos(input, tipo) {
           setVal('p-pedido-num', data.pedido_num);
           setVal('p-total-pedido', data.total_pedido != null ? Number(data.total_pedido).toFixed(2) : '');
           document.getElementById('p-total-pedido-aprox-badge').hidden = true;  // el PDF oficial siempre es el importe real
-          toast(`PDF leído — Nº Pedido ${data.pedido_num}, Total ${Number(data.total_pedido).toFixed(2)} €`, 'success');
+          toast(`PDF leído — Nº Pedido ${data.pedido_num}, Total ${Number(data.total_pedido).toFixed(2)} €` + (data.lineas_leidas ? `, ${data.lineas_leidas} líneas` : ''), 'success');
+          if (!data.lineas_leidas && data.lineas_aviso) toast('⚠️ ' + data.lineas_aviso, '', 6000);
+          cargarLineasPedido();
           // (2026-09-07) El PDF firmado/sellado (impreso, sellado en papel y
           // vuelto a escanear) no trae texto propio y se lee por OCR — ver
           // _parsear_pdf_pedido_oficial/_ocr_texto_pdf_pedido_oficial en
@@ -6042,6 +6047,7 @@ async function borrarAdjunto(adjId) {
     const el = document.getElementById(`adj-item-${adjId}`);
     if (el) el.remove();
     toast('Adjunto eliminado', 'success');
+    if (G.editingPedidoId) cargarLineasPedido();   // (v12.32.75) si era el PDF oficial, desaparecen sus líneas
   } else {
     toast(r.error || 'Error al eliminar', 'error');
   }
@@ -6504,9 +6510,65 @@ function _setFormCanceladoSilent(bloqueado) {
 }
 
 
+/* (v12.32.75) Líneas del pedido leídas del PDF oficial PRINCESS — referencias,
+   cantidades y precios. Se piden al abrir el pedido y tras subir/borrar el PDF. */
+let _lineasPedidoReq = 0;
+function _htmlLinea(t) {
+  return String(t == null ? '' : t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+async function cargarLineasPedido(forzar = false) {
+  const panel = document.getElementById('pedido-lineas-panel');
+  const id = G.editingPedidoId;
+  if (!panel) return;
+  if (!id) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  const req = ++_lineasPedidoReq;
+  panel.style.display = '';
+  panel.innerHTML = '<div style="font-size:11px;color:#888">Leyendo las líneas del pedido…</div>';
+  let d;
+  try { d = await api(`/api/pedidos/${id}/lineas${forzar ? '?releer=1' : ''}`); }
+  catch (e) { d = null; }
+  if (req !== _lineasPedidoReq || G.editingPedidoId !== id) return;   // llegó tarde: otro pedido o recarga
+  if (!d || !d.ok || !d.tiene_pdf) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  const n = (d.lineas || []).length;
+  if (!n) {
+    panel.innerHTML = `<div style="font-size:11px;color:#7a5b00;background:#fff8e1;border:1px solid #ffe08a;border-radius:6px;padding:6px 8px">
+      ⚠️ ${_htmlLinea(d.aviso || 'No hay líneas guardadas para este pedido.')}
+      ${G.rol !== 'hotel' ? ' <a href="#" onclick="cargarLineasPedido(true);return false">Reintentar la lectura</a>' : ''}</div>`;
+    return;
+  }
+  const verPrecios = G.rol !== 'hotel';
+  const num = (v, dec) => v == null ? '—' : Number(v).toLocaleString('es-ES', { minimumFractionDigits: dec, maximumFractionDigits: Math.max(dec, 4), useGrouping: 'always' });
+  const filas = d.lineas.map(l => `<tr>
+      <td class="monospace">${_htmlLinea(l.codigo)}</td>
+      <td class="monospace">${_htmlLinea(l.ref_proveedor || '—')}</td>
+      <td>${_htmlLinea(l.descripcion)}</td>
+      <td>${_htmlLinea(l.unidad || '')}</td>
+      <td style="text-align:right">${num(l.cantidad, 0)}</td>
+      ${verPrecios ? `<td style="text-align:right">${num(l.precio, 2)}</td><td style="text-align:right">${num(l.importe, 2)}</td>` : ''}
+    </tr>`).join('');
+  panel.innerHTML = `<details open style="border:1px solid #e3e8f0;border-radius:6px;background:#fafbfd">
+    <summary style="cursor:pointer;padding:6px 8px;font-size:12px;font-weight:600;color:var(--navy2)">
+      📦 Líneas del pedido (${n})${verPrecios && d.total_importe != null ? ` — ${num(d.total_importe, 2)} €` : ''}
+    </summary>
+    <div style="max-height:260px;overflow:auto;padding:0 6px 6px">
+      <table style="width:100%;border-collapse:collapse;font-size:11px">
+        <thead><tr style="position:sticky;top:0;background:#eef2f9;text-align:left">
+          <th style="padding:3px 4px">Código</th><th style="padding:3px 4px">Ref. Prov.</th><th style="padding:3px 4px">Descripción</th>
+          <th style="padding:3px 4px">Ud.</th><th style="padding:3px 4px;text-align:right">Cantidad</th>
+          ${verPrecios ? '<th style="padding:3px 4px;text-align:right">Precio</th><th style="padding:3px 4px;text-align:right">Importe</th>' : ''}
+        </tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>
+  </details>`;
+}
+
 function clearPedidoForm() {
   ['p-hotel','p-depto','p-pedido-num','p-presup','p-total-pedido','p-observaciones','p-nota','p-plazo-entrega','p-fecha-entrega-especifica'].forEach(id=>setVal(id,''));
   document.getElementById('p-total-pedido-aprox-badge').hidden = true;
+  _lineasPedidoReq++;   // descarta cualquier carga de líneas en curso
+  const _lp = document.getElementById('pedido-lineas-panel');
+  if (_lp) { _lp.style.display = 'none'; _lp.innerHTML = ''; }
   // Sin hotel seleccionado: el desplegable de Departamento vuelve a mostrar
   // el catálogo completo (sin el filtro por hotel de poblarSelectDeptos),
   // en vez de quedarse con el filtrado del pedido editado anteriormente.

@@ -1,3 +1,21 @@
+# v12.32.75 — 7 octubre 2026
+
+📦 PDF de pedido oficial: ahora también se leen y se guardan las líneas (código, referencia del proveedor, descripción, cantidad, precio, importe)
+
+**Petición de Víctor** (verbatim): "cuando se carga un pedido PDF, el sistema deberá leer el contenido del pedido, deberemos saber siempre referencias, cantidades etc; actualmente solo lee nombre proveedor almacén número pedido etc".
+
+**Causa**: el lector (`_parsear_pdf_pedido_oficial`) solo usaba las líneas de artículo para sumar su importe y las descartaba. Además `pypdf` desordena las columnas, así que no servía para leerlas.
+
+**Cambio**:
+- `app.py`: nuevo lector por posiciones con `pdfplumber` (`_extraer_lineas_pdf_pedido_oficial`): agrupa cada descripción (1-4 líneas, repartidas arriba y abajo de la línea del código) con su artículo y lee Código, Ref. Prov., Unidad, Cantidad, Precio, Importe y Almacén. Comprobación cruzada: solo se guarda si los importes coinciden exactamente con los que ya lee el lector por texto; si no, no se guarda nada y se avisa. PDF escaneado (OCR): sin líneas, con aviso.
+- Nueva tabla `pedido_lineas` (migración automática en `_auto_migrate`, sin SQL manual), ligada al pedido y al adjunto (si se borra el PDF se borran sus líneas) + columna `pedido_adjuntos.lineas_leidas`.
+- `upload_adjunto` guarda las líneas al subir el PDF y devuelve `lineas_leidas`/`lineas_aviso`. Nuevo `GET /api/pedidos/<id>/lineas`: para pedidos con el PDF subido antes de esta versión, las lee del PDF guardado la primera vez que se abre (una sola vez); `?releer=1` fuerza otra lectura (no para rol hotel). El rol hotel ve referencias y cantidades pero no precios ni importes (igual que el importe del pedido).
+- `templates/index.html`: panel "📦 Líneas del pedido" debajo del PDF oficial en el formulario del pedido (tabla con desplazamiento, total de importes); se refresca al subir o borrar el PDF. Badge `V 12.32.74` → `V 12.32.75`.
+
+**Verificación**: probado con el PDF real del pedido 41826 (Casa Delfín): 16 líneas, suma 9.196,44 € = Total Pedido; referencias con cero inicial conservadas, cantidad 2.500 correcta. Contra PostgreSQL real: guardado al subir, lectura en pedidos antiguos, cascada al borrar el PDF, relectura sin duplicar, rol hotel sin precios, hotel ajeno 403.
+
+---
+
 # v12.32.74 — 7 octubre 2026
 
 📊 Excel de proveedores: código DALI, hoteles de cada contacto, servicio por hotel y rutómetro

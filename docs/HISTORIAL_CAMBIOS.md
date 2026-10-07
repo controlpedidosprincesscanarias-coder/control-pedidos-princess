@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] PDF de pedido oficial: se leen y guardan las líneas (referencias, cantidades, precios) (v12.32.75)
+
+- **Origen**: Víctor: "cuando se carga un pedido PDF, el sistema deberá leer el contenido del pedido, deberemos saber siempre referencias, cantidades etc; actualmente solo lee nombre proveedor almacén número pedido etc".
+- **Hallazgo**: las líneas de artículo solo se leían para sumar su importe (Total Pedido) y se descartaban; `pypdf` desordena las columnas y pega la referencia del proveedor al importe ("298,801000664"), por lo que no es válido para extraerlas. Con `pdfplumber` (posición real de cada palabra) la tabla sale limpia: la línea con el código y los números va en el centro y su descripción se reparte en 1-4 líneas arriba y abajo, así que cada línea de solo texto se asigna al artículo más cercano en vertical.
+- **Corrección**: lector de líneas + tabla `pedido_lineas` + endpoint `GET /api/pedidos/<id>/lineas` + panel en el formulario del pedido (ver CHANGELOG v12.32.75). Salvaguardas: las líneas solo se guardan si sus importes coinciden con los del lector antiguo; PDF escaneado (OCR) sin líneas; lectura retroactiva perezosa para pedidos ya cargados; rol hotel sin precios.
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables de entorno nuevas ni SQL manual (la tabla se crea sola al arrancar). `pdfplumber` ya estaba en `requirements.txt`.
+- **Pendiente / ideas**: buscar un artículo por código o referencia en todos los pedidos; contrastar cantidades con las entradas de mercancía.
+
+---
+
 ## 2026-10-07 — [Control Pedidos] Excel de proveedores: código DALI, hoteles de cada contacto, servicio por hotel y rutómetro (v12.32.74)
 
 - **Origen**: Víctor: "en control de pedidos, ficha proveedores, este es el excel que exporta actualmente, necesito incluir columna código DALI y también rutómetro, se debe poder identificar también los correos electrónicos por hoteles según esté configurada la ficha".

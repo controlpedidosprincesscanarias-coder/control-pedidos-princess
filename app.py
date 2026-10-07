@@ -1284,6 +1284,41 @@ def _auto_migrate():
                     )
             except Exception as e:
                 log.warning(f"No se pudo crear/cargar la tabla proveedor_hoteles_sin_servicio: {e}")
+            # (2026-10-07, v12.32.75) Líneas del PDF de pedido oficial — a petición
+            # de Víctor: "cuando se carga un pedido PDF, el sistema deberá leer
+            # el contenido del pedido, deberemos saber siempre referencias,
+            # cantidades etc". Hasta ahora solo se guardaba el Nº de Pedido, el
+            # Total, fechas, proveedor, almacén y hotel; las líneas de artículo
+            # se leían solo para sumar su importe y se descartaban. Una fila por
+            # línea de artículo, ligada al adjunto (si se borra el PDF, se
+            # borran sus líneas) y al pedido.
+            try:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pedido_lineas (
+                        id            SERIAL PRIMARY KEY,
+                        pedido_id     INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+                        adjunto_id    INTEGER REFERENCES pedido_adjuntos(id) ON DELETE CASCADE,
+                        orden         INTEGER NOT NULL,
+                        codigo        TEXT,
+                        ref_proveedor TEXT,
+                        descripcion   TEXT,
+                        unidad        TEXT,
+                        cantidad      NUMERIC(14,4),
+                        precio        NUMERIC(14,4),
+                        importe       NUMERIC(14,2),
+                        almacen       TEXT
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_pedido_lineas_pedido ON pedido_lineas(pedido_id, orden)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_pedido_lineas_codigo ON pedido_lineas(codigo)")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_pedido_lineas_ref ON pedido_lineas(ref_proveedor)")
+                # Marca de "ya se intentó leer las líneas de este adjunto" — para los
+                # PDF subidos ANTES de esta versión, las líneas se leen la primera vez
+                # que se abre el pedido (ver get_lineas_pedido) y no se reintenta
+                # en cada apertura si el PDF no permitió leerlas.
+                cur.execute("ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS lineas_leidas BOOLEAN NOT NULL DEFAULT FALSE")
+            except Exception as e:
+                log.warning(f"No se pudo crear la tabla pedido_lineas: {e}")
             # ══════════════════════════════════════════════════════════════
             # Columnas legacy de proveedores (para DBs antiguas)
             for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT"),
@@ -19673,6 +19708,116 @@ def _resolver_proveedor_pdf_oficial(proveedor_codigo, proveedor_nombre_pdf):
             return fila
     return None
 
+# (2026-10-07, v12.32.75) Líneas de artículo del PDF de pedido oficial.
+# pypdf desordena las columnas (ver comentarios de arriba), así que aquí se
+# usan las posiciones reales de cada palabra con pdfplumber — el mismo enfoque
+# que ya usa el Listado DETALLADO de SAP. Columnas del documento: Código ·
+# Ref. Prov. · Descripción · Unidad · Cantidad · Precio · Importe · Almacén.
+# La descripción ocupa 1-4 líneas de texto repartidas ARRIBA y ABAJO de la
+# línea que lleva el código y los números (comprobado con el PDF real del
+# pedido 41826), así que cada línea "de solo texto" se asigna a la línea de
+# artículo más cercana en vertical.
+_RE_NUM_ES_LINEA = re.compile(r'^-?\d{1,3}(?:\.\d{3})*,\d{2,4}$|^-?\d+,\d{2,4}$')
+_RE_CODIGO_LINEA = re.compile(r'^\d{8}$')
+_RE_FIN_TABLA_PEDIDO = re.compile(r'^(Total Pedido|Observaciones|NOTA:|NO SE ADMIT)', re.IGNORECASE)
+
+def _extraer_lineas_pdf_pedido_oficial(pdf_bytes: bytes):
+    """Devuelve la lista de líneas del pedido [{orden, codigo, ref_proveedor,
+    descripcion, unidad, cantidad, precio, importe, almacen}] o None si el PDF
+    no tiene capa de texto / no se puede leer la tabla. Nunca lanza."""
+    try:
+        import pdfplumber, io
+        lineas = []
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for pagina in pdf.pages:
+                try:
+                    palabras = pagina.extract_words(x_tolerance=1.5)
+                finally:
+                    pagina.flush_cache()
+                if not palabras:
+                    continue
+                # Agrupar en renglones por posición vertical
+                palabras.sort(key=lambda w: (w["top"], w["x0"]))
+                renglones = []
+                for w in palabras:
+                    if renglones and abs(w["top"] - renglones[-1]["top"]) <= 2.0:
+                        renglones[-1]["w"].append(w)
+                    else:
+                        renglones.append({"top": w["top"], "w": [w]})
+                for r in renglones:
+                    r["w"].sort(key=lambda w: w["x0"])
+                    r["texto"] = " ".join(w["text"] for w in r["w"])
+                # Cabecera de la tabla de esta página
+                h_idx = next((i for i, r in enumerate(renglones)
+                              if {"Código", "Cantidad", "Importe"} <= {w["text"] for w in r["w"]}), None)
+                if h_idx is None:
+                    continue
+                cab = {w["text"]: w for w in renglones[h_idx]["w"]}
+                x_desc = cab["Descripción"]["x0"] if "Descripción" in cab else cab["Código"]["x0"] + 100
+                corte_ref = x_desc - 45  # una palabra de la línea de código que empiece antes = Ref. Prov.
+                cuerpo = []
+                for r in renglones[h_idx + 1:]:
+                    if _RE_FIN_TABLA_PEDIDO.match(r["texto"]):
+                        break
+                    cuerpo.append(r)
+                filas = []   # líneas de artículo de esta página
+                solo_texto = []
+                for r in cuerpo:
+                    ws = r["w"]
+                    if _RE_CODIGO_LINEA.match(ws[0]["text"]) and ws[0]["x0"] < 100:
+                        nums = [i for i, w in enumerate(ws) if _RE_NUM_ES_LINEA.match(w["text"])]
+                        # última terna consecutiva de números = Cantidad, Precio, Importe
+                        i_q = next((i for i in reversed(nums) if i + 2 in nums and i + 1 in nums), None)
+                        if i_q is None or i_q < 2:
+                            return None  # estructura inesperada: mejor no guardar nada
+                        resto = ws[1:i_q - 1]      # entre código y unidad
+                        ref = None
+                        if resto and resto[0]["x0"] < corte_ref:
+                            ref = resto[0]["text"]
+                            resto = resto[1:]
+                        filas.append({
+                            "top": r["top"],
+                            "codigo": ws[0]["text"],
+                            "ref_proveedor": ref,
+                            "unidad": ws[i_q - 1]["text"],
+                            "cantidad": _parse_importe_es(ws[i_q]["text"]),
+                            "precio": _parse_importe_es(ws[i_q + 1]["text"]),
+                            "importe": _parse_importe_es(ws[i_q + 2]["text"]),
+                            "almacen": " ".join(w["text"] for w in ws[i_q + 3:]) or None,
+                            "desc": [(r["top"], " ".join(w["text"] for w in resto))] if resto else [],
+                        })
+                    else:
+                        solo_texto.append(r)
+                if not filas:
+                    continue
+                for r in solo_texto:
+                    destino = min(filas, key=lambda f: abs(f["top"] - r["top"]))
+                    destino["desc"].append((r["top"], r["texto"]))
+                for f in filas:
+                    f["desc"].sort(key=lambda t: t[0])
+                    f["descripcion"] = " ".join(" ".join(t for _, t in f["desc"]).split())
+                    del f["desc"], f["top"]
+                    lineas.append(f)
+        if not lineas:
+            return None
+        for i, f in enumerate(lineas, 1):
+            f["orden"] = i
+        return lineas
+    except Exception as exc:
+        log.warning(f"[PEDIDO-LINEAS] No se pudieron leer las líneas del PDF: {exc}")
+        return None
+
+def _lineas_coinciden_con_importes(lineas, lineas_importe) -> bool:
+    """Comprobación cruzada: las líneas leídas por posición tienen que tener
+    exactamente los mismos importes que los tríos Cantidad/Precio/Importe que
+    ya detecta el lector por texto (_PATRON_IMPORTE_LINEA_OFICIAL). Si no
+    coinciden, no se guarda nada — mejor sin líneas que líneas equivocadas."""
+    if not lineas or len(lineas) != len(lineas_importe):
+        return False
+    a = sorted(round(l["importe"], 2) for l in lineas)
+    b = sorted(round(_parse_importe_es(t[2]), 2) for t in lineas_importe)
+    return a == b
+
 def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
     """
     Lee un PDF de pedido oficial PRINCESS (SAP/DALI) y devuelve
@@ -19772,7 +19917,24 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
     if leido_via_ocr:
         log.info(f"[PEDIDO-DOC-OCR] Pedido {pedido_num} leído por OCR (PDF firmado/sellado sin texto)")
 
+    # (v12.32.75) Líneas de artículo (referencias, cantidades, precios...) —
+    # solo con PDF con texto propio (no OCR) y solo si coinciden con los
+    # importes ya leídos; si no, se devuelve None y el resto sigue igual.
+    lineas = None
+    lineas_aviso = None
+    if not leido_via_ocr:
+        lineas = _extraer_lineas_pdf_pedido_oficial(pdf_bytes)
+        if lineas is not None and not _lineas_coinciden_con_importes(lineas, lineas_importe):
+            log.warning(f"[PEDIDO-LINEAS] Pedido {pedido_num}: las líneas leídas no coinciden con los importes — no se guardan")
+            lineas = None
+        if lineas is None:
+            lineas_aviso = "No se han podido leer las líneas de artículo de este PDF con fiabilidad."
+    else:
+        lineas_aviso = "Documento escaneado: las líneas de artículo no se leen automáticamente."
+
     return {
+        "lineas": lineas,
+        "lineas_aviso": lineas_aviso,
         "pedido_num": pedido_num,
         "total_pedido": total_pedido,
         "fecha_pedido_iso": fecha_pedido_iso,
@@ -19783,6 +19945,81 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
         "hotel_nombre_pdf": hotel_nombre_pdf,
         "leido_via_ocr": leido_via_ocr,
     }
+
+def _guardar_lineas_pedido(pedido_id: int, adjunto_id: int, lineas) -> int:
+    """Sustituye las líneas guardadas de un pedido por las del PDF oficial
+    leído (sin commit — lo hace quien llama). Marca el adjunto como ya leído.
+    Devuelve cuántas líneas se han guardado (0 si `lineas` es None/vacío)."""
+    execute("DELETE FROM pedido_lineas WHERE pedido_id=%s", (pedido_id,))
+    n = 0
+    if lineas:
+        with get_db().cursor() as cur:
+            execute_values(
+                cur,
+                """INSERT INTO pedido_lineas
+                   (pedido_id, adjunto_id, orden, codigo, ref_proveedor, descripcion, unidad, cantidad, precio, importe, almacen)
+                   VALUES %s""",
+                [(pedido_id, adjunto_id, l["orden"], l["codigo"], l["ref_proveedor"], l["descripcion"],
+                  l["unidad"], l["cantidad"], l["precio"], l["importe"], l["almacen"]) for l in lineas],
+                page_size=200,
+            )
+        n = len(lineas)
+    execute("UPDATE pedido_adjuntos SET lineas_leidas=TRUE WHERE id=%s", (adjunto_id,))
+    return n
+
+
+@app.route("/api/pedidos/<int:pid>/lineas", methods=["GET"])
+@login_required
+def get_lineas_pedido(pid):
+    """Líneas de artículo del PDF de pedido oficial (referencias, cantidades,
+    precios...). Para pedidos con el PDF subido antes de v12.32.75, las líneas
+    se leen del PDF guardado la primera vez que se piden (una sola vez; con
+    ?releer=1 se fuerza otra lectura)."""
+    ped = query("SELECT id, hotel_id FROM pedidos WHERE id=%s", (pid,), one=True)
+    if not ped:
+        return jsonify({"ok": False, "error": "Pedido no encontrado"}), 404
+    es_hotel = session.get("rol") == "hotel"
+    if es_hotel and ped["hotel_id"] not in session.get("hoteles_ids", []):
+        return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
+
+    adj = query(
+        "SELECT id, datos, storage_path, lineas_leidas FROM pedido_adjuntos "
+        "WHERE pedido_id=%s AND tipo='pedido_doc' ORDER BY id DESC LIMIT 1", (pid,), one=True
+    )
+    aviso = None
+    hay = query("SELECT 1 AS x FROM pedido_lineas WHERE pedido_id=%s LIMIT 1", (pid,), one=True)
+    forzar = request.args.get("releer") == "1" and not es_hotel
+    if adj and (forzar or (not hay and not adj["lineas_leidas"])):
+        try:
+            contenido = _storage_descargar(adj["storage_path"]) if adj["storage_path"] else (bytes(adj["datos"]) if adj["datos"] else None)
+            datos = _parsear_pdf_pedido_oficial(contenido) if contenido else None
+        except ValueError:
+            datos = None
+        if datos is not None and datos.get("lineas"):
+            _guardar_lineas_pedido(pid, adj["id"], datos["lineas"])
+        else:
+            aviso = (datos or {}).get("lineas_aviso") or "No se han podido leer las líneas de artículo de este PDF."
+            _guardar_lineas_pedido(pid, adj["id"], None) if not hay else None
+        get_db().commit()
+
+    filas = rows_to_list(query(
+        "SELECT orden, codigo, ref_proveedor, descripcion, unidad, cantidad, precio, importe, almacen "
+        "FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pid,)
+    ))
+    for f in filas:
+        for k in ("cantidad", "precio", "importe"):
+            f[k] = float(f[k]) if f[k] is not None else None
+        if es_hotel:   # igual que el importe del pedido: los precios no se enseñan al hotel
+            f["precio"] = None
+            f["importe"] = None
+    return jsonify({
+        "ok": True,
+        "tiene_pdf": adj is not None,
+        "lineas": filas,
+        "total_importe": None if es_hotel else round(sum((f["importe"] or 0) for f in filas), 2),
+        "aviso": aviso,
+    })
+
 
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
 @login_required
@@ -20071,7 +20308,10 @@ def upload_adjunto(pid):
              _prov_resuelto["id"] if _prov_resuelto else None, _prov_codigo_pdf, _prov_nombre_pdf, _almacen_pdf,
              _hotel_nombre_pdf, pid)
         )
+        _n_lineas = _guardar_lineas_pedido(pid, adjunto_id, _datos_pedido_pdf.get("lineas"))
         db.commit()
+        respuesta["lineas_leidas"] = _n_lineas
+        respuesta["lineas_aviso"] = _datos_pedido_pdf.get("lineas_aviso")
         respuesta["pedido_num"] = _datos_pedido_pdf["pedido_num"]
         respuesta["total_pedido"] = _datos_pedido_pdf["total_pedido"]
         respuesta["proveedor_id"] = _prov_resuelto["id"] if _prov_resuelto else None
