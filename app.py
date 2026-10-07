@@ -1317,6 +1317,10 @@ def _auto_migrate():
                 # que se abre el pedido (ver get_lineas_pedido) y no se reintenta
                 # en cada apertura si el PDF no permitió leerlas.
                 cur.execute("ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS lineas_leidas BOOLEAN NOT NULL DEFAULT FALSE")
+                # (v12.32.80) TRUE si las líneas se leyeron por OCR de un PDF
+                # escaneado/firmado (pueden tener erratas en referencias o
+                # descripciones): la app avisa de que se revisen.
+                cur.execute("ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS lineas_ocr BOOLEAN NOT NULL DEFAULT FALSE")
             except Exception as e:
                 log.warning(f"No se pudo crear la tabla pedido_lineas: {e}")
             # ══════════════════════════════════════════════════════════════
@@ -19596,30 +19600,34 @@ _UMBRAL_TEXTO_VACIO_PDF = 20
 _LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL = 5
 _OCR_RESOLUCION_DPI = 300
 
-def _ocr_texto_pdf_pedido_oficial(pdf_bytes: bytes) -> str:
-    """Devuelve el texto reconocido por OCR (Tesseract, español, vía
-    pytesseract) de cada página del PDF, concatenado en el mismo orden que
-    _parsear_pdf_pedido_oficial() espera de pypdf — o "" si el PDF supera
-    _LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL, si Tesseract no está disponible en
-    este servidor (no instalado — ver Dockerfile), o si ocurre cualquier
-    otro error leyendo el PDF. Nunca lanza excepción: el llamador trata
-    "" igual que "no se ha podido reconocer nada por OCR", con el mismo
-    mensaje de rechazo que si no se hubiera intentado.
+_OCR_PASADAS_PSM = (6, 4, 3)
 
-    Renderiza cada página con pdfplumber (que a su vez usa pypdfium2, ya
-    dependencia de este proyecto — ver requirements.txt — así que no hace
-    falta poppler ni ninguna otra herramienta de rasterizado nueva) a
-    _OCR_RESOLUCION_DPI ppp: por debajo de eso Tesseract falla con letra
-    pequeña de tablas como esta; por encima, el coste de CPU/memoria sube
-    sin mejorar apenas el resultado (probado en desarrollo).
-    """
+def _ocr_pasadas_pdf_pedido_oficial(pdf_bytes: bytes):
+    """Generador: texto OCR del PDF (Tesseract, español, vía pytesseract) de
+    cada pasada de `_OCR_PASADAS_PSM`, una por modo de segmentación de página.
+
+    (v12.32.80) Antes se hacía una sola pasada y, en un PDF firmado real
+    (pedido 16886), leyó el Nº de pedido como 16836 en vez de 16886 y/o dejó
+    las líneas sin reconocer — con una sola lectura no hay forma de saber si
+    es fiable. Cada modo tropieza en sitios distintos, así que
+    _leer_pdf_por_ocr() compara las pasadas y solo da por bueno lo que
+    coincide en varias (y deja de pasar en cuanto coinciden).
+
+    Nunca lanza excepción: no genera nada si el PDF supera
+    _LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL, si Tesseract no está disponible o si
+    ocurre cualquier error leyendo el PDF.
+
+    Renderiza cada página con pdfplumber (pypdfium2) a _OCR_RESOLUCION_DPI ppp
+    — por debajo Tesseract falla con la letra pequeña de la tabla — y en
+    escala de grises (con la imagen en color, en un escaneo real, el modo 6
+    leyó "000168386" en vez de "00016886")."""
     import pdfplumber, io
     try:
         import pytesseract
     except Exception as exc:
         log.warning(f"[PEDIDO-DOC-OCR] pytesseract no disponible: {exc}")
-        return ""
-    texto = ""
+        return
+    imagenes = []
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             if len(pdf.pages) > _LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL:
@@ -19627,31 +19635,262 @@ def _ocr_texto_pdf_pedido_oficial(pdf_bytes: bytes) -> str:
                     f"[PEDIDO-DOC-OCR] PDF de {len(pdf.pages)} páginas — se salta el OCR "
                     f"(límite {_LIMITE_PAGINAS_OCR_PEDIDO_OFICIAL}, un pedido oficial real es 1 sola página)"
                 )
-                return ""
+                return
             for pagina in pdf.pages:
                 try:
-                    imagen = pagina.to_image(resolution=_OCR_RESOLUCION_DPI).original
-                    texto += pytesseract.image_to_string(imagen, lang="spa") + "\n"
-                    # (2026-09-07) Comprobado con un PDF real firmado: Tesseract
-                    # confunde a veces los bordes verticales de la tabla con el
-                    # carácter "|" y lo intercala ENTRE los números de una
-                    # misma línea de artículo ("40,0000 | 115,00  1.150,00"),
-                    # lo que rompe _PATRON_IMPORTE_LINEA_OFICIAL (exige solo
-                    # espacio en blanco entre los tres números). El documento
-                    # real nunca trae un "|" literal en su texto, así que se
-                    # elimina siempre de lo reconocido por OCR — nunca del
-                    # texto de pypdf (ese si es fiable tal cual).
-                    texto = texto.replace("|", " ")
+                    imagenes.append(pagina.to_image(resolution=_OCR_RESOLUCION_DPI).original.convert("L"))
                 finally:
-                    # Mismo motivo que en _extraer_listado_detallado_completo()
-                    # (ver comentario ahí): libera la caché por página que
-                    # pdfplumber va acumulando, para no arrastrar memoria de
-                    # más entre páginas de un mismo documento.
+                    # Libera la caché por página de pdfplumber (ver
+                    # _extraer_listado_detallado_completo).
                     pagina.flush_cache()
     except Exception as exc:
         log.warning(f"[PEDIDO-DOC-OCR] Error en OCR del PDF adjuntado: {exc}")
-        return ""
-    return texto
+        return
+    for psm in _OCR_PASADAS_PSM:
+        texto = ""
+        try:
+            for img in imagenes:
+                texto += pytesseract.image_to_string(img, lang="spa", config=f"--psm {psm}") + "\n"
+        except Exception as exc:
+            log.warning(f"[PEDIDO-DOC-OCR] Pasada psm {psm} fallida: {exc}")
+            continue
+        # (2026-09-07) Tesseract confunde a veces los bordes verticales de la
+        # tabla con "|" y lo intercala entre los números de una línea; el
+        # documento real nunca trae un "|" literal, así que se elimina
+        # siempre de lo reconocido por OCR (nunca del texto de pypdf).
+        texto = texto.replace("|", " ")
+        if texto.strip():
+            yield texto
+
+
+def _ocr_textos_pdf_pedido_oficial(pdf_bytes: bytes) -> list:
+    """Todas las pasadas de OCR como lista (ver _ocr_pasadas_pdf_pedido_oficial)."""
+    return list(_ocr_pasadas_pdf_pedido_oficial(pdf_bytes))
+
+
+def _leer_pdf_por_ocr(pdf_bytes: bytes):
+    """OCR por pasadas sucesivas hasta que el Nº de pedido y el Total Pedido
+    coinciden en dos pasadas (suele bastar con 2: se ahorra la tercera, ~5 s
+    de CPU); si no, se usan las tres. Devuelve lo mismo que
+    _leer_pedido_por_ocr() o None."""
+    textos = []
+    for t in _ocr_pasadas_pdf_pedido_oficial(pdf_bytes):
+        textos.append(t)
+        if len(textos) >= 2:
+            lectura = _leer_pedido_por_ocr(textos)
+            if lectura and lectura.get("acuerdo_total"):
+                return lectura
+    return _leer_pedido_por_ocr(textos)
+
+
+def _ocr_texto_pdf_pedido_oficial(pdf_bytes: bytes) -> str:
+    """Primera pasada de OCR (compatibilidad con el nombre anterior)."""
+    textos = _ocr_textos_pdf_pedido_oficial(pdf_bytes)
+    return textos[0] if textos else ""
+
+
+_RE_TOTAL_PEDIDO_IMPRESO = re.compile(r'Total\s*Pedido\W{0,8}\s*(-?\d+(?:\.\d{3})*,\d{2})(?!\d)', re.I)
+_RE_NUM_OCR_2 = re.compile(r'^-?\d{1,3}(?:\.\d{3})*,\d{2}$')
+_RE_NUM_OCR_CANT = re.compile(r'^\d{1,3}(?:\.\d{3})*,\d{3,4}$')
+_RE_TOKEN_CODIGO_OCR = re.compile(r'^[0-9oOlI]{8}$')
+_RE_RUIDO_DESCRIPCION_OCR = re.compile(r'(?i)^\W*(c[oó]digo|ref\.?\s*prov|descripci[oó]n|unidad|cantidad|precio|importe|almac[eé]n|observaciones)\b')
+
+
+def _digitos_ocr(tok: str) -> str:
+    """Corrige las confusiones típicas de Tesseract en un token que debe ser numérico."""
+    return tok.translate(str.maketrans({"o": "0", "O": "0", "l": "1", "I": "1", "s": "5", "S": "5", "B": "8"}))
+
+
+def _mayoritario(valores: list, minimo: int):
+    """Valor más repetido de la lista si aparece al menos `minimo` veces (empate → None)."""
+    from collections import Counter
+    if not valores:
+        return None
+    c = Counter(valores).most_common()
+    if c[0][1] < minimo or (len(c) > 1 and c[1][1] == c[0][1]):
+        return None
+    return c[0][0]
+
+
+def _extraer_lineas_ocr(texto: str, total_impreso):
+    """Líneas de artículo de un pedido oficial ESCANEADO (texto OCR en modo de
+    filas), o None si no se pueden leer con garantías.
+
+    El OCR falla de vez en cuando en una cifra (p. ej. "20,40" → "[200") o en
+    una referencia, así que cada línea se reconstruye con la relación
+    cantidad × precio = importe (basta con 2 de los 3 datos) y el resultado
+    solo se acepta si la suma de importes coincide EXACTAMENTE con el Total
+    Pedido impreso, leído aparte. Las referencias y descripciones salen del
+    OCR sin otra comprobación: el aviso "leído por OCR" lo indica en la app."""
+    from decimal import Decimal, ROUND_HALF_UP
+    if total_impreso is None:
+        return None
+    D = lambda s: Decimal(str(s).replace(".", "").replace(",", "."))
+    q2 = lambda x: x.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    total = Decimal(str(total_impreso)).quantize(Decimal("0.01"))
+
+    lineas = [l.strip() for l in texto.replace("\r", "").split("\n")]
+    fin = next((i for i, l in enumerate(lineas) if re.match(r'^\W*Total\s*Pedido', l, re.I)), None)
+    if fin is None:
+        return None
+    ini = -1
+    for i, l in enumerate(lineas[:fin]):
+        if re.search(r'(?i)rogamos\s+suministren', l) or re.match(r'(?i)^\W*c[oó]digo\b.*(descripci|unidad|ref)', l):
+            ini = i
+    cuerpo = lineas[ini + 1:fin]
+
+    def _es_ruido(l):
+        return len(re.findall(r'[A-Za-z0-9ÁÉÍÓÚÑáéíóúñ]', l)) < 3 or bool(_RE_RUIDO_DESCRIPCION_OCR.match(l))
+
+    filas = []   # (índice en cuerpo, código, tokens tras el código)
+    for i, l in enumerate(cuerpo):
+        toks = l.split()
+        if toks and _RE_TOKEN_CODIGO_OCR.match(toks[0]):
+            cod = _digitos_ocr(toks[0])
+            if cod.isdigit():
+                filas.append((i, cod, toks[1:]))
+    if not filas:
+        return None
+
+    datos = []
+    for (_, cod, toks) in filas:
+        limp = [t.strip("[](){}") for t in toks]
+        k = next((n for n, t in enumerate(limp) if _RE_NUM_OCR_CANT.match(t)), None)
+        if k is None:
+            return None
+        cant = D(limp[k])
+        unidad = limp[k - 1] if k >= 1 and re.match(r'^[A-Za-zÁÉÍÓÚÑ]{1,12}$', limp[k - 1]) else None
+        previos = limp[:k - 1] if unidad else limp[:k]
+        ref = None
+        if previos and len(previos[0]) >= 4 and re.match(r'^[0-9A-Za-z]+$', previos[0]) and re.search(r'\d|[oOsSlI]', previos[0]):
+            cand = _digitos_ocr(previos[0])
+            ref = cand if cand.isdigit() else previos[0]
+            previos = previos[1:]
+        frag = " ".join(previos).strip()
+        if len(re.findall(r'[A-Za-z0-9]', frag)) < 2:
+            frag = ""
+        nums = [D(t) for t in limp[k + 1:] if _RE_NUM_OCR_2.match(t)][:2]
+        if cant <= 0 or not nums:
+            return None
+        cands = []   # alternativas (precio, importe), la más fiable primero
+        def _add(p, im):
+            if p > 0 and im > 0 and (p, im) not in cands:
+                cands.append((p, im))
+        if len(nums) == 2:
+            p, im = nums
+            if abs(q2(cant * p) - im) <= Decimal("0.02"):
+                _add(p, im)
+            else:
+                _add((im / cant).quantize(Decimal("0.0001")), im)
+                _add(p, q2(cant * p))
+        else:
+            x = nums[0]
+            _add((x / cant).quantize(Decimal("0.0001")), x)
+            _add(x, q2(cant * x))
+        # un precio derivado solo vale si reproduce el importe con ≤ 2 céntimos de diferencia
+        cands = [(p, im) for (p, im) in cands if abs(q2(cant * p) - im) <= Decimal("0.02")]
+        if not cands:
+            return None
+        datos.append({"cod": cod, "ref": ref, "frag": frag, "unidad": unidad, "cant": cant, "cands": cands})
+
+    # Combinación cuya suma de importes coincide con el Total Pedido impreso.
+    alcanzables = {Decimal("0.00"): []}
+    for d in datos:
+        siguiente = {}
+        for suma, elegido in alcanzables.items():
+            for n, (p, im) in enumerate(d["cands"]):
+                s2 = suma + im
+                if s2 <= total and s2 not in siguiente:
+                    siguiente[s2] = elegido + [n]
+        alcanzables = siguiente
+        if not alcanzables or len(alcanzables) > 20000:
+            return None
+    if total not in alcanzables:
+        return None
+    elegido = alcanzables[total]
+
+    # Descripciones: líneas sueltas entre filas (1 → de la fila siguiente; 2+ → la primera
+    # cuelga de la anterior y el resto encabeza la siguiente).
+    idx = [f[0] for f in filas]
+    arriba = [[] for _ in filas]
+    abajo = [[] for _ in filas]
+    huecos = [[l for l in cuerpo[:idx[0]] if not _es_ruido(l)]]
+    for n in range(len(filas) - 1):
+        huecos.append([l for l in cuerpo[idx[n] + 1:idx[n + 1]] if not _es_ruido(l)])
+    huecos.append([l for l in cuerpo[idx[-1] + 1:] if not _es_ruido(l)])
+    arriba[0] = huecos[0]
+    for n in range(1, len(filas)):
+        g = huecos[n]
+        if len(g) >= 2:
+            abajo[n - 1] = g[:1]
+            arriba[n] = g[1:]
+        else:
+            arriba[n] = g
+    abajo[-1] = huecos[-1]
+
+    salida = []
+    for n, d in enumerate(datos):
+        p, im = d["cands"][elegido[n]]
+        desc = " ".join(arriba[n] + ([d["frag"]] if d["frag"] else []) + abajo[n]).strip()
+        salida.append({
+            "orden": n + 1, "codigo": d["cod"], "ref_proveedor": d["ref"],
+            "descripcion": desc[:300] or "(sin descripción legible)",
+            "unidad": d["unidad"], "cantidad": float(d["cant"]),
+            "precio": float(p), "importe": float(im), "almacen": None,
+        })
+    return salida
+
+
+def _leer_pedido_por_ocr(textos: list):
+    """Lectura fiable de un pedido oficial escaneado a partir de varias pasadas
+    de OCR (ver _ocr_textos_pdf_pedido_oficial). Devuelve
+    {"texto", "pedido_num_raw", "total", "lineas", "verificado"} o None.
+
+    - Nº de pedido: el valor que coincide en al menos 2 pasadas (si solo hubo
+      una pasada válida, ese); si las pasadas discrepan sin mayoría, None.
+    - Total Pedido: la cifra impresa junto a "Total Pedido..." con el mismo
+      criterio de coincidencia — es mucho más fiable que sumar las líneas
+      leídas una a una. Si no se encuentra, se suman los importes de líneas
+      (comportamiento anterior).
+    - `verificado`: True si además las líneas reconstruidas suman exactamente
+      ese total (_extraer_lineas_ocr)."""
+    if not textos:
+        return None
+    nums, totales = [], []
+    for t in textos:
+        m = _PATRON_PEDIDO_NUM_OFICIAL.search(t)
+        nums.append(_normalizar_pedido_num(m.group(1)) if m else None)
+        mt = _RE_TOTAL_PEDIDO_IMPRESO.search(t)
+        totales.append(mt.group(1) if mt else None)
+    validos = [n for n in nums if n]
+    if not validos:
+        return None
+    minimo = 2 if len(validos) >= 2 else 1
+    pedido_num = _mayoritario(validos, minimo)
+    if pedido_num is None:
+        log.warning(f"[PEDIDO-DOC-OCR] Las pasadas de OCR no coinciden en el Nº de pedido: {nums}")
+        return None
+    texto_base = next(t for t, n in zip(textos, nums) if n == pedido_num)
+    tv = [x for x in totales if x]
+    total_txt = _mayoritario(tv, 2 if len(tv) >= 2 else 1) if tv else None
+    if tv and total_txt is None:
+        log.warning(f"[PEDIDO-DOC-OCR] Las pasadas de OCR no coinciden en el Total Pedido: {totales}")
+    lineas = None
+    if total_txt:
+        total_val = _parse_importe_es(total_txt)
+        for t in [texto_base] + [x for x in textos if x is not texto_base]:
+            lineas = _extraer_lineas_ocr(t, total_val)
+            if lineas:
+                break
+    else:
+        li = _PATRON_IMPORTE_LINEA_OFICIAL.findall(texto_base)
+        if not li:
+            return None
+        total_val = round(sum(_parse_importe_es(x[2]) for x in li), 2)
+    acuerdo_total = bool(total_txt) and sum(1 for x in tv if x == total_txt) >= 2
+    return {"texto": texto_base, "pedido_num_raw": pedido_num, "total": round(total_val, 2),
+            "lineas": lineas, "verificado": bool(lineas), "acuerdo_total": acuerdo_total}
+
 
 def _extraer_hotel_nombre_pdf_oficial(texto: str):
     """
@@ -19900,6 +20139,7 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
     m_pedido = _PATRON_PEDIDO_NUM_OFICIAL.search(texto)
     lineas_importe = _PATRON_IMPORTE_LINEA_OFICIAL.findall(texto)
     leido_via_ocr = False
+    lectura_ocr = None
 
     if not m_pedido or not lineas_importe:
         # Solo se intenta OCR si el texto extraído está prácticamente
@@ -19910,17 +20150,15 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
         # directo sin gastar ese coste de CPU).
         if len(texto.strip()) < _UMBRAL_TEXTO_VACIO_PDF:
             log.info("[PEDIDO-DOC] PDF sin texto extraíble — probando OCR (posible documento firmado/escaneado)")
-            texto_ocr = _ocr_texto_pdf_pedido_oficial(pdf_bytes)
-            if texto_ocr:
-                m_pedido_ocr = _PATRON_PEDIDO_NUM_OFICIAL.search(texto_ocr)
-                lineas_importe_ocr = _PATRON_IMPORTE_LINEA_OFICIAL.findall(texto_ocr)
-                if m_pedido_ocr and lineas_importe_ocr:
-                    texto = texto_ocr
-                    m_pedido = m_pedido_ocr
-                    lineas_importe = lineas_importe_ocr
-                    leido_via_ocr = True
+            # (v12.32.80) Varias pasadas de OCR y comprobación cruzada (ver
+            # _leer_pedido_por_ocr): Nº de pedido y Total Pedido impreso por
+            # coincidencia entre pasadas, líneas por cantidad × precio = importe.
+            lectura_ocr = _leer_pdf_por_ocr(pdf_bytes)
+            if lectura_ocr:
+                texto = lectura_ocr["texto"]
+                leido_via_ocr = True
 
-        if not m_pedido or not lineas_importe:
+        if not leido_via_ocr:
             raise ValueError(
                 "El PDF adjuntado no tiene el formato del pedido oficial PRINCESS, o viene "
                 "firmado/sellado sin que se puedan leer con claridad el Nº de Pedido y las "
@@ -19930,8 +20168,12 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
                 "importe) en este apartado."
             )
 
-    pedido_num = _normalizar_pedido_num(m_pedido.group(1))
-    total_pedido = round(sum(_parse_importe_es(l[2]) for l in lineas_importe), 2)
+    if leido_via_ocr:
+        pedido_num = lectura_ocr["pedido_num_raw"]
+        total_pedido = lectura_ocr["total"]
+    else:
+        pedido_num = _normalizar_pedido_num(m_pedido.group(1))
+        total_pedido = round(sum(_parse_importe_es(l[2]) for l in lineas_importe), 2)
 
     m_fecha_pedido  = _PATRON_FECHA_PEDIDO_OFICIAL.search(texto)
     m_fecha_entrega = _PATRON_FECHA_ENTREGA_OFICIAL.search(texto)
@@ -19963,9 +20205,12 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
         if lineas is None:
             lineas_aviso = "No se han podido leer las líneas de artículo de este PDF con fiabilidad."
     else:
-        lineas_aviso = "Documento escaneado: las líneas de artículo no se leen automáticamente."
+        lineas = lectura_ocr["lineas"]
+        if lineas is None:
+            lineas_aviso = "Documento escaneado: las líneas de artículo no se han podido leer con fiabilidad."
 
     return {
+        "ocr_verificado": bool(leido_via_ocr and lectura_ocr["verificado"]),
         "lineas": lineas,
         "lineas_aviso": lineas_aviso,
         "pedido_num": pedido_num,
@@ -19979,7 +20224,7 @@ def _parsear_pdf_pedido_oficial(pdf_bytes: bytes) -> dict:
         "leido_via_ocr": leido_via_ocr,
     }
 
-def _guardar_lineas_pedido(pedido_id: int, adjunto_id: int, lineas) -> int:
+def _guardar_lineas_pedido(pedido_id: int, adjunto_id: int, lineas, por_ocr: bool = False) -> int:
     """Sustituye las líneas guardadas de un pedido por las del PDF oficial
     leído (sin commit — lo hace quien llama). Marca el adjunto como ya leído.
     Devuelve cuántas líneas se han guardado (0 si `lineas` es None/vacío)."""
@@ -19997,7 +20242,7 @@ def _guardar_lineas_pedido(pedido_id: int, adjunto_id: int, lineas) -> int:
                 page_size=200,
             )
         n = len(lineas)
-    execute("UPDATE pedido_adjuntos SET lineas_leidas=TRUE WHERE id=%s", (adjunto_id,))
+    execute("UPDATE pedido_adjuntos SET lineas_leidas=TRUE, lineas_ocr=%s WHERE id=%s", (bool(por_ocr and n), adjunto_id))
     return n
 
 
@@ -20012,7 +20257,7 @@ def _leer_y_guardar_lineas_de_adjunto(pedido_id: int, adj, conservar_si_falla: b
     except ValueError:
         datos = None
     if datos is not None and datos.get("lineas"):
-        return _guardar_lineas_pedido(pedido_id, adj["id"], datos["lineas"]), None
+        return _guardar_lineas_pedido(pedido_id, adj["id"], datos["lineas"], por_ocr=bool(datos.get("leido_via_ocr"))), None
     aviso = (datos or {}).get("lineas_aviso") or "No se han podido leer las líneas de artículo de este PDF."
     if not conservar_si_falla:
         _guardar_lineas_pedido(pedido_id, adj["id"], None)
@@ -20034,7 +20279,7 @@ def get_lineas_pedido(pid):
         return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
 
     adj = query(
-        "SELECT id, datos, storage_path, lineas_leidas FROM pedido_adjuntos "
+        "SELECT id, datos, storage_path, lineas_leidas, lineas_ocr FROM pedido_adjuntos "
         "WHERE pedido_id=%s AND tipo='pedido_doc' ORDER BY id DESC LIMIT 1", (pid,), one=True
     )
     aviso = None
@@ -20073,6 +20318,7 @@ def get_lineas_pedido(pid):
         "lineas": filas,
         "total_importe": None if es_hotel else suma_importes,
         "total_real_pdf": bool(adj and filas),
+        "por_ocr": bool(adj and filas and adj["lineas_ocr"]),
         "total_corregido": total_corregido and not es_hotel,
         "aviso": aviso,
     })
@@ -20159,7 +20405,7 @@ def leer_lineas_pendientes():
     repite mientras queden pendientes."""
     if session.get("rol") != "admin":
         return jsonify({"ok": False, "error": "Solo administradores"}), 403
-    LOTE = 10
+    LOTE = 4   # (v12.32.80) un PDF escaneado cuesta ~10 s de OCR: lotes pequeños
     pend = rows_to_list(query(
         """SELECT a.id, a.pedido_id, a.datos, a.storage_path FROM pedido_adjuntos a
            WHERE a.tipo='pedido_doc' AND NOT a.lineas_leidas
@@ -20468,10 +20714,12 @@ def upload_adjunto(pid):
              _prov_resuelto["id"] if _prov_resuelto else None, _prov_codigo_pdf, _prov_nombre_pdf, _almacen_pdf,
              _hotel_nombre_pdf, pid)
         )
-        _n_lineas = _guardar_lineas_pedido(pid, adjunto_id, _datos_pedido_pdf.get("lineas"))
+        _n_lineas = _guardar_lineas_pedido(pid, adjunto_id, _datos_pedido_pdf.get("lineas"),
+                                           por_ocr=bool(_datos_pedido_pdf.get("leido_via_ocr")))
         db.commit()
         respuesta["lineas_leidas"] = _n_lineas
         respuesta["lineas_aviso"] = _datos_pedido_pdf.get("lineas_aviso")
+        respuesta["ocr_verificado"] = bool(_datos_pedido_pdf.get("ocr_verificado"))
         respuesta["pedido_num"] = _datos_pedido_pdf["pedido_num"]
         respuesta["total_pedido"] = _datos_pedido_pdf["total_pedido"]
         respuesta["proveedor_id"] = _prov_resuelto["id"] if _prov_resuelto else None

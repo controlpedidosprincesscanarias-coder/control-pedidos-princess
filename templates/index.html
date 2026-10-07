@@ -1413,7 +1413,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.79
+          V 12.32.80
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -5756,7 +5756,12 @@ async function subirAdjuntos(input, tipo) {
           // atención de lo habitual): si se ha llegado hasta aquí, el OCR ya
           // encontró Nº de Pedido y líneas de importe con garantías.
           if (data.leido_via_ocr) {
-            toast('📷 Documento firmado/escaneado — datos leídos por OCR, revíselos con atención', '', 6000);
+            // (v12.32.80) Con comprobación cruzada (varias pasadas de OCR + líneas que suman el
+            // Total Pedido) el aviso es más suave; sin ella, se pide comprobar Nº y Total.
+            toast(data.ocr_verificado
+              ? `📷 Documento firmado/escaneado leído por OCR: Nº ${data.pedido_num}, Total ${Number(data.total_pedido).toFixed(2)} € y ${data.lineas_leidas || 0} líneas (cuadran con el total). Revise referencias y descripciones.`
+              : `📷 Documento firmado/escaneado leído por OCR: compruebe el Nº de Pedido (${data.pedido_num}) y el Total (${Number(data.total_pedido).toFixed(2)} €) con el papel — no se han podido verificar las líneas.`,
+              data.ocr_verificado ? '' : 'error', 9000);
           }
           _procesarFechasPdfPedidoOficial(data);
           // (2026-09-06, v12.32.35) A petición de Víctor: el proveedor
@@ -6603,6 +6608,7 @@ async function cargarLineasPedido(forzar = false) {
       <td style="text-align:right">${num(l.cantidad, 0)}</td>
       ${verPrecios ? `<td style="text-align:right">${num(l.precio, 2)}</td><td style="text-align:right">${num(l.importe, 2)}</td>` : ''}
     </tr>`).join('');
+  const _avisoOcr = d.por_ocr ? `<div style="font-size:10.5px;color:#7a5b00;background:#fff8e1;border-top:1px solid #ffe08a;padding:4px 8px">📷 Leído de un documento escaneado (OCR): los importes cuadran con el Total Pedido, pero revise referencias y descripciones.</div>` : '';
   panel.innerHTML = `<details open style="border:1px solid #e3e8f0;border-radius:6px;background:#fafbfd">
     <summary style="cursor:pointer;padding:6px 8px;font-size:12px;font-weight:600;color:var(--navy2)">
       📦 Líneas del pedido (${n})${verPrecios && d.total_importe != null ? ` — ${num(d.total_importe, 2)} €` : ''}
@@ -6617,6 +6623,7 @@ async function cargarLineasPedido(forzar = false) {
         <tbody>${filas}</tbody>
       </table>
     </div>
+    ${_avisoOcr}
   </details>`;
 }
 

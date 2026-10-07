@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] PDF de pedido escaneado/firmado (16886): OCR por consenso + líneas verificadas (v12.32.80)
+
+- **Origen**: Víctor, captura del error al subir el 16886 firmado (+ PDFs 16885, 16886 y 16886 original).
+- **Hallazgo**: una sola pasada de OCR: Nº de pedido mal leído (16836) y totales sumados de líneas mal reconocidas (16885 → 1,07 €) — rechazo o dato equivocado sin aviso.
+- **Corrección**: OCR en grises con hasta 3 pasadas; Nº y Total impreso por coincidencia entre pasadas (sin mayoría → rechazo); líneas reconstruidas con cantidad × precio = importe y aceptadas solo si suman el Total impreso; columna `pedido_adjuntos.lineas_ocr` + avisos en pantalla; lotes de lectura masiva de 4 (ver CHANGELOG v12.32.80).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL manual (columna nueva por `_auto_migrate`). Tesseract + paquete `spa` ya estaban en el Dockerfile.
+- **Pendiente / ideas**: mejorar la lectura de descripciones/referencias de escaneados con detección de la cuadrícula de la tabla.
+
+---
+
 ## 2026-10-07 — [Control Pedidos] Correo al proveedor por cambio de estado firmado por quien gestiona el pedido (v12.32.79)
 
 - **Origen**: Víctor: los correos de cambio de estado siempre salían firmados por el comprador responsable; si gestiona otro comprador o un administrador deben salir firmados por quien hace la gestión, para trazabilidad.

@@ -1,3 +1,23 @@
+# v12.32.80 — 7 octubre 2026
+
+📷 PDF de pedido firmado/escaneado (pedido 16886): lectura por OCR fiable, con comprobación cruzada y líneas de artículo
+
+**Aviso de Víctor** (captura + PDFs 16885, 16886 y 16886 original): al subir el 16886 firmado y sellado, error "El PDF adjuntado no tiene el formato del pedido oficial PRINCESS…".
+
+**Causa**: el PDF firmado es una imagen sin texto y se lee por OCR, pero con una sola pasada de Tesseract. Probado con los PDF de Víctor: una pasada leía el Nº de pedido como 16836 (en vez de 16886), y sumaba líneas mal reconocidas (el 16885 daba un total de 1,07 € en vez de 1.492,26 €) — según el caso, rechazo o, peor, un dato equivocado sin avisar.
+
+**Cambio**:
+- `app.py`: OCR en escala de grises y por pasadas sucesivas (modos 6, 4 y 3; se detiene en cuanto dos pasadas coinciden, ~10 s). El **Nº de pedido** y el **Total Pedido impreso** se dan por buenos solo si coinciden en al menos dos pasadas (si discrepan sin mayoría, se rechaza en vez de adivinar). Las líneas se reconstruyen con cantidad × precio = importe (basta con 2 de los 3 datos si el OCR falla en una cifra) y solo se aceptan si su suma coincide exactamente con el Total impreso. Correcciones típicas de OCR en códigos/referencias (o→0, s→5…). Si las líneas no cuadran, se aceptan igualmente Nº y Total (coincidentes) pero sin líneas y con aviso para comprobarlos contra el papel.
+- Las líneas de un escaneado se guardan en `pedido_lineas` (v12.32.75) y entran en el buscador; nueva columna `pedido_adjuntos.lineas_ocr` (migración automática) para avisar en el panel "📦 Líneas del pedido": "leído por OCR — revise referencias y descripciones". Aviso al subir: verde/normal si está verificado, rojo pidiendo comprobar Nº y Total si no.
+- Lectura masiva de líneas de PDF antiguos (admin): lotes de 4 en vez de 10 (un escaneado cuesta ~10 s).
+- `templates/index.html`: avisos descritos; badge `V 12.32.79` → `V 12.32.80`.
+
+**Verificación** con los 3 PDF reales de Víctor: 16886 firmado → Nº 16886, 4.506,36 €, 7 líneas que suman el total; 16885 firmado → 1.492,26 €, 5 líneas; 16886 original (con texto) igual que antes. Subida completa contra PostgreSQL real. Escaneado girado/borroso a propósito: Nº y total correctos, sin líneas y con aviso (no inventa). Sin SQL manual.
+
+**Limitación conocida**: en un escaneado las descripciones y alguna referencia pueden llevar erratas del OCR (p. ej. "AGUANINO" por "AGUA/VINO"); los importes, cantidades, Nº y total están comprobados. Los escaneados subidos antes de esta versión no tienen líneas: abrir el pedido → "Reintentar la lectura".
+
+---
+
 # v12.32.79 — 7 octubre 2026
 
 ✍️ Correo al proveedor por cambio de estado: lo firma quien realiza la gestión, no siempre el comprador responsable
