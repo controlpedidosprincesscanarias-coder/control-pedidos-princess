@@ -1,3 +1,15 @@
+# v12.32.78 — 7 octubre 2026
+
+🐞 Total Pedido: las etiquetas "≈ APROXIMADO" y "REAL · SIN IGIC" salían las dos a la vez
+
+**Aviso de Víctor** (captura del pedido 41827 PILSA): "sale tanto aproximado como real ¿por qué?".
+
+**Causa**: las dos etiquetas llevan `display:inline-block` en línea, que tiene prioridad sobre el atributo `hidden`; por eso "≈ APROXIMADO" **nunca llegó a ocultarse** (error anterior a esta serie: se veía en todos los pedidos aunque el total fuera real) y la nueva "REAL" tampoco se ocultaba al faltar el PDF. La corrección de v12.32.77 del total sí funcionaba (2.222,04 € = suma de las 7 líneas); fallaba solo la visibilidad.
+
+**Cambio** (`templates/index.html`): regla CSS `[hidden]{display:none!important}` para ambas etiquetas. Ahora: pedido con PDF oficial leído → solo "✔ REAL · SIN IGIC"; total aproximado de SAP sin PDF → solo "≈ APROXIMADO"; sin total → ninguna. Badge `V 12.32.77` → `V 12.32.78`. Comprobado en navegador (estilo calculado). Sin cambios en `app.py` ni SQL.
+
+---
+
 # v12.32.77 — 7 octubre 2026
 
 ✔ Total Pedido leído del PDF oficial: ya no sale "≈ aproximado", sale "REAL · SIN IGIC"

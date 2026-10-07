@@ -49,6 +49,16 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] Total Pedido: las etiquetas aproximado/real se veían a la vez (v12.32.78)
+
+- **Origen**: Víctor, captura del pedido 41827 PILSA: "sale tanto aproximado como real ¿por qué?".
+- **Hallazgo**: `display:inline-block` en línea anulaba el atributo `hidden` de ambas etiquetas; "≈ APROXIMADO" estaba siempre visible desde antes de v12.32.77 (el valor del total sí era correcto).
+- **Corrección**: regla CSS que respeta `hidden` en las dos etiquetas (ver CHANGELOG v12.32.78).
+- **Ficheros editados en este repo**: `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin cambios de backend, variables ni SQL; no aplica.
+
+---
+
 ## 2026-10-07 — [Control Pedidos] Total Pedido del PDF oficial: "REAL · SIN IGIC" en lugar de "≈ aproximado" (v12.32.77)
 
 - **Origen**: Víctor: "detalle, si la lectura es del pedido real, ya el total no es aproximado, es real sin igic" (captura con 9196,44 € marcado ≈ APROXIMADO).
