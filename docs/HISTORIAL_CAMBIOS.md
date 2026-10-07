@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] Correo al proveedor por cambio de estado firmado por quien gestiona el pedido (v12.32.79)
+
+- **Origen**: Víctor: los correos de cambio de estado siempre salían firmados por el comprador responsable; si gestiona otro comprador o un administrador deben salir firmados por quien hace la gestión, para trazabilidad.
+- **Hallazgo**: `enviar_emails_estado` usaba `compradores[0]` del hotel como firma y Reply-To del correo al proveedor (único correo de cambio de estado con firma de comprador; el interno ya incluye "Realizado por").
+- **Corrección**: `_resolver_firmante_cambio_estado` — firma/Reply-To = usuario que hace el cambio manual si es comprador/admin activo con email; si no (automático, rol hotel, sin email) el comprador responsable. Los recordatorios automáticos a proveedores no cambian (ver CHANGELOG v12.32.79).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html` (badge), `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; no aplica.
+- **Pendiente / ideas**: si se quiere, copiar al comprador responsable cuando firme otra persona.
+
+---
+
 ## 2026-10-07 — [Control Pedidos] Total Pedido: las etiquetas aproximado/real se veían a la vez (v12.32.78)
 
 - **Origen**: Víctor, captura del pedido 41827 PILSA: "sale tanto aproximado como real ¿por qué?".

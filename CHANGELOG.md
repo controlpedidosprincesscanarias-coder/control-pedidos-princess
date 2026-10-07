@@ -1,3 +1,17 @@
+# v12.32.79 — 7 octubre 2026
+
+✍️ Correo al proveedor por cambio de estado: lo firma quien realiza la gestión, no siempre el comprador responsable
+
+**Petición de Víctor** (verbatim): "los correo que se envían cuando se realiza un cambio de estado de pedido, siempre va firmado por el comprador responsable, podemos cambiar esto? si el pedido lo gestiona otro comprador o administrador, los correos deben salir firmados correctamente por la persona que realiza la gestion para una correcta trazabilidad".
+
+**Causa**: `enviar_emails_estado` firmaba el correo al proveedor (ENVIADO AL PROVEEDOR) siempre con el primer comprador asignado al hotel (`_usuarios_hotel["compradores"][0]`), y ese mismo email era el Reply-To.
+
+**Cambio** (`app.py`; nueva `_resolver_firmante_cambio_estado`): en un cambio MANUAL firma (nombre, móvil y email de la firma estándar de Compras) y recibe las respuestas (Reply-To) la persona que hace el cambio, si es comprador o administrador activo con email. Se mantiene el comprador responsable del hotel cuando el cambio es automático (comparación de listados SAP), cuando lo hace un usuario de rol hotel, o si el usuario no tiene email. Sin cambios en el correo interno (ya indica "Realizado por"), ni en los avisos/recordatorios automáticos a proveedores (siguen con el comprador responsable). Si hay varios cambios seguidos del mismo pedido dentro de los 5 min de espera, sale el último con su firmante. Badge `V 12.32.78` → `V 12.32.79`.
+
+**Verificación**: PostgreSQL real con 4 usuarios: comprador no responsable firma y responde a él (con su móvil); administrador firma (sin móvil no se pone teléfono); comprador responsable firma si es quien cambia; rol hotel, cambio automático, sin usuario y admin sin email caen al responsable. Sin SQL manual.
+
+---
+
 # v12.32.78 — 7 octubre 2026
 
 🐞 Total Pedido: las etiquetas "≈ APROXIMADO" y "REAL · SIN IGIC" salían las dos a la vez

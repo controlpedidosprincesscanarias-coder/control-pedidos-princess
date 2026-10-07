@@ -3649,6 +3649,34 @@ def _enlaces_descarga_pedido_doc(pedido_id: int) -> list:
     return enlaces
 
 
+def _resolver_firmante_cambio_estado(usuario_id, es_automatico: bool, compradores_hotel: list):
+    """(v12.32.79) Quién firma el correo al proveedor de un cambio de estado.
+
+    Antes firmaba siempre el primer comprador responsable del hotel, aunque el
+    pedido lo gestionase otro comprador o un administrador. Ahora, en un cambio
+    MANUAL, firma la persona que lo realiza si es comprador (rol 'compras') o
+    administrador, está activa y tiene email — así el proveedor responde a quien
+    lleva el pedido y queda trazabilidad. En cualquier otro caso (cambio
+    automático, rol hotel, usuario sin email o no encontrado) se mantiene el
+    comportamiento de siempre: el primer comprador responsable del hotel.
+    Devuelve {nombre, email, movil} o None si no hay nadie que pueda firmar."""
+    if not es_automatico and usuario_id:
+        try:
+            u = row_to_dict(query(
+                "SELECT nombre, email, movil FROM usuarios "
+                "WHERE id=%s AND activo=1 AND rol IN ('compras','admin') "
+                "AND email IS NOT NULL AND TRIM(email) != ''", (usuario_id,), one=True))
+        except Exception as exc:
+            log.warning("[EMAIL] No se pudo leer el firmante (usuario %s): %s", usuario_id, exc)
+            u = None
+        if u:
+            return {"nombre": u.get("nombre") or "", "email": u["email"].strip(), "movil": u.get("movil") or ""}
+    if compradores_hotel and compradores_hotel[0].get("email"):
+        c = compradores_hotel[0]
+        return {"nombre": c.get("nombre") or "", "email": c["email"], "movil": c.get("movil") or ""}
+    return None
+
+
 def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str = None,
                           usuario_nombre: str = "", usuario_id: int = None,
                           es_automatico: bool = False):
@@ -3897,13 +3925,18 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     #        duplica destinatarios ni información interna.
     if estado_nuevo in ESTADOS_EMAIL_PROVEEDOR and _proveedor_emails:
         _compradores_firma = _usuarios_hotel["compradores"]
-        if not (_compradores_firma and _compradores_firma[0].get("email")):
+        # (v12.32.79) Firma = quien realiza la gestión (comprador o administrador
+        # con email), para la trazabilidad; si el cambio es automático o lo hace
+        # alguien sin firma de Compras (rol hotel, sin email...), el comprador
+        # responsable del hotel de siempre.
+        _firmante = _resolver_firmante_cambio_estado(usuario_id, es_automatico, _compradores_firma)
+        if not _firmante:
             log.warning("[EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email a proveedor omitido",
                         pedido_id, pedido.get("hotel_codigo",""))
         else:
-            _email_comprador_firma  = _compradores_firma[0]["email"]
-            _nombre_comprador_firma = _compradores_firma[0].get("nombre") or ""
-            _movil_comprador_firma  = _compradores_firma[0].get("movil") or ""
+            _email_comprador_firma  = _firmante["email"]
+            _nombre_comprador_firma = _firmante.get("nombre") or ""
+            _movil_comprador_firma  = _firmante.get("movil") or ""
             _firma_contacto_html = _firma_comprador_html(_nombre_comprador_firma, _email_comprador_firma, _movil_comprador_firma)
             _firma_contacto_text = _firma_comprador_text(_nombre_comprador_firma, _email_comprador_firma, _movil_comprador_firma)
             # (2026-08-27) A petición de Víctor, las comunicaciones al proveedor
