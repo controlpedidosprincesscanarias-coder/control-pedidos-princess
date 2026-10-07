@@ -15438,25 +15438,69 @@ def exportar_proveedores():
         from flask import send_file
 
         provs = _prov_with_contactos(query(
-            "SELECT id,codigo,nombre,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre"
+            "SELECT id,codigo,codigo_dali,nombre,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre"
         ))
+
+        # (v12.32.74) Hoteles: código por id (incluye PR, que puede estar
+        # asignado a un contacto) y los 10 reales (para decidir "TODOS").
+        codigo_hotel = {h["id"]: h["codigo"] for h in rows_to_list(query("SELECT id, codigo FROM hoteles"))}
+        reales = _hoteles_con_servicio_posibles()
+        reales_ids = [h["id"] for h in reales]
+        reales_codigos = [h["codigo"] for h in reales]
+
+        def _txt_hoteles_contacto(hotel_ids):
+            """Hoteles a los que un contacto recibe los pedidos/reclamaciones.
+            Sin ninguno asignado = contacto "general" (se usa cuando el
+            proveedor no tiene un principal asignado al hotel del pedido)."""
+            if not hotel_ids:
+                return "GENERAL (sin hotel asignado)"
+            sel = set(hotel_ids)
+            if all(i in sel for i in reales_ids):
+                return "TODOS"
+            return ", ".join(sorted(codigo_hotel.get(i, str(i)) for i in sel if i in reales_ids))
+
+        def _txt_servicio(p):
+            """Hoteles donde el proveedor da servicio (filtra el catálogo DALI)."""
+            sin = set(p.get("hoteles_sin_servicio_ids") or [])
+            if not any(i in sin for i in reales_ids):
+                return "TODOS"
+            con = [h["codigo"] for h in reales if h["id"] not in sin]
+            sin_cod = [h["codigo"] for h in reales if h["id"] in sin]
+            return (", ".join(con) if con else "NINGUNO") + f"  (sin servicio: {', '.join(sin_cod)})"
+
+        def _txt_rutometro(p):
+            """Días de pedido → reparto por hotel, una línea por ciclo."""
+            lineas = []
+            for r in p.get("rutas") or []:
+                ped = ", ".join(r.get("dias_pedido") or []) or "—"
+                rep = ", ".join(r.get("dias_reparto") or []) or "—"
+                l = f"{r.get('hotel_codigo')}: pedido {ped} → reparto {rep}"
+                if r.get("observaciones"):
+                    l += f" ({r['observaciones']})"
+                lineas.append(l)
+            return "\n".join(lineas)
 
         wb = openpyxl.Workbook()
         ws = wb.active
         ws.title = "Proveedores"
 
-        # Cabeceras: CODIGO · PROVEEDOR · PRINCIPAL · CONTACTO · TELEFONO · MOVIL · EMAIL · OBSERVACIONES
-        headers = ["CODIGO", "PROVEEDOR", "PRINCIPAL", "CONTACTO", "TELEFONO", "MOVIL", "EMAIL", "OBSERVACIONES"]
-        col_widths = [14, 42, 10, 25, 18, 18, 35, 38]
+        # Cabeceras. Las existentes (CODIGO, PROVEEDOR, PRINCIPAL, CONTACTO,
+        # TELEFONO, MOVIL, EMAIL, OBSERVACIONES) conservan su nombre: la
+        # importación (_parse_excel_proveedores) lee por NOMBRE de cabecera,
+        # así que las columnas nuevas (CODIGO DALI, HOTELES DEL CONTACTO,
+        # SERVICIO EN HOTELES, RUTOMETRO) no la afectan — son informativas.
+        headers = ["CODIGO", "CODIGO DALI", "PROVEEDOR", "PRINCIPAL", "CONTACTO", "TELEFONO", "MOVIL", "EMAIL",
+                   "HOTELES DEL CONTACTO", "SERVICIO EN HOTELES", "RUTOMETRO", "OBSERVACIONES"]
+        col_widths = [14, 13, 42, 10, 25, 18, 18, 35, 26, 34, 52, 38]
 
         hdr_fill_prov = PatternFill("solid", fgColor="1B2A4A")
         hdr_fill_ctc  = PatternFill("solid", fgColor="2E5090")
         hdr_font      = Font(bold=True, color="FFFFFF")
 
-        ctc_cols = {3, 4, 5, 6, 7}  # columnas de contacto (1-based)
+        ctc_names = {"PRINCIPAL", "CONTACTO", "TELEFONO", "MOVIL", "EMAIL", "HOTELES DEL CONTACTO"}
         for col_idx, h in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col_idx, value=h)
-            cell.fill = hdr_fill_ctc if col_idx in ctc_cols else hdr_fill_prov
+            cell.fill = hdr_fill_ctc if h in ctc_names else hdr_fill_prov
             cell.font = hdr_font
             cell.alignment = Alignment(horizontal="center")
 
@@ -15473,6 +15517,9 @@ def exportar_proveedores():
         fill_principal = PatternFill("solid", fgColor="FFF8E7")   # dorado claro → principal
         fill_alt       = PatternFill("solid", fgColor="F5F7FA")   # gris claro → proveedor sin color
         fill_ctc_alt   = PatternFill("solid", fgColor="EEF2FA")   # azul muy claro → contacto secundario
+
+        idx_principal = headers.index("PRINCIPAL") + 1
+        idx_wrap = {headers.index("SERVICIO EN HOTELES") + 1, headers.index("RUTOMETRO") + 1}
 
         r_idx = 2
         for p in provs:
@@ -15493,23 +15540,32 @@ def exportar_proveedores():
 
                 vals = [
                     p.get("codigo") or ""      if ci == 0 else "",
+                    p.get("codigo_dali") or "" if ci == 0 else "",
                     p.get("nombre") or ""      if ci == 0 else "",
                     principal_val,
                     c.get("nombre") or "",
                     c.get("telefono") or "",
                     c.get("movil") or "",
                     c.get("email") or "",
+                    _txt_hoteles_contacto(c.get("hotel_ids") or []) if c else "",
+                    _txt_servicio(p)           if ci == 0 else "",
+                    _txt_rutometro(p)          if ci == 0 else "",
                     p.get("observaciones") or "" if ci == 0 else "",
                 ]
                 for col_idx, val in enumerate(vals, 1):
                     cell = ws.cell(row=r_idx, column=col_idx, value=val)
                     cell.border = border
-                    if col_idx == 3:  # PRINCIPAL col
+                    if col_idx == idx_principal:  # PRINCIPAL col
                         cell.alignment = Alignment(horizontal="center")
                         cell.font = Font(bold=True, color="B8860B")
+                    elif col_idx in idx_wrap:
+                        cell.alignment = Alignment(wrap_text=True, vertical="top")
                     if row_fill:
                         cell.fill = row_fill
                 r_idx += 1
+
+        # Filtro en la cabecera (p.ej. filtrar por "GC" en HOTELES DEL CONTACTO)
+        ws.auto_filter.ref = f"A1:{openpyxl.utils.get_column_letter(len(headers))}{r_idx - 1}"
 
         # Nota de instrucciones en la parte inferior
         ws.cell(row=r_idx + 1, column=1, value="INSTRUCCIONES DE IMPORTACIÓN:").font = Font(bold=True, color="1B2A4A")
@@ -15519,6 +15575,7 @@ def exportar_proveedores():
             "• Varios contactos del mismo proveedor: repite CODIGO y PROVEEDOR en filas adicionales, deja OBSERVACIONES vacío.",
             "• TELEFONO: teléfono fijo.  MOVIL: móvil/WhatsApp (se usará para alertas automáticas).",
             "• Para eliminar todos los contactos de un proveedor: deja CONTACTO, TELEFONO, MOVIL y EMAIL vacíos.",
+            "• CODIGO DALI, HOTELES DEL CONTACTO, SERVICIO EN HOTELES y RUTOMETRO son solo informativas (se editan en la ficha del proveedor): la importación no las lee.",
         ]
         for i, txt in enumerate(instrucciones, r_idx + 2):
             cell = ws.cell(row=i, column=1, value=txt)

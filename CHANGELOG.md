@@ -1,3 +1,20 @@
+# v12.32.74 — 7 octubre 2026
+
+📊 Excel de proveedores: código DALI, hoteles de cada contacto, servicio por hotel y rutómetro
+
+**Petición de Víctor**: "en control de pedidos, ficha proveedores, este es el excel que exporta actualmente, necesito incluir columna código DALI y también rutómetro, se debe poder identificar también los correos electrónicos por hoteles según esté configurada la ficha".
+
+**Cambio** (`app.py`, `GET /api/proveedores/exportar`; badge `V 12.32.73` → `V 12.32.74`):
+- Nueva columna **CODIGO DALI**, justo detrás de CODIGO.
+- Nueva columna **HOTELES DEL CONTACTO**, detrás de EMAIL: los hoteles asignados a cada contacto en la ficha (`TODOS`, o los códigos, p. ej. `GC, MT`; `GENERAL (sin hotel asignado)` si no tiene ninguno). Así se ve a qué hotel va cada correo.
+- Nueva columna **SERVICIO EN HOTELES**: `TODOS` o los hoteles con servicio y, entre paréntesis, los desmarcados (v12.32.73).
+- Nueva columna **RUTOMETRO**: una línea por ciclo, p. ej. `FV: pedido L, X → reparto M, J`.
+- Filtro automático en la cabecera. Las columnas existentes conservan su nombre; la importación lee por nombre de cabecera, así que las nuevas no la afectan (se avisa en las instrucciones del propio Excel). Sin cambios de base de datos.
+
+**Verificación**: probado contra PostgreSQL real (contactos con hoteles concretos, con todos y generales; proveedor con y sin servicio restringido) y comprobado que `_parse_excel_proveedores` lee igual el archivo exportado.
+
+---
+
 # v12.32.73 — 7 octubre 2026
 
 🏨 Rutómetro: servicio por hotel activo por defecto en los 10 hoteles (alimenta el filtro de DALI)

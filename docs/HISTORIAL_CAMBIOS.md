@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] Excel de proveedores: código DALI, hoteles de cada contacto, servicio por hotel y rutómetro (v12.32.74)
+
+- **Origen**: Víctor: "en control de pedidos, ficha proveedores, este es el excel que exporta actualmente, necesito incluir columna código DALI y también rutómetro, se debe poder identificar también los correos electrónicos por hoteles según esté configurada la ficha".
+- **Hallazgo**: el Excel (`exportar_proveedores`) también sirve de plantilla de importación, y `_parse_excel_proveedores` lee por NOMBRE de cabecera, por lo que se pueden añadir columnas sin romperla. Los hoteles de cada contacto (`proveedor_contacto_hoteles`): sin filas = contacto "general"; con filas = solo esos hoteles; la ficha los crea todos marcados por defecto.
+- **Corrección**: columnas CODIGO DALI, HOTELES DEL CONTACTO, SERVICIO EN HOTELES (v12.32.73) y RUTOMETRO (una línea por ciclo), más filtro automático. El hotel PR no se muestra en el texto de hoteles.
+- **Limitación conocida (anterior a este cambio)**: la importación de proveedores sustituye los contactos y no lee asignaciones de hotel por contacto, ni las lee ahora tampoco; las columnas nuevas son informativas.
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html` (badge), `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin cambios de despliegue ni de base de datos.
+
+---
+
 ## 2026-10-07 — [Control Pedidos / DALI] Rutómetro: servicio por hotel activo por defecto en los 10 hoteles (v12.32.73)
 
 - **Origen**: Víctor, verbatim: "necesito que en la ficha de proveedores el rutómetro se active por defecto a los 10 hoteles y que solo el admin o comprador desmarque aquel o aquellos hoteles que el proveedor no tenga servicio, de esta manera automáticamente se realiza el filtro de materiales en la aplicación Catálogo Asignaciones según proveedores con rutómetro activo".
