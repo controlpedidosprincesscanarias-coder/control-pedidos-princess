@@ -1,3 +1,22 @@
+# v12.32.82 — 7 octubre 2026
+
+📋 Entrada parcial/total: detalle OPCIONAL de qué referencias y cuántas unidades llegaron, y dónde está la diferencia de importe
+
+**Petición de Víctor** (verbatim): "cuando se da entrada parcial a un pedido, podríamos dar la opción al usuario de marcar las referencias y unidades entregadas, simplemente confirmando en pantalla las referencias con posibilidad de cambiar la cantidad entregada para indicar las diferencias. Este paso no sería obligatorio pero sí opcional para un mejor ajuste y diagnóstico de los faltantes por entregar" y, después: "en la entrega total, si el importe difiere del pedido, dar también opción a indicar dónde se encuentra la diferencia para ajustar correctamente las cantidades".
+
+**Cambio**:
+- Nueva tabla `pedido_lineas_entregas` (migración automática; sin SQL manual): por pedido, Nº de entrada (albarán) y código de artículo, con la cantidad llegada. Se liga por código y no por línea, porque las líneas se regeneran si se vuelve a leer el PDF.
+- `templates/index.html`: cada entrada DALI / SAP del formulario del pedido tiene un botón **📋 Referencias** (opcional; solo si el pedido tiene líneas leídas del PDF). Abre una ventana con las referencias: se marcan las que han llegado y se cambia la cantidad si es distinta; muestra pedido, ya entregado en otras entradas, esta entrada y lo que queda, con el resumen "quedan N uds en M referencias". El detalle se guarda al pulsar **Guardar** (si se cancela, no se guarda nada); si se cambia el Nº de la entrada, el detalle la sigue.
+- **Entrega total con importe distinto del pedido** (no hotel): aviso bajo las entradas con la diferencia en € y botón **Indicar dónde está la diferencia**; también se ofrece al pulsar Guardar (con "Guardar sin detallar"). La ventana abre con todo lo pendiente marcado para ir corrigiendo cantidades, y calcula el importe de las cantidades indicadas (a precio de pedido, sin IGIC) frente al importe recibido en los albaranes: "✔ la diferencia queda explicada" o "diferencia sin explicar: X €" (otro precio, o cantidades por ajustar). El rol hotel no ve importes ni este cálculo.
+- `app.py`: `GET /api/pedidos/<id>/entregas-lineas`; `PUT /api/pedidos/<id>` acepta `entregas_lineas` (`{"<albarán>": {"<código>": cantidad}}`; sustituye el detalle del pedido; si la clave no viene, no se toca; cantidades no numéricas o negativas → 422 sin guardar nada; códigos que no son del pedido se ignoran), tanto para admin/compras como para el rol hotel de su hotel.
+- El panel "📦 Líneas del pedido" muestra columnas **Entreg.** y **Pend.** cuando hay detalle, y el buscador de artículos la columna **Entreg. / Pend.** (— si el pedido no tiene detalle). Badge `V 12.32.81` → `V 12.32.82`.
+
+**Verificación**: PostgreSQL real con el pedido 16886 (7 líneas): parcial con 100 de 108 (faltan 8); entrega total que deja 1 ud pendiente de una referencia (detectada en panel y buscador); PUT sin la clave no borra; 422 sin pérdidas; payload vacío limpia; rol hotel sin precios ni total, ajeno 403; borrar pedido borra su detalle. Ventana probada en navegador (marcar, cambiar cantidad, resumen e importe, payload).
+
+**Limitaciones**: el detalle es voluntario y no cambia por sí solo el estado del pedido (sigue mandando el que indica el usuario); una referencia repetida en dos líneas del mismo pedido se trata como una sola en el detalle. Idea pendiente: incluir lo que falta por entregar en el correo de entrega parcial.
+
+---
+
 # v12.32.81 — 7 octubre 2026
 
 🔧 PDF escaneado rechazado: el error ahora dice por qué, y el OCR tiene respaldo si falta el idioma español

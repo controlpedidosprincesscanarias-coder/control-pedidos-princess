@@ -1312,6 +1312,24 @@ def _auto_migrate():
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_pedido_lineas_pedido ON pedido_lineas(pedido_id, orden)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_pedido_lineas_codigo ON pedido_lineas(codigo)")
                 cur.execute("CREATE INDEX IF NOT EXISTS idx_pedido_lineas_ref ON pedido_lineas(ref_proveedor)")
+                # (v12.32.82) Detalle OPCIONAL de qué referencias y cuántas unidades llegaron en
+                # cada entrada (albarán) de un pedido con entrega parcial/total. Se liga por
+                # Nº de albarán y código de artículo (no por id de línea: las líneas se
+                # regeneran si se vuelve a leer el PDF).
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS pedido_lineas_entregas (
+                        id             SERIAL PRIMARY KEY,
+                        pedido_id      INTEGER NOT NULL REFERENCES pedidos(id) ON DELETE CASCADE,
+                        albaran_num    TEXT NOT NULL,
+                        codigo         TEXT NOT NULL,
+                        cantidad       NUMERIC(14,4) NOT NULL,
+                        usuario_id     INTEGER,
+                        usuario_nombre TEXT,
+                        creado_en      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        UNIQUE (pedido_id, albaran_num, codigo)
+                    )
+                """)
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_pedido_lineas_entregas_pedido ON pedido_lineas_entregas(pedido_id)")
                 # Marca de "ya se intentó leer las líneas de este adjunto" — para los
                 # PDF subidos ANTES de esta versión, las líneas se leen la primera vez
                 # que se abre el pedido (ver get_lineas_pedido) y no se reintenta
@@ -17547,6 +17565,12 @@ def update_pedido(pid):
     ):
         return jsonify({"error": "Sin acceso a este pedido"}), 403
 
+    # (v12.32.82) Detalle opcional de entregas por referencia: se valida antes de
+    # tocar nada y se guarda junto con el resto del formulario.
+    _entregas_lineas, _err_entregas = _normalizar_entregas_lineas(data)
+    if _err_entregas:
+        return jsonify({"ok": False, "error": _err_entregas}), 422
+
     # ── Restricción rol hotel: solo puede modificar entrada_albaran_num, sin CANCELADO ──
     if session.get("rol") == "hotel":
         hoteles_ids = session.get("hoteles_ids", [])
@@ -17581,6 +17605,8 @@ def update_pedido(pid):
                 modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
             WHERE id=%s
         """, (albaran_val, estado_solicitado, uid, session.get("nombre"), pid))
+        if _entregas_lineas is not None:
+            _guardar_entregas_lineas(pid, _entregas_lineas, uid, session.get("nombre"))
         estado_antes = pedido_actual["estado"]
         if estado_solicitado != estado_antes:
             execute(
@@ -17835,6 +17861,9 @@ def update_pedido(pid):
             "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
             (pid, estado_antes, estado_nuevo, uid, session.get("nombre"), data.get("nota_historial", ""))
         )
+
+    if _entregas_lineas is not None:
+        _guardar_entregas_lineas(pid, _entregas_lineas, uid, session.get("nombre"))
 
     db.commit()
 
@@ -20331,6 +20360,13 @@ def get_lineas_pedido(pid):
         for k in ("cantidad", "precio", "importe"):
             f[k] = float(f[k]) if f[k] is not None else None
     suma_importes = round(sum((f["importe"] or 0) for f in filas), 2)
+    # (v12.32.82) Entregado / pendiente por referencia, si se detalló alguna entrada.
+    _ent = _entregas_por_codigo(pid)
+    for f in filas:
+        e = _ent.get(f["codigo"])
+        _tot = e["total"] if e else 0.0
+        f["entregado"] = _tot if _ent else None
+        f["pendiente"] = round((f["cantidad"] or 0) - _tot, 4) if _ent else None
     # (v12.32.77) Si el pedido tiene el PDF oficial leído (las líneas solo se
     # guardan cuando cuadran con el Total Pedido del PDF) pero su total seguía
     # marcado "≈ aproximado" (p. ej. se dio de alta desde el Listado detallado
@@ -20353,8 +20389,113 @@ def get_lineas_pedido(pid):
         "total_importe": None if es_hotel else suma_importes,
         "total_real_pdf": bool(adj and filas),
         "por_ocr": bool(adj and filas and adj["lineas_ocr"]),
+        "hay_entregas": bool(_ent),
         "total_corregido": total_corregido and not es_hotel,
         "aviso": aviso,
+    })
+
+
+_RE_CANT_ENTREGA = re.compile(r'^\d{1,10}(?:\.\d{1,4})?$')
+
+def _normalizar_entregas_lineas(data):
+    """(v12.32.82) Valida el detalle opcional de entregas por referencia que
+    envía el formulario: {"<Nº albarán>": {"<código>": cantidad, ...}, ...}.
+    Devuelve (dict normalizado | None si la clave no viene, mensaje de error | None).
+    Solo se guardan cantidades > 0; el código se comprueba al guardar."""
+    if not isinstance(data, dict) or "entregas_lineas" not in data:
+        return None, None
+    bruto = data.get("entregas_lineas")
+    if bruto is None:
+        return {}, None
+    if not isinstance(bruto, dict):
+        return None, "Formato de entregas por referencia no válido."
+    salida = {}
+    for alb, lineas in bruto.items():
+        alb = str(alb or "").strip()
+        if not alb or not isinstance(lineas, dict):
+            continue
+        for cod, cant in lineas.items():
+            cod = str(cod or "").strip()
+            try:
+                c = float(cant)
+            except (TypeError, ValueError):
+                return None, f"Cantidad no válida en la referencia {cod} del albarán {alb}."
+            if c != c or c < 0 or c > 9999999999:
+                return None, f"Cantidad no válida en la referencia {cod} del albarán {alb}."
+            if cod and c > 0:
+                salida.setdefault(alb, {})[cod] = round(c, 4)
+    return salida, None
+
+
+def _guardar_entregas_lineas(pedido_id: int, entregas: dict, usuario_id=None, usuario_nombre=None):
+    """Sustituye TODO el detalle de entregas por referencia del pedido por el
+    recibido (sin commit — lo hace quien llama). Ignora códigos que no estén en
+    las líneas del pedido."""
+    codigos = {r["codigo"] for r in rows_to_list(query(
+        "SELECT DISTINCT codigo FROM pedido_lineas WHERE pedido_id=%s", (pedido_id,))) if r["codigo"]}
+    execute("DELETE FROM pedido_lineas_entregas WHERE pedido_id=%s", (pedido_id,))
+    filas = [(pedido_id, alb, cod, cant, usuario_id, usuario_nombre)
+             for alb, lineas in entregas.items() for cod, cant in lineas.items() if cod in codigos]
+    if filas:
+        with get_db().cursor() as cur:
+            execute_values(
+                cur,
+                "INSERT INTO pedido_lineas_entregas (pedido_id, albaran_num, codigo, cantidad, usuario_id, usuario_nombre) VALUES %s",
+                filas, page_size=500)
+
+
+def _entregas_por_codigo(pedido_id: int) -> dict:
+    """{codigo: {"total": float, "por_albaran": {num: float}}} del detalle guardado."""
+    res = {}
+    for r in rows_to_list(query(
+            "SELECT albaran_num, codigo, cantidad FROM pedido_lineas_entregas WHERE pedido_id=%s ORDER BY id", (pedido_id,))):
+        d = res.setdefault(r["codigo"], {"total": 0.0, "por_albaran": {}})
+        c = float(r["cantidad"])
+        d["total"] = round(d["total"] + c, 4)
+        d["por_albaran"][r["albaran_num"]] = c
+    return res
+
+
+@app.route("/api/pedidos/<int:pid>/entregas-lineas", methods=["GET"])
+@login_required
+def get_entregas_lineas(pid):
+    """Referencias del pedido agrupadas por código, con lo pedido, lo entregado
+    (detalle opcional por albarán) y lo pendiente — para el paso opcional de
+    "marcar referencias entregadas" y para diagnosticar faltantes."""
+    ped = query("SELECT id, hotel_id, total_pedido FROM pedidos WHERE id=%s", (pid,), one=True)
+    if not ped:
+        return jsonify({"ok": False, "error": "Pedido no encontrado"}), 404
+    es_hotel = session.get("rol") == "hotel"
+    if es_hotel and ped["hotel_id"] not in session.get("hoteles_ids", []):
+        return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
+    if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(ped["hotel_id"]):
+        return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
+    ent = _entregas_por_codigo(pid)
+    agrupadas, orden = {}, []
+    for l in rows_to_list(query(
+            "SELECT codigo, ref_proveedor, descripcion, unidad, cantidad, precio FROM pedido_lineas "
+            "WHERE pedido_id=%s ORDER BY orden", (pid,))):
+        cod = l["codigo"]
+        if not cod:
+            continue
+        g = agrupadas.get(cod)
+        if g is None:
+            g = agrupadas[cod] = {"codigo": cod, "ref_proveedor": l["ref_proveedor"], "descripcion": l["descripcion"],
+                                  "unidad": l["unidad"], "pedida": 0.0,
+                                  "precio": float(l["precio"]) if (l["precio"] is not None and not es_hotel) else None}
+            orden.append(cod)
+        g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
+    lineas = []
+    for cod in orden:
+        g = agrupadas[cod]
+        e = ent.get(cod, {"total": 0.0, "por_albaran": {}})
+        g["entregada"] = e["total"]
+        g["pendiente"] = round(g["pedida"] - e["total"], 4)
+        g["por_albaran"] = e["por_albaran"]
+        lineas.append(g)
+    return jsonify({
+        "ok": True, "lineas": lineas, "hay_detalle": bool(ent),
+        "total_pedido": None if (es_hotel or ped["total_pedido"] is None) else float(ped["total_pedido"]),
     })
 
 
@@ -20389,9 +20530,14 @@ def buscar_lineas_pedidos():
     sql = f"""
         SELECT p.id AS pedido_id, p.norden, p.pedido_num, p.estado, p.fecha_solicitud, p.fecha_tramitacion,
                h.codigo AS hotel_codigo, h.nombre AS hotel_nombre, pr.nombre AS proveedor_nombre,
-               l.codigo, l.ref_proveedor, l.descripcion, l.unidad, l.cantidad, l.precio, l.importe
+               l.codigo, l.ref_proveedor, l.descripcion, l.unidad, l.cantidad, l.precio, l.importe,
+               COALESCE(en.entregado, 0) AS entregado,
+               EXISTS (SELECT 1 FROM pedido_lineas_entregas x WHERE x.pedido_id = p.id) AS tiene_detalle
         FROM pedido_lineas l
         JOIN pedidos p ON p.id = l.pedido_id
+        LEFT JOIN (SELECT pedido_id, codigo, SUM(cantidad) AS entregado
+                   FROM pedido_lineas_entregas GROUP BY pedido_id, codigo) en
+               ON en.pedido_id = l.pedido_id AND en.codigo = l.codigo
         LEFT JOIN hoteles h ON h.id = p.hotel_id
         LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
         WHERE (l.ref_proveedor ILIKE %s OR l.codigo ILIKE %s OR l.descripcion ILIKE %s)
@@ -20407,8 +20553,11 @@ def buscar_lineas_pedidos():
     truncado = len(filas) > 300
     filas = filas[:300]
     for f in filas:
-        for k in ("cantidad", "precio", "importe"):
+        for k in ("cantidad", "precio", "importe", "entregado"):
             f[k] = float(f[k]) if f[k] is not None else None
+        f["pendiente"] = round((f["cantidad"] or 0) - (f["entregado"] or 0), 4) if f.get("tiene_detalle") else None
+        if not f.get("tiene_detalle"):
+            f["entregado"] = None
         for k in ("fecha_solicitud", "fecha_tramitacion"):
             if f.get(k) is not None:
                 f[k] = str(f[k])

@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] Detalle opcional de referencias entregadas por entrada y dónde está la diferencia de importe (v12.32.82)
+
+- **Origen**: Víctor: poder marcar, de forma opcional, las referencias y unidades entregadas en una entrada parcial (confirmando en pantalla y cambiando la cantidad) para ajustar y diagnosticar faltantes; y, en la entrega total con importe distinto del pedido, poder indicar dónde está la diferencia.
+- **Hallazgo**: las entradas (`entrada_albaran_num`) solo guardan Nº, fecha e importe; desde v12.32.75 el pedido tiene líneas (`pedido_lineas`) sobre las que apoyarlo.
+- **Corrección**: tabla `pedido_lineas_entregas` (por pedido + albarán + código), `GET /api/pedidos/<id>/entregas-lineas`, clave `entregas_lineas` en `PUT /api/pedidos/<id>` (misma transacción que el resto del formulario), botón 📋 Referencias por entrada, aviso/ventana de diferencia con comparación de importes (no hotel), columnas Entreg./Pend. en panel de líneas y buscador (ver CHANGELOG v12.32.82).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL manual (tabla por `_auto_migrate`); resto de documentos de mantenimiento: no aplica.
+- **Pendiente / ideas**: mostrar lo pendiente en el correo de entrega parcial; exportar a Excel los faltantes.
+
+---
+
 ## 2026-10-07 — [Control Pedidos] OCR de pedidos escaneados: motivo del rechazo visible y respaldo de idioma (v12.32.81)
 
 - **Origen**: Víctor, captura con el error de "16885.pdf" tras entregar la v12.32.80.

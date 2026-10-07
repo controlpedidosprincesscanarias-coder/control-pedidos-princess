@@ -1413,7 +1413,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.81
+          V 12.32.82
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1579,7 +1579,7 @@ tbody tr:last-child{border-bottom:none}
                 <tr>
                   <th>Hotel</th><th>Nº Pedido</th><th>Estado</th><th>Proveedor</th>
                   <th>Ref. Prov.</th><th>Código</th><th>Descripción</th>
-                  <th style="text-align:right">Cantidad</th><th>Ud.</th><th>F. solicitud</th>
+                  <th style="text-align:right">Cantidad</th><th style="text-align:right" title="Detalle opcional de entregas por referencia">Entreg. / Pend.</th><th>Ud.</th><th>F. solicitud</th>
                 </tr>
               </thead>
               <tbody id="bq-tbody"></tbody>
@@ -2396,6 +2396,43 @@ tbody tr:last-child{border-bottom:none}
 </div>
 
 <!-- ── MODAL PEDIDO ─────────────────────────────────────────────────────── -->
+<!-- (v12.32.82) Referencias entregadas en una entrada (albarán) — paso opcional -->
+<div class="modal-overlay" id="modal-entrega-lineas" style="z-index:1100">
+  <div class="modal" style="width:min(1000px,96vw)">
+    <div class="modal-header">
+      <div class="modal-title" id="mel-title">📋 Referencias entregadas</div>
+      <button class="close-btn" onclick="closeModal('modal-entrega-lineas')">✕</button>
+    </div>
+    <div class="modal-body">
+      <div id="mel-intro" style="font-size:12px;color:#555;margin-bottom:8px"></div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px" id="mel-toolbar">
+        <button type="button" class="btn btn-ghost btn-sm" onclick="melMarcarTodas(true)">✔ Marcar todas (con lo pendiente)</button>
+        <button type="button" class="btn btn-ghost btn-sm" onclick="melMarcarTodas(false)">✕ Desmarcar todas</button>
+      </div>
+      <div style="max-height:46vh;overflow:auto;border:1px solid #e3e8f0;border-radius:8px">
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="position:sticky;top:0;background:#eef2f9;text-align:left">
+            <th style="padding:5px 6px;width:28px"></th>
+            <th style="padding:5px 6px">Código</th><th style="padding:5px 6px">Ref. Prov.</th><th style="padding:5px 6px">Descripción</th>
+            <th style="padding:5px 6px">Ud.</th>
+            <th style="padding:5px 6px;text-align:right">Pedido</th>
+            <th style="padding:5px 6px;text-align:right" title="Cantidad ya entregada en las OTRAS entradas">Ya entregado</th>
+            <th style="padding:5px 6px;text-align:right;width:110px">Esta entrada</th>
+            <th style="padding:5px 6px;text-align:right">Quedan</th>
+          </tr></thead>
+          <tbody id="mel-tbody"></tbody>
+        </table>
+      </div>
+      <div id="mel-resumen" style="margin-top:10px;font-size:12px"></div>
+    </div>
+    <div class="modal-footer">
+      <button type="button" class="btn btn-ghost btn-sm" style="margin-right:auto" onclick="melQuitarDetalle()" id="mel-btn-quitar">Quitar el detalle de esta entrada</button>
+      <button type="button" class="btn btn-ghost" onclick="closeModal('modal-entrega-lineas')">Cancelar</button>
+      <button type="button" class="btn btn-gold" onclick="melConfirmar()" id="mel-btn-ok">Confirmar</button>
+    </div>
+  </div>
+</div>
+
 <div class="modal-overlay" id="modal-pedido">
   <div class="modal">
     <div class="modal-header">
@@ -2557,6 +2594,8 @@ tbody tr:last-child{border-bottom:none}
             onmouseout="this.style.background='transparent'">
             ＋ Añadir entrada DALI / SAP
           </button>
+          <!-- (v12.32.82) Aviso opcional: el importe recibido no coincide con el del pedido -->
+          <div id="albaran-diferencia-aviso" style="display:none;margin-top:8px;font-size:12px;color:#7a5b00;background:#fff8e1;border:1px solid #ffe08a;border-radius:8px;padding:7px 10px"></div>
         </div>
 
         <!-- Estado -->
@@ -5425,6 +5464,8 @@ async function openPedidoModal(id=null) {
     onTarifaAcordadaChange();
     setVal('p-estado', p.estado);
     initAlbaranSection(p.entrada_albaran_num || '', p.estado);
+    G.avisoDiferenciaOmitido = false;
+    cargarEntregasLineas();   // (v12.32.82) detalle opcional de referencias entregadas
     onEstadoChange();
     document.getElementById('p-proveedor').value = p.proveedor_id || '';
     document.getElementById('p-proveedor-input').value = p.proveedor_nombre || '';
@@ -6235,6 +6276,7 @@ function renderAlbaranList(valores, editable) {
     const row = _makeAlbaranRow(entry.num, entry.fecha, editable, idx, entry.baseImponible);
     list.appendChild(row);
   });
+  setTimeout(actualizarAvisoDiferenciaEntrega, 0);
 }
 
 // Crea una fila de albarán con campo número + campo fecha + base imponible + (en parcial) checkbox total + botón borrar
@@ -6288,6 +6330,18 @@ function _makeAlbaranRow(num, fecha, editable, idx, baseImponible) {
   row.appendChild(inputFecha);
   row.appendChild(inputBaseImp);
 
+  // (v12.32.82) Paso OPCIONAL: detallar qué referencias y cuántas unidades llegaron en esta entrada.
+  const btnRef = document.createElement('button');
+  btnRef.type = 'button';
+  btnRef.className = 'albaran-btn-ref';
+  btnRef.style.cssText = 'font-size:11px;font-weight:600;padding:4px 8px;border:1px solid #c5cbe0;border-radius:6px;background:#f4f6fb;color:var(--navy2);cursor:pointer;flex-shrink:0;white-space:nowrap';
+  btnRef.onclick = () => abrirEntregaLineas(row);
+  row.appendChild(btnRef);
+  inputNum.dataset.numPrevio = inputNum.value.trim();
+  inputNum.addEventListener('change', () => _migrarClaveEntrega(inputNum, row));
+  inputBaseImp.addEventListener('input', () => actualizarAvisoDiferenciaEntrega());
+  setTimeout(() => _refrescarBotonRef(row), 0);
+
   if (editable) {
     // Botón eliminar fila
     const btnDel = document.createElement('button');
@@ -6338,6 +6392,7 @@ function _onAlbaranFinalChange(chk, row) {
     row.style.padding = '3px 4px';
     // Deshabilitar el botón de añadir más entradas
     if (btnAdd) btnAdd.style.display = 'none';
+    actualizarAvisoDiferenciaEntrega();
   } else {
     // Revertir a entrega parcial (sigue habiendo entradas pero ninguna final)
     if (estadoSel) estadoSel.value = 'ENTREGA PARCIAL';
@@ -6345,6 +6400,7 @@ function _onAlbaranFinalChange(chk, row) {
     row.style.borderRadius = '';
     row.style.padding = '';
     if (btnAdd) btnAdd.style.display = '';
+    actualizarAvisoDiferenciaEntrega();
   }
 }
 
@@ -6352,6 +6408,292 @@ function reindexAlbaranList() {
   document.querySelectorAll('#albaran-list .albaran-row').forEach((row, idx) => {
     const prefix = row.querySelector('.albaran-prefix');
     if (prefix) prefix.textContent = `${idx + 1}.`;
+  });
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   (v12.32.82) Referencias entregadas por entrada (albarán) — paso OPCIONAL
+   Estado en memoria: G.entregasPorAlbaran = { "<Nº albarán>": { "<código>": cantidad } }
+   (se guarda junto con el pedido, ver savePedido) y G.lineasEntrega = referencias del
+   pedido agrupadas por código (de GET /api/pedidos/<id>/entregas-lineas).
+═══════════════════════════════════════════════════════════════════════════ */
+G.entregasPorAlbaran = {};
+G.lineasEntrega = [];
+G.entregasCargadas = false;
+G.avisoDiferenciaOmitido = false;
+
+function _fmtCant(v) {
+  if (v == null || isNaN(v)) return '—';
+  return Number(v).toLocaleString('es-ES', { minimumFractionDigits: 0, maximumFractionDigits: 4 });
+}
+function _fmtEur(v) {
+  return Number(v).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €';
+}
+function _numDeFila(row) {
+  const i = row && row.querySelector('.albaran-input');
+  return i ? i.value.trim() : '';
+}
+
+async function cargarEntregasLineas() {
+  G.entregasPorAlbaran = {}; G.lineasEntrega = []; G.entregasCargadas = false;
+  const id = G.editingPedidoId;
+  if (!id) { _refrescarTodosBotonesRef(); return; }
+  let d;
+  try { d = await api(`/api/pedidos/${id}/entregas-lineas`); } catch (e) { d = null; }
+  if (G.editingPedidoId !== id) return;   // se abrió otro pedido mientras tanto
+  if (!d || !d.ok) { _refrescarTodosBotonesRef(); return; }
+  G.lineasEntrega = d.lineas || [];
+  G.totalPedidoEntrega = d.total_pedido;
+  (d.lineas || []).forEach(l => {
+    Object.entries(l.por_albaran || {}).forEach(([alb, c]) => {
+      (G.entregasPorAlbaran[alb] = G.entregasPorAlbaran[alb] || {})[l.codigo] = c;
+    });
+  });
+  G.entregasCargadas = true;
+  _refrescarTodosBotonesRef();
+  actualizarAvisoDiferenciaEntrega();
+}
+
+function _refrescarBotonRef(row) {
+  const b = row.querySelector('.albaran-btn-ref');
+  if (!b) return;
+  const num = _numDeFila(row);
+  const det = G.entregasPorAlbaran[num];
+  const n = det ? Object.keys(det).length : 0;
+  const hayLineas = G.lineasEntrega.length > 0;
+  b.style.display = (G.editingPedidoId && hayLineas) ? '' : 'none';
+  b.textContent = n ? `📋 ${n} ref. ✔` : '📋 Referencias';
+  b.style.background = n ? '#e6f4ea' : '#f4f6fb';
+  b.style.borderColor = n ? '#81c995' : '#c5cbe0';
+  b.title = n ? 'Detalle de las referencias entregadas en esta entrada (clic para ver o cambiar)'
+              : 'Opcional: indicar qué referencias y cuántas unidades llegaron en esta entrada';
+}
+function _refrescarTodosBotonesRef() {
+  document.querySelectorAll('#albaran-list .albaran-row').forEach(_refrescarBotonRef);
+}
+
+// Si se cambia el Nº de una entrada ya detallada, el detalle la sigue.
+function _migrarClaveEntrega(input, row) {
+  const antes = input.dataset.numPrevio || '';
+  const ahora = input.value.trim();
+  if (antes && ahora && antes !== ahora && G.entregasPorAlbaran[antes] && !G.entregasPorAlbaran[ahora]) {
+    G.entregasPorAlbaran[ahora] = G.entregasPorAlbaran[antes];
+    delete G.entregasPorAlbaran[antes];
+  }
+  input.dataset.numPrevio = ahora;
+  _refrescarBotonRef(row);
+}
+
+// Detalle a enviar al guardar: solo de las entradas que siguen existiendo en el formulario.
+function getEntregasLineasPayload() {
+  if (!G.editingPedidoId || !G.entregasCargadas) return undefined;   // no tocar lo guardado
+  const out = {};
+  document.querySelectorAll('#albaran-list .albaran-row').forEach(row => {
+    const num = _numDeFila(row);
+    const det = num && G.entregasPorAlbaran[num];
+    if (det && Object.keys(det).length) out[num] = det;
+  });
+  return out;
+}
+
+function _sumaBasesAlbaranes() {
+  let s = 0, hay = false;
+  document.querySelectorAll('#albaran-list .albaran-row').forEach(row => {
+    if (!_numDeFila(row)) return;
+    const v = parseFloat((row.querySelector('.albaran-base-imponible') || {}).value);
+    if (!isNaN(v)) { s += v; hay = true; }
+  });
+  return hay ? Math.round(s * 100) / 100 : null;
+}
+function _filaFinal() {
+  const rows = Array.from(document.querySelectorAll('#albaran-list .albaran-row')).filter(r => _numDeFila(r));
+  return rows.find(r => (r.querySelector('.albaran-chk-final') || {}).checked) || null;
+}
+
+// Entrega total con importe distinto del pedido: ofrece (sin obligar) indicar dónde está la diferencia.
+function _diferenciaEntregaTotal() {
+  if (G.rol === 'hotel') return null;                      // el hotel no ve importes
+  const fila = _filaFinal();
+  const estado = (document.getElementById('p-estado') || {}).value;
+  if (!fila && estado !== 'ENTREGADO') return null;
+  const total = parseFloat(val('p-total-pedido'));
+  const recibido = _sumaBasesAlbaranes();
+  if (isNaN(total) || recibido == null) return null;
+  const dif = Math.round((recibido - total) * 100) / 100;
+  if (Math.abs(dif) < 0.01) return null;
+  return { dif, total, recibido, fila: fila || Array.from(document.querySelectorAll('#albaran-list .albaran-row')).filter(r => _numDeFila(r)).pop() };
+}
+
+function actualizarAvisoDiferenciaEntrega() {
+  const box = document.getElementById('albaran-diferencia-aviso');
+  if (!box) return;
+  const d = G.lineasEntrega.length ? _diferenciaEntregaTotal() : null;
+  if (!d || !d.fila) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const signo = d.dif > 0 ? 'más' : 'menos';
+  box.innerHTML = `⚖️ El importe recibido (${_fmtEur(d.recibido)}) difiere del pedido (${_fmtEur(d.total)}): <strong>${_fmtEur(Math.abs(d.dif))} ${signo}</strong>.
+    <button type="button" class="btn btn-ghost btn-sm" style="margin-left:6px" onclick="abrirDiferenciaEntrega()">📋 Indicar dónde está la diferencia</button>
+    <span style="color:#888"> (opcional)</span>`;
+  box.style.display = '';
+}
+function abrirDiferenciaEntrega() {
+  const d = _diferenciaEntregaTotal();
+  if (d && d.fila) abrirEntregaLineas(d.fila, true);
+}
+
+/* ── Modal de referencias ─────────────────────────────────────────────── */
+let _melFila = null, _melModoDif = false, _melSoloLectura = false;
+
+function abrirEntregaLineas(row, modoDiferencia = false) {
+  const num = _numDeFila(row);
+  if (!num) { showFormAlert('Escribe primero el Nº de la entrada DALI / SAP para poder detallar sus referencias.', { title: 'Falta el Nº de entrada' }); return; }
+  if (!G.lineasEntrega.length) { toast('Este pedido no tiene líneas leídas del PDF oficial.', ''); return; }
+  _melFila = row; _melModoDif = !!modoDiferencia;
+  _melSoloLectura = !(row.querySelector('.albaran-input') && !row.querySelector('.albaran-input').readOnly);
+  const actual = G.entregasPorAlbaran[num] || {};
+  const sinDetalle = !Object.keys(actual).length;
+  const verPrecios = G.rol !== 'hotel';
+  document.getElementById('mel-title').textContent = `📋 Referencias de la entrada ${num}`;
+  document.getElementById('mel-intro').innerHTML = _melSoloLectura
+    ? 'Detalle guardado de esta entrada (solo lectura: la entrega está cerrada).'
+    : (_melModoDif
+      ? 'Entrega <strong>total</strong> con importe distinto del pedido: todas las referencias vienen marcadas con lo que faltaba por recibir. <strong>Cambia la cantidad</strong> donde llegó menos (o más) y desmarca lo que no llegó; abajo verás cuánta diferencia queda explicada. <em>Es opcional.</em>'
+      : 'Marca las referencias que han llegado en esta entrada y, si la cantidad es distinta de lo pendiente, cámbiala. <em>Es opcional</em>: sirve para saber exactamente qué falta por entregar.');
+  document.getElementById('mel-toolbar').style.display = _melSoloLectura ? 'none' : 'flex';
+  document.getElementById('mel-btn-ok').style.display = _melSoloLectura ? 'none' : '';
+  document.getElementById('mel-btn-quitar').style.display = (_melSoloLectura || sinDetalle) ? 'none' : '';
+
+  const tb = document.getElementById('mel-tbody');
+  tb.innerHTML = G.lineasEntrega.map((l, i) => {
+    const ya = _entregadoEnOtras(l.codigo, num);
+    const pend = Math.max(0, Math.round((l.pedida - ya) * 10000) / 10000);
+    const marcada = (actual[l.codigo] != null) || (sinDetalle && _melModoDif && pend > 0);
+    const cant = actual[l.codigo] != null ? actual[l.codigo] : pend;
+    return `<tr data-cod="${esc(l.codigo)}" data-pedida="${l.pedida}" data-ya="${ya}" data-precio="${l.precio == null ? '' : l.precio}" style="border-top:1px solid #eef1f6">
+      <td style="padding:4px 6px"><input type="checkbox" class="mel-chk" ${marcada ? 'checked' : ''} ${_melSoloLectura ? 'disabled' : ''} onchange="melCambio(this.closest('tr'), true)"></td>
+      <td class="monospace" style="padding:4px 6px">${_htmlLinea(l.codigo)}</td>
+      <td class="monospace" style="padding:4px 6px">${_htmlLinea(l.ref_proveedor || '—')}</td>
+      <td style="padding:4px 6px">${_htmlLinea(l.descripcion || '')}</td>
+      <td style="padding:4px 6px">${_htmlLinea(l.unidad || '')}</td>
+      <td style="padding:4px 6px;text-align:right">${_fmtCant(l.pedida)}</td>
+      <td style="padding:4px 6px;text-align:right;color:${ya ? '#1a7a1a' : '#999'}">${_fmtCant(ya)}</td>
+      <td style="padding:4px 6px;text-align:right"><input type="number" class="form-control mel-cant" min="0" step="any" value="${cant}" ${(marcada && !_melSoloLectura) ? '' : 'disabled'} style="width:96px;text-align:right;padding:3px 6px;height:auto" oninput="melCambio(this.closest('tr'), false)"></td>
+      <td class="mel-quedan" style="padding:4px 6px;text-align:right;font-weight:600"></td>
+    </tr>`;
+  }).join('');
+  tb.querySelectorAll('tr').forEach(tr => melCambio(tr, false));
+  melResumen();
+  openModal('modal-entrega-lineas');
+}
+
+function _entregadoEnOtras(codigo, numActual) {
+  let s = 0;
+  Object.entries(G.entregasPorAlbaran).forEach(([alb, det]) => {
+    if (alb !== numActual && det && det[codigo] != null) s += Number(det[codigo]);
+  });
+  return Math.round(s * 10000) / 10000;
+}
+
+function melCambio(tr, desdeCheck) {
+  const chk = tr.querySelector('.mel-chk'), inp = tr.querySelector('.mel-cant');
+  if (desdeCheck) {
+    inp.disabled = !chk.checked;
+    if (chk.checked) {
+      const pend = Math.max(0, Number(tr.dataset.pedida) - Number(tr.dataset.ya));
+      if (!parseFloat(inp.value)) inp.value = Math.round(pend * 10000) / 10000;
+    }
+  }
+  const pedida = Number(tr.dataset.pedida), ya = Number(tr.dataset.ya);
+  const esta = chk.checked ? (parseFloat(inp.value) || 0) : 0;
+  const quedan = Math.round((pedida - ya - esta) * 10000) / 10000;
+  const q = tr.querySelector('.mel-quedan');
+  q.textContent = quedan > 0 ? _fmtCant(quedan) : (quedan < 0 ? `+${_fmtCant(-quedan)} (de más)` : '✔ 0');
+  q.style.color = quedan > 0 ? '#b45309' : (quedan < 0 ? '#b91c1c' : '#1a7a1a');
+  melResumen();
+}
+
+function melMarcarTodas(marcar) {
+  document.querySelectorAll('#mel-tbody tr').forEach(tr => {
+    const chk = tr.querySelector('.mel-chk'), inp = tr.querySelector('.mel-cant');
+    chk.checked = marcar; inp.disabled = !marcar;
+    if (marcar) inp.value = Math.max(0, Math.round((Number(tr.dataset.pedida) - Number(tr.dataset.ya)) * 10000) / 10000);
+    melCambio(tr, false);
+  });
+}
+
+function melResumen() {
+  const filas = Array.from(document.querySelectorAll('#mel-tbody tr'));
+  let marcadas = 0, uds = 0, quedanUds = 0, refsPend = 0, impCant = 0, hayPrecio = false;
+  filas.forEach(tr => {
+    const chk = tr.querySelector('.mel-chk');
+    const esta = chk.checked ? (parseFloat(tr.querySelector('.mel-cant').value) || 0) : 0;
+    if (chk.checked) { marcadas++; uds += esta; }
+    const quedan = Number(tr.dataset.pedida) - Number(tr.dataset.ya) - esta;
+    if (quedan > 0.00001) { quedanUds += quedan; refsPend++; }
+    const p = tr.dataset.precio === '' ? null : Number(tr.dataset.precio);
+    if (p != null) { hayPrecio = true; impCant += (Number(tr.dataset.ya) + esta) * p; }
+  });
+  let html = `<strong>${marcadas}</strong> de ${filas.length} referencias en esta entrada · <strong>${_fmtCant(uds)}</strong> uds · `
+    + (refsPend ? `quedan por entregar <strong style="color:#b45309">${_fmtCant(quedanUds)} uds en ${refsPend} referencia(s)</strong>` : '<strong style="color:#1a7a1a">no queda nada por entregar</strong>');
+  if (hayPrecio && G.rol !== 'hotel') {
+    // Importe (base imponible) de las cantidades indicadas frente al importe de los albaranes del formulario.
+    const rec = _sumaBasesAlbaranes();
+    html += `<div style="margin-top:6px;padding:6px 8px;background:#f4f6fb;border-radius:6px">Importe de las cantidades indicadas (a precio de pedido, sin IGIC): <strong>${_fmtEur(impCant)}</strong>`;
+    if (rec != null) {
+      const dif = Math.round((rec - impCant) * 100) / 100;
+      html += ` · Importe recibido en los albaranes: <strong>${_fmtEur(rec)}</strong> · `
+        + (Math.abs(dif) < 0.01
+          ? '<strong style="color:#1a7a1a">✔ la diferencia queda explicada</strong>'
+          : `diferencia sin explicar: <strong style="color:#b45309">${_fmtEur(Math.abs(dif))} ${dif > 0 ? 'de más' : 'de menos'}</strong> <span style="color:#888">(otro precio, o cantidades por ajustar)</span>`);
+    }
+    html += '</div>';
+  }
+  document.getElementById('mel-resumen').innerHTML = html;
+}
+
+function melConfirmar() {
+  if (!_melFila) return;
+  const num = _numDeFila(_melFila);
+  const det = {};
+  let invalido = false;
+  document.querySelectorAll('#mel-tbody tr').forEach(tr => {
+    if (!tr.querySelector('.mel-chk').checked) return;
+    const c = parseFloat(tr.querySelector('.mel-cant').value);
+    if (isNaN(c) || c < 0) { invalido = true; return; }
+    if (c > 0) det[tr.dataset.cod] = Math.round(c * 10000) / 10000;
+  });
+  if (invalido) { toast('Hay una cantidad no válida.', 'error'); return; }
+  if (Object.keys(det).length) G.entregasPorAlbaran[num] = det; else delete G.entregasPorAlbaran[num];
+  closeModal('modal-entrega-lineas');
+  _refrescarTodosBotonesRef();
+  actualizarAvisoDiferenciaEntrega();
+  toast(Object.keys(det).length
+    ? `📋 Detalle de la entrada ${num} anotado (${Object.keys(det).length} ref.). Se guarda al pulsar Guardar.`
+    : `Detalle de la entrada ${num} vacío — no se guardará.`, 'success', 4500);
+}
+function melQuitarDetalle() {
+  if (!_melFila) return;
+  delete G.entregasPorAlbaran[_numDeFila(_melFila)];
+  closeModal('modal-entrega-lineas');
+  _refrescarTodosBotonesRef();
+  actualizarAvisoDiferenciaEntrega();
+}
+
+// Antes de guardar una entrega TOTAL con importe distinto: pregunta (sin obligar) si se quiere detallar.
+function _preguntarDiferenciaEntrega() {
+  return new Promise(resolve => {
+    const d = _diferenciaEntregaTotal();
+    if (!d || !d.fila || !G.lineasEntrega.length || G.avisoDiferenciaOmitido
+        || Object.keys(G.entregasPorAlbaran[_numDeFila(d.fila)] || {}).length) { resolve(true); return; }
+    const ov = document.createElement('div');
+    ov.className = 'modal-overlay open'; ov.style.zIndex = 1200;
+    ov.innerHTML = `<div class="modal" style="width:min(520px,94vw)"><div class="modal-header"><div class="modal-title">⚖️ El importe no coincide con el pedido</div></div>
+      <div class="modal-body" style="font-size:13px">Has recibido <strong>${_fmtEur(d.recibido)}</strong> y el pedido era de <strong>${_fmtEur(d.total)}</strong> (${_fmtEur(Math.abs(d.dif))} ${d.dif > 0 ? 'más' : 'menos'}).<br><br>
+      ¿Quieres indicar en qué referencias está la diferencia para ajustar bien las cantidades? Es opcional.</div>
+      <div class="modal-footer"><button class="btn btn-ghost" id="dif-no">Guardar sin detallar</button><button class="btn btn-gold" id="dif-si">📋 Indicar la diferencia</button></div></div>`;
+    document.body.appendChild(ov);
+    ov.querySelector('#dif-no').onclick = () => { G.avisoDiferenciaOmitido = true; ov.remove(); resolve(true); };
+    ov.querySelector('#dif-si').onclick = () => { ov.remove(); resolve(false); abrirEntregaLineas(d.fila, true); };
   });
 }
 
@@ -6363,6 +6705,7 @@ function addAlbaranInput() {
   const hoy  = new Date().toISOString().split('T')[0];
   const row  = _makeAlbaranRow('', hoy, true, idx);
   list.appendChild(row);
+  setTimeout(() => _refrescarBotonRef(row), 0);
   const input = row.querySelector('.albaran-input');
   if (input) input.focus();
 }
@@ -6600,12 +6943,14 @@ async function cargarLineasPedido(forzar = false) {
   }
   const verPrecios = G.rol !== 'hotel';
   const num = (v, dec) => v == null ? '—' : Number(v).toLocaleString('es-ES', { minimumFractionDigits: dec, maximumFractionDigits: Math.max(dec, 4), useGrouping: 'always' });
+  const conEnt = !!d.hay_entregas;
   const filas = d.lineas.map(l => `<tr>
       <td class="monospace">${_htmlLinea(l.codigo)}</td>
       <td class="monospace">${_htmlLinea(l.ref_proveedor || '—')}</td>
       <td>${_htmlLinea(l.descripcion)}</td>
       <td>${_htmlLinea(l.unidad || '')}</td>
       <td style="text-align:right">${num(l.cantidad, 0)}</td>
+      ${conEnt ? `<td style="text-align:right;color:#1a7a1a">${num(l.entregado, 0)}</td><td style="text-align:right;font-weight:600;color:${l.pendiente > 0 ? '#b45309' : (l.pendiente < 0 ? '#b91c1c' : '#1a7a1a')}">${l.pendiente > 0 ? num(l.pendiente, 0) : (l.pendiente < 0 ? '+' + num(-l.pendiente, 0) : '✔')}</td>` : ''}
       ${verPrecios ? `<td style="text-align:right">${num(l.precio, 2)}</td><td style="text-align:right">${num(l.importe, 2)}</td>` : ''}
     </tr>`).join('');
   const _avisoOcr = d.por_ocr ? `<div style="font-size:10.5px;color:#7a5b00;background:#fff8e1;border-top:1px solid #ffe08a;padding:4px 8px">📷 Leído de un documento escaneado (OCR): los importes cuadran con el Total Pedido, pero revise referencias y descripciones.</div>` : '';
@@ -6618,6 +6963,7 @@ async function cargarLineasPedido(forzar = false) {
         <thead><tr style="position:sticky;top:0;background:#eef2f9;text-align:left">
           <th style="padding:3px 4px">Código</th><th style="padding:3px 4px">Ref. Prov.</th><th style="padding:3px 4px">Descripción</th>
           <th style="padding:3px 4px">Ud.</th><th style="padding:3px 4px;text-align:right">Cantidad</th>
+          ${conEnt ? '<th style="padding:3px 4px;text-align:right">Entreg.</th><th style="padding:3px 4px;text-align:right">Pend.</th>' : ''}
           ${verPrecios ? '<th style="padding:3px 4px;text-align:right">Precio</th><th style="padding:3px 4px;text-align:right">Importe</th>' : ''}
         </tr></thead>
         <tbody>${filas}</tbody>
@@ -6672,6 +7018,7 @@ async function buscarArticuloPedidos() {
       <td class="monospace">${_htmlLinea(r.codigo || '')}</td>
       <td>${_htmlLinea(r.descripcion || '')}</td>
       <td style="text-align:right;font-weight:600">${num(r.cantidad)}</td>
+      <td style="text-align:right;font-size:11px;white-space:nowrap">${r.pendiente == null ? '<span style="color:#bbb">—</span>' : `<span style="color:#1a7a1a">${num(r.entregado)}</span> / <strong style="color:${r.pendiente > 0 ? '#b45309' : (r.pendiente < 0 ? '#b91c1c' : '#1a7a1a')}">${r.pendiente > 0 ? num(r.pendiente) : (r.pendiente < 0 ? '+' + num(-r.pendiente) : '✔')}</strong>`}</td>
       <td>${_htmlLinea(r.unidad || '')}</td>
       <td>${_htmlLinea((r.fecha_solicitud || '').slice(0, 10).split('-').reverse().join('/'))}</td>
     </tr>`).join('');
@@ -6708,6 +7055,7 @@ function clearPedidoForm() {
   document.getElementById('p-total-pedido-aprox-badge').hidden = true;
   document.getElementById('p-total-pedido-real-badge').hidden = true;
   _lineasPedidoReq++;   // descarta cualquier carga de líneas en curso
+  G.entregasPorAlbaran = {}; G.lineasEntrega = []; G.entregasCargadas = false; G.avisoDiferenciaOmitido = false;
   const _lp = document.getElementById('pedido-lineas-panel');
   if (_lp) { _lp.style.display = 'none'; _lp.innerHTML = ''; }
   // Sin hotel seleccionado: el desplegable de Departamento vuelve a mostrar
@@ -6843,6 +7191,8 @@ async function savePedido() {
       entrada_albaran_num: getAlbaranCombined(),
       estado: estadoNuevo,
     };
+    const _entHotel = getEntregasLineasPayload();
+    if (_entHotel !== undefined) body.entregas_lineas = _entHotel;
     const btn = document.getElementById('btn-save-pedido');
     btn.disabled = true;
     const r = await api(`/api/pedidos/${id}`, 'PUT', body);
@@ -7001,6 +7351,8 @@ async function savePedido() {
   //    DALI / SAP» (parcial o final) — ver _validarBaseImponibleAlbaran() ──
   if ((_estadoNuevoValidar === 'ENTREGA PARCIAL' || _estadoNuevoValidar === 'ENTREGADO')
       && !_validarBaseImponibleAlbaran()) return;
+  // (v12.32.82) Entrega total con importe distinto del pedido: ofrecer (opcional) indicar dónde está la diferencia.
+  if (_estadoNuevoValidar === 'ENTREGADO' && !(await _preguntarDiferenciaEntrega())) return;
 
   const sujetoTecho = document.getElementById('p-sujeto-techo').checked;
   const familiaId   = sujetoTecho ? (val('p-familia') || null) : null;
@@ -7048,6 +7400,8 @@ async function savePedido() {
     plazo_entrega_dias:   parseInt(val('p-plazo-entrega')) || null,
     fecha_entrega_especifica: val('p-fecha-entrega-especifica') || null,
   };
+  const _entLin = getEntregasLineasPayload();   // (v12.32.82) undefined = no tocar lo guardado
+  if (_entLin !== undefined) body.entregas_lineas = _entLin;
 
   const btn = document.getElementById('btn-save-pedido');
   btn.disabled=true; btn.textContent='Guardando…';
