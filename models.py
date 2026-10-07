@@ -128,6 +128,12 @@ SQL_STATEMENTS = [
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_prov_rutas_proveedor ON proveedor_rutas(proveedor_id)",
+    # NOTA (2026-10-07, v12.32.73): la tabla proveedor_hoteles_sin_servicio
+    # (hoteles donde un proveedor NO da servicio — el rutómetro está activo
+    # por defecto en todos) NO se crea aquí a propósito, sino solo en
+    # _auto_migrate() (app.py): su carga inicial desde proveedor_rutas debe
+    # ejecutarse una única vez, justo cuando la tabla aún no existe, y no
+    # sería distinguible si otro sitio la creara antes.
     # ── Usuarios ──────────────────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS usuarios (

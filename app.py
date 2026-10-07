@@ -1229,6 +1229,61 @@ def _auto_migrate():
                 )
             except Exception as e:
                 log.warning(f"No se pudo quitar el UNIQUE de proveedor_rutas: {e}")
+            # ── Rutómetro: servicio por hotel — v12.32.73 (2026-10-07) ───────
+            # A petición de Víctor: "en la ficha de proveedores el rutómetro
+            # se active por defecto a los 10 hoteles y que solo el admin o
+            # comprador desmarque aquel o aquellos hoteles que el proveedor
+            # no tenga servicio, de esta manera automáticamente se realiza
+            # el filtro de materiales en la aplicación Catálogo
+            # Asignaciones". Se guardan los hoteles SIN servicio (no los que
+            # sí lo tienen): así un proveedor sin ninguna fila aquí da
+            # servicio a todos los hoteles — es el estado por defecto de
+            # todo proveedor existente o nuevo, y un hotel que se dé de alta
+            # en el futuro nace cubierto sin tocar nada.
+            #
+            # Esta tabla se crea SOLO aquí (no en models.py) a propósito: la
+            # carga inicial de abajo (backfill) debe ejecutarse una única
+            # vez, justo cuando la tabla aún no existe, y no puede
+            # distinguirse "tabla recién creada" de "tabla ya existente"
+            # si otro sitio (init_db.py) la creara antes.
+            #
+            # Carga inicial: hasta ahora "tiene rutómetro" significaba "tiene
+            # filas en proveedor_rutas", y DALI ocultaba el proveedor en los
+            # hoteles SIN ninguna fila. Para no cambiar lo que ya se ve en
+            # el catálogo al desplegar esto, cada proveedor con filas en
+            # proveedor_rutas queda con SIN servicio en los hoteles (reales,
+            # activos, sin el de pruebas 'PR') en los que no tiene ninguna
+            # ruta — exactamente la restricción que ya estaba aplicándose.
+            try:
+                cur.execute("SELECT to_regclass('public.proveedor_hoteles_sin_servicio') AS t")
+                _tabla_servicio_existia = cur.fetchone()["t"] is not None
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS proveedor_hoteles_sin_servicio (
+                        proveedor_id INTEGER NOT NULL REFERENCES proveedores(id) ON DELETE CASCADE,
+                        hotel_id     INTEGER NOT NULL REFERENCES hoteles(id) ON DELETE CASCADE,
+                        PRIMARY KEY (proveedor_id, hotel_id)
+                    )
+                """)
+                if not _tabla_servicio_existia:
+                    cur.execute("""
+                        INSERT INTO proveedor_hoteles_sin_servicio (proveedor_id, hotel_id)
+                        SELECT p.id, h.id
+                        FROM proveedores p
+                        CROSS JOIN hoteles h
+                        WHERE h.activo = 1 AND h.codigo <> 'PR'
+                          AND EXISTS (SELECT 1 FROM proveedor_rutas r WHERE r.proveedor_id = p.id)
+                          AND NOT EXISTS (
+                              SELECT 1 FROM proveedor_rutas r
+                              WHERE r.proveedor_id = p.id AND r.hotel_id = h.id
+                          )
+                        ON CONFLICT DO NOTHING
+                    """)
+                    log.info(
+                        "[MIGRACION] proveedor_hoteles_sin_servicio creada; carga inicial desde "
+                        f"proveedor_rutas: {cur.rowcount} exclusión(es)"
+                    )
+            except Exception as e:
+                log.warning(f"No se pudo crear/cargar la tabla proveedor_hoteles_sin_servicio: {e}")
             # ══════════════════════════════════════════════════════════════
             # Columnas legacy de proveedores (para DBs antiguas)
             for col_name, col_type in [("codigo","TEXT"),("movil","TEXT"),("observaciones","TEXT"),
@@ -10476,6 +10531,19 @@ def _prov_with_contactos(rows):
         })
     for p in result:
         p["rutas"] = rmap.get(p["id"], [])
+    # (2026-10-07, v12.32.73) Hoteles SIN servicio de cada proveedor (ver
+    # proveedor_hoteles_sin_servicio en _auto_migrate()). Lista vacía = da
+    # servicio a todos los hoteles (estado por defecto).
+    sin_servicio_rows = rows_to_list(query(
+        f"""SELECT proveedor_id, hotel_id FROM proveedor_hoteles_sin_servicio
+            WHERE proveedor_id IN ({placeholders}) ORDER BY proveedor_id, hotel_id""",
+        tuple(ids)
+    ))
+    ssmap = defaultdict(list)
+    for r in sin_servicio_rows:
+        ssmap[r["proveedor_id"]].append(r["hotel_id"])
+    for p in result:
+        p["hoteles_sin_servicio_ids"] = ssmap.get(p["id"], [])
     return result
 
 @app.route("/api/proveedores", methods=["GET"])
@@ -10557,7 +10625,49 @@ def _buscar_proveedor_duplicado(campo: str, valor: str, excluir_id: int = None) 
     return row_to_dict(query(sql, tuple(args), one=True))
 
 
-def _guardar_rutas_proveedor(proveedor_id: int, rutas: list) -> str:
+def _hoteles_con_servicio_posibles():
+    """
+    (2026-10-07, v12.32.73) Hoteles sobre los que se decide "tiene o no
+    servicio" en la ficha de proveedor: los activos, sin el de pruebas
+    ('PR', que DALI no conoce — sus 10 hoteles reales son FV, GC, GY, IT,
+    JN, LP, MG, MT, SU, TA). Devuelve filas {id, codigo, nombre}.
+    """
+    return rows_to_list(query(
+        "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 AND codigo <> %s ORDER BY codigo",
+        (HOTEL_CODIGO_PRUEBAS,)
+    ))
+
+
+def _guardar_hoteles_sin_servicio(proveedor_id: int, hotel_ids) -> set:
+    """
+    (2026-10-07, v12.32.73) Guarda los hoteles en los que el proveedor NO
+    tiene servicio (ver proveedor_hoteles_sin_servicio en _auto_migrate()).
+    Reemplaza todas las filas del proveedor, mismo patrón que contactos y
+    rutas. Ids que no sean un hotel real y activo (basura, el de pruebas)
+    se ignoran en silencio. Devuelve el set de hotel_id realmente
+    guardados, para que _guardar_rutas_proveedor() descarte las rutas de
+    esos hoteles.
+    """
+    validos = {h["id"] for h in _hoteles_con_servicio_posibles()}
+    excluidos = set()
+    for hid in (hotel_ids or []):
+        try:
+            hid = int(hid)
+        except (TypeError, ValueError):
+            continue
+        if hid in validos:
+            excluidos.add(hid)
+    execute("DELETE FROM proveedor_hoteles_sin_servicio WHERE proveedor_id=%s", (proveedor_id,))
+    for hid in sorted(excluidos):
+        execute(
+            "INSERT INTO proveedor_hoteles_sin_servicio (proveedor_id, hotel_id) VALUES (%s,%s) "
+            "ON CONFLICT DO NOTHING",
+            (proveedor_id, hid)
+        )
+    return excluidos
+
+
+def _guardar_rutas_proveedor(proveedor_id: int, rutas: list, hoteles_excluidos=None) -> str:
     """
     (2026-10-02, revisado v12.32.71) Usada por create_proveedor/
     update_proveedor para guardar el rutómetro — a petición de Víctor:
@@ -10585,6 +10695,11 @@ def _guardar_rutas_proveedor(proveedor_id: int, rutas: list) -> str:
         try:
             hotel_id = int(r.get("hotel_id"))
         except (TypeError, ValueError):
+            continue
+        # (2026-10-07, v12.32.73) Un hotel marcado "sin servicio" no puede
+        # tener ciclos de pedido/reparto: el frontend ya lo avisa antes de
+        # guardar; esto es la red de seguridad si llegara igualmente.
+        if hoteles_excluidos and hotel_id in hoteles_excluidos:
             continue
         dias_pedido  = _normalizar_dias_semana(r.get("dias_pedido"))
         dias_reparto = _normalizar_dias_semana(r.get("dias_reparto"))
@@ -10690,7 +10805,8 @@ def create_proveedor():
     # Rutómetro — ver _guardar_rutas_proveedor(). Comprobado antes del
     # commit: si devuelve error, nada de lo anterior (proveedor + contactos
     # recién insertados) se llega a confirmar.
-    error_rutas = _guardar_rutas_proveedor(new_id, data.get("rutas", []))
+    excluidos = _guardar_hoteles_sin_servicio(new_id, data.get("hoteles_sin_servicio", []))
+    error_rutas = _guardar_rutas_proveedor(new_id, data.get("rutas", []), excluidos)
     if error_rutas:
         return jsonify({"error": error_rutas}), 400
     db.commit()
@@ -10804,7 +10920,19 @@ def update_proveedor(pid):
     # nombre/código, es logística operativa). Reemplaza todas las filas,
     # mismo patrón que proveedor_contactos justo arriba.
     execute("DELETE FROM proveedor_rutas WHERE proveedor_id=%s", (pid,))
-    error_rutas = _guardar_rutas_proveedor(pid, data.get("rutas", []))
+    # (2026-10-07, v12.32.73) Servicio por hotel: solo se toca si el payload
+    # trae la clave — un formulario antiguo cacheado en el navegador que no
+    # la envíe no debe borrar, sin querer, los hoteles ya marcados sin
+    # servicio.
+    if "hoteles_sin_servicio" in data:
+        excluidos = _guardar_hoteles_sin_servicio(pid, data.get("hoteles_sin_servicio"))
+    else:
+        excluidos = {
+            r["hotel_id"] for r in rows_to_list(query(
+                "SELECT hotel_id FROM proveedor_hoteles_sin_servicio WHERE proveedor_id=%s", (pid,)
+            ))
+        }
+    error_rutas = _guardar_rutas_proveedor(pid, data.get("rutas", []), excluidos)
     if error_rutas:
         return jsonify({"error": error_rutas}), 400
     db.commit()
@@ -22290,7 +22418,18 @@ def api_externo_dali_proveedores():
     fuente de este dato, igual que ya lo es de los contactos/email.
     `rutas` reutiliza tal cual lo que ya calcula `_prov_with_contactos()`
     para la propia ficha de proveedor de esta app (ver el Rutómetro,
-    v12.32.70/71) — un array vacío significa "sin rutómetro configurado"
+    v12.32.70/71).
+
+    (2026-10-07, v12.32.73) Cada proveedor trae además `hoteles_con_servicio`
+    y `hoteles_sin_servicio` (códigos de hotel, sin el de pruebas 'PR') — a
+    petición de Víctor, el rutómetro está activo por defecto en los 10
+    hoteles y quien administra o compra desmarca los que el proveedor no
+    cubre (ver proveedor_hoteles_sin_servicio en _auto_migrate()). Esa es
+    ahora la fuente que usa DALI para decidir qué proveedores ocultar:
+    `hoteles_sin_servicio` vacío = servicio en todos, sin restricción. El
+    comentario siguiente sobre `rutas` describe el criterio ANTERIOR (v12.32.72),
+    que DALI conserva solo como alternativa si este campo no viniera.
+    Antes: un array vacío de `rutas` significaba "sin rutómetro configurado"
     (Víctor: "si no tiene rutómetro activo, entonces no hay variación y
     se ven todos los artículos activos como hasta ahora"), nunca "cubre
     cero hoteles".
@@ -22300,6 +22439,17 @@ def api_externo_dali_proveedores():
     try:
         rows = query("SELECT id,codigo,nombre,observaciones FROM proveedores WHERE activo=1 ORDER BY nombre")
         result = _prov_with_contactos(rows)
+        # (2026-10-07, v12.32.73) Servicio por hotel: DALI recibe, por
+        # proveedor, los códigos de hotel CON y SIN servicio. Un proveedor
+        # con `hoteles_sin_servicio` vacío da servicio a todos (sin
+        # restricción en el catálogo). El hotel de pruebas 'PR' nunca
+        # entra: DALI no lo conoce.
+        _hoteles_posibles = _hoteles_con_servicio_posibles()
+        _codigo_por_id = {h["id"]: h["codigo"] for h in _hoteles_posibles}
+        _todos_codigos = [h["codigo"] for h in _hoteles_posibles]
+
+        def _codigos_sin_servicio(p):
+            return [_codigo_por_id[hid] for hid in p["hoteles_sin_servicio_ids"] if hid in _codigo_por_id]
         salida = [
             {
                 "nombre": p["nombre"],
@@ -22319,6 +22469,8 @@ def api_externo_dali_proveedores():
                     }
                     for r in p["rutas"]
                 ],
+                "hoteles_sin_servicio": _codigos_sin_servicio(p),
+                "hoteles_con_servicio": [c for c in _todos_codigos if c not in _codigos_sin_servicio(p)],
             }
             for p in result
         ]

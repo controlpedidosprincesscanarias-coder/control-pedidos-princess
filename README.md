@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.32.72** (ver `CHANGELOG.md` y
+> Versión actual: **v12.32.73** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -123,7 +123,13 @@ confundirse entre sí, ver más abajo):
   `GET /api/externo/dali-sap/proveedores`) para decidir, hotel a hotel, si
   los artículos de un proveedor siguen viéndose activos para los usuarios
   de ese hotel — un proveedor sin ningún rutómetro configurado no cambia
-  nada, se sigue viendo igual que antes en DALI.
+  nada, se sigue viendo igual que antes en DALI. Desde v12.32.73 esa
+  decisión sale del **servicio por hotel**: cada proveedor sirve por
+  defecto a los 10 hoteles (el hotel de pruebas PR no cuenta) y admin/
+  compras desmarcan en la ficha los hoteles sin servicio (tabla
+  `proveedor_hoteles_sin_servicio`, migración automática); el puente
+  devuelve `hoteles_sin_servicio`/`hoteles_con_servicio` y DALI oculta
+  los artículos del proveedor a los hoteles desmarcados.
 - **Comparar Pedidos + Albaranes (SAP)** (admin, botón "📄 Comparar
   listado PDF" — base desde 2026-08-06, ampliada desde entonces) — la
   herramienta admite subir hasta dos PDF que exporta SAP para un hotel:

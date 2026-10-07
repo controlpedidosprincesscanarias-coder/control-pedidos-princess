@@ -1,3 +1,22 @@
+# v12.32.73 — 7 octubre 2026
+
+🏨 Rutómetro: servicio por hotel activo por defecto en los 10 hoteles (alimenta el filtro de DALI)
+
+**Petición de Víctor** (verbatim): "necesito que en la ficha de proveedores el rutómetro se active por defecto a los 10 hoteles y que solo el admin o comprador desmarque aquel o aquellos hoteles que el proveedor no tenga servicio, de esta manera automáticamente se realiza el filtro de materiales en la aplicación Catálogo Asignaciones según proveedores con rutómetro activo".
+
+**Cambio**:
+- Nueva tabla `proveedor_hoteles_sin_servicio (proveedor_id, hotel_id)` con los hoteles donde el proveedor NO sirve. Sin filas = sirve a todos los hoteles (por defecto), y los hoteles nuevos nacen cubiertos. El hotel de pruebas `PR` nunca cuenta.
+- Ficha de proveedor (`templates/index.html`): nuevo bloque "🏨 Servicio por hotel" en el Rutómetro, con todos los hoteles marcados; admin/compras desmarcan los que no tienen servicio ("Marcar todos" los restablece). No se pueden definir días de pedido/reparto para un hotel sin servicio (aviso al guardar y descarte en backend). Badge `V 12.32.72` → `V 12.32.73`.
+- `app.py`: `create_proveedor`/`update_proveedor` guardan `hoteles_sin_servicio` (solo si el formulario lo envía: si no viene, se conserva lo guardado); `_prov_with_contactos` devuelve `hoteles_sin_servicio_ids`; el puente `GET /api/externo/dali-sap/proveedores` añade `hoteles_sin_servicio` y `hoteles_con_servicio` (códigos de hotel) por proveedor. Permisos sin cambios (editan admin y compras; hotel recibe 403).
+- Migración automática en `_auto_migrate()`, sin SQL manual: crea la tabla y, solo la primera vez, carga como "sin servicio" los hoteles activos sin ruta de los proveedores que ya tienen rutómetro, para que lo que ven hoy los hoteles en DALI no cambie. Los proveedores sin rutómetro quedan con servicio en todos los hoteles.
+- `models.py`: solo una nota (la tabla se crea desde `_auto_migrate`).
+
+**Despliegue**: desplegar esta app ANTES que DALI v1.20.36 (DALI antiguo sigue funcionando con la regla anterior por rutas).
+
+**Verificación**: probado contra PostgreSQL real (13 casos: backfill, PR ignorado, permisos, conservación sin clave, descarte de rutas, nuevo proveedor); `py_compile` limpio.
+
+---
+
 # v12.32.72 — 2 octubre 2026
 
 🌉 Puente DALI: el Rutómetro decide qué artículos ve activos cada usuario según su hotel

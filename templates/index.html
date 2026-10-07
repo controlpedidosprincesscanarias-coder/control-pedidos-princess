@@ -1408,7 +1408,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.72
+          V 12.32.73
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2737,6 +2737,28 @@ tbody tr:last-child{border-bottom:none}
         <label class="form-label" style="margin:0;font-weight:700">🚚 Rutómetro</label>
         <button type="button" class="btn btn-ghost btn-sm" onclick="rtAddRuta()"
                 style="padding:2px 10px;font-size:.82rem">+ Añadir ruta</button>
+      </div>
+      <!-- (2026-10-07, v12.32.73) SERVICIO POR HOTEL — Víctor: "que el -->
+      <!-- rutómetro se active por defecto a los 10 hoteles y que solo el -->
+      <!-- admin o comprador desmarque aquel o aquellos hoteles que el -->
+      <!-- proveedor no tenga servicio, de esta manera automáticamente se -->
+      <!-- realiza el filtro de materiales en la aplicación Catálogo -->
+      <!-- Asignaciones". Todo marcado por defecto; los DESMARCADOS se -->
+      <!-- guardan (proveedor_hoteles_sin_servicio) y son los hoteles -->
+      <!-- donde DALI oculta los artículos de este proveedor. -->
+      <div style="background:var(--bg-card,#f8f9fa);border:1px solid var(--border,#e2e8f0);border-radius:10px;padding:10px 12px;margin:0 0 10px 0">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:4px">
+          <span style="font-weight:700;font-size:.9rem">🏨 Servicio por hotel</span>
+          <span id="pv-servicio-resumen" style="font-size:.8rem;color:var(--text-secondary)"></span>
+          <button type="button" class="btn btn-ghost btn-sm" onclick="rtMarcarTodosServicio()"
+                  style="padding:1px 8px;font-size:.78rem;margin-left:auto">Marcar todos</button>
+        </div>
+        <div style="font-size:.78rem;color:var(--text-secondary);margin-bottom:8px">
+          Por defecto el proveedor da servicio a <strong>todos</strong> los hoteles. Desmarca los
+          hoteles donde <strong>NO</strong> tenga servicio: en el catálogo (Catálogo Asignaciones) los
+          usuarios de esos hoteles dejarán de ver los artículos de este proveedor.
+        </div>
+        <div id="pv-servicio-hoteles" data-listo="0" style="display:flex;flex-wrap:wrap;gap:6px 14px"></div>
       </div>
       <div style="font-size:.78rem;color:var(--text-secondary);margin:-2px 0 8px">
         Días de pedido y de reparto habituales de este proveedor, por hotel — información de
@@ -7592,6 +7614,61 @@ function rtSetRutas(rutas) {
     list.children.length ? 'none' : '';
 }
 
+/* ── Servicio por hotel (2026-10-07, v12.32.73) ──────────────────────
+   Casillas de los hoteles reales (sin el de pruebas 'PR') — TODAS marcadas
+   salvo las que vengan en `sinServicioIds` (proveedor_hoteles_sin_servicio,
+   ver _prov_with_contactos() en app.py). Lo que se guarda son los
+   DESMARCADOS. `data-listo` evita guardar una lista vacía por error si se
+   pulsa Guardar antes de que carguen los hoteles (ver
+   rtGetHotelesSinServicio()). */
+async function rtRenderServicio(sinServicioIds) {
+  const cont = document.getElementById('pv-servicio-hoteles');
+  cont.dataset.listo = '0';
+  cont.innerHTML = '<span style="color:#999;font-size:.78rem">Cargando hoteles…</span>';
+  const excluidos = new Set((sinServicioIds || []).map(Number));
+  const hoteles = (await _pvGetHoteles()).filter(h => h.codigo !== 'PR');
+  if (!hoteles.length) {
+    cont.innerHTML = '<span style="color:#999;font-size:.78rem">No hay hoteles disponibles</span>';
+    return;
+  }
+  cont.innerHTML = hoteles.map(h => `
+    <label style="display:flex;align-items:center;gap:5px;font-size:.85rem;cursor:pointer" title="${esc(h.nombre)}">
+      <input type="checkbox" class="rt-serv-chk" value="${h.id}" data-codigo="${esc(h.codigo)}"
+             ${excluidos.has(h.id) ? '' : 'checked'} onchange="rtActualizarResumenServicio()">
+      <strong>${esc(h.codigo)}</strong>
+    </label>`).join('');
+  cont.dataset.listo = '1';
+  rtActualizarResumenServicio();
+}
+function rtActualizarResumenServicio() {
+  const chks = Array.from(document.querySelectorAll('#pv-servicio-hoteles .rt-serv-chk'));
+  const resumen = document.getElementById('pv-servicio-resumen');
+  if (!chks.length) { resumen.textContent = ''; return; }
+  const con = chks.filter(c => c.checked).length;
+  if (con === 0) {
+    resumen.style.color = '#c0392b';
+    resumen.textContent = 'Sin servicio en ningún hotel: los artículos de este proveedor no se verán en el catálogo.';
+  } else if (con === chks.length) {
+    resumen.style.color = '';
+    resumen.textContent = `Servicio en los ${chks.length} hoteles`;
+  } else {
+    resumen.style.color = '';
+    resumen.textContent = `Servicio en ${con} de ${chks.length} hoteles`;
+  }
+}
+function rtMarcarTodosServicio() {
+  document.querySelectorAll('#pv-servicio-hoteles .rt-serv-chk').forEach(c => { c.checked = true; });
+  rtActualizarResumenServicio();
+}
+/* Devuelve los ids de hotel DESMARCADOS, o `undefined` si las casillas aún
+   no se han cargado — JSON.stringify omite `undefined`, así que el backend
+   conserva lo que ya hubiera guardado en vez de borrarlo. */
+function rtGetHotelesSinServicio() {
+  const cont = document.getElementById('pv-servicio-hoteles');
+  if (!cont || cont.dataset.listo !== '1') return undefined;
+  return Array.from(cont.querySelectorAll('.rt-serv-chk')).filter(c => !c.checked).map(c => parseInt(c.value));
+}
+
 function openProveedorModal(pid) {
   const p = _provCache[pid];
   if (!p) return;
@@ -7618,6 +7695,7 @@ function openProveedorModal(pid) {
   }
   pvSetContactos(p.contactos || []);
   rtSetRutas(p.rutas || []);
+  rtRenderServicio(p.hoteles_sin_servicio_ids || []);
   document.getElementById('pv-obs').value = p.observaciones||'';
   document.getElementById('pv-sujeto-seguimiento').checked = p.sujeto_seguimiento === true;
   _pvAplicarPermisoSeguimiento(isAdmin);
@@ -7657,6 +7735,7 @@ function openNuevoProveedorModal() {
   setVal('pv-codigo-dali-input', '');
   pvSetContactos([]);
   rtSetRutas([]);
+  rtRenderServicio([]); // proveedor nuevo: servicio en todos los hoteles por defecto
   document.getElementById('pv-obs').value = '';
   document.getElementById('pv-sujeto-seguimiento').checked = false;
   _pvAplicarPermisoSeguimiento(G.rol === 'admin');
@@ -7682,7 +7761,28 @@ async function saveProveedor() {
     sujeto_seguimiento: document.getElementById('pv-sujeto-seguimiento').checked,
     contactos:     pvGetContactos(),
     rutas:         rtGetRutas(),
+    hoteles_sin_servicio: rtGetHotelesSinServicio(),
   };
+
+  // (2026-10-07, v12.32.73) Un hotel sin servicio no puede tener ciclos de
+  // pedido/reparto — se avisa antes de guardar en vez de descartarlos en
+  // silencio (el backend los descartaría igualmente como red de seguridad).
+  if (body.hoteles_sin_servicio && body.hoteles_sin_servicio.length) {
+    const conflictivos = [...new Set(body.rutas
+      .filter(r => body.hoteles_sin_servicio.includes(r.hotel_id))
+      .map(r => {
+        const chk = document.querySelector(`#pv-servicio-hoteles .rt-serv-chk[value="${r.hotel_id}"]`);
+        return chk ? chk.dataset.codigo : String(r.hotel_id);
+      }))];
+    if (conflictivos.length) {
+      showFormAlert(
+        `Hay rutas de pedido/reparto para hoteles marcados SIN servicio (${conflictivos.join(', ')}). ` +
+        'Elimina esas rutas o vuelve a marcar el hotel en "Servicio por hotel".',
+        { title: '⚠️ Rutómetro incoherente' }
+      );
+      return;
+    }
+  }
 
   if (isNew) {
     const nombre = val('pv-nombre-input');

@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos / DALI] Rutómetro: servicio por hotel activo por defecto en los 10 hoteles (v12.32.73)
+
+- **Origen**: Víctor, verbatim: "necesito que en la ficha de proveedores el rutómetro se active por defecto a los 10 hoteles y que solo el admin o comprador desmarque aquel o aquellos hoteles que el proveedor no tenga servicio, de esta manera automáticamente se realiza el filtro de materiales en la aplicación Catálogo Asignaciones según proveedores con rutómetro activo".
+- **Hallazgo**: hasta v12.32.72 "tiene rutómetro" equivalía a "tiene filas en `proveedor_rutas`", así que para que DALI filtrara había que crear una ruta por hotel, y un proveedor nuevo no filtraba por omisión. Los días de pedido/reparto y el servicio por hotel son cosas distintas.
+- **Corrección**: tabla `proveedor_hoteles_sin_servicio` (exclusiones: sin filas = todos los hoteles, y los hoteles nuevos nacen cubiertos); bloque "Servicio por hotel" en la ficha con todo marcado por defecto; guardado en `create_proveedor`/`update_proveedor` (si el formulario no manda la clave, se conserva lo guardado, para no borrar datos desde una página en caché); rutas de hoteles sin servicio rechazadas en formulario y backend; el puente DALI devuelve `hoteles_sin_servicio`/`hoteles_con_servicio`. El hotel `PR` queda fuera. Migración y carga inicial automáticas en `_auto_migrate()` (una sola vez, conserva las restricciones actuales: hoteles activos sin ruta de proveedores con rutómetro).
+- **Ficheros editados en este repo**: `app.py`, `models.py` (solo nota), `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: `GUIA_DESPLIEGUE.md` y similares no existen/no afectan: sin variables de entorno nuevas ni SQL manual.
+- **Despliegue**: primero esta app, después DALI v1.20.36.
+
+---
+
 ## 2026-10-02 — [Control Pedidos / DALI] El Rutómetro decide qué artículos ve activos cada usuario según su hotel (v12.32.72)
 
 - **Origen**: Víctor, verbatim: "necesito que cada usuario solo vea activo
