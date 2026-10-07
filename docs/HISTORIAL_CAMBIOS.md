@@ -49,6 +49,16 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] Total Pedido del PDF oficial: "REAL · SIN IGIC" en lugar de "≈ aproximado" (v12.32.77)
+
+- **Origen**: Víctor: "detalle, si la lectura es del pedido real, ya el total no es aproximado, es real sin igic" (captura con 9196,44 € marcado ≈ APROXIMADO).
+- **Hallazgo**: la marca `total_pedido_aproximado` solo se limpiaba al subir el PDF o al comparar el listado resumido; con el PDF ya cargado (o líneas leídas después, v12.32.75) quedaba visible aunque el total fuera el del PDF.
+- **Corrección**: `get_lineas_pedido` fija total real (suma de líneas = base sin IGIC) y limpia la marca cuando hay PDF oficial con líneas cuadradas; etiqueta verde "✔ REAL · SIN IGIC" en el formulario (ver CHANGELOG v12.32.77).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables nuevas ni SQL manual; resto de documentos de mantenimiento: no aplica.
+
+---
+
 ## 2026-10-07 — [Control Pedidos] Buscador de artículos en pedidos: hotel + referencia → nº pedido, cantidad y estado (v12.32.76)
 
 - **Origen**: Víctor: "seria interezante un buscador en el que podamos buscar por hotel y referencia, nos indique nuemero de pedido, cantidad y estado".

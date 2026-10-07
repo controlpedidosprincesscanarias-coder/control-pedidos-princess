@@ -1411,7 +1411,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.76
+          V 12.32.77
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2518,6 +2518,7 @@ tbody tr:last-child{border-bottom:none}
             <span style="font-size:10px;color:#888;font-weight:400"> (automático)</span>
           </label>
           <span id="p-total-pedido-aprox-badge" hidden title="Este importe NO viene del Listado de Pedidos RESUMIDO de SAP — es una suma aproximada de las líneas del Listado DETALLADO, puede no coincidir al céntimo con el importe real de SAP. Se corrige sola en cuanto se compare el listado RESUMIDO." style="display:inline-block;background:#fff3cd;border:1px solid #ffc107;color:#7a5b00;border-radius:4px;font-size:10px;padding:1px 5px;margin-left:4px;font-weight:700">≈ APROXIMADO</span>
+          <span id="p-total-pedido-real-badge" hidden title="Importe leído del PDF del pedido oficial PRINCESS: es la base del pedido, sin IGIC." style="display:inline-block;background:#e6f4ea;border:1px solid #81c995;color:#1e6b34;border-radius:4px;font-size:10px;padding:1px 5px;margin-left:4px;font-weight:700">✔ REAL · SIN IGIC</span>
           <input class="form-control" type="number" id="p-total-pedido" min="0" step="0.01" placeholder="Se rellena al adjuntar el PDF" readonly style="background:#f5f5f5;color:#555">
           <div style="font-size:10.5px;color:#888;margin-top:4px">
             Se rellena al adjuntar el PDF del pedido oficial (suma de las líneas de importe) y se corrige solo, si hiciera falta, al comparar el "Listado de Pedidos" PDF de SAP.
@@ -5417,6 +5418,7 @@ async function openPedidoModal(id=null) {
     setVal('p-presup', p.presupuesto_num);
     setVal('p-total-pedido', p.total_pedido != null ? Number(p.total_pedido).toFixed(2) : '');
     document.getElementById('p-total-pedido-aprox-badge').hidden = !p.total_pedido_aproximado;
+    document.getElementById('p-total-pedido-real-badge').hidden = true;   // se muestra al leer las líneas del PDF (cargarLineasPedido)
     document.getElementById('chk-tarifa-acordada').checked = !!p.tarifa_acordada;
     onTarifaAcordadaChange();
     setVal('p-estado', p.estado);
@@ -5741,6 +5743,7 @@ async function subirAdjuntos(input, tipo) {
           setVal('p-pedido-num', data.pedido_num);
           setVal('p-total-pedido', data.total_pedido != null ? Number(data.total_pedido).toFixed(2) : '');
           document.getElementById('p-total-pedido-aprox-badge').hidden = true;  // el PDF oficial siempre es el importe real
+          document.getElementById('p-total-pedido-real-badge').hidden = false;
           toast(`PDF leído — Nº Pedido ${data.pedido_num}, Total ${Number(data.total_pedido).toFixed(2)} €` + (data.lineas_leidas ? `, ${data.lineas_leidas} líneas` : ''), 'success');
           if (!data.lineas_leidas && data.lineas_aviso) toast('⚠️ ' + data.lineas_aviso, '', 6000);
           cargarLineasPedido();
@@ -6568,8 +6571,20 @@ async function cargarLineasPedido(forzar = false) {
   try { d = await api(`/api/pedidos/${id}/lineas${forzar ? '?releer=1' : ''}`); }
   catch (e) { d = null; }
   if (req !== _lineasPedidoReq || G.editingPedidoId !== id) return;   // llegó tarde: otro pedido o recarga
-  if (!d || !d.ok || !d.tiene_pdf) { panel.style.display = 'none'; panel.innerHTML = ''; return; }
+  if (!d || !d.ok || !d.tiene_pdf) {
+    panel.style.display = 'none'; panel.innerHTML = '';
+    if (d && d.ok) { const _b = document.getElementById('p-total-pedido-real-badge'); if (_b) _b.hidden = true; }   // sin PDF oficial: no es el total del PDF
+    return;
+  }
   const n = (d.lineas || []).length;
+  // (v12.32.77) Líneas leídas del PDF oficial = total real (base, sin IGIC): se quita "≈ aproximado".
+  const _bReal = document.getElementById('p-total-pedido-real-badge');
+  const _bAprox = document.getElementById('p-total-pedido-aprox-badge');
+  if (d.total_real_pdf) {
+    if (_bReal) _bReal.hidden = false;
+    if (_bAprox) _bAprox.hidden = true;
+    if (d.total_corregido && d.total_importe != null) setVal('p-total-pedido', Number(d.total_importe).toFixed(2));
+  } else if (_bReal) { _bReal.hidden = true; }
   if (!n) {
     panel.innerHTML = `<div style="font-size:11px;color:#7a5b00;background:#fff8e1;border:1px solid #ffe08a;border-radius:6px;padding:6px 8px">
       ⚠️ ${_htmlLinea(d.aviso || 'No hay líneas guardadas para este pedido.')}
@@ -6682,6 +6697,7 @@ async function leerLineasPendientes(btn) {
 function clearPedidoForm() {
   ['p-hotel','p-depto','p-pedido-num','p-presup','p-total-pedido','p-observaciones','p-nota','p-plazo-entrega','p-fecha-entrega-especifica'].forEach(id=>setVal(id,''));
   document.getElementById('p-total-pedido-aprox-badge').hidden = true;
+  document.getElementById('p-total-pedido-real-badge').hidden = true;
   _lineasPedidoReq++;   // descarta cualquier carga de líneas en curso
   const _lp = document.getElementById('pedido-lineas-panel');
   if (_lp) { _lp.style.display = 'none'; _lp.innerHTML = ''; }

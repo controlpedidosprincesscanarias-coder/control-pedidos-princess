@@ -1,3 +1,19 @@
+# v12.32.77 — 7 octubre 2026
+
+✔ Total Pedido leído del PDF oficial: ya no sale "≈ aproximado", sale "REAL · SIN IGIC"
+
+**Petición de Víctor**: "detalle, si la lectura es del pedido real, ya el total no es aproximado, es real sin igic".
+
+**Causa**: la marca "≈ APROXIMADO" la pone el alta desde el Listado detallado de SAP y solo se quitaba al subir el PDF (o al comparar el listado resumido). Un pedido con la marca puesta cuyo PDF ya estaba cargado (o cuyas líneas se leían después, v12.32.75) seguía mostrándola aunque el total ya coincidiera con el del PDF.
+
+**Cambio**:
+- `app.py` (`GET /api/pedidos/<id>/lineas`): si el pedido tiene PDF oficial con líneas leídas (solo se guardan si cuadran con el Total Pedido del PDF) y su total seguía marcado aproximado, se fija el total real (suma de las líneas = base del PDF, sin IGIC) y se quita la marca. Devuelve `total_real_pdf` y `total_corregido`.
+- `templates/index.html`: junto al Total Pedido, nueva etiqueta verde **✔ REAL · SIN IGIC** cuando el total procede del PDF oficial (al abrir el pedido, al subir el PDF y al releer); desaparece la de "≈ APROXIMADO". Sin PDF oficial no se muestra. Badge `V 12.32.76` → `V 12.32.77`.
+
+**Verificación**: PostgreSQL real con el PDF del pedido 41826: pedido con 4.403,12 € aproximado → pasa a 9.196,44 € real sin marca; segunda apertura no vuelve a tocarlo; el rol hotel no recibe importes y también dispara la corrección. Sin SQL manual.
+
+---
+
 # v12.32.76 — 7 octubre 2026
 
 🔎 Nuevo buscador de artículos en los pedidos: por hotel y referencia, con nº de pedido, cantidad y estado

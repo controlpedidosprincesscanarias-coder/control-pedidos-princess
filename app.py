@@ -20018,14 +20018,29 @@ def get_lineas_pedido(pid):
     for f in filas:
         for k in ("cantidad", "precio", "importe"):
             f[k] = float(f[k]) if f[k] is not None else None
-        if es_hotel:   # igual que el importe del pedido: los precios no se enseñan al hotel
+    suma_importes = round(sum((f["importe"] or 0) for f in filas), 2)
+    # (v12.32.77) Si el pedido tiene el PDF oficial leído (las líneas solo se
+    # guardan cuando cuadran con el Total Pedido del PDF) pero su total seguía
+    # marcado "≈ aproximado" (p. ej. se dio de alta desde el Listado detallado
+    # de SAP), el PDF manda: total real (base, sin IGIC) y se quita la marca.
+    total_corregido = False
+    if adj and filas and suma_importes > 0:
+        marca = query("SELECT total_pedido_aproximado FROM pedidos WHERE id=%s", (pid,), one=True)
+        if marca and marca["total_pedido_aproximado"]:
+            execute("UPDATE pedidos SET total_pedido=%s, total_pedido_aproximado=FALSE WHERE id=%s", (suma_importes, pid))
+            get_db().commit()
+            total_corregido = True
+    if es_hotel:   # igual que el importe del pedido: los precios no se enseñan al hotel
+        for f in filas:
             f["precio"] = None
             f["importe"] = None
     return jsonify({
         "ok": True,
         "tiene_pdf": adj is not None,
         "lineas": filas,
-        "total_importe": None if es_hotel else round(sum((f["importe"] or 0) for f in filas), 2),
+        "total_importe": None if es_hotel else suma_importes,
+        "total_real_pdf": bool(adj and filas),
+        "total_corregido": total_corregido and not es_hotel,
         "aviso": aviso,
     })
 
