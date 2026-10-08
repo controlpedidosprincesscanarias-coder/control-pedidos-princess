@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-08 — [Control Pedidos] Reclamación manual al proveedor firmada por quien la realiza (v12.32.88)
+
+- **Origen**: Víctor (pedido 40907, GY): la reclamación salía firmada como «Vacante»; debe firmar quien la realiza, sea admin o usuario de hotel, tenga o no el hotel asignado.
+- **Hallazgo**: `_build_alerta_email` usaba siempre el primer comprador del hotel (firma y Reply-To); sin comprador con email la reclamación manual no se podía preparar.
+- **Corrección**: `_firmante_usuario_sesion()` + parámetro `firmante` (vista previa manual); Reply-To del envío manual = firmante; automáticas sin cambios (ver CHANGELOG v12.32.88).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; resto: no aplica.
+- **Pendiente / ideas**: revisar el puesto «Vacante» del hotel (a quién debe firmar la reclamación automática cuando el comprador asignado es un puesto vacante).
+
+---
+
 ## 2026-10-08 — [Control Pedidos] Aviso interno de entrega parcial: enlace al pedido en la app y referencias pendientes (v12.32.87)
 
 - **Origen**: Víctor: que el aviso interno a los departamentos por entrega parcial lleve el enlace al pedido y qué referencias y cantidades quedan pendientes.

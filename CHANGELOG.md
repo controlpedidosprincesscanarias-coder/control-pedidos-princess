@@ -1,3 +1,19 @@
+# v12.32.88 — 8 octubre 2026
+
+✍️ Reclamación manual al proveedor: firma (y Reply-To) de quien la realiza, tenga o no el hotel asignado
+
+**Petición de Víctor** (verbatim, con captura del pedido 40907 de GY en ENTREGA PARCIAL, firmado como «Vacante»): "tenemos que tener cuidado con esto, las reclamaciones a proveedores deberían salir con la firma del usuario que esté realizando la misma, ya sea admin como hotel, independientemente que tenga o no asignado el hotel".
+
+**Causa**: `_build_alerta_email` firmaba siempre con el primer comprador asignado al hotel — aquí un puesto «Vacante» — y el Reply-To del envío manual salía del mismo comprador. Además, si el hotel no tenía ningún comprador con email, la reclamación manual ni se podía preparar («No hay plantilla para este estado»).
+
+**Cambio**:
+- `app.py`: nueva `_firmante_usuario_sesion()` y parámetro `firmante` en `_build_alerta_email`. En la ventana «Notificación de alerta» (vista previa/envío manual, también «Re-notificar») firma la persona que está realizando la reclamación — administrador, comprador o usuario de hotel — con su nombre, email y móvil, tenga o no asignado el hotel del pedido. Si no tiene email (o no está activa), se firma como siempre con el comprador del hotel. El comprador asignado sigue en copia (CC). Sin comprador asignado, la reclamación manual ahora sale igualmente, firmada por quien la hace.
+- `templates/index.html`: el **Reply-To** del envío manual es el email del firmante (antes, el del comprador del hotel), así la respuesta del proveedor llega a quien reclama. Badge `V 12.32.87` → `V 12.32.88`. README: línea de versión.
+- Reclamaciones **automáticas** (sin nadie delante): sin cambios, firma el comprador responsable del hotel.
+- La firma sigue llevando el bloque fijo «Dpto. Central de Compras Canarias» + dirección, también cuando firma un usuario de hotel.
+
+**Verificación** (PostgreSQL real, pedido en ENTREGA PARCIAL de un hotel cuyo comprador asignado es «Vacante»): administrador y usuario de hotel → firman con su nombre, no «Vacante»; su email queda como firmante/Reply-To; el comprador asignado sigue en CC; usuario sin email → firma el comprador asignado; automática → sin cambios; hotel sin comprador asignado → la manual sale firmada por quien la hace y la automática se omite como siempre.
+
 # v12.32.87 — 8 octubre 2026
 
 🔗 Aviso interno de entrega parcial: enlace directo al pedido en la app y referencias pendientes (también en texto)

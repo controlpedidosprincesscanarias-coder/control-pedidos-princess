@@ -1425,7 +1425,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.87
+          V 12.32.88
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -13314,8 +13314,9 @@ async function meaEnviarEmail() {
     // `_meaData.compradores` (la lista de compradores del hotel que ya
     // trae el preview del servidor, ver alerta_email_preview en app.py —
     // estable, no se toca al editar la copia oculta) en vez de `ccList`.
-    if (_meaData.es_proveedor && _meaData.compradores && _meaData.compradores.length) {
-      const _comprador0 = _meaData.compradores[0];
+    if (_meaData.es_proveedor && ((_meaData.firmante && _meaData.firmante.email) || (_meaData.compradores && _meaData.compradores.length))) {
+      // (v12.32.88) El Reply-To es quien firma la reclamación (el usuario que la realiza); si no hay, el comprador del hotel.
+      const _comprador0 = (_meaData.firmante && _meaData.firmante.email) ? _meaData.firmante : _meaData.compradores[0];
       const _replyToComprador = (_comprador0.email || '').trim();
       // (2026-09-16) Misma red de seguridad que en el envío automático
       // (ver _replyToSeguro / EMAIL_GMAIL_COMPARTIDO_PROHIBIDO_REPLY_TO) --

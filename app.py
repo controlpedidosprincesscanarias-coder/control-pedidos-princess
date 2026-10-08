@@ -7856,10 +7856,35 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
     """
     return subject, body
 
-def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
+def _firmante_usuario_sesion():
+    """(v12.32.88) Quien firma una reclamación MANUAL: el usuario que la está realizando (la sesión), sea
+    administrador, comprador o usuario de hotel, y tenga o no asignado el hotel del pedido. Devuelve
+    {nombre, email, movil} o None si el usuario no está activo o no tiene email (entonces se firma como siempre:
+    el comprador responsable del hotel)."""
+    uid = session.get("user_id")
+    if not uid:
+        return None
+    try:
+        u = row_to_dict(query(
+            "SELECT nombre, email, movil FROM usuarios WHERE id=%s AND activo=1 "
+            "AND email IS NOT NULL AND TRIM(email) != ''", (uid,), one=True))
+    except Exception as exc:
+        log.warning("[EMAIL] No se pudo leer el firmante de la sesión (usuario %s): %s", uid, exc)
+        return None
+    if not u:
+        return None
+    return {"nombre": u.get("nombre") or "", "email": u["email"].strip(), "movil": u.get("movil") or ""}
+
+
+def _build_alerta_email(pedido: dict, dias: int, nivel: str, firmante: dict = None) -> tuple:
     """Selecciona la plantilla correcta según el estado del pedido y devuelve
     (subject, body, es_proveedor, comprador_email).
-    Devuelve (None, None, False, None) si no hay comprador con email asignado al hotel.
+    Devuelve (None, None, False, None) si no hay nadie que pueda firmar.
+
+    v12.32.88: `firmante` ({nombre, email, movil}) = la persona que realiza la reclamación a mano; si se
+    indica, firma ella (y es el Reply-To) en vez del comprador asignado al hotel — que puede ser un puesto
+    «Vacante» o ser otra persona distinta de quien lleva el pedido. Sin `firmante` (reclamaciones automáticas,
+    sin nadie delante) se firma como siempre con el comprador responsable del hotel.
 
     v12.32.44: se añade comprador_email al tuple de retorno — ya se
     calculaba internamente para la firma del correo, pero no se exponía al
@@ -7870,14 +7895,19 @@ def _build_alerta_email(pedido: dict, dias: int, nivel: str) -> tuple:
     estado    = pedido.get("estado", "")
     urgente   = nivel == "urgente"
     # Obtener email del comprador responsable del hotel para incluir en la firma
-    _compradores = _get_compradores_cc(pedido.get("hotel_codigo",""))
-    if not (_compradores and _compradores[0].get("email")):
-        log.warning("[ALERTA EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email de alerta omitido",
-                    pedido.get("id"), pedido.get("hotel_codigo",""))
-        return None, None, False, None
-    _comprador_email  = _compradores[0]["email"]
-    _comprador_nombre = _compradores[0].get("nombre") or ""
-    _comprador_movil  = _compradores[0].get("movil") or ""
+    if firmante and firmante.get("email"):
+        _comprador_email  = firmante["email"]
+        _comprador_nombre = firmante.get("nombre") or ""
+        _comprador_movil  = firmante.get("movil") or ""
+    else:
+        _compradores = _get_compradores_cc(pedido.get("hotel_codigo",""))
+        if not (_compradores and _compradores[0].get("email")):
+            log.warning("[ALERTA EMAIL] Pedido %s: no hay comprador con email asignado al hotel %s — email de alerta omitido",
+                        pedido.get("id"), pedido.get("hotel_codigo",""))
+            return None, None, False, None
+        _comprador_email  = _compradores[0]["email"]
+        _comprador_nombre = _compradores[0].get("nombre") or ""
+        _comprador_movil  = _compradores[0].get("movil") or ""
     if estado == "ENVIADO AL PROVEEDOR":
         s, b = _email_template_enviado_proveedor(pedido, dias, urgente, _comprador_email,
                                                    _comprador_nombre, _comprador_movil)
@@ -8176,7 +8206,9 @@ def alerta_email_preview(pedido_id):
     if not pedido:
         return jsonify({"error": "Pedido no encontrado"}), 404
 
-    subject, body_html, es_proveedor, _ = _build_alerta_email(pedido, dias, nivel)
+    # (v12.32.88) Reclamación MANUAL: firma (y recibe las respuestas) quien la realiza.
+    firmante = _firmante_usuario_sesion()
+    subject, body_html, es_proveedor, _ = _build_alerta_email(pedido, dias, nivel, firmante=firmante)
     if not subject:
         return jsonify({"error": "No hay plantilla para este estado"}), 400
 
@@ -8222,6 +8254,7 @@ def alerta_email_preview(pedido_id):
         "to_nombre":     to_nombre,
         "cc_emails":     cc_emails,
         "compradores":   compradores,
+        "firmante":      firmante,   # (v12.32.88) quien firma y recibe las respuestas
         "subject":       subject,
         "body_html":     body_html,
         "wa_text":       wa_text,
