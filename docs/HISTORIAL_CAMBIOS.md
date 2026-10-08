@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-08 — [Control Pedidos] Ventana de referencias de la entrada: cantidad editable sin marcar la referencia (v12.32.85)
+
+- **Origen**: Víctor: en la entrada parcial 101417 no podía cambiar 10 por 5 uds en la primera referencia.
+- **Hallazgo**: el input de cantidad (`.mel-cant`) estaba `disabled` mientras la casilla no estuviera marcada (v12.32.82).
+- **Corrección**: input siempre editable (salvo solo lectura); escribir una cantidad > 0 marca la referencia; desmarcar conserva el valor (ver CHANGELOG v12.32.85). Solo `templates/index.html`.
+- **Ficheros editados en este repo**: `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; resto: no aplica.
+- **Pendiente / ideas**: ninguna nueva.
+
+---
+
 ## 2026-10-08 — [Control Pedidos] Líneas del PDF oficial: códigos de artículo de 7 cifras (v12.32.84)
 
 - **Origen**: Víctor adjuntó el PDF del pedido 41866 (Guayarmina, Dorta): Nº y Total bien, pero aviso de que las líneas no se podían leer con fiabilidad.

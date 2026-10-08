@@ -1,3 +1,15 @@
+# v12.32.85 — 8 octubre 2026
+
+🔧 Ventana «Referencias de la entrada»: la cantidad se puede escribir aunque la referencia no esté marcada
+
+**Aviso de Víctor**: en una entrada parcial (entrada 101417) el proveedor entregó solo 5 de las 10 uds de la primera referencia, y en la ventana no se podía cambiar el 10 por un 5.
+
+**Causa**: el campo de cantidad estaba bloqueado (`disabled`) mientras la referencia no estuviera marcada, y el valor mostrado por defecto era todo lo pendiente (10), así que parecía editable pero no dejaba escribir.
+
+**Cambio** (`templates/index.html`): el campo de cantidad ya no se bloquea nunca (salvo en solo lectura, entrega cerrada). Al escribir una cantidad mayor que 0 en una referencia sin marcar, **se marca sola**. Si se desmarca, la cantidad escrita se conserva (el campo se ve atenuado) y, si se vuelve a marcar, sigue ahí. Badge `V 12.32.84` → `V 12.32.85`; README: línea de versión. Sin cambios en `app.py`.
+
+**Verificación** (navegador de prueba): referencia sin marcar → escribir 5 → se marca sola, «Quedan» pasa a 5 → desmarcar/marcar conserva el 5 → Confirmar guarda `{00023737: 5}` → al reabrir viene marcada con 5.
+
 # v12.32.84 — 8 octubre 2026
 
 🔧 Líneas del PDF oficial: artículos con código de 7 cifras ya se leen (pedido 41866)
