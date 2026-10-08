@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-07 — [Control Pedidos] Revisión obligatoria del estado tras leer el PDF oficial y fecha + archivo en los estados de firma (v12.32.83)
+
+- **Origen**: Víctor: al cargarse bien el PDF oficial, ventana que confirme la carga y obligue a revisar el estado antes de guardar (¿ENVIADO AL PROVEEDOR u otro?); si se marca pendiente de firma (Compras, Hotel o Dirección General), debe haber fecha y archivo en «enviado para firma», y lo mismo si el estado se cambia a mano.
+- **Hallazgo**: la sección «enviado para firma» es «Fecha de envío para Vº Bº» (`fecha_envio_visto_bueno`) + adjuntos `vb_eml`; hasta ahora no era obligatoria para ningún estado. Nuevo problema detectado de paso: los ZIP de v12.32.81 y v12.32.82 llevaban `README.md` vacío (0 bytes).
+- **Corrección**: ventana bloqueante (no usa `.modal-overlay`, para que Escape/clic fuera no la cierren) con elección obligatoria de estado; ventana «Envío para firma» que pide y sube fecha + archivo; comprobación en `savePedido`; validación 422 en `update_pedido` solo al cambiar de estado; README restaurado desde v12.32.80 (ver CHANGELOG v12.32.83).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md` (restaurado), `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL manual; resto de documentos de mantenimiento: no aplica.
+- **Pendiente / ideas**: copiar al comprador responsable en los correos cuando firma otra persona; mostrar lo pendiente en el correo de entrega parcial; exportar a Excel los faltantes.
+
+---
+
 ## 2026-10-07 — [Control Pedidos] Detalle opcional de referencias entregadas por entrada y dónde está la diferencia de importe (v12.32.82)
 
 - **Origen**: Víctor: poder marcar, de forma opcional, las referencias y unidades entregadas en una entrada parcial (confirmando en pantalla y cambiando la cantidad) para ajustar y diagnosticar faltantes; y, en la entrega total con importe distinto del pedido, poder indicar dónde está la diferencia.

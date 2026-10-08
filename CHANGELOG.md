@@ -1,3 +1,17 @@
+# v12.32.83 — 7 octubre 2026
+
+🧭 Tras cargar el PDF oficial: revisión obligatoria del estado, y los estados de firma exigen fecha y archivo
+
+**Petición de Víctor** (verbatim): "cuando se carga el PDF oficial del pedido y se lea correctamente, le lance una ventana al usuario indicando que el pedido se ha cargado correctamente y preguntar si desea cambiar el estado a ENVIADO AL PROVEEDOR o a cuál, la idea es una vez cargado obligar a revisar el estado antes de guardar el pedido. Si lo que se marca es pendiente firma de dirección, debe verificar que en el apartado de enviado para firma, debe contener una fecha y un archivo adjunto que contemple este estado, igualmente si durante el proceso de creación del pedido se cambia el estado manualmente a pendiente de firma de cualquiera DIRECTORES O GENERAL, también se solicite esta fecha y documento si ya no existe".
+
+**Cambio**:
+- `templates/index.html`: al leerse bien el PDF oficial (no rol hotel) se abre la ventana **«Pedido cargado correctamente»** con Nº de pedido, total sin IGIC, líneas, proveedor (avisa si no está reconocido) y estado actual. Hay que elegir una opción (sin ninguna marcada de entrada; «Aceptar» desactivado hasta elegir): ENVIADO AL PROVEEDOR, PENDIENTE FIRMA DIRECCION COMPRAS, PENDIENTE DE FIRMA DIRECCION HOTEL, PENDIENTE Vº Bº DIRECCIÓN GENERAL, otro estado, o «mantener el estado actual». No se cierra con Escape ni con clic fuera. El estado elegido se pone en el formulario (se aplica al pulsar Guardar); si por cualquier motivo no se hubiera confirmado, «Guardar» vuelve a abrir la ventana.
+- Estados de firma (los tres PENDIENTE …): si falta la **Fecha de envío para Vº Bº** o el **archivo** (correo .eml/.msg o PDF) en esa sección, se abre la ventana «Envío para firma», que pide la fecha (por defecto hoy) y el archivo, lo sube y rellena la fecha. Se aplica tanto al elegirlo en la ventana de arriba como al cambiar el desplegable de estado a mano, y de nuevo al guardar. Si se cancela, el estado vuelve al guardado. Si el pedido aún no está guardado, avisa de guardarlo primero (no se pueden adjuntar archivos antes).
+- `app.py`: comprobación de seguridad en `PUT /api/pedidos/<id>`: pasar a uno de esos estados sin fecha o sin adjunto `vb_eml` → 422 con el mensaje de qué falta. Solo al cambiar de estado (un pedido que ya está en él no se bloquea). Badge `V 12.32.82` → `V 12.32.83`.
+- **README.md**: restaurado. Las entregas v12.32.81 y v12.32.82 llevaban por error un README vacío (0 bytes); se recupera el de v12.32.80 con la línea de versión actualizada. **Si copiaste el README de esas dos entregas sobre el tuyo, sustitúyelo por este.**
+
+**Verificación**: PostgreSQL real — los tres estados sin datos → 422; solo fecha → 422; solo archivo → 422; fecha + archivo → 200; mismo estado sin tocar → 200; volver a cotización → 200. Interfaz en navegador: Escape no cierra, «Aceptar» desactivado hasta elegir, firma sin datos pide fecha y archivo (errores de campo vacío, subida, fecha rellenada), cancelar vuelve a la elección o revierte el estado, con datos completos no pregunta, pedido sin guardar avisa.
+
 # v12.32.82 — 7 octubre 2026
 
 📋 Entrada parcial/total: detalle OPCIONAL de qué referencias y cuántas unidades llegaron, y dónde está la diferencia de importe

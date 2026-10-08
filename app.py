@@ -17630,6 +17630,18 @@ def update_pedido(pid):
     estado_antes = pedido_actual["estado"]
     estado_nuevo = data.get("estado", estado_antes)
 
+    # (v12.32.83) Cambio a un estado de firma (directores / general): exige fecha de envío
+    # para Vº Bº y su correo/PDF adjunto. Solo al CAMBIAR de estado, para no bloquear
+    # pedidos que ya estaban en ese estado.
+    if estado_nuevo in ESTADOS_PENDIENTE_FIRMA and estado_nuevo != estado_antes:
+        _faltan_firma = _faltan_datos_envio_firma(
+            pid, data.get("fecha_envio_visto_bueno", pedido_actual.get("fecha_envio_visto_bueno")))
+        if _faltan_firma:
+            return jsonify({
+                "ok": False,
+                "error": f"Para pasar a «{estado_nuevo}» hace falta indicar " + " y ".join(_faltan_firma) + ".",
+            }), 422
+
     sujeto_techo = data.get("sujeto_techo", pedido_actual.get("sujeto_techo", 0))
     sujeto_techo = 1 if sujeto_techo else 0
     familia_id   = data.get("familia_id", pedido_actual.get("familia_id"))
@@ -20393,6 +20405,27 @@ def get_lineas_pedido(pid):
         "total_corregido": total_corregido and not es_hotel,
         "aviso": aviso,
     })
+
+
+# (v12.32.83) Estados "pendiente de firma" (directores / dirección general): al pasar un
+# pedido a cualquiera de ellos hace falta haber indicado la «Fecha de envío para Vº Bº» y
+# adjuntar el correo/PDF de ese envío.
+ESTADOS_PENDIENTE_FIRMA = (
+    "PENDIENTE FIRMA DIRECCION COMPRAS",
+    "PENDIENTE DE FIRMA DIRECCION HOTEL",
+    "PENDIENTE Vº Bº DIRECCIÓN GENERAL",
+)
+
+def _faltan_datos_envio_firma(pid, fecha_vb) -> list:
+    """Lista de lo que falta para pasar a un estado de firma: fecha de envío para
+    Vº Bº y al menos un adjunto (correo .eml/.msg o PDF) de ese apartado."""
+    faltan = []
+    if not (str(fecha_vb or "").strip()):
+        faltan.append("la «Fecha de envío para Vº Bº»")
+    n = query("SELECT COUNT(*) AS n FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='vb_eml'", (pid,), one=True)
+    if not n or int(n["n"]) < 1:
+        faltan.append("el correo o PDF de ese envío adjunto en «Fecha de envío para Vº Bº»")
+    return faltan
 
 
 _RE_CANT_ENTREGA = re.compile(r'^\d{1,10}(?:\.\d{1,4})?$')

@@ -781,6 +781,18 @@ tbody tr:last-child{border-bottom:none}
    #sb-access-toast / "Acceso restringido"), reutilizado para los errores
    de campos obligatorios en el modal de Pedidos (antes salían como un
    pequeño toast rojo en la esquina, poco visible). */
+/* (v12.32.83) Diálogos bloqueantes de estado — NO usan .modal-overlay para que ni Escape ni el clic fuera los cierren */
+.cp-bloq{position:fixed;inset:0;background:rgba(15,32,68,.55);display:flex;align-items:center;justify-content:center;z-index:3000;backdrop-filter:blur(2px);padding:16px}
+.cp-bloq-box{background:#fff;border-radius:14px;max-width:560px;width:100%;max-height:92vh;overflow:auto;padding:22px 24px;box-shadow:0 12px 48px rgba(0,0,0,.35)}
+.cp-bloq-box h3{margin:0 0 6px;font-size:18px;color:#0f2044}
+.cp-bloq-resumen{background:#f1f5fb;border-radius:8px;padding:10px 12px;font-size:13px;margin:10px 0 14px;line-height:1.55}
+.cp-bloq-op{display:flex;gap:10px;align-items:flex-start;padding:9px 11px;border:1.5px solid #d6dde9;border-radius:9px;margin-bottom:7px;cursor:pointer;font-size:13.5px}
+.cp-bloq-op:hover{border-color:#2563eb;background:#f6f9ff}
+.cp-bloq-op input{margin-top:3px}
+.cp-bloq-op small{display:block;color:#64748b;font-size:12px;margin-top:2px}
+.cp-bloq-aviso{background:#fff7e0;border:1px solid #f1d58a;color:#7a5600;border-radius:8px;padding:8px 10px;font-size:12.5px;margin:8px 0}
+.cp-bloq-acc{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
+
 #form-alert-toast {
   position: fixed;
   bottom: 80px;
@@ -1413,7 +1425,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.82
+          V 12.32.83
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2602,7 +2614,7 @@ tbody tr:last-child{border-bottom:none}
         <div class="form-section">Estado</div>
         <div class="form-group full">
           <label class="form-label">Estado del pedido *</label>
-          <select class="form-control" id="p-estado" onchange="onEstadoChange()"></select>
+          <select class="form-control" id="p-estado" onchange="onEstadoChange(); _alCambiarEstadoManual()"></select>
         </div>
         <div class="form-group full">
           <label class="form-label" id="p-nota-label">Nota (para historial, opcional)</label>
@@ -5422,6 +5434,7 @@ async function openPedidoModal(id=null) {
   G.editingPedidoId = id;
   G.currentPedidoData = null;
   _estadoSelectorPrevio = null;   // reset rastreador al abrir modal
+  G.estadoPendienteRevision = false;   // (v12.32.83)
   clearPedidoForm();
   document.getElementById('modal-pedido-title').textContent = id ? 'Editar pedido' : 'Nuevo pedido';
   document.getElementById('btn-delete-pedido').style.display = (id && G.rol==='admin') ? '' : 'none';
@@ -5759,6 +5772,7 @@ async function subirAdjuntos(input, tipo) {
   if (label) label.classList.add('adj-uploading');
 
   let subidos = 0;
+  let _pdfOficialLeido = null;   // (v12.32.83) datos del PDF oficial recién leído (si lo hay)
   for (const archivo of archivos) {
     const MAX_MB = 20;
     if (archivo.size > MAX_MB * 1024 * 1024) {
@@ -5805,6 +5819,7 @@ async function subirAdjuntos(input, tipo) {
               data.ocr_verificado ? '' : 'error', 9000);
           }
           _procesarFechasPdfPedidoOficial(data);
+          _pdfOficialLeido = data;   // (v12.32.83) al terminar la subida: obligar a revisar el estado
           // (2026-09-06, v12.32.35) A petición de Víctor: el proveedor
           // también se lee y asigna solo del mismo PDF (ver
           // _resolver_proveedor_pdf_oficial en app.py) — se refleja aquí
@@ -5885,9 +5900,186 @@ async function subirAdjuntos(input, tipo) {
     // El PDF de pedido oficial ya muestra su propio toast más arriba (con
     // el Nº de Pedido y el Total leídos) — evita duplicar aviso aquí.
     if (tipo !== 'pedido_doc') toast(`${subidos} archivo${subidos>1?'s':''} subido${subidos>1?'s':''}`, 'success');
-    cargarAdjuntos(pedidoId);
+    await cargarAdjuntos(pedidoId);
+  }
+  // (v12.32.83) Pedido oficial leído correctamente → ventana obligatoria para revisar el estado
+  if (_pdfOficialLeido && G.rol !== 'hotel' && G.editingPedidoId === pedidoId) {
+    G.estadoPendienteRevision = true;
+    G.pdfOficialUltimo = _pdfOficialLeido;
+    await _revisarEstadoTrasPdf(_pdfOficialLeido);
   }
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   (v12.32.83) Revisión obligatoria del estado tras leer el PDF oficial y
+   requisitos de los estados «PENDIENTE … FIRMA / Vº Bº» (fecha + archivo).
+═══════════════════════════════════════════════════════════════════════════ */
+const ESTADOS_PENDIENTE_FIRMA = [
+  'PENDIENTE FIRMA DIRECCION COMPRAS',
+  'PENDIENTE DE FIRMA DIRECCION HOTEL',
+  'PENDIENTE Vº Bº DIRECCIÓN GENERAL',
+];
+
+function _escHtmlCp(t) {
+  return String(t == null ? '' : t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// Estado de la sección «Fecha de envío para Vº Bº» del formulario.
+function _datosFirmaEstado() {
+  const f = document.getElementById('p-f-vb');
+  const l = document.getElementById('adj-vb-list');
+  return {
+    fecha: !!(f && f.value),
+    adjunto: !!(l && l.querySelectorAll('.adj-item').length),
+  };
+}
+
+// Diálogo bloqueante genérico: sin Escape, sin clic fuera. Devuelve el elemento raíz;
+// «cerrar()» lo retira. Mientras está abierto, Escape no llega a los demás manejadores.
+function _abrirDialogoBloqueante(html, onEscape) {
+  const ov = document.createElement('div');
+  ov.className = 'cp-bloq';
+  ov.innerHTML = '<div class="cp-bloq-box" role="dialog" aria-modal="true">' + html + '</div>';
+  const teclas = (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation(); e.preventDefault();
+      if (onEscape) onEscape();
+    }
+  };
+  window.addEventListener('keydown', teclas, true);
+  ov._cerrar = () => { window.removeEventListener('keydown', teclas, true); ov.remove(); };
+  document.body.appendChild(ov);
+  return ov;
+}
+
+// Pide (si faltan) la fecha de envío para firma y el archivo que lo acredita.
+// Devuelve true cuando ambos quedan en el formulario; false si el usuario cancela.
+function _pedirDatosFirma(estado) {
+  return new Promise((resolve) => {
+    const datos = _datosFirmaEstado();
+    if (datos.fecha && datos.adjunto) { resolve(true); return; }
+    if (!G.editingPedidoId) {
+      showFormAlert('Guarda primero el pedido (queda en su estado actual) y después cámbialo a «' + estado + '» para poder adjuntar el documento de envío a firma.',
+        { title: '⚠️ Guarda el pedido primero', duracion: 8000 });
+      resolve(false); return;
+    }
+    const hoy = new Date();
+    const hoyIso = hoy.getFullYear() + '-' + String(hoy.getMonth()+1).padStart(2,'0') + '-' + String(hoy.getDate()).padStart(2,'0');
+    const ov = _abrirDialogoBloqueante(`
+      <h3>✍️ Envío para firma</h3>
+      <div style="font-size:13.5px;color:#334155">Para pasar el pedido a <b>${_escHtmlCp(estado)}</b> hace falta indicar
+      cuándo se envió a firma y adjuntar el documento que lo acredita (correo .eml/.msg o PDF).</div>
+      <div class="form-group" style="margin-top:14px">
+        <label class="form-label">Fecha de envío para Vº Bº *</label>
+        <input type="date" class="form-control" id="cp-firma-fecha" value="${datos.fecha ? _escHtmlCp(val('p-f-vb')) : hoyIso}">
+      </div>
+      <div class="form-group" id="cp-firma-adj-grp" style="${datos.adjunto ? 'display:none' : ''}">
+        <label class="form-label">Documento de envío (correo o PDF) *</label>
+        <input type="file" class="form-control" id="cp-firma-file" accept=".eml,.msg,.pdf">
+      </div>
+      <div class="cp-bloq-aviso" id="cp-firma-err" style="display:none"></div>
+      <div class="cp-bloq-acc">
+        <button class="btn btn-secondary" id="cp-firma-cancel">Cancelar cambio de estado</button>
+        <button class="btn btn-primary" id="cp-firma-ok">Aceptar</button>
+      </div>`, () => { ov._cerrar(); resolve(false); });
+    const err = (m) => { const e = ov.querySelector('#cp-firma-err'); e.textContent = m; e.style.display = 'block'; };
+    ov.querySelector('#cp-firma-cancel').onclick = () => { ov._cerrar(); resolve(false); };
+    ov.querySelector('#cp-firma-ok').onclick = async () => {
+      const fecha = ov.querySelector('#cp-firma-fecha').value;
+      const fi = ov.querySelector('#cp-firma-file');
+      if (!fecha) { err('Indique la fecha de envío para Vº Bº.'); return; }
+      const necesitaArchivo = !_datosFirmaEstado().adjunto;
+      if (necesitaArchivo && !(fi && fi.files && fi.files.length)) { err('Adjunte el correo o PDF de envío a firma.'); return; }
+      const btn = ov.querySelector('#cp-firma-ok'); btn.disabled = true; btn.textContent = 'Subiendo…';
+      if (necesitaArchivo) {
+        await subirAdjuntos(fi, 'vb_eml');
+        if (!_datosFirmaEstado().adjunto) { btn.disabled = false; btn.textContent = 'Aceptar'; err('No se pudo subir el archivo. Inténtelo de nuevo.'); return; }
+      }
+      setVal('p-f-vb', fecha);
+      ov._cerrar();
+      resolve(true);
+    };
+  });
+}
+
+// Se ejecuta cuando el usuario cambia a mano el desplegable de estado.
+async function _alCambiarEstadoManual() {
+  if (G.rol === 'hotel') return;
+  const sel = document.getElementById('p-estado');
+  const nuevo = sel.value;
+  if (!ESTADOS_PENDIENTE_FIRMA.includes(nuevo)) return;
+  const bd = G.currentPedidoData ? G.currentPedidoData.estado : null;
+  if (nuevo === bd) return;                        // sin cambio real: no se exige nada
+  const ok = await _pedirDatosFirma(nuevo);
+  if (!ok) {
+    sel.value = bd || 'PENDIENTE COTIZACIÓN';      // vuelve al estado guardado
+    onEstadoChange();
+  }
+}
+
+// Ventana obligatoria tras leer correctamente el PDF del pedido oficial.
+function _revisarEstadoTrasPdf(data) {
+  return new Promise((resolve) => {
+    const sel = document.getElementById('p-estado');
+    const actual = sel.value;
+    const bd = G.currentPedidoData ? G.currentPedidoData.estado : actual;
+    const total = data.total_pedido != null ? Number(data.total_pedido).toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €' : '—';
+    const provOk = !!data.proveedor_reconocido;
+    const provTxt = data.proveedor_nombre || data.proveedor_pdf_nombre || (data.proveedor_pdf_codigo ? 'código SAP ' + data.proveedor_pdf_codigo : 'no indicado');
+    const opciones = [
+      {v:'ENVIADO AL PROVEEDOR', t:'ENVIADO AL PROVEEDOR', d:'El pedido se envía ya al proveedor.'},
+      {v:'PENDIENTE FIRMA DIRECCION COMPRAS', t:'PENDIENTE FIRMA DIRECCION COMPRAS', d:'Requiere fecha de envío y archivo adjunto.'},
+      {v:'PENDIENTE DE FIRMA DIRECCION HOTEL', t:'PENDIENTE DE FIRMA DIRECCION HOTEL', d:'Requiere fecha de envío y archivo adjunto.'},
+      {v:'PENDIENTE Vº Bº DIRECCIÓN GENERAL', t:'PENDIENTE Vº Bº DIRECCIÓN GENERAL', d:'Requiere fecha de envío y archivo adjunto.'},
+      {v:'__mantener__', t:'Mantener el estado actual: ' + actual, d:'Confirmo que el estado actual es el correcto.'},
+    ];
+    const otros = (G.maestros.estados || []).filter(e => e !== 'CANCELADO');
+    const ov = _abrirDialogoBloqueante(`
+      <h3>✅ Pedido cargado correctamente</h3>
+      <div style="font-size:13.5px;color:#334155">Revise el estado del pedido antes de guardarlo.</div>
+      <div class="cp-bloq-resumen">
+        <b>Nº Pedido:</b> ${_escHtmlCp(data.pedido_num)} &nbsp;·&nbsp; <b>Total (sin IGIC):</b> ${_escHtmlCp(total)}
+        ${data.lineas_leidas ? ' &nbsp;·&nbsp; <b>Líneas:</b> ' + _escHtmlCp(data.lineas_leidas) : ''}<br>
+        <b>Proveedor:</b> ${_escHtmlCp(provTxt)} ${provOk ? '' : '<span style="color:#b45309">(no reconocido en el catálogo)</span>'}<br>
+        <b>Estado actual:</b> ${_escHtmlCp(actual)}
+      </div>
+      ${provOk ? '' : '<div class="cp-bloq-aviso">El proveedor no está reconocido: no se podrá pasar a ENVIADO AL PROVEEDOR hasta darlo de alta en Admin → Proveedores.</div>'}
+      <div style="font-weight:600;font-size:13.5px;margin-bottom:8px">¿A qué estado desea pasar el pedido?</div>
+      ${opciones.map((o,i) => `<label class="cp-bloq-op"><input type="radio" name="cp-estado-op" value="${_escHtmlCp(o.v)}"><span>${_escHtmlCp(o.t)}<small>${_escHtmlCp(o.d)}</small></span></label>`).join('')}
+      <label class="cp-bloq-op"><input type="radio" name="cp-estado-op" value="__otro__"><span>Otro estado:
+        <select id="cp-estado-otro" class="form-control" style="margin-top:5px" disabled>
+          ${otros.map(e => `<option value="${_escHtmlCp(e)}"${e===actual?' selected':''}>${_escHtmlCp(e)}</option>`).join('')}
+        </select></span></label>
+      <div class="cp-bloq-aviso" id="cp-estado-err" style="display:none"></div>
+      <div class="cp-bloq-acc"><button class="btn btn-primary" id="cp-estado-ok" disabled>Aceptar</button></div>`, null);
+    const ok = ov.querySelector('#cp-estado-ok');
+    const otroSel = ov.querySelector('#cp-estado-otro');
+    ov.querySelectorAll('input[name="cp-estado-op"]').forEach(r => r.addEventListener('change', () => {
+      otroSel.disabled = r.value !== '__otro__' || !r.checked;
+      ok.disabled = false;
+    }));
+    ok.onclick = async () => {
+      const r = ov.querySelector('input[name="cp-estado-op"]:checked');
+      if (!r) return;
+      let destino = r.value;
+      if (destino === '__mantener__') destino = actual;
+      if (destino === '__otro__') destino = otroSel.value;
+      if (ESTADOS_PENDIENTE_FIRMA.includes(destino) && destino !== bd) {
+        ov.style.display = 'none';                   // se oculta mientras se piden fecha y archivo
+        const okFirma = await _pedirDatosFirma(destino);
+        ov.style.display = '';
+        if (!okFirma) return;                        // vuelve a la elección: el estado sigue sin confirmarse
+      }
+      sel.value = destino;
+      onEstadoChange();
+      G.estadoPendienteRevision = false;
+      ov._cerrar();
+      toast('Estado del pedido: ' + destino + (destino !== bd ? ' — pulse «Guardar» para aplicarlo' : ''), 'success', 5000);
+      resolve(true);
+    };
+  });
+}
+
 
 // (2026-09-06, v12.32.35) Normaliza texto para comparar Departamento vs.
 // "Almacén" del PDF — réplica en JS de _normalizar_texto_generico() en
@@ -7346,6 +7538,20 @@ async function savePedido() {
     }
   }
   // ── Fin validación ENVIADO AL PROVEEDOR ──────────────────────────────────────
+
+  // ── (v12.32.83) Tras leer el PDF oficial el estado debe haberse revisado ──
+  if (G.estadoPendienteRevision && G.editingPedidoId && G.pdfOficialUltimo) {
+    await _revisarEstadoTrasPdf(G.pdfOficialUltimo);
+    if (G.estadoPendienteRevision) return;
+    if (val('p-estado') !== _estadoNuevoValidar) { showFormAlert('Se ha actualizado el estado; revise y pulse Guardar de nuevo.', { title: 'Estado revisado' }); return; }
+  }
+  // ── (v12.32.83) Estados de firma: exigen fecha de envío + archivo adjunto ──
+  if (G.editingPedidoId && ESTADOS_PENDIENTE_FIRMA.includes(_estadoNuevoValidar) && _estadoNuevoValidar !== _estadoAnteriorBD) {
+    const _dF = _datosFirmaEstado();
+    if (!_dF.fecha || !_dF.adjunto) {
+      if (!(await _pedirDatosFirma(_estadoNuevoValidar))) return;
+    }
+  }
 
   // ── Validación: Base imp. (€) obligatoria en cada entrada de «Nº Entrada
   //    DALI / SAP» (parcial o final) — ver _validarBaseImponibleAlbaran() ──
