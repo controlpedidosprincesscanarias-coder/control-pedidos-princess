@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-08 — [Control Pedidos] Aviso interno de entrega parcial: enlace al pedido en la app y referencias pendientes (v12.32.87)
+
+- **Origen**: Víctor: que el aviso interno a los departamentos por entrega parcial lleve el enlace al pedido y qué referencias y cantidades quedan pendientes.
+- **Hallazgo**: el aviso ya tenía el botón de descarga del PDF y (v12.32.86) la tabla de pendientes solo con detalle completo y sin versión de texto; no existía ningún enlace que abriera un pedido en la app.
+- **Corrección**: enlace `/?pedido=<id>` (captura en la página, apertura tras la sesión), tabla de pendientes también con detalle parcial y aviso (solo interno), y versión de texto; ver CHANGELOG v12.32.87.
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; el enlace usa la variable `APP_URL` ya existente (debe apuntar a la URL real del servicio en Render).
+- **Pendiente / ideas**: extender el enlace al resto de avisos internos; exportar a Excel los faltantes.
+
+---
+
 ## 2026-10-08 — [Control Pedidos] Reclamación de entrega parcial con referencias y cantidades pendientes (v12.32.86)
 
 - **Origen**: Víctor preguntó si la reclamación del pendiente al proveedor indica las referencias y cantidades que faltan (pedido con dos entradas parciales detalladas).

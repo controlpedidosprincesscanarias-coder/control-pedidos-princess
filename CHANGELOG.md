@@ -1,3 +1,21 @@
+# v12.32.87 — 8 octubre 2026
+
+🔗 Aviso interno de entrega parcial: enlace directo al pedido en la app y referencias pendientes (también en texto)
+
+**Petición de Víctor** (verbatim): "sería bueno que cuando se notifica también internamente a los departamentos que se han realizado entregas parciales, se adjunte el enlace al pedido de referencia y también se indique qué referencias y cantidades quedan pendientes de entrega".
+
+**Estado previo**: el aviso interno de ENTREGA PARCIAL ya llevaba el botón «Descargar» con el PDF del pedido (desde v12.30.x/2026-09-02) y, desde v12.32.86, la tabla de pendientes — pero esta solo salía con TODAS las entradas detalladas, y no iba en la versión de texto.
+
+**Cambio**:
+- `app.py`: el aviso **interno** de ENTREGA PARCIAL (compradores, usuarios de hotel/departamentos, A&B) incluye:
+  - botón **🔎 Abrir el pedido en Control de Pedidos** (enlace `…/?pedido=<id>`; pide iniciar sesión si hace falta) además del botón de descarga del PDF que ya tenía;
+  - tabla **Referencias pendientes de entregar** (código, Ref. Prov., descripción, pedido, recibido, pendiente). Aquí, a diferencia del correo al proveedor, se muestra también cuando alguna entrada no tiene detalle, con el aviso «calculado solo con las entradas con detalle; sin detallar: …» — al ser interno, informa sin riesgo; al proveedor sigue yendo solo con el detalle completo;
+  - ambas cosas también en la **versión de texto** del correo.
+- `templates/index.html`: al cargar la página con `?pedido=<id>` se recuerda el pedido y se abre su ficha en cuanto hay sesión (sesión ya iniciada o login nuevo); si no hay acceso o no existe, aviso en pantalla. Badge `V 12.32.86` → `V 12.32.87`. README: línea de versión.
+- Solo ENTREGA PARCIAL por ahora (pedido de Víctor); el enlace se puede extender al resto de avisos internos.
+
+**Verificación** (PostgreSQL real, PDF 41866, dos entradas, solo una detallada): el aviso interno se encola con tabla de pendientes, aviso de «sin detallar: E2», enlace `/?pedido=<id>`, botón de descarga del PDF y versión de texto con pendientes + enlace; el correo al proveedor no muestra la tabla con detalle incompleto. Navegador: `?pedido=41866` se guarda, se limpia la URL, se abre el pedido tras la sesión, sin parámetro no abre nada y un error al abrir no rompe la página.
+
 # v12.32.86 — 8 octubre 2026
 
 📋 Reclamación de entrega parcial: ahora indica las referencias y cantidades que faltan

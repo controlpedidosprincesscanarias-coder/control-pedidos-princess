@@ -3422,23 +3422,21 @@ def _html_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
     )
 
 
-def _html_bloque_pendientes(pedido: dict) -> str:
-    """(v12.32.86) Tabla HTML con las referencias que AÚN FALTAN por entregar (código, Ref. Prov.,
-    descripción, pedido, recibido, pendiente — sin precios), a partir del detalle opcional de
-    «Referencias de la entrada» (tabla pedido_lineas_entregas). Solo se genera si TODAS las entradas
-    DALI/SAP del pedido tienen su detalle: con detalle a medias el «pendiente» sería falso, y esto
-    puede acabar en un correo al proveedor, así que en ese caso no se muestra nada ('')."""
+def _datos_pendientes(pedido: dict):
+    """(v12.32.86/87) Referencias que AÚN FALTAN por entregar, a partir del detalle opcional de
+    «Referencias de la entrada» (tabla pedido_lineas_entregas). Devuelve None si no hay detalle o
+    falla; si no, {"filas": [{codigo, ref, desc, ud, pedida, recibida, pendiente}],
+    "sin_detalle": [Nº de entradas DALI/SAP que no tienen detalle]}. Nunca lanza."""
     try:
         pid = pedido.get("id")
         if not pid:
-            return ""
+            return None
         ent = _entregas_por_codigo(pid)
         if not ent:
-            return ""
+            return None
         albaranes_con_detalle = {a for d in ent.values() for a in d["por_albaran"]}
         entradas = [e["num"] for e in _parse_albaran_entries(pedido.get("entrada_albaran_num"))]
-        if not entradas or any(n not in albaranes_con_detalle for n in entradas):
-            return ""
+        sin_detalle = [n for n in entradas if n not in albaranes_con_detalle]
         agrupadas, orden = {}, []
         for l in rows_to_list(query(
                 "SELECT codigo, ref_proveedor, descripcion, unidad, cantidad FROM pedido_lineas "
@@ -3459,23 +3457,66 @@ def _html_bloque_pendientes(pedido: dict) -> str:
             pend = round(g["pedida"] - rec, 4)
             if pend <= 0.00001:
                 continue
-            def _q(x):
-                return (f"{x:.4f}".rstrip("0").rstrip(".")).replace(".", ",")
-            filas.append(
-                f'<tr><td>{_html_escape(str(cod))}</td><td>{_html_escape(str(g["ref"] or "—"))}</td>'
-                f'<td>{_html_escape(str(g["desc"] or ""))}</td><td align="right">{_q(g["pedida"])}</td>'
-                f'<td align="right">{_q(rec)}</td><td align="right"><b>{_q(pend)}</b> {_html_escape(str(g["ud"] or ""))}</td></tr>')
-        if not filas:
-            return ""
-        return (
-            f'<p style="margin:16px 0 6px"><b>Referencias pendientes de entregar</b> ({len(filas)}):</p>'
-            '<table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'
-            '<tr style="background:#f0f0f0"><th>Código</th><th>Ref. Prov.</th><th>Descripción</th>'
-            '<th>Pedido</th><th>Recibido</th><th>Pendiente</th></tr>' + "".join(filas) + '</table>'
-        )
+            g["recibida"], g["pendiente"] = rec, pend
+            filas.append(g)
+        return {"filas": filas, "sin_detalle": sin_detalle}
     except Exception as exc:
-        log.warning(f"[PENDIENTES-EMAIL] No se pudo construir el bloque de referencias pendientes: {exc}")
+        log.warning(f"[PENDIENTES-EMAIL] No se pudo calcular las referencias pendientes: {exc}")
+        return None
+
+
+def _fmt_cant_email(x) -> str:
+    return (f"{float(x):.4f}".rstrip("0").rstrip(".")).replace(".", ",")
+
+
+def _html_bloque_pendientes(pedido: dict, permitir_parcial: bool = False) -> str:
+    """Tabla HTML «Referencias pendientes de entregar» (código, Ref. Prov., descripción, pedido,
+    recibido, pendiente — sin precios). Por defecto (correo al PROVEEDOR) solo se genera si TODAS las
+    entradas DALI/SAP del pedido tienen detalle: con detalle a medias el «pendiente» sería falso y no se
+    le puede decir eso a un proveedor. Con permitir_parcial=True (aviso INTERNO) se genera igualmente
+    con un aviso de qué entradas faltan por detallar. '' si no hay nada que mostrar."""
+    d = _datos_pendientes(pedido)
+    if not d or not d["filas"]:
         return ""
+    if d["sin_detalle"] and not permitir_parcial:
+        return ""
+    filas = "".join(
+        f'<tr><td>{_html_escape(str(g["codigo"]))}</td><td>{_html_escape(str(g["ref"] or "—"))}</td>'
+        f'<td>{_html_escape(str(g["desc"] or ""))}</td><td align="right">{_fmt_cant_email(g["pedida"])}</td>'
+        f'<td align="right">{_fmt_cant_email(g["recibida"])}</td>'
+        f'<td align="right"><b>{_fmt_cant_email(g["pendiente"])}</b> {_html_escape(str(g["ud"] or ""))}</td></tr>'
+        for g in d["filas"])
+    aviso = ""
+    if d["sin_detalle"]:
+        aviso = ('<p style="margin:6px 0 0;font-size:12px;color:#8a6d00">⚠️ Calculado solo con las entradas que tienen '
+                 'detalle de referencias; sin detallar: ' + _html_escape(", ".join(d["sin_detalle"])) +
+                 '. Puede haber llegado más de lo indicado.</p>')
+    return (
+        f'<p style="margin:16px 0 6px"><b>Referencias pendientes de entregar</b> ({len(d["filas"])}):</p>'
+        '<table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'
+        '<tr style="background:#f0f0f0"><th>Código</th><th>Ref. Prov.</th><th>Descripción</th>'
+        '<th>Pedido</th><th>Recibido</th><th>Pendiente</th></tr>' + filas + '</table>' + aviso
+    )
+
+
+def _text_bloque_pendientes(pedido: dict, permitir_parcial: bool = True) -> str:
+    """Versión en texto plano de _html_bloque_pendientes (para el aviso interno)."""
+    d = _datos_pendientes(pedido)
+    if not d or not d["filas"] or (d["sin_detalle"] and not permitir_parcial):
+        return ""
+    lineas = [f"Referencias pendientes de entregar ({len(d['filas'])}):"]
+    for g in d["filas"]:
+        lineas.append(f"  - {g['codigo']} · Ref. Prov. {g['ref'] or '—'} · {g['desc'] or ''}: pedido {_fmt_cant_email(g['pedida'])}, "
+                      f"recibido {_fmt_cant_email(g['recibida'])}, PENDIENTE {_fmt_cant_email(g['pendiente'])} {g['ud'] or ''}".rstrip())
+    if d["sin_detalle"]:
+        lineas.append("  (Calculado solo con las entradas con detalle; sin detallar: " + ", ".join(d["sin_detalle"]) + ".)")
+    return "\n".join(lineas)
+
+
+def _enlace_pedido_app(pedido_id) -> str:
+    """(v12.32.87) Enlace que abre este pedido directamente en la app (pide login si hace falta)."""
+    app_url = os.environ.get("APP_URL", "https://control-pedidos-princess.onrender.com").rstrip("/")
+    return f"{app_url}/?pedido={int(pedido_id)}"
 
 
 def _text_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
@@ -4474,7 +4515,8 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         {_bloque_doc_html_interno}
         {_nota_base_imponible_html() if not _resumen_ent["entregas"] else ''}
         {_html_bloque_entregas(_resumen_ent, estado_nuevo)}
-        {_html_bloque_pendientes(pedido) if estado_nuevo == "ENTREGA PARCIAL" else ''}
+        {_html_bloque_pendientes(pedido, permitir_parcial=True) if estado_nuevo == "ENTREGA PARCIAL" else ''}
+        {('<p style="margin:14px 0 4px">Puede abrir este pedido directamente en la aplicación:</p><p style="margin:4px 0 14px"><a href="' + _enlace_pedido_app(pedido_id) + '" style="display:inline-block;background:#8B6914;color:#fff;text-decoration:none;padding:9px 18px;border-radius:5px;font-size:13px;font-weight:700">🔎 Abrir el pedido en Control de Pedidos</a></p>') if estado_nuevo == "ENTREGA PARCIAL" else ''}
         """
         if estado_nuevo in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL") and _motivo_estado:
             _label_motivo = "Motivo de la denegación" if estado_nuevo == "DENEGADO POR DIRECCION GENERAL" else "Motivo de la cancelación"
@@ -4591,6 +4633,11 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _bloque_text_ent = _text_bloque_entregas(_resumen_ent, estado_nuevo)
         if _bloque_text_ent:
             body_text_i += "\n\n📦 " + _bloque_text_ent
+        if estado_nuevo == "ENTREGA PARCIAL":
+            _bloque_text_pend = _text_bloque_pendientes(pedido, permitir_parcial=True)
+            if _bloque_text_pend:
+                body_text_i += "\n\n" + _bloque_text_pend
+            body_text_i += f"\n\nAbrir el pedido en la aplicación: {_enlace_pedido_app(pedido_id)}"
         if estado_nuevo in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL") and _motivo_estado:
             _label_motivo_txt = "Motivo de la denegación" if estado_nuevo == "DENEGADO POR DIRECCION GENERAL" else "Motivo de la cancelación"
             body_text_i += f"\n\n{_label_motivo_txt}:\n{_motivo_estado}"

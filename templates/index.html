@@ -1425,7 +1425,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.86
+          V 12.32.87
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3814,6 +3814,7 @@ async function _entrarEnApp(r) {
   _checkIntegridadBadge();  // badge silencioso en sidebar para admin
   _startVersionPolling();   // polling automático de nueva versión cada 5 min
   if (G.rol === 'admin' || G.rol === 'compras') _startEmailsSistemaPolling();
+  _abrirPedidoEnlace();     // (v12.32.87) si se entró desde un enlace a un pedido
 }
 
 async function doLogout() {
@@ -4016,6 +4017,21 @@ async function enviarSolicitudReset() {
 // ══════════════════════════════════════════════════════════════════════
 //  SOLICITUD DE ACCESO EN 2 FASES (v10.5)
 // ══════════════════════════════════════════════════════════════════════
+
+// (v12.32.87) Enlace directo a un pedido (?pedido=ID, ver los avisos internos de entrega parcial): se guarda
+// el id al cargar la página y se abre el pedido en cuanto hay sesión (sesión restaurada o login nuevo).
+(function _enlacePedidoInit() {
+  try {
+    const id = parseInt(new URLSearchParams(window.location.search).get('pedido') || '', 10);
+    if (id > 0) { window._pedidoEnlace = id; window.history.replaceState({}, '', window.location.pathname); }
+  } catch (_) {}
+})();
+async function _abrirPedidoEnlace() {
+  const id = window._pedidoEnlace; window._pedidoEnlace = null;
+  if (!id) return;
+  try { await openPedidoModal(id); }
+  catch (e) { toast('No se pudo abrir el pedido del enlace.', 'error'); }
+}
 
 const _SOL = { token: null, wu: null, manual: false };
 
@@ -10412,6 +10428,7 @@ function calcDias(s) {
     } catch(_) {}
     _startVersionPolling();   // polling automático cada 30 s (primeros 15 min) luego 1 min
     if (G.rol === 'admin' || G.rol === 'compras') _startEmailsSistemaPolling();
+    _abrirPedidoEnlace();     // (v12.32.87) si se entró desde un enlace a un pedido
   }
 })();
 </script>
