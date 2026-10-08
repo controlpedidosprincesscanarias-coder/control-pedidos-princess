@@ -8,6 +8,29 @@
 
 ---
 
+### Migrar el servicio de Render a runtime Docker (para que funcione el OCR de PDF escaneados/firmados) — aplazado por Víctor (8 oct 2026)
+
+**Origen**: al subir el PDF escaneado 16885 (v12.32.83 desplegada) el error final decía `TesseractNotFoundError: tesseract is not installed`. Causa: el servicio `control-pedidos-princess` de Render (plan Free, región Frankfurt) está creado con runtime **Python 3** nativo, no Docker, así que no usa el `Dockerfile` del repo (que sí instala `tesseract-ocr` + `tesseract-ocr-spa`) y el `runtime: docker` de `render.yaml` se ignora. Render no permite cambiar el runtime desde el panel (solo API/Blueprint).
+
+**Decisión de Víctor**: por ahora no se migra; se seguirá cargando el PDF original limpio (se lee sin OCR). Varias aplicaciones llaman a esta, y hay que valorar el cambio de URL antes.
+
+**Qué falta cuando se aborde**:
+1. Inventariar qué aplicaciones llaman a Control Pedidos (DALI por SSO, otras) y con qué dirección (URL `…onrender.com` o dominio propio).
+2. Crear un servicio web nuevo de tipo Docker con el mismo repo/rama, las mismas variables de entorno (+ `PORT=10000`), Docker Command de `render.yaml` (`gunicorn app:app --bind 0.0.0.0:$PORT --workers 1 --worker-class gthread --threads 4 --timeout 900`) y Health Check `/ping`.
+3. Probar con los PDF 16885/16886 escaneados; actualizar las URLs de las apps que llaman (o mover el dominio propio).
+4. Suspender el servicio viejo (nunca dos encendidos a la vez: se duplicarían avisos/correos programados), dejarlo suspendido una o dos semanas y después borrarlo (guardando antes sus variables).
+5. Alternativa si no se quiere migrar: OCR solo con librerías de pip (imagen más pesada; dudoso en 512 MB del plan Free).
+
+---
+
+### Ideas pendientes de priorizar (ofrecidas, sin petición firme)
+
+- Copiar al comprador responsable en los correos de cambio de estado cuando los firma otra persona (v12.32.79).
+- Mostrar lo pendiente por entregar en el correo de entrega parcial (v12.32.82).
+- Exportar a Excel los faltantes por referencia (v12.32.82).
+
+---
+
 ### Rellenar la Private Key de EmailJS — entregado (v12.32.55), pendiente de que Víctor la configure en producción
 
 **Origen**: petición de cerrar sesión diaria (ya existía) y exigir código
