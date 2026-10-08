@@ -5,6 +5,7 @@ Despliegue: Render.com  |  BD: Supabase  |  Email: EmailJS (frontend)
 
 import os, json, logging, secrets, atexit, hashlib, re, threading, base64, hmac, gzip
 from html import unescape as _html_unescape
+from html import escape as _html_escape
 from datetime import datetime, timedelta, timezone, date as _date
 from functools import wraps
 
@@ -3421,6 +3422,62 @@ def _html_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
     )
 
 
+def _html_bloque_pendientes(pedido: dict) -> str:
+    """(v12.32.86) Tabla HTML con las referencias que AÚN FALTAN por entregar (código, Ref. Prov.,
+    descripción, pedido, recibido, pendiente — sin precios), a partir del detalle opcional de
+    «Referencias de la entrada» (tabla pedido_lineas_entregas). Solo se genera si TODAS las entradas
+    DALI/SAP del pedido tienen su detalle: con detalle a medias el «pendiente» sería falso, y esto
+    puede acabar en un correo al proveedor, así que en ese caso no se muestra nada ('')."""
+    try:
+        pid = pedido.get("id")
+        if not pid:
+            return ""
+        ent = _entregas_por_codigo(pid)
+        if not ent:
+            return ""
+        albaranes_con_detalle = {a for d in ent.values() for a in d["por_albaran"]}
+        entradas = [e["num"] for e in _parse_albaran_entries(pedido.get("entrada_albaran_num"))]
+        if not entradas or any(n not in albaranes_con_detalle for n in entradas):
+            return ""
+        agrupadas, orden = {}, []
+        for l in rows_to_list(query(
+                "SELECT codigo, ref_proveedor, descripcion, unidad, cantidad FROM pedido_lineas "
+                "WHERE pedido_id=%s ORDER BY orden", (pid,))):
+            cod = l["codigo"]
+            if not cod:
+                continue
+            g = agrupadas.get(cod)
+            if g is None:
+                g = agrupadas[cod] = {"codigo": cod, "ref": l["ref_proveedor"], "desc": l["descripcion"],
+                                      "ud": l["unidad"], "pedida": 0.0}
+                orden.append(cod)
+            g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
+        filas = []
+        for cod in orden:
+            g = agrupadas[cod]
+            rec = ent.get(cod, {"total": 0.0})["total"]
+            pend = round(g["pedida"] - rec, 4)
+            if pend <= 0.00001:
+                continue
+            def _q(x):
+                return (f"{x:.4f}".rstrip("0").rstrip(".")).replace(".", ",")
+            filas.append(
+                f'<tr><td>{_html_escape(str(cod))}</td><td>{_html_escape(str(g["ref"] or "—"))}</td>'
+                f'<td>{_html_escape(str(g["desc"] or ""))}</td><td align="right">{_q(g["pedida"])}</td>'
+                f'<td align="right">{_q(rec)}</td><td align="right"><b>{_q(pend)}</b> {_html_escape(str(g["ud"] or ""))}</td></tr>')
+        if not filas:
+            return ""
+        return (
+            f'<p style="margin:16px 0 6px"><b>Referencias pendientes de entregar</b> ({len(filas)}):</p>'
+            '<table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'
+            '<tr style="background:#f0f0f0"><th>Código</th><th>Ref. Prov.</th><th>Descripción</th>'
+            '<th>Pedido</th><th>Recibido</th><th>Pendiente</th></tr>' + "".join(filas) + '</table>'
+        )
+    except Exception as exc:
+        log.warning(f"[PENDIENTES-EMAIL] No se pudo construir el bloque de referencias pendientes: {exc}")
+        return ""
+
+
 def _text_bloque_entregas(resumen: dict, estado_nuevo: str) -> str:
     """Bloque de texto plano con el histórico de entregas (con base imponible y días desde el pedido), para el correo interno (fallback texto)."""
     if not resumen["entregas"]:
@@ -4417,6 +4474,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         {_bloque_doc_html_interno}
         {_nota_base_imponible_html() if not _resumen_ent["entregas"] else ''}
         {_html_bloque_entregas(_resumen_ent, estado_nuevo)}
+        {_html_bloque_pendientes(pedido) if estado_nuevo == "ENTREGA PARCIAL" else ''}
         """
         if estado_nuevo in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL") and _motivo_estado:
             _label_motivo = "Motivo de la denegación" if estado_nuevo == "DENEGADO POR DIRECCION GENERAL" else "Motivo de la cancelación"
@@ -7681,6 +7739,7 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
     _fila_tp_pp = f'<br><strong>Total Pedido:</strong> {_fmt_importe_es(_tp_pp)} €' if _tp_pp is not None else ''
     _resumen_ent_pp = _resumen_entregas(pedido)
     _bloque_ent_pp = _html_bloque_entregas(_resumen_ent_pp, pedido.get("estado"))
+    _bloque_pend_pp = _html_bloque_pendientes(pedido)   # (v12.32.86) referencias y cantidades que faltan
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
       {_email_header_html("Princess Hotels &amp; Resorts", "Dpto. Central de Compras Princess en Canarias",
@@ -7700,6 +7759,7 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
           <strong>Días transcurridos:</strong> <span style="color:#b45309;font-weight:bold">{dias} días</span>{_fila_tp_pp}{('<br><strong>Observaciones:</strong> ' + pedido['observaciones']) if pedido.get('observaciones') else ''}
         </p>
         {_bloque_ent_pp if _bloque_ent_pp else (_nota_base_imponible_html() if _tp_pp is not None else '')}
+        {_bloque_pend_pp}
         <p>Le rogamos que nos informe sobre la fecha prevista para completar la entrega pendiente.</p>
         <p>Muchas gracias.</p>
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">

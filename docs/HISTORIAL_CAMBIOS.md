@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-08 — [Control Pedidos] Reclamación de entrega parcial con referencias y cantidades pendientes (v12.32.86)
+
+- **Origen**: Víctor preguntó si la reclamación del pendiente al proveedor indica las referencias y cantidades que faltan (pedido con dos entradas parciales detalladas).
+- **Hallazgo**: no; `_email_template_entrega_parcial` solo mostraba entradas e importes. El detalle por referencia (v12.32.82) ya estaba en `pedido_lineas_entregas`.
+- **Corrección**: `_html_bloque_pendientes(pedido)` añade la tabla al correo de ENTREGA PARCIAL al proveedor (auto y manual) y al aviso interno; solo si todas las entradas tienen detalle (ver CHANGELOG v12.32.86).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html` (badge), `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; resto: no aplica.
+- **Pendiente / ideas**: exportar a Excel los faltantes; versión en texto plano de la tabla en el aviso interno.
+
+---
+
 ## 2026-10-08 — [Control Pedidos] Ventana de referencias de la entrada: cantidad editable sin marcar la referencia (v12.32.85)
 
 - **Origen**: Víctor: en la entrada parcial 101417 no podía cambiar 10 por 5 uds en la primera referencia.

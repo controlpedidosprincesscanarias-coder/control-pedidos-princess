@@ -1,3 +1,17 @@
+# v12.32.86 — 8 octubre 2026
+
+📋 Reclamación de entrega parcial: ahora indica las referencias y cantidades que faltan
+
+**Pregunta de Víctor** (pedido con dos entradas parciales y referencias detalladas): "¿la reclamación del pendiente al proveedor se realiza indicando las referencias pendientes y cantidad?" — hasta ahora **no**: el correo de ENTREGA PARCIAL (automático y «Re-notificar») solo traía las entradas recibidas con su base imponible y el importe pendiente.
+
+**Cambio** (`app.py`, nueva `_html_bloque_pendientes`):
+- El correo al proveedor de ENTREGA PARCIAL incluye una tabla **«Referencias pendientes de entregar»**: código, Ref. Prov., descripción, cantidad pedida, recibida y pendiente (sin precios). Sale la suma de todas las entradas del pedido; las referencias completas no aparecen.
+- El aviso interno al pasar a ENTREGA PARCIAL lleva la misma tabla.
+- **Solo si todas las entradas DALI/SAP del pedido tienen su detalle** de «Referencias»: con una entrada sin detallar el pendiente sería falso, y el correo va al proveedor, así que en ese caso no se añade nada (el correo sale como hasta ahora). Sin detalle → igual que antes.
+- Badge `V 12.32.85` → `V 12.32.86`; README: línea de versión. Sin cambios de base de datos.
+
+**Verificación** (PostgreSQL real, PDF 41866): dos entradas con detalle → salen solo las 3 referencias pendientes con sus cantidades (5, 5 y 10); las completas no salen; sin precios; el correo al proveedor incluye la tabla; con una tercera entrada sin detalle → no se muestra; pedido sin detalle → vacío.
+
 # v12.32.85 — 8 octubre 2026
 
 🔧 Ventana «Referencias de la entrada»: la cantidad se puede escribir aunque la referencia no esté marcada
