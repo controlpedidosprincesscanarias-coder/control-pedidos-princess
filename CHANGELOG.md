@@ -1,3 +1,18 @@
+# v12.32.91 — 8 octubre 2026
+
+🔧 Alertas: un pedido con la fecha de entrega vencida permanece SIEMPRE en la lista (pedido 41152)
+
+**Aviso de Víctor**: el pedido 41152 (entrega prevista 25/09/2026) no aparecía en Alertas estando vencido. Propuso —y se aplica— que, una vez vencido el plazo, la información quede siempre visible, toque avisar o no.
+
+**Causa**: la pantalla de Alertas reutilizaba `_alertas_plazo_entrega()`, que solo devuelve algo los días en que **toca avisar** (X días antes, el día de la entrega y cada 2 días —«Plazo urgente ciclo»— después). Los días intermedios un pedido vencido desaparecía de la lista (y el contador del menú subía y bajaba).
+
+**Cambios** (`app.py`):
+- Nueva `_plazo_entrega_vencido()`: pedido en ENVIADO AL PROVEEDOR / ENTREGA PARCIAL con fecha de entrega prevista (específica o tramitación + plazo) ya superada → alerta **urgente**.
+- `_clasificar_alertas(..., solo_dias_de_aviso=False)`: pantalla de Alertas, contador/badge, dashboard y alertas del rol hotel incluyen siempre los vencidos. El puente hacia los popups del Organizador (`/api/bridge/alertas`) pasa `solo_dias_de_aviso=True` y conserva el comportamiento anterior, para no repetir popups a diario.
+- Los avisos (Telegram, email interno, reclamación automática al proveedor) **no cambian**: siguen saliendo solo los días de ciclo.
+- Los pedidos con fecha de entrega aún futura siguen sin aparecer hasta su día de primer aviso.
+- Badge `V 12.32.90` → `V 12.32.91`; README: línea de versión.
+
 # v12.32.90 — 8 octubre 2026
 
 🔧 Techo de Gastos: los apuntes pendientes de meses anteriores ya se pueden aprobar o denegar (pedido 41699)

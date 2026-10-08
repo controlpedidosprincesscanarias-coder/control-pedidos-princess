@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-08 — [Control Pedidos] Alertas: pedidos con entrega vencida siempre visibles (v12.32.91)
+
+- **Origen**: Víctor: el pedido 41152 (entrega prevista 25/09) no aparecía en Alertas; pidió que, vencido el plazo, la información quede siempre visible independientemente de que toque avisar.
+- **Hallazgo**: la lista usaba `_alertas_plazo_entrega()`, que solo devuelve resultado los días de aviso (ciclo de 2 días tras el vencimiento); el resto de días el pedido vencido se ocultaba.
+- **Corrección**: `_plazo_entrega_vencido()` + parámetro `solo_dias_de_aviso` en `_clasificar_alertas()`; pantalla, badge, dashboard y rol hotel muestran siempre los vencidos (urgente); el puente de popups y todos los avisos automáticos mantienen su ciclo (ver CHANGELOG v12.32.91).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html` (badge), `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; resto: no aplica.
+- **Pendiente / ideas**: mostrar en la fila el texto «vencido hace N días»; valorar el mismo criterio para el puente de popups si se prefiere.
+
+---
+
 ## 2026-10-08 — [Control Pedidos] Techo de Gastos: apuntes pendientes de meses anteriores resolubles (v12.32.90)
 
 - **Origen**: Víctor: el pedido 41699 (GY, ECUS SLEEP) se envió al proveedor el 28/09 sin cambiar el estado en la app; al intentarlo, el sistema exigía aceptar el techo de gastos, pero la pantalla solo mostraba octubre.

@@ -6150,6 +6150,27 @@ def _alertas_plazo_entrega(pedido: dict, cfg_activado: bool):
     return None
 
 
+def _plazo_entrega_vencido(pedido: dict, cfg_activado: bool):
+    """(v12.32.91) Devuelve {"nivel": "urgente", "fecha_entrega_prevista": date}
+    si el pedido (ENVIADO AL PROVEEDOR / ENTREGA PARCIAL) tiene una fecha de
+    entrega prevista YA SUPERADA, o None en cualquier otro caso.
+
+    _alertas_plazo_entrega() solo devuelve algo los días en que TOCA AVISAR
+    (cada N días tras el vencimiento), de modo que, usada por sí sola para
+    la pantalla de Alertas, un pedido vencido desaparecía de la lista los
+    días intermedios (caso del pedido 41152, avisado por Víctor). Esta
+    función no decide si hay que avisar — solo si el pedido sigue vencido
+    y, por tanto, debe seguir visible. Los avisos (Telegram, email,
+    reclamación automática) siguen usando únicamente
+    _alertas_plazo_entrega(), sin cambios."""
+    if not cfg_activado or pedido.get("estado") not in ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL"):
+        return None
+    fecha = _resolver_fecha_entrega_prevista(pedido)
+    if fecha and _date.today() > fecha:
+        return {"nivel": "urgente", "fecha_entrega_prevista": fecha}
+    return None
+
+
 def _debe_usar_logica_plazo(pedido: dict) -> bool:
     """True si el pedido tiene plazo o fecha de entrega específica informados
     Y la feature está activada en config."""
@@ -17101,7 +17122,8 @@ def _resumen_ultima_notificacion(p: dict) -> dict:
     return {"fecha": fecha_iso, "canales": canales, "dias": dias, "reclamacion_auto": reclamacion_auto}
 
 
-def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
+def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool,
+                        solo_dias_de_aviso: bool = False) -> list:
     """Clasifica una lista de pedidos y devuelve solo los que generan alerta.
 
     Para cada pedido:
@@ -17116,6 +17138,13 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
       • ultima_notificacion    (dict — ver _resumen_ultima_notificacion)
       • popup_repetir, popup_horas_critico, popup_horas_normal
                           (ver _aplicar_config_popup — config editable desde Admin)
+
+    (v12.32.91) Con `solo_dias_de_aviso=False` (pantalla de Alertas, badge,
+    dashboard) un pedido con la fecha de entrega ya superada se mantiene
+    SIEMPRE en la lista como urgente, toque o no avisar hoy. Con True
+    (puente hacia los popups del Organizador) se conserva el comportamiento
+    anterior: solo aparece los días en que toca avisar, para no repetir
+    popups a diario.
 
     Devuelve la lista ordenada: urgentes primero, luego por días descendente.
     """
@@ -17132,6 +17161,8 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool) -> list:
         # todavía lejana y mostraría el pedido como urgente sin serlo.
         if _debe_usar_logica_plazo(p):
             info_plazo = _alertas_plazo_entrega(p, cfg_activar_plazo)
+            if not info_plazo and not solo_dias_de_aviso:
+                info_plazo = _plazo_entrega_vencido(p, cfg_activar_plazo)
             if not info_plazo:
                 continue
             dias = _dias_desde_alerta(p.get("fecha_tramitacion")) or 0
@@ -18945,7 +18976,7 @@ def bridge_alertas_usuario():
         ORDER BY p.fecha_tramitacion ASC
     """, filtro_args))
     cfg_activar_plazo_bridge = bool(int(get_config().get("activar_uso_plazo_entrega", 1) or 0))
-    alertas = _clasificar_alertas(alertas_raw, cfg_activar_plazo_bridge)
+    alertas = _clasificar_alertas(alertas_raw, cfg_activar_plazo_bridge, solo_dias_de_aviso=True)
 
     # v12.29.47 (PRUEBA): "alertas" pasa a contener SOLO lo pendiente de
     # entregar como popup (ver _filtrar_popups_no_vistos). Los totales sin
