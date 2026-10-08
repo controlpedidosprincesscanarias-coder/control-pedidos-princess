@@ -3799,7 +3799,8 @@ def _resolver_firmante_cambio_estado(usuario_id, es_automatico: bool, compradore
 
 def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str = None,
                           usuario_nombre: str = "", usuario_id: int = None,
-                          es_automatico: bool = False):
+                          es_automatico: bool = False,
+                          sin_email_proveedor: bool = False):
     """
     Construye los correos de notificación de cambio de estado (proveedor +
     internos) y los registra en _log_email.
@@ -4043,7 +4044,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     #        ya avisa a todos los compradores y usuarios hotel del cambio de
     #        estado, así que este correo va exclusivamente al proveedor y no
     #        duplica destinatarios ni información interna.
-    if estado_nuevo in ESTADOS_EMAIL_PROVEEDOR and _proveedor_emails:
+    if estado_nuevo in ESTADOS_EMAIL_PROVEEDOR and _proveedor_emails and not sin_email_proveedor:
         _compradores_firma = _usuarios_hotel["compradores"]
         # (v12.32.79) Firma = quien realiza la gestión (comprador o administrador
         # con email), para la trazabilidad; si el cambio es automático o lo hace
@@ -5633,7 +5634,8 @@ def _telegram_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes:
 
 def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: str,
                               usuario_nombre: str = "", usuario_id: int = None,
-                              es_automatico: bool = False) -> list:
+                              es_automatico: bool = False,
+                              sin_email_proveedor: bool = False) -> list:
     """
     Centraliza todas las notificaciones de un cambio de estado manual.
 
@@ -5684,7 +5686,8 @@ def _notificar_cambio_estado(db, pedido_id: int, estado_nuevo: str, estado_antes
     try:
         pendientes = enviar_emails_estado(db, pedido_id, estado_nuevo, estado_antes,
                                            usuario_nombre=usuario_nombre, usuario_id=usuario_id,
-                                           es_automatico=es_automatico)
+                                           es_automatico=es_automatico,
+                                           sin_email_proveedor=sin_email_proveedor)
     except Exception as exc:
         _email_exc = exc
         log.error("[NOTIFICAR-CAMBIO-ESTADO] Fallo construyendo/encolando el correo interno "
@@ -16326,18 +16329,25 @@ def techo_resumen():
         ORDER BY p.hotel_id, p.creado_en
     """, hotel_ids + [mes_str]))
 
-    # ── 3b. Expedientes del mes (Sección 8): pendientes + aprobados ──────────
+    # ── 3b. Expedientes (Sección 8): aprobados DEL MES + pendientes de CUALQUIER mes ─
+    # (v12.32.90) Un apunte pendiente de un mes anterior (p. ej. el pedido
+    # 41699, solicitado en septiembre y sin resolver) no puede quedar
+    # invisible al cambiar de mes: update_pedido() bloquea el pedido hasta
+    # que ese apunte se resuelva, así que la tarjeta del hotel tiene que
+    # ofrecer siempre Aprobar/Denegar. Cada apunte lleva su `mes`.
     expedientes_mes = rows_to_list(query(f"""
         SELECT e.id, e.pedido_id, e.hotel_id, e.familia_id, e.importe_pedido,
                e.exceso, e.motivo_solicitud, e.resultado, e.creado_en,
                e.fecha_resolucion, e.observaciones_direccion_general,
-               f.nombre AS familia_nombre, p.pedido_num
+               e.mes, f.nombre AS familia_nombre, p.pedido_num
         FROM expediente_exceso e
         LEFT JOIN familias f ON e.familia_id = f.id
         LEFT JOIN pedidos  p ON e.pedido_id   = p.id
         WHERE e.hotel_id IN ({ph})
-          AND e.mes = %s
-          AND e.resultado IN ('pendiente', 'aprobado')
+          AND (
+                e.resultado = 'pendiente'
+                OR (e.mes = %s AND e.resultado = 'aprobado')
+          )
         ORDER BY e.hotel_id, e.creado_en DESC
     """, hotel_ids + [mes_str]))
 
@@ -18082,6 +18092,12 @@ def aprobar_expediente(eid):
     uid  = current_user_id()
     db   = get_db()
     nota = (data.get("nota_historial") or data.get("observaciones") or "").strip()
+    # (v12.32.90) «Ya enviado al proveedor»: el pedido salió en su día pero
+    # nunca se cambió el estado en la aplicación (caso 41699). Se regulariza
+    # el estado SIN reenviar el correo al proveedor (el aviso interno sí
+    # se envía) y el consumo del techo se imputa al mes del apunte, no al
+    # mes en que se aprueba.
+    ya_enviado = bool(data.get("ya_enviado_proveedor"))
 
     execute("""
         UPDATE expediente_exceso SET resultado='aprobado', usuario_resuelve_id=%s,
@@ -18091,6 +18107,8 @@ def aprobar_expediente(eid):
 
     estado_antes = pedido["estado"]
     mes_consumo  = _date.today().strftime("%Y-%m")
+    if ya_enviado and exp.get("mes") and re.match(r"^\d{4}-\d{2}$", str(exp["mes"])) and str(exp["mes"]) < mes_consumo:
+        mes_consumo = str(exp["mes"])
     execute("""
         UPDATE pedidos SET estado='ENVIADO AL PROVEEDOR', mes_consumo_techo=%s,
                modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
@@ -18098,6 +18116,8 @@ def aprobar_expediente(eid):
     """, (mes_consumo, uid, session.get("nombre"), exp["pedido_id"]))
 
     _nota_hist = "Autorizado por Dirección General" + (f": {nota}" if nota else "")
+    if ya_enviado:
+        _nota_hist += " · Regularización: el pedido ya se había enviado al proveedor (no se reenvía el correo)"
     execute(
         "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
         (exp["pedido_id"], estado_antes, "ENVIADO AL PROVEEDOR", uid, session.get("nombre"), _nota_hist)
@@ -18107,6 +18127,7 @@ def aprobar_expediente(eid):
     _pendientes_email = _notificar_cambio_estado(
         db, exp["pedido_id"], "ENVIADO AL PROVEEDOR", estado_antes,
         usuario_nombre=session.get("nombre", ""), usuario_id=uid,
+        sin_email_proveedor=ya_enviado,
     )
     # (2026-08-27) pedido_id incluido en la respuesta para que el frontend,
     # cuando el usuario aprueba este expediente navegando directamente a

@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-08 — [Control Pedidos] Techo de Gastos: apuntes pendientes de meses anteriores resolubles (v12.32.90)
+
+- **Origen**: Víctor: el pedido 41699 (GY, ECUS SLEEP) se envió al proveedor el 28/09 sin cambiar el estado en la app; al intentarlo, el sistema exigía aceptar el techo de gastos, pero la pantalla solo mostraba octubre.
+- **Hallazgo**: `techo_resumen` filtraba expedientes por el mes actual; `update_pedido` bloquea mientras haya un apunte `pendiente` de cualquier mes → apunte de septiembre invisible e irresoluble.
+- **Corrección**: pendientes de cualquier mes visibles (con etiqueta de mes); al aprobar uno antiguo se puede marcar «ya enviado al proveedor» (no reenvía el correo al proveedor, imputa el consumo al mes del apunte y anota la regularización) (ver CHANGELOG v12.32.90).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; resto: no aplica.
+- **Pendiente / ideas**: valorar un aviso automático a Dirección General cuando un apunte lleva más de N días pendiente.
+
+---
+
 ## 2026-10-08 — [Control Pedidos] Líneas del PDF oficial: códigos alfanuméricos (v12.32.89)
 
 - **Origen**: Víctor: el PDF del pedido 41862 (Redican) no leía las líneas (aviso de fiabilidad).

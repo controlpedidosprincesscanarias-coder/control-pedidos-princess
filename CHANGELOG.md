@@ -1,3 +1,19 @@
+# v12.32.90 — 8 octubre 2026
+
+🔧 Techo de Gastos: los apuntes pendientes de meses anteriores ya se pueden aprobar o denegar (pedido 41699)
+
+**Aviso de Víctor**: el pedido 41699 (GY, ECUS SLEEP, 22.670,00 €) se envió al proveedor el 28/09 pero nunca se pasó a ENVIADO AL PROVEEDOR en la aplicación. Al intentarlo ahora, el sistema pedía aceptar el apunte de Techo de Gastos, pero esa pantalla solo enseña el mes en curso (octubre) y el apunte, de septiembre, no aparecía: no había forma de resolverlo y el pedido quedaba bloqueado.
+
+**Causa**: `techo_resumen` filtraba los expedientes por `mes = mes actual`, mientras que `update_pedido` bloquea el cambio de estado mientras exista un apunte `pendiente` de **cualquier** mes.
+
+**Cambios**:
+- `app.py` (`techo_resumen`): los apuntes **pendientes** se devuelven de cualquier mes (cada uno con su `mes`); los aprobados siguen siendo solo los del mes. El compromiso potencial y el semáforo azul los incluyen.
+- `templates/index.html`: en la tarjeta del hotel, el apunte de un mes anterior lleva la etiqueta «📅 Apunte de AAAA-MM (mes anterior) — sigue pendiente». Al **aprobarlo**, se pregunta si el pedido **ya se envió al proveedor** por otra vía.
+- `app.py` (`aprobar_expediente`, `_notificar_cambio_estado`, `enviar_emails_estado`): nuevo parámetro `ya_enviado_proveedor`. Si se marca, el pedido pasa a ENVIADO AL PROVEEDOR **sin reenviar el correo al proveedor** (el aviso interno sí sale), el consumo del techo se imputa al mes del apunte (no al de la aprobación) y el historial lo deja anotado («Regularización…»).
+- Badge `V 12.32.89` → `V 12.32.90`; README: línea de versión.
+
+**Para el 41699**: Techo de Gastos → tarjeta GY → «Apunte de 2026-09» → ✅ Aprobar → Aceptar en la pregunta de «ya enviado». Sin migración.
+
 # v12.32.89 — 8 octubre 2026
 
 🔧 Líneas del PDF oficial: códigos de artículo alfanuméricos (pedido 41862, Redican)

@@ -1425,7 +1425,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.89
+          V 12.32.90
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -10774,7 +10774,7 @@ function checkTechoPreview() {
 // dejar rastro; esto es justo lo contrario, capturar el motivo exigido por
 // el propio backend). Si más adelante se prefiere un modal en condiciones
 // en vez de prompt(), es un cambio contenido a esta única función.
-async function resolverExpedienteTecho(eid, accion) {
+async function resolverExpedienteTecho(eid, accion, mesAnterior) {
   let nota = '';
   if (accion === 'denegar') {
     const val = prompt('Motivo de la denegación (obligatorio):');
@@ -10786,8 +10786,15 @@ async function resolverExpedienteTecho(eid, accion) {
     if (val === null) return; // canceló el prompt
     nota = val.trim();
   }
+  // (v12.32.90) Apunte de un mes anterior: lo normal es que el pedido ya
+  // saliera hacia el proveedor en su día sin que se cambiara el estado
+  // aquí (caso 41699). Se pregunta para no reenviarle el correo.
+  let yaEnviado = false;
+  if (accion === 'aprobar' && mesAnterior) {
+    yaEnviado = confirm('Este apunte es de un mes anterior.\n\n¿El pedido YA se envió al proveedor por otra vía?\n\nAceptar = solo se regulariza el estado a ENVIADO AL PROVEEDOR, SIN reenviar el correo al proveedor (el consumo del techo se imputa al mes del apunte).\nCancelar = se aprueba y se envía el correo al proveedor ahora.');
+  }
   try {
-    const r = await api(`/api/expedientes/${eid}/${accion}`, 'POST', { nota_historial: nota });
+    const r = await api(`/api/expedientes/${eid}/${accion}`, 'POST', { nota_historial: nota, ya_enviado_proveedor: yaEnviado });
     if (r.error) { toast(r.error, 'error'); return; }
 
     // (2026-08-27) FIX apertura de ficha: si este expediente es justo el
@@ -10928,9 +10935,10 @@ async function loadTecho() {
                  <span style="font-weight:700">Pedido ${e.pedido_num||('#'+e.pedido_id)}${e.familia_nombre?' — '+e.familia_nombre:''}</span>
                  <span style="font-weight:700">${(e.importe_pedido||0).toLocaleString('es-ES',{minimumFractionDigits:2})} €</span>
                </div>
+               ${(e.mes && e.mes !== d.mes) ? `<div style="font-size:10.5px;font-weight:700;color:#b45309;background:#fff3cd;border-radius:4px;padding:2px 6px;margin-bottom:4px;display:inline-block">📅 Apunte de ${e.mes} (mes anterior) — sigue pendiente</div>` : ''}
                <div style="font-size:10.5px;color:#555;margin-bottom:6px">${e.motivo_solicitud||''}</div>
                <div style="display:flex;gap:6px">
-                 <button onclick="event.stopPropagation();resolverExpedienteTecho(${e.id},'aprobar')"
+                 <button onclick="event.stopPropagation();resolverExpedienteTecho(${e.id},'aprobar',${(e.mes && e.mes !== d.mes) ? 'true' : 'false'})"
                          style="flex:1;font-size:10.5px;padding:4px 8px;border:1px solid #198754;border-radius:4px;background:#fff;color:#198754;font-weight:700;cursor:pointer">✅ Aprobar</button>
                  <button onclick="event.stopPropagation();resolverExpedienteTecho(${e.id},'denegar')"
                          style="flex:1;font-size:10.5px;padding:4px 8px;border:1px solid #dc3545;border-radius:4px;background:#fff;color:#dc3545;font-weight:700;cursor:pointer">❌ Denegar</button>
