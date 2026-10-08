@@ -20255,6 +20255,10 @@ _RE_NUM_ES_LINEA = re.compile(r'^-?\d{1,3}(?:\.\d{3})*,\d{2,4}$|^-?\d+,\d{2,4}$'
 # tenga la terna Cantidad · Precio · Importe — el resto de comprobaciones (las líneas deben sumar lo
 # mismo que los importes del texto) evitan falsos positivos.
 _RE_CODIGO_LINEA = re.compile(r'^[0-9A-Za-z][0-9A-Za-z\-/._]{2,19}$')
+# (v12.32.92) Cantidad y Precio pegados en una sola palabra cuando el precio es muy corto y la cantidad
+# grande: «10.000,00000,26» = 10.000,0000 + 0,26 (pedido 16756, Cube Root Cards). Se separan probando
+# 4, 3 y 2 decimales para la cantidad; el resto de garantías (suma de importes) no cambia.
+_RE_NUM_ES_PEGADO = [re.compile(r'^(-?\d{1,3}(?:\.\d{3})*,\d{%d})(-?\d{1,3}(?:\.\d{3})*,\d{2,4})$' % d) for d in (4, 3, 2)]
 _RE_FIN_TABLA_PEDIDO = re.compile(r'^(Total Pedido|Observaciones|NOTA:|NO SE ADMIT)', re.IGNORECASE)
 
 def _extraer_lineas_pdf_pedido_oficial(pdf_bytes: bytes):
@@ -20282,6 +20286,21 @@ def _extraer_lineas_pdf_pedido_oficial(pdf_bytes: bytes):
                         renglones.append({"top": w["top"], "w": [w]})
                 for r in renglones:
                     r["w"].sort(key=lambda w: w["x0"])
+                    nuevos = []
+                    for w in r["w"]:
+                        if not _RE_NUM_ES_LINEA.match(w["text"]):
+                            for rx in _RE_NUM_ES_PEGADO:
+                                m = rx.match(w["text"])
+                                if m:
+                                    corte = w["x0"] + (w["x1"] - w["x0"]) * len(m.group(1)) / len(w["text"])
+                                    nuevos.append(dict(w, text=m.group(1), x1=corte))
+                                    nuevos.append(dict(w, text=m.group(2), x0=corte))
+                                    break
+                            else:
+                                nuevos.append(w)
+                        else:
+                            nuevos.append(w)
+                    r["w"] = nuevos
                     r["texto"] = " ".join(w["text"] for w in r["w"])
                 # Cabecera de la tabla de esta página
                 h_idx = next((i for i, r in enumerate(renglones)

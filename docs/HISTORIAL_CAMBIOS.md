@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-08 — [Control Pedidos] Líneas del PDF oficial: cantidad y precio pegados (v12.32.92)
+
+- **Origen**: Víctor: el PDF del pedido 16756 (Cube Root Cards) no leía las líneas (aviso de fiabilidad).
+- **Hallazgo**: cantidad grande + precio corto salen sin hueco (`10.000,00000,26`) y el lector por posiciones no reconocía la palabra como número.
+- **Corrección**: `_RE_NUM_ES_PEGADO` separa Cantidad y Precio antes de leer la fila; la comprobación de suma contra los importes del texto sigue siendo la garantía (ver CHANGELOG v12.32.92).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html` (badge), `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; resto: no aplica.
+- **Pendiente / ideas**: valorar guardar el precio exacto (Importe ÷ Cantidad) cuando el PDF lo imprime redondeado; reintento en bloque de PDF con 0 líneas.
+
+---
+
 ## 2026-10-08 — [Control Pedidos] Alertas: pedidos con entrega vencida siempre visibles (v12.32.91)
 
 - **Origen**: Víctor: el pedido 41152 (entrega prevista 25/09) no aparecía en Alertas; pidió que, vencido el plazo, la información quede siempre visible independientemente de que toque avisar.

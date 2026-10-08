@@ -1,3 +1,15 @@
+# v12.32.92 — 8 octubre 2026
+
+🔧 Líneas del PDF oficial: Cantidad y Precio pegados en una sola palabra (pedido 16756, Cube Root Cards)
+
+**Aviso de Víctor**: el PDF del pedido 16756 (La Palma Teneguía, Cube Root Cards SL, 2.553,00 €) dio «No se han podido leer las líneas de artículo de este PDF con fiabilidad» (Nº y Total sí se leían).
+
+**Causa**: con una cantidad grande y un precio unitario pequeño, el PDF imprime ambos sin hueco entre columnas: `10.000,0000` y `0,26` salen como una única palabra `10.000,00000,26`. El lector por posiciones no la reconocía como número y descartaba la fila (el lector por texto, que sí la separaba, daba el importe correcto, pero la comprobación cruzada exige también las líneas).
+
+**Cambio** (`app.py`): `_RE_NUM_ES_PEGADO` — una palabra de ese tipo se parte en Cantidad y Precio (probando 4, 3 y 2 decimales para la cantidad) antes de leer la fila. La garantía no cambia: las líneas deben sumar exactamente lo mismo que los importes del texto. Comprobado con los 12 PDF de pedidos disponibles: solo cambian los dos del 16756 (antes sin líneas, ahora 1). Badge `V 12.32.91` → `V 12.32.92`; README: línea de versión.
+
+**Para el 16756 ya cargado**: tras desplegar, pulsar **Reintentar la lectura** en el aviso amarillo. Nota: el PDF imprime el precio redondeado a 2 decimales (0,26 en vez de 0,2553), así que Cantidad × Precio no cuadra con el Importe; se guarda tal como figura en el documento.
+
 # v12.32.91 — 8 octubre 2026
 
 🔧 Alertas: un pedido con la fecha de entrega vencida permanece SIEMPRE en la lista (pedido 41152)
