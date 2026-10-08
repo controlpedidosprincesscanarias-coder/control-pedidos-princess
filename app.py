@@ -20196,10 +20196,13 @@ def _resolver_proveedor_pdf_oficial(proveedor_codigo, proveedor_nombre_pdf):
 # pedido 41826), así que cada línea "de solo texto" se asigna a la línea de
 # artículo más cercana en vertical.
 _RE_NUM_ES_LINEA = re.compile(r'^-?\d{1,3}(?:\.\d{3})*,\d{2,4}$|^-?\d+,\d{2,4}$')
-# (v12.32.84) 7 u 8 cifras: hay artículos cuyo código SAP se imprime con 7 cifras
-# (pedido 41866: «2060205»); con solo 8, esa línea se perdía y la descripción de
-# la siguiente se mezclaba con ella.
-_RE_CODIGO_LINEA = re.compile(r'^\d{7,8}$')
+# (v12.32.84/89) Código de artículo de la primera columna: no es siempre un número de 8 cifras. Hay
+# códigos de 7 cifras («2060205», pedido 41866) y de proveedor alfanuméricos, cortos o con guiones
+# («6432», «4487B», «39-0000010B», «31-0000002», pedido 41862). Basta que sea una sola palabra de
+# 3-20 caracteres (letras, cifras, - / . _) en la columna de códigos (x < 100) de una fila que además
+# tenga la terna Cantidad · Precio · Importe — el resto de comprobaciones (las líneas deben sumar lo
+# mismo que los importes del texto) evitan falsos positivos.
+_RE_CODIGO_LINEA = re.compile(r'^[0-9A-Za-z][0-9A-Za-z\-/._]{2,19}$')
 _RE_FIN_TABLA_PEDIDO = re.compile(r'^(Total Pedido|Observaciones|NOTA:|NO SE ADMIT)', re.IGNORECASE)
 
 def _extraer_lineas_pdf_pedido_oficial(pdf_bytes: bytes):
@@ -20250,7 +20253,11 @@ def _extraer_lineas_pdf_pedido_oficial(pdf_bytes: bytes):
                         # última terna consecutiva de números = Cantidad, Precio, Importe
                         i_q = next((i for i in reversed(nums) if i + 2 in nums and i + 1 in nums), None)
                         if i_q is None or i_q < 2:
-                            return None  # estructura inesperada: mejor no guardar nada
+                            # (v12.32.89) Con la regla de código más amplia, una fila sin la terna
+                            # Cantidad·Precio·Importe es texto de descripción, no un artículo; si de verdad
+                            # faltara una línea, la comprobación cruzada con los importes la descarta.
+                            solo_texto.append(r)
+                            continue
                         resto = ws[1:i_q - 1]      # entre código y unidad
                         ref = None
                         if resto and resto[0]["x0"] < corte_ref:

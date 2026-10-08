@@ -1,3 +1,17 @@
+# v12.32.89 — 8 octubre 2026
+
+🔧 Líneas del PDF oficial: códigos de artículo alfanuméricos (pedido 41862, Redican)
+
+**Aviso de Víctor**: el PDF del pedido 41862 (Guayarmina, Redican S.L., 2.999,48 €) volvió a dar «No se han podido leer las líneas de artículo de este PDF con fiabilidad» (Nº y Total sí se leían).
+
+**Causa**: el lector de líneas solo aceptaba códigos numéricos de 8 cifras (7 desde v12.32.84). Este proveedor usa códigos propios cortos o con letras y guiones: `6432`, `4487B`, `39-0000010B`, `31-0000002`, `15-0000006N`. Ninguna línea se reconocía.
+
+**Cambio** (`app.py`): `_RE_CODIGO_LINEA` acepta cualquier palabra de 3 a 20 caracteres (letras, cifras y `- / . _`) en la columna de códigos de una fila que tenga la terna Cantidad · Precio · Importe. Una fila de ese tipo sin la terna se trata como texto de descripción (antes anulaba toda la lectura). Las garantías no cambian: las líneas deben sumar exactamente lo mismo que los importes del texto del PDF. Badge `V 12.32.88` → `V 12.32.89`; README: línea de versión.
+
+**Para el 41862 ya cargado**: tras desplegar, pulsar **Reintentar la lectura** en el aviso amarillo.
+
+**Verificación** (PostgreSQL real): 41862 → 11 líneas, suma 2.999,48 € = Total Pedido, sin aviso; el detalle por referencias funciona con esos códigos (4 de 10 → faltan 6) y el buscador los encuentra. Regresión: 41866 (5), 16886 (7) y 16885 (5), idénticos a antes.
+
 # v12.32.88 — 8 octubre 2026
 
 ✍️ Reclamación manual al proveedor: firma (y Reply-To) de quien la realiza, tenga o no el hotel asignado

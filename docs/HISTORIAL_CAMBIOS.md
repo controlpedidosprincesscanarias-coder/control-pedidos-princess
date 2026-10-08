@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-08 — [Control Pedidos] Líneas del PDF oficial: códigos alfanuméricos (v12.32.89)
+
+- **Origen**: Víctor: el PDF del pedido 41862 (Redican) no leía las líneas (aviso de fiabilidad).
+- **Hallazgo**: `_RE_CODIGO_LINEA` exigía números de 8 (luego 7) cifras; Redican usa códigos como `4487B` o `39-0000010B`.
+- **Corrección**: la regla acepta palabras de 3-20 caracteres alfanuméricos con `- / . _`; filas sin terna de importes pasan a ser descripción; la comprobación de suma contra los importes sigue siendo la garantía (ver CHANGELOG v12.32.89).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html` (badge), `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; resto: no aplica.
+- **Pendiente / ideas**: los PDF que quedaron sin líneas por este motivo se recuperan pedido a pedido con «Reintentar la lectura»; valorar un reintento en bloque para todos los que tengan PDF oficial y 0 líneas.
+
+---
+
 ## 2026-10-08 — [Control Pedidos] Reclamación manual al proveedor firmada por quien la realiza (v12.32.88)
 
 - **Origen**: Víctor (pedido 40907, GY): la reclamación salía firmada como «Vacante»; debe firmar quien la realiza, sea admin o usuario de hotel, tenga o no el hotel asignado.
