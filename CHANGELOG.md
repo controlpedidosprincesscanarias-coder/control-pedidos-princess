@@ -1,3 +1,18 @@
+# v12.32.84 — 8 octubre 2026
+
+🔧 Líneas del PDF oficial: artículos con código de 7 cifras ya se leen (pedido 41866)
+
+**Aviso de Víctor**: al adjuntar el PDF del pedido 41866 (Guayarmina, Suministros Textiles Dorta) se leían Nº de Pedido (41866) y Total (1.040,70 €), pero salía «No se han podido leer las líneas de artículo de este PDF con fiabilidad».
+
+**Causa**: el lector de líneas (`_extraer_lineas_pdf_pedido_oficial`) solo reconocía como línea de artículo las que empiezan por un código de **8 cifras exactas**. Este pedido trae un artículo con código de **7 cifras** (`2060205`, el EDREDON NORDICO 200 FIBRA): esa línea no se reconocía, su descripción se pegaba a la del artículo anterior y la comprobación cruzada con los importes (5 importes en el texto frente a 4 líneas) descartaba todas las líneas, para no guardar nada equivocado.
+
+**Cambio**:
+- `app.py`: `_RE_CODIGO_LINEA` pasa de `^\d{8}$` a `^\d{7,8}$`. El código se guarda tal como viene impreso (`2060205`, sin añadir ceros).
+- `templates/index.html`: badge `V 12.32.83` → `V 12.32.84`. README: línea de versión.
+- **Para el pedido 41866 ya cargado**: tras desplegar, pulsar **Reintentar la lectura** en el aviso amarillo (no hace falta volver a subir el PDF).
+
+**Verificación**: con el PDF real del 41866 salen las 5 líneas con sus descripciones separadas y la suma de importes (1.040,70 €) coincide con el Total Pedido; sin aviso. Regresión con los PDF 16885 (5 líneas) y 16886 (7 líneas): igual que antes.
+
 # v12.32.83 — 7 octubre 2026
 
 🧭 Tras cargar el PDF oficial: revisión obligatoria del estado, y los estados de firma exigen fecha y archivo

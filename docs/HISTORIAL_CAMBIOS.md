@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-08 — [Control Pedidos] Líneas del PDF oficial: códigos de artículo de 7 cifras (v12.32.84)
+
+- **Origen**: Víctor adjuntó el PDF del pedido 41866 (Guayarmina, Dorta): Nº y Total bien, pero aviso de que las líneas no se podían leer con fiabilidad.
+- **Hallazgo**: `_RE_CODIGO_LINEA` exigía 8 cifras exactas; el artículo `2060205` tiene 7 en el PDF, así que su línea se perdía y la comprobación cruzada con los importes (5 vs 4) descartaba todas.
+- **Corrección**: la regla acepta 7 u 8 cifras (código guardado tal como se imprime). Reintentar la lectura en el pedido ya cargado. Ver CHANGELOG v12.32.84.
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL manual; resto: no aplica.
+- **Pendiente / ideas**: la búsqueda de artículos distingue `2060205` de `02060205` si alguien escribe el código con un cero delante (valorar búsqueda tolerante a ceros iniciales).
+
+---
+
 ## 2026-10-07 — [Control Pedidos] Revisión obligatoria del estado tras leer el PDF oficial y fecha + archivo en los estados de firma (v12.32.83)
 
 - **Origen**: Víctor: al cargarse bien el PDF oficial, ventana que confirme la carga y obligue a revisar el estado antes de guardar (¿ENVIADO AL PROVEEDOR u otro?); si se marca pendiente de firma (Compras, Hotel o Dirección General), debe haber fecha y archivo en «enviado para firma», y lo mismo si el estado se cambia a mano.

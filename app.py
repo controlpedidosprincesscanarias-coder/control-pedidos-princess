@@ -20056,7 +20056,10 @@ def _resolver_proveedor_pdf_oficial(proveedor_codigo, proveedor_nombre_pdf):
 # pedido 41826), así que cada línea "de solo texto" se asigna a la línea de
 # artículo más cercana en vertical.
 _RE_NUM_ES_LINEA = re.compile(r'^-?\d{1,3}(?:\.\d{3})*,\d{2,4}$|^-?\d+,\d{2,4}$')
-_RE_CODIGO_LINEA = re.compile(r'^\d{8}$')
+# (v12.32.84) 7 u 8 cifras: hay artículos cuyo código SAP se imprime con 7 cifras
+# (pedido 41866: «2060205»); con solo 8, esa línea se perdía y la descripción de
+# la siguiente se mezclaba con ella.
+_RE_CODIGO_LINEA = re.compile(r'^\d{7,8}$')
 _RE_FIN_TABLA_PEDIDO = re.compile(r'^(Total Pedido|Observaciones|NOTA:|NO SE ADMIT)', re.IGNORECASE)
 
 def _extraer_lineas_pdf_pedido_oficial(pdf_bytes: bytes):
