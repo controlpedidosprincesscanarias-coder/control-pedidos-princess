@@ -1,3 +1,16 @@
+# v12.32.95 — 9 octubre 2026
+
+🔧 Referencias con el mismo código en un pedido: cada línea cuenta por separado (pedido 28289)
+
+**Aviso de Víctor**: en «Pedidos con entregas pendientes», el pedido 28289 (IT, Domínguez González) mostraba una sola referencia pendiente («DUNI», 6 uds.) cuando el PDF tiene tres líneas: TETE A TETE BIO-DUNICEL (4 uds., 365,47 €) y dos MANTELITO BIO-DUNICEL (1 ud. cada uno, a 0,00 €). Las referencias sin precio no aparecían como faltantes propios.
+
+**Causa**: este proveedor usa el mismo código («DUNI») en todas sus líneas, y la app agrupaba las referencias por código — las tres líneas se fundían en una sola (4 + 1 + 1 = 6). El problema afectaba también a «Referencias de la entrada», al buscador de artículos y a las referencias pendientes de los correos de reclamación.
+
+**Cambio** (`app.py`, `templates/index.html`): nueva `_claves_lineas()` — cada línea se identifica por su código, y si el código se repite dentro del pedido, la 1ª conserva el código y las siguientes pasan a `DUNI#2`, `DUNI#3`… (en orden de aparición). Se usa en: `_datos_pendientes` (correos), `_calcular_faltantes_pedido` (nuevo listado), `GET /api/pedidos/<id>/entregas-lineas` (devuelve `codigo` = clave y `codigo_vista` = código real), `_guardar_entregas_lineas`, `GET /api/pedidos/<id>/lineas` (entregado/pendiente por línea) y el buscador de artículos (misma regla en SQL con `ROW_NUMBER()`). El diálogo «Referencias de la entrada» sigue mostrando el código real (`DUNI`) en las tres filas, cada una con su descripción y su cantidad.
+- Los pedidos cuyos códigos no se repiten (la inmensa mayoría) no cambian en nada: la clave es el propio código. Sin migración.
+- Si algún pedido con códigos repetidos ya tenía detalle de entregas guardado, ese detalle se asigna a la primera línea del código; se puede corregir abriendo «Referencias de la entrada» y repartiéndolo.
+- Badge `V 12.32.94` → `V 12.32.95`; README: línea de versión.
+
 # v12.32.94 — 9 octubre 2026
 
 ✨ Buscar artículo: nuevo modo «Pedidos con entregas pendientes» (pantalla, listado PDF y detallado de faltantes)

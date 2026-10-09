@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Líneas con el mismo código en un pedido: cada una por separado (v12.32.95)
+
+- **Origen**: Víctor: en el listado de pendientes, el pedido 28289 mostraba una sola referencia («DUNI», 6 uds.) en vez de las tres líneas del PDF; las referencias sin precio no salían como faltantes.
+- **Hallazgo**: el proveedor usa el mismo código en todas sus líneas y la app agrupaba por código (4+1+1 = 6).
+- **Corrección**: `_claves_lineas()` (código, o `CODIGO#n` si se repite en el pedido) aplicada a pendientes, entregas por referencia, líneas del pedido, buscador y correos de reclamación (ver CHANGELOG v12.32.95).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL de migración; resto: no aplica.
+- **Pendiente / ideas**: revisar si algún pedido existente con códigos repetidos tenía detalle de entregas guardado (se asigna a la primera línea del código).
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Buscar artículo: pedidos con entregas pendientes, listado y detallado en PDF (v12.32.94)
 
 - **Origen**: Víctor: listar en pantalla y PDF los pedidos enviados al proveedor con entregas pendientes (totales o parciales) y poder imprimir el detalle de los faltantes de cada uno.

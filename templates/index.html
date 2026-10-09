@@ -1429,7 +1429,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.94
+          V 12.32.95
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6837,7 +6837,7 @@ function abrirEntregaLineas(row, modoDiferencia = false) {
     const cant = actual[l.codigo] != null ? actual[l.codigo] : pend;
     return `<tr data-cod="${esc(l.codigo)}" data-pedida="${l.pedida}" data-ya="${ya}" data-precio="${l.precio == null ? '' : l.precio}" style="border-top:1px solid #eef1f6">
       <td style="padding:4px 6px"><input type="checkbox" class="mel-chk" ${marcada ? 'checked' : ''} ${_melSoloLectura ? 'disabled' : ''} onchange="melCambio(this.closest('tr'), true)"></td>
-      <td class="monospace" style="padding:4px 6px">${_htmlLinea(l.codigo)}</td>
+      <td class="monospace" style="padding:4px 6px">${_htmlLinea(l.codigo_vista || l.codigo)}</td>
       <td class="monospace" style="padding:4px 6px">${_htmlLinea(l.ref_proveedor || '—')}</td>
       <td style="padding:4px 6px">${_htmlLinea(l.descripcion || '')}</td>
       <td style="padding:4px 6px">${_htmlLinea(l.unidad || '')}</td>

@@ -3438,15 +3438,15 @@ def _datos_pendientes(pedido: dict):
         entradas = [e["num"] for e in _parse_albaran_entries(pedido.get("entrada_albaran_num"))]
         sin_detalle = [n for n in entradas if n not in albaranes_con_detalle]
         agrupadas, orden = {}, []
-        for l in rows_to_list(query(
-                "SELECT codigo, ref_proveedor, descripcion, unidad, cantidad FROM pedido_lineas "
-                "WHERE pedido_id=%s ORDER BY orden", (pid,))):
-            cod = l["codigo"]
+        _lin = rows_to_list(query(
+            "SELECT codigo, ref_proveedor, descripcion, unidad, cantidad FROM pedido_lineas "
+            "WHERE pedido_id=%s ORDER BY orden", (pid,)))
+        for l, cod in zip(_lin, _claves_lineas(_lin)):
             if not cod:
                 continue
             g = agrupadas.get(cod)
             if g is None:
-                g = agrupadas[cod] = {"codigo": cod, "ref": l["ref_proveedor"], "desc": l["descripcion"],
+                g = agrupadas[cod] = {"codigo": l["codigo"], "ref": l["ref_proveedor"], "desc": l["descripcion"],
                                       "ud": l["unidad"], "pedida": 0.0}
                 orden.append(cod)
             g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
@@ -20595,8 +20595,8 @@ def get_lineas_pedido(pid):
     suma_importes = round(sum((f["importe"] or 0) for f in filas), 2)
     # (v12.32.82) Entregado / pendiente por referencia, si se detalló alguna entrada.
     _ent = _entregas_por_codigo(pid)
-    for f in filas:
-        e = _ent.get(f["codigo"])
+    for f, _clave in zip(filas, _claves_lineas(filas)):
+        e = _ent.get(_clave)
         _tot = e["total"] if e else 0.0
         f["entregado"] = _tot if _ent else None
         f["pendiente"] = round((f["cantidad"] or 0) - _tot, 4) if _ent else None
@@ -20685,8 +20685,8 @@ def _guardar_entregas_lineas(pedido_id: int, entregas: dict, usuario_id=None, us
     """Sustituye TODO el detalle de entregas por referencia del pedido por el
     recibido (sin commit — lo hace quien llama). Ignora códigos que no estén en
     las líneas del pedido."""
-    codigos = {r["codigo"] for r in rows_to_list(query(
-        "SELECT DISTINCT codigo FROM pedido_lineas WHERE pedido_id=%s", (pedido_id,))) if r["codigo"]}
+    _lin = rows_to_list(query("SELECT codigo, orden FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pedido_id,)))
+    codigos = {c for c in _claves_lineas(_lin) if c}
     execute("DELETE FROM pedido_lineas_entregas WHERE pedido_id=%s", (pedido_id,))
     filas = [(pedido_id, alb, cod, cant, usuario_id, usuario_nombre)
              for alb, lineas in entregas.items() for cod, cant in lineas.items() if cod in codigos]
@@ -20696,6 +20696,26 @@ def _guardar_entregas_lineas(pedido_id: int, entregas: dict, usuario_id=None, us
                 cur,
                 "INSERT INTO pedido_lineas_entregas (pedido_id, albaran_num, codigo, cantidad, usuario_id, usuario_nombre) VALUES %s",
                 filas, page_size=500)
+
+
+def _claves_lineas(lineas) -> list:
+    """(v12.32.95) Clave que identifica cada línea del pedido en el detalle de entregas
+    («Referencias de la entrada»). Es el código de artículo, salvo cuando el MISMO código se repite
+    en varias líneas del pedido (pedido 28289: tres líneas con el código «DUNI», una con precio y dos
+    a 0,00): la primera conserva el código y las siguientes pasan a «CODIGO#2», «CODIGO#3»... en
+    orden de aparición. Antes se agrupaba todo por código y las líneas repetidas se fundían en una
+    sola (cantidad 4+1+1 = 6). Devuelve una lista alineada con `lineas` (None si la línea no tiene
+    código). En SQL el equivalente es CASE WHEN rn = 1 THEN codigo ELSE codigo || '#' || rn END con
+    rn = ROW_NUMBER() OVER (PARTITION BY pedido_id, codigo ORDER BY orden)."""
+    vistos, claves = {}, []
+    for l in lineas:
+        cod = l["codigo"]
+        if not cod:
+            claves.append(None)
+            continue
+        n = vistos[cod] = vistos.get(cod, 0) + 1
+        claves.append(cod if n == 1 else f"{cod}#{n}")
+    return claves
 
 
 def _entregas_por_codigo(pedido_id: int) -> dict:
@@ -20726,15 +20746,17 @@ def get_entregas_lineas(pid):
         return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
     ent = _entregas_por_codigo(pid)
     agrupadas, orden = {}, []
-    for l in rows_to_list(query(
-            "SELECT codigo, ref_proveedor, descripcion, unidad, cantidad, precio FROM pedido_lineas "
-            "WHERE pedido_id=%s ORDER BY orden", (pid,))):
-        cod = l["codigo"]
+    _lin = rows_to_list(query(
+        "SELECT codigo, ref_proveedor, descripcion, unidad, cantidad, precio FROM pedido_lineas "
+        "WHERE pedido_id=%s ORDER BY orden", (pid,)))
+    for l, cod in zip(_lin, _claves_lineas(_lin)):
         if not cod:
             continue
         g = agrupadas.get(cod)
         if g is None:
-            g = agrupadas[cod] = {"codigo": cod, "ref_proveedor": l["ref_proveedor"], "descripcion": l["descripcion"],
+            # `codigo` es la CLAVE de la línea (el código, o «CODIGO#2» si el código se repite en el
+            # pedido — ver _claves_lineas); `codigo_vista` es el código real para mostrar.
+            g = agrupadas[cod] = {"codigo": cod, "codigo_vista": l["codigo"], "ref_proveedor": l["ref_proveedor"], "descripcion": l["descripcion"],
                                   "unidad": l["unidad"], "pedida": 0.0,
                                   "precio": float(l["precio"]) if (l["precio"] is not None and not es_hotel) else None}
             orden.append(cod)
@@ -20787,11 +20809,14 @@ def buscar_lineas_pedidos():
                l.codigo, l.ref_proveedor, l.descripcion, l.unidad, l.cantidad, l.precio, l.importe,
                COALESCE(en.entregado, 0) AS entregado,
                EXISTS (SELECT 1 FROM pedido_lineas_entregas x WHERE x.pedido_id = p.id) AS tiene_detalle
-        FROM pedido_lineas l
+        FROM (SELECT pl.*, CASE WHEN ROW_NUMBER() OVER (PARTITION BY pl.pedido_id, pl.codigo ORDER BY pl.orden) = 1
+                                THEN pl.codigo
+                                ELSE pl.codigo || '#' || ROW_NUMBER() OVER (PARTITION BY pl.pedido_id, pl.codigo ORDER BY pl.orden) END AS clave
+              FROM pedido_lineas pl) l
         JOIN pedidos p ON p.id = l.pedido_id
         LEFT JOIN (SELECT pedido_id, codigo, SUM(cantidad) AS entregado
                    FROM pedido_lineas_entregas GROUP BY pedido_id, codigo) en
-               ON en.pedido_id = l.pedido_id AND en.codigo = l.codigo
+               ON en.pedido_id = l.pedido_id AND en.codigo = l.clave
         LEFT JOIN hoteles h ON h.id = p.hotel_id
         LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
         WHERE (l.ref_proveedor ILIKE %s OR l.codigo ILIKE %s OR l.descripcion ILIKE %s)
@@ -20856,13 +20881,12 @@ def _calcular_faltantes_pedido(lineas: list, entregas: list, entrada_albaran_num
     if entradas and not con_detalle:
         return {"cobertura": "sin_detalle", "faltantes": [], "sin_detalle": sin_detalle}
     agrupadas, orden = {}, []
-    for l in lineas:
-        cod = l["codigo"]
+    for l, cod in zip(lineas, _claves_lineas(lineas)):
         if not cod:
             continue
         g = agrupadas.get(cod)
         if g is None:
-            g = agrupadas[cod] = {"codigo": cod, "ref": l["ref_proveedor"], "desc": l["descripcion"],
+            g = agrupadas[cod] = {"codigo": l["codigo"], "ref": l["ref_proveedor"], "desc": l["descripcion"],
                                   "ud": l["unidad"], "pedida": 0.0}
             orden.append(cod)
         g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
@@ -20939,7 +20963,7 @@ def pedidos_pendientes_entrega():
             "dias_retraso": dias_retraso,
             "num_entradas": len(entradas),
             "cobertura": calc["cobertura"], "faltantes": calc["faltantes"], "sin_detalle": calc["sin_detalle"],
-            "num_lineas": len({l["codigo"] for l in lineas_por.get(p["id"], []) if l["codigo"]}),
+            "num_lineas": len([c for c in _claves_lineas(lineas_por.get(p["id"], [])) if c]),
         })
     # Más vencidos primero; los que no tienen fecha prevista, al final (por hotel y nº de pedido)
     salida.sort(key=lambda x: (x["dias_retraso"] is None, -(x["dias_retraso"] or 0), x["hotel_codigo"] or "", x["norden"] or 0))
