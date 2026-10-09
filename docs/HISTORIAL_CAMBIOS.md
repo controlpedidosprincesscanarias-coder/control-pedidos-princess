@@ -49,6 +49,11 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Carga única de listados SAP con cruce por líneas (v12.32.97)
+
+- **Petición**: simplificar la carga de listados (Comparar, Departamentos y líneas, Importar albaranes, Sugerencias) y que al cargar se actualicen solos estado, nº de albarán, fecha y base imponible, y se creen los pedidos de proveedores «Sujeto a seguimiento».
+- **Corrección/novedad**: botón «Cargar listados SAP» (`/api/sap/cargar-listados`), detección del tipo de PDF por contenido, lector del listado de albaranes resumido (`sap_albaranes_cab`), cruce por líneas `_cruce_lineas_sap_hotel` y aplicación segura `_aplicar_cruce_lineas_pedido`; resto en «Para revisar» (ver CHANGELOG v12.32.97).
+
 ## 2026-10-09 — [Control Pedidos] Material recibido en exceso en correos y listados de pendientes (v12.32.96)
 
 - **Origen**: Víctor: cuando llega más cantidad de la pedida (pedido 16134, +10/+5) debe constar en la reclamación al proveedor, en los correos internos y en los listados de faltantes, como sobrante / material entregado en exceso.

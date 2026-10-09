@@ -1429,7 +1429,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.96
+          V 12.32.97
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1672,7 +1672,7 @@ tbody tr:last-child{border-bottom:none}
           <input class="filter-input" id="f-fecha-hasta" type="date" title="Fecha solicitud hasta" style="width:140px" onchange="applyFilter()">
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
           <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
-          <button class="btn btn-sm" id="btn-cruce-sap" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCruceSap()">🔄 Cruce con SAP (Pedidos ↔ Albaranes)</button>
+          <button class="btn btn-sm" id="btn-cruce-sap" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCruceSap()">📥 Cargar listados SAP</button>
           <button class="btn btn-sm" id="btn-confirmar-albaran" style="background:#5b3a99;color:#fff;border:none" onclick="abrirModalConfirmarAlbaran()">📎 Confirmar un albarán suelto</button>
         </div>
         <div class="search-chips" id="pedidos-chips">
@@ -2974,50 +2974,67 @@ tbody tr:last-child{border-bottom:none}
    datos" / "Paso 2: revisar y aplicar".
 -->
 <div class="modal-overlay" id="modal-cruce-sap">
-  <div class="modal" style="max-width:760px">
+  <div class="modal" style="max-width:980px">
     <div class="modal-header">
-      <div class="modal-title">🔄 Cruce con SAP (Pedidos ↔ Albaranes)</div>
+      <div class="modal-title">📥 Cargar listados SAP</div>
       <button class="close-btn" onclick="closeModal('modal-cruce-sap')">✕</button>
     </div>
     <div class="modal-body">
-      <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:18px">
-        Herramientas para mantener al día los pedidos y sus entregas a partir de los listados que
-        exporta SAP. Primero se cargan los datos (Paso 1); después se revisan las propuestas y se
-        aplican las que correspondan (Paso 2). Desde cualquiera de las pantallas siguientes puedes
-        volver aquí con el botón "← Cruce con SAP".
-      </div>
-
-      <div style="font-weight:700;color:#1a3a6b;margin-bottom:8px">Paso 1 · Cargar datos SAP</div>
-      <div style="display:flex;flex-direction:column;gap:10px;margin-bottom:22px">
-        <button class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none;text-align:left;white-space:normal"
-                onclick="closeModal('modal-cruce-sap');abrirModalCompararListado()">
-          📄 Comparar / cargar Listado de Pedidos (SAP resumido) — y, si hace falta, el Listado de
-          Albaranes registrados en DALI
-        </button>
-        <button class="btn btn-sm" style="background:#6f42c1;color:#fff;border:none;text-align:left;white-space:normal"
-                onclick="closeModal('modal-cruce-sap');abrirModalActualizarDepartamentos()">
-          🏷️ Departamentos y líneas (Listado de Pedidos SAP detallado)
-        </button>
-        <button class="btn btn-sm" style="background:#20805c;color:#fff;border:none;text-align:left;white-space:normal"
-                onclick="closeModal('modal-cruce-sap');abrirModalImportarAlbaranes()">
-          📥 Importar Albaranes (Listado de Albaranes SAP detallado)
-        </button>
-      </div>
-
-      <div style="font-weight:700;color:#1a3a6b;margin-bottom:8px">Paso 2 · Revisar y aplicar</div>
-      <div style="display:flex;flex-direction:column;gap:10px">
-        <button class="btn btn-sm" style="background:#b8860b;color:#fff;border:none;text-align:left;white-space:normal"
-                onclick="closeModal('modal-cruce-sap');abrirModalSugerenciasAlbaranesPendientes()">
-          📋 Revisar entregas pendientes y sugerencias de albarán (incluye la búsqueda de un pedido
-          concreto)
-        </button>
-        <div style="font-size:.8rem;color:var(--text-secondary)">
-          Los pedidos que SAP ya tiene registrados pero que todavía no están dados de alta en la
-          app se revisan y crean automáticamente desde "📄 Comparar / cargar Listado de Pedidos"
-          del Paso 1 — aparecen en cuanto seleccionas el hotel, sin necesidad de volver a subir el
-          PDF si ya hay un listado guardado.
+      <!-- (v12.32.97) Carga unificada: un solo sitio para los PDF de SAP de un hotel. Reconoce cada listado por su
+           contenido (con o sin cabecera), crea los pedidos que faltan (solo proveedores «Sujeto a seguimiento»),
+           cruza por líneas pedidos y albaranes y aplica SOLO lo seguro; el resto queda «Para revisar». Sin correos. -->
+      <div id="csl-form">
+        <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:12px">
+          Elige el hotel y suelta los PDF que exporta SAP (hasta 4; con o sin cabecera):
+          <b>Pedidos resumido</b>, <b>Pedidos detallado</b>, <b>Albaranes detallado</b> y
+          <b>Albaranes resumido</b> (el que trae la fecha). La app reconoce cada uno sola, crea los pedidos que falten y
+          registra estado, nº de albarán, fecha y base imponible <b>solo cuando el cruce es seguro</b>. Lo demás queda en
+          «Para revisar». Alimentación, bebidas y limpieza se ignoran (solo proveedores «Sujeto a seguimiento»).
+          Todo lo cargado se guarda: en la próxima carga se usa también lo de meses anteriores, así que un albarán de
+          un mes puede cerrar un pedido de otro.
+        </div>
+        <div class="form-grid" style="grid-template-columns:1fr 2fr;gap:14px;align-items:end">
+          <div class="form-group">
+            <label class="form-label">Hotel <span style="color:#e74c3c">*</span></label>
+            <select class="form-control" id="csl-hotel"><option value="">— Selecciona —</option></select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">PDF de SAP (puedes elegir varios a la vez) <span style="color:#e74c3c">*</span></label>
+            <input class="form-control" type="file" id="csl-files" accept="application/pdf" multiple onchange="cslMostrarArchivos()">
+          </div>
+        </div>
+        <div id="csl-lista" style="font-size:.8rem;color:var(--text-secondary);margin-top:8px"></div>
+        <div style="margin-top:14px;text-align:right">
+          <button class="btn btn-gold" id="btn-csl-cargar" onclick="cslCargar()">Cargar y cruzar</button>
         </div>
       </div>
+      <div id="csl-loading" class="loading" style="display:none">Leyendo los listados y cruzando pedidos con albaranes… puede tardar unos minutos.</div>
+      <div id="csl-resultado" style="display:none"></div>
+
+      <details style="margin-top:22px">
+        <summary style="cursor:pointer;font-weight:700;color:#1a3a6b">Cargas por separado (avanzado)</summary>
+        <div style="font-size:.8rem;color:var(--text-secondary);margin:8px 0 10px">
+          Las herramientas de antes siguen disponibles por si hace falta una sola de ellas. Guardan en los mismos datos que la carga única.
+        </div>
+        <div style="display:flex;flex-direction:column;gap:10px">
+          <button class="btn btn-sm" style="background:#0d6efd;color:#fff;border:none;text-align:left;white-space:normal"
+                  onclick="closeModal('modal-cruce-sap');abrirModalCompararListado()">
+            📄 Comparar / cargar Listado de Pedidos (SAP resumido) — y, si hace falta, el Listado de Albaranes registrados en DALI
+          </button>
+          <button class="btn btn-sm" style="background:#6f42c1;color:#fff;border:none;text-align:left;white-space:normal"
+                  onclick="closeModal('modal-cruce-sap');abrirModalActualizarDepartamentos()">
+            🏷️ Departamentos y líneas (Listado de Pedidos SAP detallado)
+          </button>
+          <button class="btn btn-sm" style="background:#20805c;color:#fff;border:none;text-align:left;white-space:normal"
+                  onclick="closeModal('modal-cruce-sap');abrirModalImportarAlbaranes()">
+            📥 Importar Albaranes (Listado de Albaranes SAP detallado)
+          </button>
+          <button class="btn btn-sm" style="background:#b8860b;color:#fff;border:none;text-align:left;white-space:normal"
+                  onclick="closeModal('modal-cruce-sap');abrirModalSugerenciasAlbaranesPendientes()">
+            📋 Revisar entregas pendientes y sugerencias de albarán (incluye la búsqueda de un pedido concreto)
+          </button>
+        </div>
+      </details>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('modal-cruce-sap')">Cerrar</button>
@@ -3036,7 +3053,7 @@ tbody tr:last-child{border-bottom:none}
 <div class="modal-overlay" id="modal-comparar-pdf">
   <div class="modal" style="max-width:1100px">
     <div class="modal-header">
-      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-comparar-pdf');abrirModalCruceSap()">← Cruce con SAP</button>
+      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-comparar-pdf');abrirModalCruceSap()">← Cargar listados SAP</button>
       <div class="modal-title">📄 Comparar listado PDF (SAP)</div>
       <button class="close-btn" onclick="closeModal('modal-comparar-pdf')">✕</button>
     </div>
@@ -3254,7 +3271,7 @@ tbody tr:last-child{border-bottom:none}
 <div class="modal-overlay" id="modal-actualizar-departamentos">
   <div class="modal" style="max-width:640px">
     <div class="modal-header">
-      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-actualizar-departamentos');abrirModalCruceSap()">← Cruce con SAP</button>
+      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-actualizar-departamentos');abrirModalCruceSap()">← Cargar listados SAP</button>
       <div class="modal-title">🏷️ Actualizar departamentos y líneas (Listado detallado SAP)</div>
       <button class="close-btn" onclick="closeModal('modal-actualizar-departamentos')">✕</button>
     </div>
@@ -3311,7 +3328,7 @@ tbody tr:last-child{border-bottom:none}
 <div class="modal-overlay" id="modal-importar-albaranes">
   <div class="modal" style="max-width:640px">
     <div class="modal-header">
-      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-importar-albaranes');abrirModalCruceSap()">← Cruce con SAP</button>
+      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-importar-albaranes');abrirModalCruceSap()">← Cargar listados SAP</button>
       <div class="modal-title">📥 Importar listado de Albaranes (SAP detallado)</div>
       <button class="close-btn" onclick="closeModal('modal-importar-albaranes')">✕</button>
     </div>
@@ -3380,7 +3397,7 @@ tbody tr:last-child{border-bottom:none}
 <div class="modal-overlay" id="modal-sugerencias-albaranes-pendientes">
   <div class="modal" style="max-width:960px">
     <div class="modal-header">
-      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-sugerencias-albaranes-pendientes');abrirModalCruceSap()">← Cruce con SAP</button>
+      <button class="btn btn-ghost btn-sm" style="margin-right:8px" onclick="closeModal('modal-sugerencias-albaranes-pendientes');abrirModalCruceSap()">← Cargar listados SAP</button>
       <div class="modal-title">📋 Revisar entregas pendientes (Albaranes detallado)</div>
       <button class="close-btn" onclick="closeModal('modal-sugerencias-albaranes-pendientes')">✕</button>
     </div>
@@ -8888,7 +8905,114 @@ async function saveProveedor() {
    en el HTML. No contiene lógica propia: solo abre el modal.
 ═══════════════════════════════════════════════════════════════════════ */
 function abrirModalCruceSap() {
+  // (v12.32.97) Carga unificada de listados SAP — ver el modal «modal-cruce-sap».
+  const sel = document.getElementById('csl-hotel');
+  if (sel && sel.options.length <= 1) {
+    (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  }
+  document.getElementById('csl-form').style.display = '';
+  document.getElementById('csl-loading').style.display = 'none';
+  document.getElementById('csl-resultado').style.display = 'none';
   openModal('modal-cruce-sap');
+}
+
+function cslMostrarArchivos() {
+  const fs = Array.from(document.getElementById('csl-files').files || []);
+  document.getElementById('csl-lista').innerHTML = fs.length
+    ? fs.map(f => `📄 ${_escHtmlCp(f.name)} <span style="color:#999">(${(f.size/1048576).toFixed(1)} MB)</span>`).join('<br>')
+    : '';
+}
+
+async function cslCargar() {
+  const hotelId = val('csl-hotel');
+  const fs = Array.from(document.getElementById('csl-files').files || []);
+  if (!hotelId) { toast('Selecciona un hotel', 'error'); return; }
+  if (!fs.length) { toast('Selecciona al menos un PDF de SAP', 'error'); return; }
+  if (fs.length > 4) { toast('Máximo 4 PDF a la vez', 'error'); return; }
+  document.getElementById('csl-form').style.display = 'none';
+  document.getElementById('csl-loading').style.display = '';
+  document.getElementById('csl-resultado').style.display = 'none';
+  const fd = new FormData();
+  fd.append('hotel_id', hotelId);
+  fs.forEach(f => fd.append('files', f));
+  let jobId;
+  try {
+    const r = await fetch('/api/sap/cargar-listados', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const d = await r.json();
+    if (!r.ok || d.error) { _cslError(d.error || 'Error al cargar los listados'); return; }
+    jobId = d.job_id;
+  } catch (e) { _cslError('Error al cargar los listados: ' + e.message); return; }
+  _cslPoll(jobId, 0);
+}
+
+function _cslError(msg) {
+  toast(msg, 'error', 8000);
+  document.getElementById('csl-form').style.display = '';
+  document.getElementById('csl-loading').style.display = 'none';
+}
+
+async function _cslPoll(jobId, intentos) {
+  if (intentos > 600) { _cslError('La carga está tardando demasiado — inténtalo de nuevo en unos minutos'); return; }
+  let d;
+  try {
+    const r = await fetch(`/api/sap/cargar-listados/${jobId}`, { credentials: 'same-origin' });
+    d = await r.json();
+    if (!r.ok || d.error) { _cslError(d.error || 'Error al cargar los listados'); return; }
+  } catch (e) { setTimeout(() => _cslPoll(jobId, intentos + 1), 2500); return; }
+  if (d.status === 'processing') { setTimeout(() => _cslPoll(jobId, intentos + 1), 2500); return; }
+  if (d.status === 'error') { _cslError(d.error || 'Error al cargar los listados'); return; }
+  _cslMostrarResultado(d.resultado || {});
+}
+
+function _cslMostrarResultado(res) {
+  const E = _escHtmlCp;
+  const pill = (txt, bg, color) => `<span style="background:${bg};color:${color};font-weight:700;padding:4px 10px;border-radius:6px;font-size:.82rem">${txt}</span>`;
+  const R = res.resumen || {};
+  const eur = v => (v == null ? '—' : Number(v).toLocaleString('es-ES', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + ' €');
+  const fch = iso => iso ? iso.split('-').reverse().join('/') : '<span style="color:#c0392b">sin fecha</span>';
+  const entradas = es => (es || []).map(e => `${E(e.albaran_id)} · ${fch(e.fecha_iso)} · ${eur(e.base)}`).join('<br>') || '—';
+  const verPedido = id => `<button class="btn btn-ghost btn-sm" onclick="closeModal('modal-cruce-sap');openPedidoModal(${id})">Abrir</button>`;
+  const th = cols => `<tr>${cols.map(c => `<th style="text-align:left;padding:5px 8px">${c}</th>`).join('')}</tr>`;
+  const td = 'style="padding:5px 8px;vertical-align:top;border-top:1px solid #eef1f7"';
+  let h = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
+    ${pill(`${R.aplicados ?? 0} aplicado(s) solo`, '#d4edda', '#155724')}
+    ${pill(`${R.creados ?? 0} pedido(s) creado(s)`, '#e7e0f7', '#4d2f8f')}
+    ${pill(`${R.revisar ?? 0} para revisar`, (R.revisar ? '#fff3cd' : '#f8f9fa'), (R.revisar ? '#856404' : '#666'))}
+    ${pill(`${R.sin_recepcion ?? 0} sin nada recibido`, '#f8f9fa', '#666')}
+  </div>`;
+  h += '<div style="font-size:.82rem;margin-bottom:10px">' + (res.archivos || []).map(a => a.error
+      ? `<div style="color:#c0392b">⚠️ ${E(a.nombre)}: ${E(a.error)}</div>`
+      : `<div>✅ ${E(a.tipo_texto)} — ${E(a.detalle || '')} <span style="color:#999">(${E(a.nombre)})</span></div>`).join('') + '</div>';
+  (res.avisos || []).forEach(a => { h += `<div style="background:#fff3cd;color:#856404;border-radius:6px;padding:6px 10px;font-size:.82rem;margin-bottom:6px">⚠️ ${E(a)}</div>`; });
+
+  if ((res.aplicados || []).length) {
+    h += `<div style="font-weight:700;color:#155724;margin:14px 0 4px">✅ Aplicado automáticamente (${res.aplicados.length})</div>
+      <div class="table-wrap" style="max-height:260px;overflow:auto"><table style="width:100%;font-size:.8rem"><thead>${th(['Pedido', 'Proveedor', 'Estado', 'Albaranes (fecha · base imponible)', ''])}</thead><tbody>` +
+      res.aplicados.map(a => `<tr><td ${td}>${E(a.pedido_num)}</td><td ${td}>${E(a.proveedor)}</td>
+        <td ${td}>${E(a.estado_actual)}${a.estado_nuevo && a.estado_nuevo !== a.estado_actual ? ' → <b>' + E(a.estado_nuevo) + '</b>' : ''}</td>
+        <td ${td}>${entradas(a.entradas)}</td><td ${td}>${verPedido(a.pedido_id)}</td></tr>`).join('') + '</tbody></table></div>';
+  }
+  if ((res.creados || []).length) {
+    h += `<div style="font-weight:700;color:#4d2f8f;margin:14px 0 4px">🆕 Pedidos creados desde SAP (${res.creados.length})</div>
+      <div class="table-wrap" style="max-height:200px;overflow:auto"><table style="width:100%;font-size:.8rem"><thead>${th(['Nº SAP', 'Proveedor', 'Estado', ''])}</thead><tbody>` +
+      res.creados.map(c => `<tr><td ${td}>${E(c.pedido_num_sap)}</td><td ${td}>${E(c.proveedor || '')}</td><td ${td}>${E(c.estado)}</td><td ${td}>${verPedido(c.pedido_id)}</td></tr>`).join('') + '</tbody></table></div>';
+  }
+  if ((res.no_creados || []).length) {
+    h += `<div style="font-size:.8rem;color:#856404;margin-top:8px">No se han podido crear ${res.no_creados.length}: ` + res.no_creados.slice(0, 6).map(n => `${E(n.pedido_num_sap)} (${E(n.motivo || '')})`).join('; ') + '</div>';
+  }
+  if ((res.revisar || []).length) {
+    h += `<div style="font-weight:700;color:#856404;margin:14px 0 4px">🔎 Para revisar (${res.revisar.length}) — no se ha tocado nada</div>
+      <div class="table-wrap" style="max-height:340px;overflow:auto"><table style="width:100%;font-size:.8rem"><thead>${th(['Pedido', 'Proveedor', 'App / SAP', 'Motivo', 'Propuesta parcial', ''])}</thead><tbody>` +
+      res.revisar.map(a => `<tr><td ${td}>${E(a.pedido_num)}</td><td ${td}>${E(a.proveedor)}</td>
+        <td ${td}>${E(a.estado_actual)}<br><span style="color:#888">SAP: ${E(a.estado_sap || '—')}</span></td>
+        <td ${td}>${(a.motivos || []).map(m => E(m)).join('<br>')}</td>
+        <td ${td}>${a.entradas && a.entradas.length ? entradas(a.entradas) : '—'}</td><td ${td}>${verPedido(a.pedido_id)}</td></tr>`).join('') + '</tbody></table></div>';
+  }
+  document.getElementById('csl-loading').style.display = 'none';
+  const cont = document.getElementById('csl-resultado');
+  cont.innerHTML = h + `<div style="margin-top:14px;text-align:right"><button class="btn btn-ghost" onclick="abrirModalCruceSap()">Cargar otros listados</button></div>`;
+  cont.style.display = '';
+  if (typeof loadPedidos === 'function') { try { loadPedidos(); } catch (e) {} }
 }
 
 /* ═══════════════════════════════════════════════════════════════════════

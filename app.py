@@ -2781,6 +2781,28 @@ def _auto_migrate():
                 CREATE INDEX IF NOT EXISTS sap_albaranes_lineas_pedido_confirmado_idx
                     ON sap_albaranes_lineas (hotel_id, pedido_num_sap_confirmado)
             """)
+            # (2026-10-09, v12.32.97) Cabecera de cada albarán del «Listado de Albaranes de Compra RESUMIDO
+            # POR ALBARANES» de SAP: aporta lo que el listado detallado no trae — la FECHA y hora del
+            # albarán, el almacén y el importe total (= base imponible). Se guarda tal cual; una fila por
+            # albarán y hotel (volver a subir el listado actualiza la fila, no la duplica).
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS sap_albaranes_cab (
+                    id               SERIAL PRIMARY KEY,
+                    hotel_id         INTEGER NOT NULL REFERENCES hoteles(id),
+                    albaran_id       TEXT NOT NULL,
+                    albaran_ref      TEXT,
+                    proveedor_nombre TEXT,
+                    fecha_albaran    TIMESTAMP,
+                    almacen          TEXT,
+                    importe_txt      TEXT,
+                    creado_en        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    actualizado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
+            cur.execute("""
+                CREATE UNIQUE INDEX IF NOT EXISTS sap_albaranes_cab_hotel_albaran_uk
+                    ON sap_albaranes_cab (hotel_id, albaran_id)
+            """)
         db.close()
         log.info("Auto-migración OK")
     except Exception as e:
@@ -11253,6 +11275,11 @@ _PDF_JOBS_LOCK = threading.Lock()
 # bastante por debajo de lo que se ha visto fallar — para cortar la subida
 # ANTES de gastar memoria de verdad, con un aviso claro en vez de reventar
 # el proceso para todo el mundo.
+# (2026-10-09, v12.32.97) Se MANTIENE en 200. Medido en un entorno sin límites: 239 págs. → pico ~100 MB, 717 págs. →
+# ~143 MB (la memoria ya no es el problema de los 3,2 GB originales), pero el TIEMPO en Render Free (CPU compartida
+# muy pequeña) no se puede verificar desde fuera, y la carga única lee varios PDF seguidos en un solo trabajo. Por eso
+# no se toca el límite: la carga semanal (unas decenas de páginas por listado) cabe de sobra; la primera carga de un
+# hotel con meses atrás conviene dividirla en tramos quincenales, como siempre.
 _LIMITE_PAGINAS_PDF_LISTADO_GRANDE = 200
 
 def _contar_paginas_pdf(pdf_bytes: bytes) -> int:
@@ -12977,6 +13004,17 @@ def _importar_albaranes_listado(hotel_id: int, pdf_bytes: bytes) -> dict:
         )
         filas_borradas = cur_del.rowcount or 0
 
+    # (v12.32.97) Además de por periodo, se reemplazan SIEMPRE las filas de los albaranes que trae este PDF
+    # (aunque la cabecera no se reconozca): antes, al subir un listado «sin periodo» las líneas se duplicaban
+    # cada vez que se volvía a subir el mismo PDF.
+    _ids_alb = sorted({f.get("albaran_id") for f in filas if f.get("albaran_id")})
+    if _ids_alb:
+        cur_del2 = execute(
+            "DELETE FROM sap_albaranes_lineas WHERE hotel_id=%s AND albaran_id = ANY(%s)",
+            (hotel_id, _ids_alb)
+        )
+        filas_borradas += cur_del2.rowcount or 0
+
     proveedores_vistos = set()
     familias_vistas = set()
     for f in filas:
@@ -13614,7 +13652,7 @@ def _importar_albaran_confirmacion(hotel_id: int, pdf_bytes: bytes) -> dict:
     }
 
 
-def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
+def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes, escribir_base_ultima_entrada: bool = True) -> dict:
     """Lógica pura de extracción+comparación — separada de la vista Flask
     para poder llamarla igual desde una petición normal o desde un hilo
     en segundo plano. Lanza excepción con el mensaje de error si algo
@@ -13851,7 +13889,9 @@ def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes) -> dict:
             elif _difiere:
                 _total_pedido_actualizados.append((pedido_app["id"], importe_base))
 
-        if pedido_app and importe_recibido is not None:
+        if escribir_base_ultima_entrada and pedido_app and importe_recibido is not None:
+            # (v12.32.97) La carga unificada de listados SAP pasa escribir_base_ultima_entrada=False: allí la
+            # base de cada entrada sale del propio albarán (suma de sus líneas), no del importe recibido de SAP.
             _entradas_pedido = _parse_albaran_entries(pedido_app.get("entrada_albaran_num"))
             if _entradas_pedido:
                 _suma_anteriores = sum(
@@ -15032,6 +15072,123 @@ def pedidos_pendientes_crear_sap(hotel_id):
         return jsonify({"error": "Hotel no disponible"}), 403
     return jsonify({"ok": True, "pedidos": _pedidos_sap_no_registrados(hotel_id)})
 
+def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: dict, uid=None) -> dict:
+    """(v12.32.97) Cuerpo de crear_pedidos_desde_sap() extraído tal cual para poder reutilizarlo desde
+    la carga unificada de listados SAP (_cargar_listados_sap_logica). Mismas reglas, mismo alta «cáscara»
+    silenciosa y misma trazabilidad automática que se describen en el docstring del endpoint."""
+    db  = get_db()
+    if uid is None:
+        uid = current_user_id()
+    # (2026-09-04, v12.32.13) Trazabilidad de altas automáticas — mismo
+    # criterio ya usado en _aplicar_coincidencia_albaran(): el nombre que
+    # queda registrado en el pedido y en su historial NO es el del admin
+    # que pulsó el botón, es un texto fijo que deja claro que fue una
+    # automatización la que lo creó. `uid` (el id real) sí se conserva.
+    _NOMBRE_AUTO_CREACION_SAP = "Automática — alta desde listado de pedidos SAP"
+    # (2026-09-04, v12.32.13) Mapeo del estado de entrega de SAP al estado
+    # inicial del pedido — ver CORRECCIÓN v12.32.13 en el docstring de
+    # arriba: "No entregado" (o cualquier otro valor) siempre cae a
+    # ENVIADO AL PROVEEDOR, nunca se inventa un estado de entrega sin dato.
+    _ESTADO_INICIAL_POR_ENTREGA = {
+        "Entregado":       "ENTREGADO",
+        "Entrega parcial": "ENTREGA PARCIAL",
+    }
+
+    creados, omitidos, errores = [], [], []
+    for num in nums_pedidos:
+        fila = filas_por_num.get(_normalizar_pedido_num(num))
+        if not fila:
+            omitidos.append({
+                "pedido_num_sap": num,
+                "motivo": "Ya no está pendiente de crear — puede que ya se haya dado de alta "
+                          "(a mano o en otra pestaña) mientras tanto",
+            })
+            continue
+        if not fila.get("proveedor_identificado"):
+            omitidos.append({
+                "pedido_num_sap": num,
+                "motivo": "El proveedor no está identificado en el catálogo — identifícalo primero en Admin → Proveedores",
+            })
+            continue
+        try:
+            norden = _next_norden(db)
+            fecha_tramitacion        = _parsear_fecha_es_a_iso(fila.get("fecha_pedido"))
+            fecha_entrega_especifica = _parsear_fecha_es_a_iso(fila.get("fecha_entrega"))
+            importe_base = fila.get("importe_base")
+            estado_inicial = _ESTADO_INICIAL_POR_ENTREGA.get(fila.get("entrega_estado"), "ENVIADO AL PROVEEDOR")
+            # (2026-09-05, v12.32.31 — Pieza 3) Total Pedido: si el RESUMIDO
+            # nunca trajo un importe real para este pedido (DETALLADO-only,
+            # `importe_base_real` False — ver _pedidos_sap_no_registrados),
+            # se usa la suma de líneas ya guardada como aproximación en vez
+            # de dejarlo en 0,00 fijo — marcado con `total_pedido_aproximado`
+            # para que quede claro en la ficha que no es el importe exacto
+            # de SAP. Nunca afecta a `importe` (el campo de techo/presupuesto,
+            # que sigue viniendo solo de `importe_base`) ni a `estado_inicial`
+            # (calculado arriba a partir del importe REAL, nunca del
+            # aproximado — mismo criterio que en
+            # _actualizar_departamentos_desde_listado_detallado).
+            if fila.get("importe_base_real"):
+                total_pedido_val = importe_base
+                total_pedido_aproximado = False
+            elif fila.get("importe_aproximado") is not None:
+                total_pedido_val = fila["importe_aproximado"]
+                total_pedido_aproximado = True
+            else:
+                total_pedido_val = importe_base  # se queda en 0,00 — sin líneas todavía de las que aproximar
+                total_pedido_aproximado = False
+            observ = (
+                f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']}) "
+                f"el {datetime.now().strftime('%d/%m/%Y')} — pendiente de completar el resto de la documentación."
+            )
+
+            cur = execute("""
+                INSERT INTO pedidos (
+                    norden, hotel_id, departamento_id,
+                    fecha_solicitud, fecha_envio_visto_bueno, fecha_tramitacion,
+                    pedido_num, presupuesto_num, entrada_albaran_num,
+                    tarifa_acordada,
+                    estado, comunicado_ab, comunicado_jefe_dep,
+                    parte_rotura, parte_ampliacion,
+                    proveedor_id, observaciones,
+                    familia_id, importe, sujeto_techo,
+                    plazo_entrega_dias, fecha_entrega_especifica,
+                    total_pedido, total_pedido_aproximado,
+                    creado_por_id, modificado_por_id,
+                    creado_por_nombre, modificado_por_nombre
+                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                RETURNING id
+            """, (
+                norden, hotel_id, fila.get("departamento_id"),
+                None, None, fecha_tramitacion,
+                fila["pedido_num_sap"], None, None,
+                False,
+                estado_inicial, 0, 0,
+                0, 0,
+                fila["proveedor_id"], observ,
+                None, importe_base, 0,
+                None, fecha_entrega_especifica,
+                total_pedido_val, total_pedido_aproximado,
+                uid, uid,
+                _NOMBRE_AUTO_CREACION_SAP, _NOMBRE_AUTO_CREACION_SAP,
+            ))
+            pedido_id = cur.fetchone()["id"]
+            execute(
+                "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s)",
+                (pedido_id, estado_inicial, uid, _NOMBRE_AUTO_CREACION_SAP,
+                 f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']})")
+            )
+            db.commit()
+            creados.append({
+                "pedido_num_sap": fila["pedido_num_sap"], "pedido_id": pedido_id,
+                "norden": norden, "estado": estado_inicial,
+            })
+        except Exception as exc:
+            log.exception("[CREAR-DESDE-SAP] Error creando pedido %s: %s", num, exc)
+            errores.append({"pedido_num_sap": num, "error": str(exc)})
+
+    return {"creados": creados, "omitidos": omitidos, "errores": errores}
+
+
 @app.route("/api/pedidos/crear-desde-sap", methods=["POST"])
 @login_required
 def crear_pedidos_desde_sap():
@@ -15147,116 +15304,547 @@ def crear_pedidos_desde_sap():
                                   "pedido pendiente de crear — vuelve a comparar el listado"}), 400
     filas_por_num = {_normalizar_pedido_num(f["pedido_num_sap"]): f for f in filas}
 
-    db  = get_db()
-    uid = current_user_id()
-    # (2026-09-04, v12.32.13) Trazabilidad de altas automáticas — mismo
-    # criterio ya usado en _aplicar_coincidencia_albaran(): el nombre que
-    # queda registrado en el pedido y en su historial NO es el del admin
-    # que pulsó el botón, es un texto fijo que deja claro que fue una
-    # automatización la que lo creó. `uid` (el id real) sí se conserva.
-    _NOMBRE_AUTO_CREACION_SAP = "Automática — alta desde listado de pedidos SAP"
-    # (2026-09-04, v12.32.13) Mapeo del estado de entrega de SAP al estado
-    # inicial del pedido — ver CORRECCIÓN v12.32.13 en el docstring de
-    # arriba: "No entregado" (o cualquier otro valor) siempre cae a
-    # ENVIADO AL PROVEEDOR, nunca se inventa un estado de entrega sin dato.
-    _ESTADO_INICIAL_POR_ENTREGA = {
-        "Entregado":       "ENTREGADO",
-        "Entrega parcial": "ENTREGA PARCIAL",
-    }
-
-    creados, omitidos, errores = [], [], []
-    for num in nums_pedidos:
-        fila = filas_por_num.get(_normalizar_pedido_num(num))
-        if not fila:
-            omitidos.append({
-                "pedido_num_sap": num,
-                "motivo": "Ya no está pendiente de crear — puede que ya se haya dado de alta "
-                          "(a mano o en otra pestaña) mientras tanto",
-            })
-            continue
-        if not fila.get("proveedor_identificado"):
-            omitidos.append({
-                "pedido_num_sap": num,
-                "motivo": "El proveedor no está identificado en el catálogo — identifícalo primero en Admin → Proveedores",
-            })
-            continue
-        try:
-            norden = _next_norden(db)
-            fecha_tramitacion        = _parsear_fecha_es_a_iso(fila.get("fecha_pedido"))
-            fecha_entrega_especifica = _parsear_fecha_es_a_iso(fila.get("fecha_entrega"))
-            importe_base = fila.get("importe_base")
-            estado_inicial = _ESTADO_INICIAL_POR_ENTREGA.get(fila.get("entrega_estado"), "ENVIADO AL PROVEEDOR")
-            # (2026-09-05, v12.32.31 — Pieza 3) Total Pedido: si el RESUMIDO
-            # nunca trajo un importe real para este pedido (DETALLADO-only,
-            # `importe_base_real` False — ver _pedidos_sap_no_registrados),
-            # se usa la suma de líneas ya guardada como aproximación en vez
-            # de dejarlo en 0,00 fijo — marcado con `total_pedido_aproximado`
-            # para que quede claro en la ficha que no es el importe exacto
-            # de SAP. Nunca afecta a `importe` (el campo de techo/presupuesto,
-            # que sigue viniendo solo de `importe_base`) ni a `estado_inicial`
-            # (calculado arriba a partir del importe REAL, nunca del
-            # aproximado — mismo criterio que en
-            # _actualizar_departamentos_desde_listado_detallado).
-            if fila.get("importe_base_real"):
-                total_pedido_val = importe_base
-                total_pedido_aproximado = False
-            elif fila.get("importe_aproximado") is not None:
-                total_pedido_val = fila["importe_aproximado"]
-                total_pedido_aproximado = True
-            else:
-                total_pedido_val = importe_base  # se queda en 0,00 — sin líneas todavía de las que aproximar
-                total_pedido_aproximado = False
-            observ = (
-                f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']}) "
-                f"el {datetime.now().strftime('%d/%m/%Y')} — pendiente de completar el resto de la documentación."
-            )
-
-            cur = execute("""
-                INSERT INTO pedidos (
-                    norden, hotel_id, departamento_id,
-                    fecha_solicitud, fecha_envio_visto_bueno, fecha_tramitacion,
-                    pedido_num, presupuesto_num, entrada_albaran_num,
-                    tarifa_acordada,
-                    estado, comunicado_ab, comunicado_jefe_dep,
-                    parte_rotura, parte_ampliacion,
-                    proveedor_id, observaciones,
-                    familia_id, importe, sujeto_techo,
-                    plazo_entrega_dias, fecha_entrega_especifica,
-                    total_pedido, total_pedido_aproximado,
-                    creado_por_id, modificado_por_id,
-                    creado_por_nombre, modificado_por_nombre
-                ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                RETURNING id
-            """, (
-                norden, hotel_id, fila.get("departamento_id"),
-                None, None, fecha_tramitacion,
-                fila["pedido_num_sap"], None, None,
-                False,
-                estado_inicial, 0, 0,
-                0, 0,
-                fila["proveedor_id"], observ,
-                None, importe_base, 0,
-                None, fecha_entrega_especifica,
-                total_pedido_val, total_pedido_aproximado,
-                uid, uid,
-                _NOMBRE_AUTO_CREACION_SAP, _NOMBRE_AUTO_CREACION_SAP,
-            ))
-            pedido_id = cur.fetchone()["id"]
-            execute(
-                "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s)",
-                (pedido_id, estado_inicial, uid, _NOMBRE_AUTO_CREACION_SAP,
-                 f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']})")
-            )
-            db.commit()
-            creados.append({
-                "pedido_num_sap": fila["pedido_num_sap"], "pedido_id": pedido_id,
-                "norden": norden, "estado": estado_inicial,
-            })
-        except Exception as exc:
-            log.exception("[CREAR-DESDE-SAP] Error creando pedido %s: %s", num, exc)
-            errores.append({"pedido_num_sap": num, "error": str(exc)})
-
+    res = _crear_pedidos_sap_lote(hotel_id, nums_pedidos, filas_por_num, current_user_id())
+    creados, omitidos, errores = res["creados"], res["omitidos"], res["errores"]
     return jsonify({"ok": True, "creados": creados, "omitidos": omitidos, "errores": errores})
+
+# ═══════════════════════════════════════════════════════════════════════════
+# (2026-10-09, v12.32.97) CARGA UNIFICADA DE LISTADOS SAP
+#
+# Petición de Víctor: «simplificar las diferentes opciones existentes para la carga de listados en pedidos,
+# es todo muy lioso». Un único punto de entrada recibe los PDF de SAP de un hotel (hasta cuatro: pedidos
+# resumido, pedidos detallado, albaranes detallado y albaranes resumido; con o sin cabecera), reconoce cada
+# uno por su contenido, los guarda con los lectores de siempre y, con lo cargado:
+#   1. da de alta los pedidos que SAP tiene y la app no (solo proveedores «Sujeto a seguimiento»);
+#   2. cruza por LÍNEAS (proveedor + código de artículo + cantidad exacta) los pedidos pendientes con los
+#      albaranes y aplica SOLO lo seguro: estado, nº de albarán, fecha del albarán y base imponible;
+#   3. deja en una lista «para revisar» (con el motivo) todo lo que no es seguro.
+# Alimentación, bebidas y limpieza no entran: solo cuentan los proveedores marcados «Sujeto a seguimiento».
+# Todo lo automático queda en el Historial como «Automática — carga de listados SAP» y NO envía correos
+# (ni al proveedor ni internos) ni Telegram: son altas/regularizaciones retroactivas, no decisiones nuevas.
+# ═══════════════════════════════════════════════════════════════════════════
+
+_NOMBRE_AUTO_CARGA_SAP = "Automática — carga de listados SAP"
+_TIPOS_LISTADO_SAP = {
+    "pedidos_resumido":    "Listado de Pedidos (resumido)",
+    "pedidos_detallado":   "Listado de Pedidos (detallado)",
+    "albaranes_detallado": "Listado de Albaranes (detallado)",
+    "albaranes_resumido":  "Listado de Albaranes (resumido por albaranes)",
+}
+_ORDEN_CARGA_LISTADOS_SAP = ["pedidos_resumido", "pedidos_detallado", "albaranes_resumido", "albaranes_detallado"]
+
+
+def _detectar_tipo_listado_sap(pdf_bytes: bytes):
+    """Reconoce cuál de los cuatro listados de SAP es un PDF mirando solo el texto de sus dos primeras
+    páginas (con o sin cabecera de página). Devuelve la clave de _TIPOS_LISTADO_SAP o None."""
+    from pypdf import PdfReader
+    import io
+    try:
+        lector = PdfReader(io.BytesIO(pdf_bytes))
+        texto = "\n".join((pg.extract_text() or "") for pg in lector.pages[:2])
+    except Exception:
+        return None
+    if re.search(r'Proveedor:\s*\d+\s*-', texto) and "Albarán:" in texto:
+        return "albaranes_detallado"
+    if re.search(r'(?m)^\s*\d{6,}\s+Albar[aá]n:\s*\d+', texto):
+        return "albaranes_resumido"
+    if re.search(r'\d{6,}\s*-\s*Pedido\s+\d{2}/\d{2}/\d{4}', texto) and "Art" in texto:
+        return "pedidos_detallado"
+    if _PATRON_LISTADO_SIMPLIFICADO.search(texto):
+        return "pedidos_resumido"
+    return None
+
+
+def _extraer_albaranes_resumido(pdf_bytes: bytes) -> dict:
+    """Lee el «Listado de Albaranes de Compra RESUMIDO POR ALBARANES» (una fila por albarán: código,
+    descripción «Albarán: NNNNNNNN - REF (EURO)», proveedor, fecha y hora, almacén e importe total).
+    Devuelve {"periodo_desde","periodo_hasta","filas":[{albaran_id, albaran_ref, proveedor_nombre,
+    fecha_hora (YYYY-MM-DD HH:MM:SS), almacen, importe_txt}]}. Con o sin cabecera: el periodo solo se
+    informa si la cabecera está."""
+    import io
+    import pdfplumber
+    filas, periodo = [], None
+    with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+        for pagina in pdf.pages:
+            if periodo is None:
+                m = _PATRON_PERIODO_ALBARANES.search(pagina.extract_text() or "")
+                if m:
+                    periodo = m.groups()
+            for tabla in pagina.extract_tables():
+                for r in tabla:
+                    if not r or len(r) < 6 or not r[0] or not re.fullmatch(r'\d{6,}', r[0].strip()):
+                        continue
+                    celdas = [re.sub(r'\s+', ' ', (c or '').replace('\n', ' ')).strip() for c in r]
+                    cod, desc, prov, fecha, alm, imp = celdas[0], celdas[1], celdas[2], celdas[3], celdas[4], celdas[5]
+                    m_ref = re.match(r'Albar[aá]n:\s*\d+\s*-\s*(.*)$', desc)
+                    m_f = re.match(r'(\d{2})/(\d{2})/(\d{4})(?:\s+(\d{1,2}):(\d{2}):(\d{2}))?', fecha)
+                    fecha_hora = None
+                    if m_f:
+                        d, mo, y, h, mi, se = m_f.groups()
+                        fecha_hora = f"{y}-{mo}-{d} {int(h or 0):02d}:{mi or '00'}:{se or '00'}"
+                    filas.append({
+                        "albaran_id": cod, "albaran_ref": (m_ref.group(1).strip() if m_ref else desc),
+                        "proveedor_nombre": prov, "fecha_hora": fecha_hora, "almacen": alm, "importe_txt": imp,
+                    })
+            pagina.flush_cache()
+    return {"periodo_desde": periodo[0] if periodo else None, "periodo_hasta": periodo[1] if periodo else None,
+            "filas": filas}
+
+
+def _guardar_albaranes_resumido(hotel_id: int, filas: list) -> int:
+    """Upsert de la cabecera de cada albarán en sap_albaranes_cab (una fila por hotel+albarán)."""
+    if not filas:
+        return 0
+    datos = [(hotel_id, f["albaran_id"], f.get("albaran_ref"), f.get("proveedor_nombre"), f.get("fecha_hora"),
+              f.get("almacen"), f.get("importe_txt")) for f in filas]
+    with get_db().cursor() as cur:
+        execute_values(
+            cur,
+            """INSERT INTO sap_albaranes_cab (hotel_id, albaran_id, albaran_ref, proveedor_nombre, fecha_albaran, almacen, importe_txt)
+               VALUES %s
+               ON CONFLICT (hotel_id, albaran_id) DO UPDATE SET
+                   albaran_ref=EXCLUDED.albaran_ref, proveedor_nombre=EXCLUDED.proveedor_nombre,
+                   fecha_albaran=EXCLUDED.fecha_albaran, almacen=EXCLUDED.almacen,
+                   importe_txt=EXCLUDED.importe_txt, actualizado_en=NOW()""",
+            datos, page_size=500)
+    get_db().commit()
+    return len(datos)
+
+
+def _clave_prov_sap(nombre) -> str:
+    """Clave de comparación de proveedores entre listados de SAP (solo letras y cifras, sin acentos)."""
+    import unicodedata
+    s = unicodedata.normalize("NFKD", (nombre or "").upper())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r'[^A-Z0-9]', '', s)
+
+
+def _mismo_prov_sap(a: str, b: str) -> bool:
+    """Igualdad de proveedores tolerando los nombres CORTADOS del listado de pedidos (p. ej. «TORRES
+    CANARIAS VINOS Y DESTILADOS,» frente al nombre completo del listado de albaranes)."""
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    corto, largo = (a, b) if len(a) <= len(b) else (b, a)
+    return len(corto) >= 15 and largo.startswith(corto)
+
+
+def _cruce_lineas_sap_hotel(hotel_id: int) -> dict:
+    """SOLO LECTURA. Propone, para cada pedido pendiente de la app (proveedor «Sujeto a seguimiento»), qué
+    albaranes de SAP corresponden a lo recibido, cruzando por LÍNEAS: para cada referencia con cantidad
+    recibida en el listado de pedidos detallado se buscan, entre los albaranes del mismo proveedor, las
+    líneas de esa referencia cuya suma de cantidades es EXACTAMENTE la recibida. Un mismo albarán puede
+    repartir líneas entre varios pedidos del proveedor (lo normal fuera de alimentación), por eso no se
+    exige que un albarán entero pertenezca a un solo pedido: la base imponible de cada entrada es la suma
+    de las líneas que corresponden a ESE pedido.
+
+    Devuelve {"seguros": [...], "revisar": [...], "sin_recepcion": int, "evaluados": int}. Cada elemento
+    lleva pedido_id, norden, pedido_num, proveedor, estado_actual, estado_sap, estado_objetivo y, en
+    «seguros», "entradas": [{albaran_id, albaran_ref, fecha_iso, base, lineas:{codigo: cantidad}}]; en
+    «revisar», "motivos": [texto] y la propuesta parcial si la hay."""
+    import itertools
+    from collections import defaultdict
+    tol = 1e-6
+
+    # ── Pedidos de la app candidatos ──────────────────────────────────────────────────────────────
+    cands = rows_to_list(query(
+        """SELECT p.id, p.norden, p.pedido_num, p.estado, p.entrada_albaran_num, pr.nombre AS proveedor
+           FROM pedidos p JOIN proveedores pr ON pr.id = p.proveedor_id
+           WHERE p.hotel_id=%s AND pr.sujeto_seguimiento = TRUE AND p.pedido_num IS NOT NULL AND p.pedido_num <> ''
+             AND p.estado IN ('ENVIADO AL PROVEEDOR','PENDIENTE COTIZACIÓN','ENTREGA PARCIAL','ENTREGADO')""",
+        (hotel_id,)))
+    cands = [c for c in cands if c["estado"] != "ENTREGADO" or not _parse_albaran_entries(c["entrada_albaran_num"])]
+
+    # ── Lo que SAP dice de cada pedido: estado, proveedor y líneas con cantidad recibida ─────────
+    listado = {}
+    for f in rows_to_list(query(
+            "SELECT pedido_num_sap, proveedor_raw, estado_sap, importe_recibido_txt, fecha_hora_fecha FROM sap_pedidos_listado WHERE hotel_id=%s",
+            (hotel_id,))):
+        listado[_normalizar_pedido_num(f["pedido_num_sap"])] = f
+    lineas_sap = defaultdict(list)
+    for l in rows_to_list(query(
+            """SELECT pedido_num_sap, codigo_articulo, descripcion, cantidad_pedida_txt, cantidad_recibida_txt
+               FROM sap_pedidos_lineas WHERE hotel_id=%s ORDER BY id""", (hotel_id,))):
+        lineas_sap[_normalizar_pedido_num(l["pedido_num_sap"])].append(l)
+    recibido = {}      # pedido_num normalizado → {codigo: cantidad recibida}
+    for num, lst in lineas_sap.items():
+        d = defaultdict(float)
+        for l in lst:
+            d[l["codigo_articulo"]] += _parse_importe_es(l["cantidad_recibida_txt"])
+        recibido[num] = {c: q for c, q in d.items() if q > tol}
+    prov_de = {num: _clave_prov_sap((listado.get(num) or {}).get("proveedor_raw")) for num in recibido}
+    por_codigo = defaultdict(list)     # código → [pedido_num normalizado con ese código recibido]
+    for n2, r2 in recibido.items():
+        for cod2 in r2:
+            por_codigo[cod2].append(n2)
+
+    # ── Albaranes: líneas por proveedor/albarán/código y cabeceras (fecha) ─────────────────────────
+    alb = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: [0.0, 0.0])))   # prov → aid → codigo → [qty, importe]
+    ref_alb = {}
+    for l in rows_to_list(query(
+            "SELECT proveedor_nombre, albaran_id, albaran_ref, codigo_articulo, cantidad_txt, importe_txt "
+            "FROM sap_albaranes_lineas WHERE hotel_id=%s", (hotel_id,))):
+        q = _parse_importe_es(l["cantidad_txt"])
+        if q <= tol:
+            continue
+        celda = alb[_clave_prov_sap(l["proveedor_nombre"])][l["albaran_id"]][l["codigo_articulo"]]
+        celda[0] += q
+        celda[1] += _parse_importe_es(l["importe_txt"])
+        ref_alb[l["albaran_id"]] = l["albaran_ref"]
+    cab = {f["albaran_id"]: f for f in rows_to_list(query(
+        "SELECT albaran_id, albaran_ref, fecha_albaran, importe_txt FROM sap_albaranes_cab WHERE hotel_id=%s", (hotel_id,)))}
+
+    def albaranes_de(prov_key):
+        res = {}
+        for k, v in alb.items():
+            if _mismo_prov_sap(prov_key, k):
+                res.update(v)
+        return res
+
+    seguros, revisar, sin_recepcion = [], [], 0
+    plan = {}                          # pedido_num normalizado → datos del cruce de ese pedido
+    reclamado = defaultdict(list)      # (albarán, código) → [pedido_num normalizado]
+    for c in cands:
+        num = _normalizar_pedido_num(c["pedido_num"])
+        sap = listado.get(num)
+        base_item = {"pedido_id": c["id"], "norden": c["norden"], "pedido_num": c["pedido_num"], "proveedor": c["proveedor"],
+                     "estado_actual": c["estado"], "estado_sap": (sap or {}).get("estado_sap")}
+        r = recibido.get(num)
+        if not sap or num not in lineas_sap:
+            if sap and _parse_importe_es(sap.get("importe_recibido_txt")) > 0:
+                revisar.append({**base_item, "motivos": ["SAP tiene recibido, pero falta el Listado de Pedidos DETALLADO de este pedido"]})
+            continue
+        if not r:
+            if (sap.get("estado_sap") or "").strip().lower() == "cerrado" and c["estado"] != "ENTREGADO":
+                revisar.append({**base_item, "motivos": ["Cerrado en SAP sin nada recibido: ¿cancelado o error?"]})
+            else:
+                sin_recepcion += 1
+            continue
+        prov_key = prov_de.get(num) or _clave_prov_sap(c["proveedor"])
+        albs = albaranes_de(prov_key)
+        asignado = defaultdict(dict)       # aid → {codigo: (cantidad, importe)}
+        faltan, ambiguos = [], []
+        for cod, q_rec in r.items():
+            cand = [(aid, d[cod][0], d[cod][1]) for aid, d in albs.items() if cod in d]
+            otros = [n2 for n2 in por_codigo.get(cod, ()) if n2 != num and _mismo_prov_sap(prov_key, prov_de.get(n2, ""))]
+            total = sum(x[1] for x in cand)
+            if not cand:
+                faltan.append((cod, q_rec, 0.0))
+            elif not otros and abs(total - q_rec) < tol:
+                for aid, q, imp in cand:
+                    asignado[aid][cod] = (q, imp)
+            elif not otros and total < q_rec - tol:
+                for aid, q, imp in cand:
+                    asignado[aid][cod] = (q, imp)
+                faltan.append((cod, q_rec, total))
+            else:
+                # Más albarán que recibido en este pedido, o referencia compartida con otro pedido: solo vale
+                # una combinación ÚNICA de líneas cuya suma sea exactamente lo recibido.
+                pool = cand[:14]
+                sols = [sub for k in range(1, min(4, len(pool)) + 1) for sub in itertools.combinations(pool, k)
+                        if abs(sum(x[1] for x in sub) - q_rec) < tol]
+                if len(sols) == 1:
+                    for aid, q, imp in sols[0]:
+                        asignado[aid][cod] = (q, imp)
+                elif not sols and total < q_rec - tol:
+                    for aid, q, imp in cand:
+                        asignado[aid][cod] = (q, imp)
+                    faltan.append((cod, q_rec, total))
+                else:
+                    ambiguos.append((cod, q_rec, total))
+        for aid, d in asignado.items():
+            for cod in d:
+                reclamado[(aid, cod)].append(num)
+        plan[num] = {"base": base_item, "sap": sap, "asignado": asignado, "faltan": faltan, "ambiguos": ambiguos}
+
+    # ── Mismo reparto (albarán, referencia) reclamado por dos pedidos: desempata la FECHA ────────────────
+    # Un albarán no puede ser anterior al pedido que lo origina. Si de los pedidos en conflicto solo uno es
+    # anterior (o igual) a la fecha del albarán, ese se queda con él y a los demás les «falta» ese albarán.
+    def _fecha_pedido(num):
+        t = ((plan[num]["sap"] or {}).get("fecha_hora_fecha") or "").strip()
+        m = re.match(r'(\d{2})/(\d{2})/(\d{4})', t)
+        return datetime(int(m.group(3)), int(m.group(2)), int(m.group(1))) if m else None
+    for (aid, cod), claim in list(reclamado.items()):
+        if len(claim) < 2:
+            continue
+        f_alb = (cab.get(aid) or {}).get("fecha_albaran")
+        validos = [n for n in claim if f_alb and _fecha_pedido(n) and _fecha_pedido(n).date() <= f_alb.date()]
+        if len(validos) == 1:
+            for n in claim:
+                if n != validos[0]:
+                    q_perd = plan[n]["asignado"][aid].pop(cod, None)
+                    if not plan[n]["asignado"][aid]:
+                        del plan[n]["asignado"][aid]
+                    plan[n]["faltan"].append((cod, recibido[n].get(cod, 0.0), 0.0))
+            reclamado[(aid, cod)] = [validos[0]]
+    dobles = {k for k, v in reclamado.items() if len(v) > 1}
+
+    for num, pl in plan.items():
+        base_item, sap, asignado, faltan, ambiguos = pl["base"], pl["sap"], pl["asignado"], pl["faltan"], pl["ambiguos"]
+        completo = all(_parse_importe_es(l["cantidad_recibida_txt"]) + tol >= _parse_importe_es(l["cantidad_pedida_txt"])
+                       for l in lineas_sap[num])
+        cerrado = (sap.get("estado_sap") or "").strip().lower() == "cerrado"
+        objetivo = "ENTREGADO" if (cerrado or completo) else "ENTREGA PARCIAL"
+        entradas = []
+        for aid in sorted(asignado, key=lambda a: ((cab.get(a) or {}).get("fecha_albaran") or datetime.max, a)):
+            fch = (cab.get(aid) or {}).get("fecha_albaran")
+            entradas.append({
+                "albaran_id": aid, "albaran_ref": (cab.get(aid) or {}).get("albaran_ref") or ref_alb.get(aid),
+                "fecha_iso": fch.date().isoformat() if fch else None,
+                "base": round(sum(v[1] for v in asignado[aid].values()), 2),
+                "lineas": {cod: v[0] for cod, v in asignado[aid].items()},
+            })
+        motivos = []
+        if faltan:
+            motivos.append(f"Faltan albaranes de {len(faltan)} referencia(s) recibida(s) en SAP — ¿albarán de otro mes que aún no has cargado? "
+                           f"({', '.join(x[0] for x in faltan[:4])}{'…' if len(faltan) > 4 else ''})")
+        if ambiguos:
+            motivos.append(f"{len(ambiguos)} referencia(s) con más de una combinación posible o compartidas con otro pedido "
+                           f"({', '.join(x[0] for x in ambiguos[:4])}{'…' if len(ambiguos) > 4 else ''})")
+        if any((e["albaran_id"], cod) in dobles for e in entradas for cod in e["lineas"]):
+            motivos.append("Las mismas líneas de albarán podrían corresponder también a otro pedido del proveedor")
+        if not entradas and not motivos:
+            motivos.append("Ningún albarán del listado coincide con lo recibido")
+        if entradas and any(not e["fecha_iso"] for e in entradas):
+            motivos.append("Falta la fecha de algún albarán: carga también el Listado de Albaranes RESUMIDO")
+        item = {**base_item, "estado_objetivo": objetivo, "entradas": entradas}
+        if motivos:
+            revisar.append({**item, "motivos": motivos})
+        else:
+            seguros.append(item)
+    return {"seguros": seguros, "revisar": revisar, "sin_recepcion": sin_recepcion, "evaluados": len(cands)}
+
+
+def _aplicar_cruce_lineas_pedido(db, item: dict, usuario_id) -> dict:
+    """Aplica UN resultado «seguro» de _cruce_lineas_sap_hotel(): añade las entradas de albarán que falten
+    (nº, fecha y base imponible), guarda el detalle «Referencias de la entrada» si el pedido tiene líneas y
+    sube el estado si procede. Idempotente. SIN correos ni Telegram. Devuelve {"aplicado", "cambios"}."""
+    pid = item["pedido_id"]
+    p = row_to_dict(query("SELECT id, estado, entrada_albaran_num FROM pedidos WHERE id=%s", (pid,), one=True))
+    if not p:
+        return {"aplicado": False, "cambios": ["El pedido ya no existe"]}
+    estado_antes = p["estado"]
+    if estado_antes in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL"):
+        return {"aplicado": False, "cambios": [f"El pedido está {estado_antes}"]}
+    entradas = _parse_albaran_entries(p["entrada_albaran_num"])
+    cambios = []
+    nuevas_lineas = {}
+    for e in item["entradas"]:
+        existente = next((x for x in entradas if _normalizar_num_albaran(x["num"]) == _normalizar_num_albaran(e["albaran_id"])), None)
+        if existente is None:
+            entradas.append({"num": e["albaran_id"], "fecha_iso": e["fecha_iso"], "base_imponible": e["base"]})
+            nuevas_lineas[e["albaran_id"]] = e["lineas"]
+            cambios.append(f"entrada {e['albaran_id']} ({_fmt_importe_es(e['base'])} €)")
+        else:
+            if existente.get("base_imponible") is None:
+                existente["base_imponible"] = e["base"]
+                cambios.append(f"base de la entrada {e['albaran_id']} → {_fmt_importe_es(e['base'])} €")
+            if not existente.get("fecha_iso") and e["fecha_iso"]:
+                existente["fecha_iso"] = e["fecha_iso"]
+                cambios.append(f"fecha de la entrada {e['albaran_id']} → {e['fecha_iso']}")
+    estado_nuevo = estado_antes
+    objetivo = item["estado_objetivo"]
+    if _ORDEN_ENTREGA_ESTADOS.get(objetivo, 0) > _ORDEN_ENTREGA_ESTADOS.get(estado_antes, 0):
+        estado_nuevo = objetivo
+        cambios.append(f"estado → {objetivo}")
+    if not cambios:
+        return {"aplicado": False, "cambios": ["Ya estaba todo al día"]}
+    nuevo_str = _construir_entrada_albaran_num(entradas)
+    execute("UPDATE pedidos SET entrada_albaran_num=%s, estado=%s, modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW() WHERE id=%s",
+            (nuevo_str, estado_nuevo, usuario_id, _NOMBRE_AUTO_CARGA_SAP, pid))
+    if nuevas_lineas:
+        lin = rows_to_list(query("SELECT codigo, orden FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pid,)))
+        if lin:
+            previas = {}
+            for r in rows_to_list(query("SELECT albaran_num, codigo, cantidad FROM pedido_lineas_entregas WHERE pedido_id=%s ORDER BY id", (pid,))):
+                previas.setdefault(r["albaran_num"], {})[r["codigo"]] = float(r["cantidad"])
+            for alb_num, lineas in nuevas_lineas.items():
+                previas[alb_num] = dict(lineas)
+            _guardar_entregas_lineas(pid, previas, usuario_id, _NOMBRE_AUTO_CARGA_SAP)
+    if estado_nuevo != estado_antes:
+        execute("INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
+                (pid, estado_antes, estado_nuevo, usuario_id, _NOMBRE_AUTO_CARGA_SAP,
+                 "Registro automático — carga de listados SAP (pedidos + albaranes, cruce por líneas): "
+                 + ", ".join(e["albaran_id"] for e in item["entradas"])))
+    db.commit()
+    return {"aplicado": True, "cambios": cambios, "estado_nuevo": estado_nuevo}
+
+
+def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> dict:
+    """Orquesta la carga unificada: reconoce y guarda cada PDF, crea los pedidos que faltan, cruza por
+    líneas y aplica lo seguro. `archivos` = [(nombre, bytes)]. Devuelve el resumen para la pantalla."""
+    res = {"ok": True, "archivos": [], "avisos": [], "creados": [], "no_creados": [], "aplicados": [],
+           "revisar": [], "resumen": {}}
+    por_tipo = {}
+    for nombre, datos in archivos:
+        tipo = _detectar_tipo_listado_sap(datos)
+        if not tipo:
+            res["archivos"].append({"nombre": nombre, "tipo": None, "error": "No se reconoce como ningún listado de SAP"})
+            continue
+        if tipo in por_tipo:
+            res["archivos"].append({"nombre": nombre, "tipo": tipo, "tipo_texto": _TIPOS_LISTADO_SAP[tipo],
+                                    "error": "Ya hay otro PDF de este mismo tipo en la carga: se ignora"})
+            continue
+        por_tipo[tipo] = (nombre, datos)
+    if not por_tipo:
+        raise RuntimeError("Ningún PDF se reconoce como listado de SAP (pedidos resumido/detallado o albaranes resumido/detallado).")
+
+    for tipo in _ORDEN_CARGA_LISTADOS_SAP:
+        if tipo not in por_tipo:
+            continue
+        nombre, datos = por_tipo[tipo]
+        info = {"nombre": nombre, "tipo": tipo, "tipo_texto": _TIPOS_LISTADO_SAP[tipo]}
+        try:
+            if tipo == "pedidos_resumido":
+                r = _comparar_listado_pdf_logica(hotel_id, datos, escribir_base_ultima_entrada=False)
+                info["detalle"] = f"{r['total_pdf']} pedidos leídos"
+            elif tipo == "pedidos_detallado":
+                r = _actualizar_departamentos_desde_listado_detallado(hotel_id, datos)
+                info["detalle"] = f"{r['pedidos_con_lineas']} pedidos, {r['lineas_guardadas']} líneas"
+            elif tipo == "albaranes_resumido":
+                r = _extraer_albaranes_resumido(datos)
+                n = _guardar_albaranes_resumido(hotel_id, r["filas"])
+                info["detalle"] = f"{n} albaranes con fecha"
+                if r["periodo_desde"]:
+                    info["detalle"] += f" ({r['periodo_desde']} – {r['periodo_hasta']})"
+            else:
+                r = _importar_albaranes_listado(hotel_id, datos)
+                info["detalle"] = f"{r['total_filas']} líneas de {r['proveedores_distintos']} proveedores"
+        except Exception as exc:
+            log.exception("[CARGA-LISTADOS-SAP] Error leyendo %s: %s", nombre, exc)
+            info["error"] = str(exc)
+        res["archivos"].append(info)
+    if not any("error" not in a and a.get("tipo") for a in res["archivos"]):
+        raise RuntimeError("No se ha podido leer ningún listado: " + "; ".join(a.get("error", "") for a in res["archivos"]))
+
+    # Aviso de cargas antiguas duplicadas (el listado de albaranes «sin periodo» se duplicaba al repetir la carga).
+    dup = query("""SELECT COUNT(*) AS n FROM (
+                       SELECT albaran_id FROM (
+                           SELECT albaran_id, COUNT(*) AS c FROM sap_albaranes_lineas WHERE hotel_id=%s
+                           GROUP BY albaran_id, codigo_articulo, cantidad_txt, importe_txt) g
+                       GROUP BY albaran_id HAVING BOOL_AND(c >= 2 AND c % 2 = 0)) x""", (hotel_id,), one=True)
+    if dup and dup["n"]:
+        res["avisos"].append(f"{dup['n']} albarán(es) guardados tienen TODAS sus líneas duplicadas (carga repetida de antes). "
+                             "No se aplicará nada que dependa de ellos sin cuadrar; vuelve a cargar su Listado de Albaranes detallado y se corrigen solos.")
+
+    # ── 1. Alta de los pedidos que SAP tiene y la app no ───────────────────────────────────────────
+    filas = _pedidos_sap_no_registrados(hotel_id)
+    ident = [f for f in filas if f.get("proveedor_identificado")]
+    sin_ident = [f for f in filas if not f.get("proveedor_identificado")]
+    if ident:
+        lote = _crear_pedidos_sap_lote(hotel_id, [f["pedido_num_sap"] for f in ident],
+                                       {_normalizar_pedido_num(f["pedido_num_sap"]): f for f in ident}, usuario_id)
+        por_num = {_normalizar_pedido_num(f["pedido_num_sap"]): f for f in ident}
+        for c in lote["creados"]:
+            f = por_num.get(_normalizar_pedido_num(c["pedido_num_sap"])) or {}
+            res["creados"].append({**c, "proveedor": f.get("proveedor_pdf")})
+        for o in lote["omitidos"] + lote["errores"]:
+            res["no_creados"].append({"pedido_num_sap": o.get("pedido_num_sap"), "motivo": o.get("motivo") or o.get("error")})
+    if sin_ident:
+        res["avisos"].append(f"{len(sin_ident)} pedido(s) de SAP no se pueden dar de alta porque su proveedor no está identificado "
+                             f"en el catálogo (Admin → Proveedores): " + ", ".join(sorted({f['proveedor_pdf'] for f in sin_ident})[:8])
+                             + ("…" if len({f['proveedor_pdf'] for f in sin_ident}) > 8 else ""))
+
+    # ── 2. Cruce por líneas y aplicación de lo seguro ──────────────────────────────────────────────
+    hay_pedidos_det = "pedidos_detallado" in por_tipo or bool(query("SELECT 1 FROM sap_pedidos_lineas WHERE hotel_id=%s LIMIT 1", (hotel_id,), one=True))
+    hay_albaranes = bool(query("SELECT 1 FROM sap_albaranes_lineas WHERE hotel_id=%s LIMIT 1", (hotel_id,), one=True))
+    if not hay_pedidos_det or not hay_albaranes:
+        res["avisos"].append("Para cruzar pedidos y albaranes hacen falta el Listado de Pedidos DETALLADO y el Listado de Albaranes DETALLADO "
+                             "(y, para la fecha, el de Albaranes RESUMIDO). No se ha cruzado nada.")
+        cruce = {"seguros": [], "revisar": [], "sin_recepcion": 0, "evaluados": 0}
+    else:
+        cruce = _cruce_lineas_sap_hotel(hotel_id)
+        if not query("SELECT 1 FROM sap_albaranes_cab WHERE hotel_id=%s LIMIT 1", (hotel_id,), one=True):
+            res["avisos"].append("Falta el Listado de Albaranes RESUMIDO: sin él no hay fecha de albarán y todo queda para revisar.")
+    db = get_db()
+    for it in cruce["seguros"]:
+        try:
+            ap = _aplicar_cruce_lineas_pedido(db, it, usuario_id)
+            if ap["aplicado"]:
+                res["aplicados"].append({**it, "cambios": ap["cambios"], "estado_nuevo": ap.get("estado_nuevo")})
+        except Exception as exc:
+            db.rollback()
+            log.exception("[CARGA-LISTADOS-SAP] Error aplicando pedido %s: %s", it.get("pedido_num"), exc)
+            res["revisar"].append({**it, "motivos": [f"Error al aplicar: {exc}"]})
+    res["revisar"].extend(cruce["revisar"])
+    res["resumen"] = {
+        "creados": len(res["creados"]), "aplicados": len(res["aplicados"]), "revisar": len(res["revisar"]),
+        "sin_recepcion": cruce["sin_recepcion"], "evaluados": cruce["evaluados"],
+    }
+    return res
+
+
+def _ejecutar_carga_listados_sap_bg(job_id, hotel_id, archivos, usuario_id):
+    with app.app_context():
+        try:
+            resultado = _cargar_listados_sap_logica(hotel_id, archivos, usuario_id)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "done", "resultado": resultado}
+        except Exception as exc:
+            log.exception("[CARGA-LISTADOS-SAP] Error en job %s: %s", job_id, exc)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
+
+
+@app.route("/api/sap/cargar-listados", methods=["POST"])
+@login_required
+def cargar_listados_sap():
+    """Carga unificada de listados SAP (v12.32.97). form-data: hotel_id + files (1 a 4 PDF). → 202 {job_id}.
+    Solo admin. El resultado se consulta con GET /api/sap/cargar-listados/<job_id>."""
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    try:
+        hotel_id = int(request.form.get("hotel_id") or 0)
+    except ValueError:
+        hotel_id = 0
+    if not hotel_id:
+        return jsonify({"error": "Falta indicar el hotel"}), 400
+    if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(hotel_id):
+        return jsonify({"error": "Hotel no disponible"}), 403
+    ficheros = [f for f in request.files.getlist("files") if f and f.filename]
+    if not ficheros:
+        return jsonify({"error": "No se ha adjuntado ningún PDF"}), 400
+    if len(ficheros) > 4:
+        return jsonify({"error": "Como máximo 4 PDF (pedidos resumido y detallado, albaranes resumido y detallado)"}), 400
+    archivos = []
+    for f in ficheros:
+        if not f.filename.lower().endswith(".pdf"):
+            return jsonify({"error": f"«{f.filename}» no es un PDF"}), 400
+        datos = f.read()
+        if not datos:
+            return jsonify({"error": f"«{f.filename}» está vacío"}), 400
+        rechazo = _rechazo_pdf_demasiado_grande(datos)
+        if rechazo:
+            return rechazo
+        archivos.append((f.filename, datos))
+    import time as _time_cl
+    job_id = secrets.token_hex(16)
+    with _PDF_JOBS_LOCK:
+        limite = _time_cl.time() - 1800
+        for jid in [j for j, v in _PDF_JOBS.items() if v.get("creado_en", 0) < limite]:
+            del _PDF_JOBS[jid]
+        _PDF_JOBS[job_id] = {"status": "processing", "creado_en": _time_cl.time(), "hotel_id": hotel_id,
+                             "usuario_id": session.get("user_id")}
+    threading.Thread(target=_ejecutar_carga_listados_sap_bg, args=(job_id, hotel_id, archivos, session.get("user_id")),
+                     daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id}), 202
+
+
+@app.route("/api/sap/cargar-listados/<job_id>", methods=["GET"])
+@login_required
+def cargar_listados_sap_estado(job_id):
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    with _PDF_JOBS_LOCK:
+        job = dict(_PDF_JOBS.get(job_id) or {})
+    if not job:
+        return jsonify({"error": "El job no existe o ha caducado — vuelve a cargar los PDF"}), 404
+    job.pop("creado_en", None)
+    return jsonify(job)
+
 
 @app.route("/api/pedidos/comparar-listado-albaranes/<job_id>", methods=["GET"])
 @login_required

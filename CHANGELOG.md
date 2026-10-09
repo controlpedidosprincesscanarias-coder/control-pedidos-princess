@@ -1,3 +1,22 @@
+# v12.32.97 — 9 octubre 2026
+
+📥 Carga única de listados SAP: un solo botón reconoce los 4 PDF, crea los pedidos que faltan y registra estado, nº de albarán, fecha y base imponible cuando el cruce por líneas es seguro
+
+**Petición de Víctor**: «simplificar las diferentes opciones existentes para la carga de listados en pedidos, es todo muy lioso»; que al cargar se cambien solos los estados (parcial/entregado), las bases imponibles y los nº de albarán SAP/DALI, y se creen los pedidos de proveedores «Sujeto a seguimiento». Alimentación, bebidas y limpieza no se usan en la app.
+
+**Pruebas con listados reales de GY (septiembre, 511 pedidos, 611 albaranes)**: el listado de albaranes no trae el nº de pedido; cruzando proveedor + referencia + cantidad exacta por LÍNEAS (un albarán reparte líneas entre varios pedidos del mismo proveedor) y desempatando por la fecha, solo en los proveedores de la app se aplican solos 16 de los 55 pedidos evaluados (9 sin nada recibido); el resto queda «Para revisar» con su motivo.
+
+**Cambios** (`app.py`, `templates/index.html`):
+- **Botón «📥 Cargar listados SAP»** (antes «Cruce con SAP»): hotel + hasta 4 PDF a la vez. Cada PDF se reconoce por su contenido (con o sin cabecera): pedidos resumido, pedidos detallado, albaranes detallado y **albaranes resumido** (nuevo: aporta fecha y hora del albarán, almacén e importe). Las herramientas antiguas siguen en «Cargas por separado (avanzado)».
+- **Nuevo** `POST /api/sap/cargar-listados` (+ `GET …/<job_id>`), solo admin, en segundo plano. Orden: guardar los PDF → alta de pedidos que SAP tiene y la app no (solo proveedores «Sujeto a seguimiento», `_crear_pedidos_sap_lote`, extraído de `crear_pedidos_desde_sap`) → cruce por líneas (`_cruce_lineas_sap_hotel`, solo lectura) → aplicar lo seguro (`_aplicar_cruce_lineas_pedido`).
+- **Qué se aplica solo**: nº de albarán DALI/SAP, fecha del albarán, base imponible de cada entrada (suma de las líneas de ESE pedido), detalle «Referencias de la entrada» y estado (SAP «Cerrado» o todo recibido → ENTREGADO; si no, ENTREGA PARCIAL; nunca retrocede). También regulariza pedidos ENTREGADOS sin entradas y rellena la fecha/base de entradas ya existentes. Todo con historial «Automática — carga de listados SAP», **sin correos ni Telegram**.
+- **Qué NO se aplica (queda «Para revisar», con motivo y propuesta parcial)**: referencias sin albarán cargado (¿otro mes?), referencias compartidas con otro pedido sin combinación única, mismas líneas reclamadas por dos pedidos (se desempata por fecha de pedido ≤ fecha de albarán) y «Cerrado» en SAP sin nada recibido.
+- **Memoria entre cargas**: todo se guarda en la base de datos (tablas existentes + nueva `sap_albaranes_cab`) y el cruce usa siempre lo guardado, no solo lo recién cargado: un albarán de un mes cierra un pedido de otro, y la carga semanal solo necesita lo nuevo.
+- `_importar_albaranes_listado` ahora reemplaza siempre las líneas de los albaranes del PDF (antes, con la cabecera sin periodo, repetir la carga las duplicaba). Aviso si quedan albaranes con TODAS sus líneas duplicadas de cargas antiguas.
+- `_comparar_listado_pdf_logica(…, escribir_base_ultima_entrada=False)` en la carga única: la base de cada entrada sale del albarán, no del importe recibido de SAP.
+- Límite de páginas por PDF de listado: se mantiene en 200 (Render Free: el tiempo no es verificable; la carga semanal cabe de sobra; la primera carga de meses atrás, en tramos quincenales). Memoria medida: 239 págs. ≈ 100 MB.
+- Migración automática: tabla `sap_albaranes_cab`. Badge `V 12.32.96` → `V 12.32.97`; README: línea de versión.
+
 # v12.32.96 — 9 octubre 2026
 
 ✨ Material recibido en exceso («sobrante»): ahora figura en la reclamación al proveedor, en los correos internos y en los listados de pendientes
