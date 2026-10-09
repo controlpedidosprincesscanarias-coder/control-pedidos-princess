@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Líneas de SAP en los pedidos creados solos; PDF oficial opcional (v12.33.03)
+
+- **Novedad**: `_volcar_lineas_sap_hotel` copia a `pedido_lineas` (origen='sap') las líneas del listado detallado en pedidos sin PDF; panel de líneas y nota «PDF opcional» en la ficha; `_validar_pedido_envio_proveedor` y `savePedido` no exigen el PDF a pedidos creados por «Carga automática SAP».
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Avisos de error del formulario de pedidos: persistentes y con detalle (v12.33.02)
 
 - **Novedad**: `showFormAlert` se mantiene hasta pulsar una tecla / clic (salvo ✅ éxito o `persistente:false`); `_detalleGuardadoPedido` añade operación, hotel, estado, proveedor, importe, hora y error técnico al fallar `savePedido`. Solo front.

@@ -36,7 +36,7 @@ def _ahora_canarias_txt() -> str:
 def _obs_alta_automatica_sap(num_sap) -> str:
     """Observación de los pedidos dados de alta solos desde los listados de SAP (formato de trazabilidad)."""
     return (f"Alta automática · {_AUTOR_SAP_AUTO} · {_ahora_canarias_txt()} · Nº SAP {num_sap} · "
-            "Pendiente de completar el resto de la documentación")
+            "Datos y artículos tomados de los listados de SAP (el PDF oficial es opcional)")
 
 # ── Configuración ──────────────────────────────────────────────────────────────
 
@@ -743,7 +743,12 @@ def _auto_migrate():
                         if _m and _fo.get("f"):
                             cur.execute("UPDATE pedidos SET observaciones=%s WHERE id=%s",
                                         (f"Alta automática · {_AUTOR_SAP_AUTO} · {_fo['f']} · Nº SAP {_m.group(1)} · "
-                                         "Pendiente de completar el resto de la documentación", _p["id"]))
+                                         "Datos y artículos tomados de los listados de SAP (el PDF oficial es opcional)", _p["id"]))
+                        # (v12.33.03) Las de v12.33.00 llevaban «Pendiente de completar el resto de la documentación».
+                        cur.execute(
+                            "UPDATE pedidos SET observaciones = REPLACE(observaciones, 'Pendiente de completar el resto de la documentación', "
+                            "'Datos y artículos tomados de los listados de SAP (el PDF oficial es opcional)') "
+                            "WHERE id=%s AND observaciones LIKE 'Alta automática · %%'", (_p["id"],))
                         # 3) Reclamaciones automáticas todavía sin enviar
                         # para este pedido — se purgan de la cola en
                         # cualquier caso.
@@ -1379,6 +1384,9 @@ def _auto_migrate():
                 # escaneado/firmado (pueden tener erratas en referencias o
                 # descripciones): la app avisa de que se revisen.
                 cur.execute("ALTER TABLE pedido_adjuntos ADD COLUMN IF NOT EXISTS lineas_ocr BOOLEAN NOT NULL DEFAULT FALSE")
+                # (v12.33.03) 'pdf' = leída del PDF de pedido oficial; 'sap' = copiada del Listado de Pedidos
+                # DETALLADO de SAP (pedidos dados de alta solos, sin PDF). Subir el PDF las sustituye.
+                cur.execute("ALTER TABLE pedido_lineas ADD COLUMN IF NOT EXISTS origen TEXT NOT NULL DEFAULT 'pdf'")
             except Exception as e:
                 log.warning(f"No se pudo crear la tabla pedido_lineas: {e}")
             # ══════════════════════════════════════════════════════════════
@@ -15111,6 +15119,47 @@ def pedidos_pendientes_crear_sap(hotel_id):
         return jsonify({"error": "Hotel no disponible"}), 403
     return jsonify({"ok": True, "pedidos": _pedidos_sap_no_registrados(hotel_id)})
 
+def _volcar_lineas_sap_hotel(hotel_id: int, solo_pedido_ids=None) -> dict:
+    """(v12.33.03) Copia a `pedido_lineas` los artículos y cantidades del Listado de Pedidos DETALLADO de SAP
+    (`sap_pedidos_lineas`) para los pedidos de la app que NO tienen PDF oficial ni líneas: así un pedido dado
+    de alta solo queda con su detalle como si se hubiera subido el PDF, sin pedir nada al usuario. Las líneas
+    se marcan origen='sap'; si luego se sube el PDF oficial, `_guardar_lineas_pedido` las sustituye.
+    Hace commit. Devuelve {"pedidos": n, "lineas": n}."""
+    cond, args = "", [hotel_id]
+    if solo_pedido_ids:
+        cond, args = " AND p.id = ANY(%s)", [hotel_id, list(solo_pedido_ids)]
+    cand = rows_to_list(query(f"""
+        SELECT p.id, p.pedido_num FROM pedidos p
+         WHERE p.hotel_id=%s AND p.pedido_num IS NOT NULL AND p.pedido_num <> ''{cond}
+           AND NOT EXISTS (SELECT 1 FROM pedido_lineas l WHERE l.pedido_id = p.id)
+           AND NOT EXISTS (SELECT 1 FROM pedido_adjuntos a WHERE a.pedido_id = p.id AND a.tipo = 'pedido_doc')""", tuple(args)))
+    if not cand:
+        return {"pedidos": 0, "lineas": 0}
+    sap = {}
+    for r in rows_to_list(query(
+            "SELECT pedido_num_sap, codigo_articulo, descripcion, unidad, cantidad_pedida_txt, precio_txt, importe_linea_txt "
+            "FROM sap_pedidos_lineas WHERE hotel_id=%s ORDER BY id", (hotel_id,))):
+        sap.setdefault(_normalizar_pedido_num(r["pedido_num_sap"]), []).append(r)
+    filas, n_ped = [], 0
+    for c in cand:
+        lin = sap.get(_normalizar_pedido_num(c["pedido_num"]))
+        if not lin:
+            continue
+        n_ped += 1
+        for i, r in enumerate(lin, 1):
+            filas.append((c["id"], i, (r["codigo_articulo"] or "").strip() or None, None,
+                          re.sub(r"\s+", " ", r["descripcion"] or "").strip() or None, re.sub(r"\s+", "", r["unidad"] or "") or None,   # el PDF parte «KILOGRAMO» en dos líneas
+                          _parse_importe_es(r["cantidad_pedida_txt"]), _parse_importe_es(r["precio_txt"]),
+                          _parse_importe_es(r["importe_linea_txt"]), None, "sap"))
+    if filas:
+        with get_db().cursor() as cur:
+            execute_values(cur, """INSERT INTO pedido_lineas
+                (pedido_id, orden, codigo, ref_proveedor, descripcion, unidad, cantidad, precio, importe, almacen, origen)
+                VALUES %s""", filas, page_size=500)
+        get_db().commit()
+    return {"pedidos": n_ped, "lineas": len(filas)}
+
+
 def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: dict, uid=None) -> dict:
     """(v12.32.97) Cuerpo de crear_pedidos_desde_sap() extraído tal cual para poder reutilizarlo desde
     la carga unificada de listados SAP (_cargar_listados_sap_logica). Mismas reglas, mismo alta «cáscara»
@@ -15134,6 +15183,7 @@ def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: di
     }
 
     creados, omitidos, errores = [], [], []
+    con_lineas = 0   # (v12.33.03) pedidos a los que se copiaron las líneas del listado detallado
     for num in nums_pedidos:
         fila = filas_por_num.get(_normalizar_pedido_num(num))
         if not fila:
@@ -15214,6 +15264,11 @@ def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: di
                  f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']})")
             )
             db.commit()
+            try:   # (v12.33.03) artículos y cantidades desde el listado detallado, sin pedir el PDF
+                con_lineas += _volcar_lineas_sap_hotel(hotel_id, [pedido_id])["pedidos"]
+            except Exception as exc_l:
+                db.rollback()
+                log.warning("[CREAR-DESDE-SAP] Pedido %s creado, pero no se copiaron sus líneas del listado: %s", num, exc_l)
             creados.append({
                 "pedido_num_sap": fila["pedido_num_sap"], "pedido_id": pedido_id,
                 "norden": norden, "estado": estado_inicial,
@@ -15222,7 +15277,7 @@ def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: di
             log.exception("[CREAR-DESDE-SAP] Error creando pedido %s: %s", num, exc)
             errores.append({"pedido_num_sap": num, "error": str(exc)})
 
-    return {"creados": creados, "omitidos": omitidos, "errores": errores}
+    return {"creados": creados, "omitidos": omitidos, "errores": errores, "con_lineas": con_lineas}
 
 
 @app.route("/api/pedidos/crear-desde-sap", methods=["POST"])
@@ -15787,6 +15842,7 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
         lote = _crear_pedidos_sap_lote(hotel_id, [f["pedido_num_sap"] for f in ident],
                                        {_normalizar_pedido_num(f["pedido_num_sap"]): f for f in ident}, usuario_id)
         por_num = {_normalizar_pedido_num(f["pedido_num_sap"]): f for f in ident}
+        res["lineas_copiadas_alta"] = lote.get("con_lineas", 0)
         for c in lote["creados"]:
             f = por_num.get(_normalizar_pedido_num(c["pedido_num_sap"])) or {}
             res["creados"].append({**c, "proveedor": f.get("proveedor_pdf")})
@@ -15796,6 +15852,18 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
         res["avisos"].append(f"{len(sin_ident)} pedido(s) de SAP no se pueden dar de alta porque su proveedor no está identificado "
                              f"en el catálogo (Admin → Proveedores): " + ", ".join(sorted({f['proveedor_pdf'] for f in sin_ident})[:8])
                              + ("…" if len({f['proveedor_pdf'] for f in sin_ident}) > 8 else ""))
+
+    # ── 1b. Artículos y cantidades del listado detallado → pedidos sin PDF ni líneas (nuevos y anteriores) ──
+    _csl_paso("copiar artículos y cantidades de SAP a los pedidos")
+    try:
+        vol = _volcar_lineas_sap_hotel(hotel_id)
+    except Exception as exc:
+        get_db().rollback()
+        log.exception("[CARGA-LISTADOS-SAP] No se pudieron copiar las líneas a los pedidos: %s", exc)
+        vol = {"pedidos": 0, "lineas": 0}
+        res["avisos"].append(f"No se han podido copiar los artículos de SAP a los pedidos ({exc}). El resto de la carga continúa.")
+    vol = {"pedidos": vol["pedidos"] + res.get("lineas_copiadas_alta", 0), "lineas": vol["lineas"]}
+    res["lineas_copiadas"] = vol
 
     # ── 2. Cruce por líneas y aplicación de lo seguro ──────────────────────────────────────────────
     _csl_paso("cruzar pedidos con albaranes")
@@ -15824,6 +15892,7 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
     res["resumen"] = {
         "creados": len(res["creados"]), "aplicados": len(res["aplicados"]), "revisar": len(res["revisar"]),
         "sin_recepcion": cruce["sin_recepcion"], "evaluados": cruce["evaluados"],
+        "con_lineas": res.get("lineas_copiadas", {}).get("pedidos", 0),
     }
     return res
 
@@ -18395,7 +18464,11 @@ def _validar_pedido_envio_proveedor(pedido_actual, pid, departamento_id, hotel_i
         "SELECT id, nombre FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='pedido_doc'",
         (pid,)
     ))
-    if len(adjuntos_pedido) == 0:
+    # (v12.33.03) Un pedido dado de alta solo desde los listados de SAP ya trae Nº de pedido, proveedor, total y
+    # líneas de SAP: el PDF oficial es opcional (no se pide salvo que falte algo).
+    _desde_sap = (pedido_actual.get("creado_por_nombre") == _AUTOR_SAP_AUTO
+                  and bool((pedido_actual.get("pedido_num") or "").strip()))
+    if len(adjuntos_pedido) == 0 and not _desde_sap:
         errores_envio.append(
             "Debe adjuntar el PDF del pedido oficial PRINCESS en la sección «Nº Pedido (DALI/SAP)»."
         )
@@ -21283,9 +21356,10 @@ def get_lineas_pedido(pid):
         get_db().commit()
 
     filas = rows_to_list(query(
-        "SELECT orden, codigo, ref_proveedor, descripcion, unidad, cantidad, precio, importe, almacen "
+        "SELECT orden, codigo, ref_proveedor, descripcion, unidad, cantidad, precio, importe, almacen, origen "
         "FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pid,)
     ))
+    origen_sap = bool(filas) and all(f.get("origen") == "sap" for f in filas) and adj is None
     for f in filas:
         for k in ("cantidad", "precio", "importe"):
             f[k] = float(f[k]) if f[k] is not None else None
@@ -21315,6 +21389,7 @@ def get_lineas_pedido(pid):
     return jsonify({
         "ok": True,
         "tiene_pdf": adj is not None,
+        "origen_sap": origen_sap,   # (v12.33.03) líneas copiadas del listado detallado de SAP (sin PDF)
         "lineas": filas,
         "total_importe": None if es_hotel else suma_importes,
         "total_real_pdf": bool(adj and filas),

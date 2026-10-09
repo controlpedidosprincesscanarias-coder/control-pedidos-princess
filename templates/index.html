@@ -1438,7 +1438,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.02
+          V 12.33.03
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2607,6 +2607,7 @@ tbody tr:last-child{border-bottom:none}
             Solo se admite el PDF de pedido oficial PRINCESS (el que genera SAP/DALI, con el mismo formato siempre) — al adjuntarlo, la app lee sola el Nº de Pedido, el Total Pedido y las líneas del pedido (códigos, referencias, cantidades y precios).
           </div>
           <div id="adj-pedido-list" class="adj-fecha-list"></div>
+          <div id="pedido-sap-nota" style="display:none;font-size:11px;color:#14532d;background:#ecfdf3;border:1px solid #a7e3bf;border-radius:6px;padding:6px 8px;margin-top:6px"></div>
         </div>
         <div class="form-group" id="presupuesto-section">
           <label class="form-label">Nº Presupuesto</label>
@@ -7328,7 +7329,14 @@ async function cargarLineasPedido(forzar = false) {
   try { d = await api(`/api/pedidos/${id}/lineas${forzar ? '?releer=1' : ''}`); }
   catch (e) { d = null; }
   if (req !== _lineasPedidoReq || G.editingPedidoId !== id) return;   // llegó tarde: otro pedido o recarga
-  if (!d || !d.ok || !d.tiene_pdf) {
+  // (v12.33.03) Pedido dado de alta solo desde SAP: sus líneas vienen del listado detallado; el PDF es opcional.
+  const _notaSap = document.getElementById('pedido-sap-nota');
+  if (_notaSap) {
+    const _sap = !!(d && d.ok && d.origen_sap);
+    _notaSap.style.display = _sap ? '' : 'none';
+    if (_sap) _notaSap.innerHTML = '✔ Pedido cargado desde los listados de SAP: Nº de pedido, proveedor, total y líneas ya están guardados. <b>Adjuntar el PDF oficial es opcional</b> (si lo subes, sustituye a estas líneas).';
+  }
+  if (!d || !d.ok || (!d.tiene_pdf && !d.origen_sap)) {
     panel.style.display = 'none'; panel.innerHTML = '';
     if (d && d.ok) { const _b = document.getElementById('p-total-pedido-real-badge'); if (_b) _b.hidden = true; }   // sin PDF oficial: no es el total del PDF
     return;
@@ -7360,6 +7368,7 @@ async function cargarLineasPedido(forzar = false) {
       ${conEnt ? `<td style="text-align:right;color:#1a7a1a">${num(l.entregado, 0)}</td><td style="text-align:right;font-weight:600;color:${l.pendiente > 0 ? '#b45309' : (l.pendiente < 0 ? '#b91c1c' : '#1a7a1a')}">${l.pendiente > 0 ? num(l.pendiente, 0) : (l.pendiente < 0 ? '+' + num(-l.pendiente, 0) : '✔')}</td>` : ''}
       ${verPrecios ? `<td style="text-align:right">${num(l.precio, 2)}</td><td style="text-align:right">${num(l.importe, 2)}</td>` : ''}
     </tr>`).join('');
+  const _avisoSap = d.origen_sap ? `<div style="font-size:10.5px;color:#14532d;background:#ecfdf3;border-top:1px solid #a7e3bf;padding:4px 8px">📋 Líneas tomadas automáticamente del Listado de Pedidos detallado de SAP (sin PDF oficial adjunto).</div>` : '';
   const _avisoOcr = d.por_ocr ? `<div style="font-size:10.5px;color:#7a5b00;background:#fff8e1;border-top:1px solid #ffe08a;padding:4px 8px">📷 Leído de un documento escaneado (OCR): los importes cuadran con el Total Pedido, pero revise referencias y descripciones.</div>` : '';
   panel.innerHTML = `<details open style="border:1px solid #e3e8f0;border-radius:6px;background:#fafbfd">
     <summary style="cursor:pointer;padding:6px 8px;font-size:12px;font-weight:600;color:var(--navy2)">
@@ -7376,7 +7385,7 @@ async function cargarLineasPedido(forzar = false) {
         <tbody>${filas}</tbody>
       </table>
     </div>
-    ${_avisoOcr}
+    ${_avisoSap}${_avisoOcr}
   </details>`;
 }
 
@@ -7916,7 +7925,9 @@ async function savePedido() {
     // ambos campos están rellenos; el backend vuelve a comprobarlo igual.
     const _pedidoNumVal = val('p-pedido-num').trim();
     const _adjPedidoList = document.getElementById('adj-pedido-list');
-    const _tienePdf = _adjPedidoList && _adjPedidoList.querySelectorAll('.adj-item').length > 0;
+    // (v12.33.03) Un pedido dado de alta solo desde SAP ya trae Nº de pedido y líneas: el PDF no es obligatorio.
+    const _desdeSapAuto = !!(G.currentPedidoData && G.currentPedidoData.creado_por_nombre === 'Carga automática SAP');
+    const _tienePdf = (_adjPedidoList && _adjPedidoList.querySelectorAll('.adj-item').length > 0) || _desdeSapAuto;
     if (!_tienePdf || !_pedidoNumVal) {
       showFormAlert(
         'Para pasar a ENVIADO AL PROVEEDOR debe adjuntar el PDF del pedido oficial PRINCESS en la sección '
@@ -9134,6 +9145,7 @@ function _cslMostrarResultado(res) {
   let h = `<div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:10px">
     ${pill(`${R.aplicados ?? 0} aplicado(s) solo`, '#d4edda', '#155724')}
     ${pill(`${R.creados ?? 0} pedido(s) creado(s)`, '#e7e0f7', '#4d2f8f')}
+    ${(R.con_lineas || 0) > 0 ? pill(`${R.con_lineas} pedido(s) con artículos copiados de SAP`, '#e7e0f7', '#4d2f8f') : ''}
     ${pill(`${R.revisar ?? 0} para revisar`, (R.revisar ? '#fff3cd' : '#f8f9fa'), (R.revisar ? '#856404' : '#666'))}
     ${pill(`${R.sin_recepcion ?? 0} sin nada recibido`, '#f8f9fa', '#666')}
   </div>`;

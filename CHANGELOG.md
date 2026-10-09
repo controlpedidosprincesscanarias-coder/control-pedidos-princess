@@ -1,3 +1,19 @@
+# v12.33.03 — 9 octubre 2026
+
+📋 Pedidos dados de alta solos desde SAP: se guardan sus artículos y cantidades del listado detallado y el PDF oficial deja de ser necesario
+
+**Petición de Víctor**: un pedido creado automáticamente no lleva el PDF oficial; la app debe introducir los artículos y cantidades desde los listados detallados, con el mismo aspecto que si se hubiera subido el PDF, sin pedir al usuario que suba el documento salvo que haya un error.
+
+**Situación anterior**: los pedidos creados solos tenían 0 líneas guardadas (los artículos solo estaban en los listados de SAP), así que no salía el panel «Líneas del pedido», ni el detalle de entregas por referencia, ni el buscador de artículos.
+
+**Cambios** (`app.py`, `templates/index.html`):
+- `_volcar_lineas_sap_hotel`: copia a `pedido_lineas` (código, descripción, unidad, cantidad, precio e importe) las líneas del Listado de Pedidos DETALLADO para los pedidos sin PDF ni líneas. Se ejecuta al crear cada pedido y en cada carga de listados (también regulariza los pedidos creados antes). Columna nueva `pedido_lineas.origen` ('sap' / 'pdf'). Si luego se sube el PDF oficial, sustituye a estas líneas.
+- Con las líneas guardadas, la carga automática ya registra también el detalle «Referencias de la entrada» de cada albarán, y funcionan el buscador de artículos y las entregas pendientes.
+- Pantalla del pedido: panel «Líneas del pedido» con el aviso «tomadas automáticamente del listado detallado de SAP» y, junto al botón del PDF, la nota «Adjuntar el PDF oficial es opcional».
+- El PDF oficial deja de exigirse (frontend y `_validar_pedido_envio_proveedor`) en pedidos creados por «Carga automática SAP» con Nº de pedido. Para el resto de pedidos sigue siendo obligatorio.
+- Observación del alta automática: «Alta automática · Carga automática SAP · fecha hora · Nº SAP … · Datos y artículos tomados de los listados de SAP (el PDF oficial es opcional)» (se actualizan también las de v12.33.00).
+- Resultado de «Cargar listados SAP»: nuevo indicador «N pedido(s) con artículos copiados de SAP».
+
 # v12.33.02 — 9 octubre 2026
 
 🔴 Formulario de pedidos: los avisos rojos de error se quedan en pantalla hasta pulsar una tecla y dan más detalle
