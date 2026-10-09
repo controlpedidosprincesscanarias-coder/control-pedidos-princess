@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Alertas: tiempo contado desde la fecha de entrega cuando existe (v12.33.01)
+
+- **Corrección**: `_clasificar_alertas` expone `por_plazo` / `dias_exceso` y ordena por retraso sobre la fecha de entrega; la UI (Alertas, impresión, Dashboard) muestra «N días de retraso», «Vence hoy» o «Faltan N días» (`_alertaTiempo`) en vez de los días desde tramitación. La lógica de cuándo avisar no cambia.
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Trazabilidad de lo automático al estilo SAP (v12.33.00)
 
 - **Novedad**: autor único «Carga automática SAP» (`_AUTOR_SAP_AUTO`) para altas y cambios de la carga de listados, con renombrado de los autores antiguos al arrancar; observación de alta automática en formato de trazabilidad (`_obs_alta_automatica_sap`, con migración de las antiguas); bloque «Trazabilidad» en Editar pedido (`_renderTrazabilidadPedido`) con autor y fecha de creación y de última modificación en formato SAP.

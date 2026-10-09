@@ -17857,6 +17857,10 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool,
             p["nivel_alerta"]          = info_plazo["nivel"]
             fep = info_plazo["fecha_entrega_prevista"]
             p["fecha_entrega_prevista"] = fep.strftime("%Y-%m-%d") if fep else None
+            # (v12.33.01) Alerta por FECHA DE ENTREGA: el tiempo que cuenta es el retraso (o los días que faltan)
+            # sobre esa fecha, no los días desde la tramitación. >0 = retraso, 0 = vence hoy, <0 = faltan.
+            p["por_plazo"]     = True
+            p["dias_exceso"]   = (_date_alerta.today() - fep).days if fep else None
             p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
             _aplicar_config_popup(p)
             alertas.append(p)
@@ -17873,12 +17877,17 @@ def _clasificar_alertas(pedidos_raw: list, cfg_activar_plazo: bool,
         p["dias_tramitacion"]      = dias
         p["nivel_alerta"]          = nivel
         p["fecha_entrega_prevista"] = None
+        p["por_plazo"]   = False
+        p["dias_exceso"] = None
         p["ultima_notificacion"]   = _resumen_ultima_notificacion(p)
         _aplicar_config_popup(p)
         alertas.append(p)
 
-    alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1,
-                                 -x["dias_tramitacion"]))
+    def _tiempo_orden(x):
+        # Con fecha de entrega manda el retraso sobre ella; sin ella, los días desde la tramitación.
+        return x["dias_exceso"] if x.get("por_plazo") and x.get("dias_exceso") is not None else x["dias_tramitacion"]
+
+    alertas.sort(key=lambda x: (0 if x["nivel_alerta"] == "urgente" else 1, -_tiempo_orden(x)))
     return alertas
 
 
@@ -19343,6 +19352,7 @@ def get_dashboard_resumen():
             "proveedor_nombre": top.get("proveedor_nombre"),
             "estado": top.get("estado"),
             "dias_tramitacion": top.get("dias_tramitacion"),
+            "por_plazo": bool(top.get("por_plazo")), "dias_exceso": top.get("dias_exceso"),
             "nivel_alerta": top.get("nivel_alerta"),
         }
 

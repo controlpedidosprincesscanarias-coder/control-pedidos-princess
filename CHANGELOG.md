@@ -1,3 +1,15 @@
+# v12.33.01 — 9 octubre 2026
+
+⏱️ Alertas: si el pedido tiene fecha de entrega (o plazo), el tiempo que se muestra y con el que se ordena es el retraso sobre esa fecha, no los días desde la tramitación
+
+**Petición de Víctor**: un pedido con fecha de entrega indicada (fecha concreta o días de plazo desde la tramitación) debe contar el exceso de tiempo desde esa fecha y no desde la tramitación.
+
+**Qué ya era así y no cambia**: la decisión de cuándo un pedido entra en Alertas ya iba por la fecha de entrega (`_alertas_plazo_entrega` / `_plazo_entrega_vencido`): aviso N días antes, urgente el día de la entrega y, superada, se mantiene en la lista como urgente; nunca cae a «días desde la tramitación». Los avisos, correos y reclamaciones automáticas no cambian.
+
+**Qué se corregía** (`app.py`, `templates/index.html`): la columna «Días» seguía mostrando los días desde la tramitación (p. ej. «40 días» con la entrega superada hace 3).
+- `_clasificar_alertas` añade `por_plazo` y `dias_exceso` (>0 retraso, 0 vence hoy, <0 faltan) y ordena por ese retraso en los pedidos con fecha de entrega.
+- Pantalla Alertas, impresión, tarjeta «Necesita atención» del Dashboard y frase destacada: «3 días de retraso» / «Vence hoy» / «Faltan 5 días», con «tramitado hace N d» en pequeño. Columna renombrada «Tiempo». Sin fecha ni plazo, todo igual que antes (días desde la tramitación).
+
 # v12.33.00 — 9 octubre 2026
 
 🧾 Trazabilidad de lo automático al estilo SAP: autor fijo «Carga automática SAP», fecha y hora exactas y observación unificada

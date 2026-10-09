@@ -1429,7 +1429,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.00
+          V 12.33.01
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1758,7 +1758,7 @@ tbody tr:last-child{border-bottom:none}
           <div class="table-wrap" id="alertas-table-wrap">
             <table>
               <thead>
-                <tr><th>Nº</th><th>Hotel</th><th>Pedido DALI / SAP</th><th>Estado</th><th>Proveedor</th><th>F. Tramitación</th><th>Días</th><th>Nivel</th><th>Notificación</th><th></th></tr>
+                <tr><th>Nº</th><th>Hotel</th><th>Pedido DALI / SAP</th><th>Estado</th><th>Proveedor</th><th>F. Tramitación</th><th>Tiempo</th><th>Nivel</th><th>Notificación</th><th></th></tr>
               </thead>
               <tbody id="alertas-tbody"></tbody>
             </table>
@@ -5111,6 +5111,18 @@ function _sparklineSvg(values, color) {
 
 // Narrativa de datos: traduce las cifras que ya calcula /api/dashboard/resumen
 // a frases en lenguaje natural, priorizando lo que requiere atención.
+// (v12.33.01) Tiempo de una alerta: si va por fecha de entrega se cuenta el retraso sobre ella (no desde la tramitación).
+function _alertaTiempo(p) {
+  if (p && p.por_plazo && p.dias_exceso != null) {
+    const n = p.dias_exceso;
+    if (n > 0)  return { txt: `${n} día${n !== 1 ? 's' : ''} de retraso`, corto: `+${n} d`, retraso: true };
+    if (n === 0) return { txt: 'Vence hoy', corto: 'Hoy', retraso: false };
+    return { txt: `Faltan ${-n} día${n !== -1 ? 's' : ''}`, corto: `Faltan ${-n} d`, retraso: false };
+  }
+  const d = p ? p.dias_tramitacion : null;
+  return { txt: `${d ?? '?'} días`, corto: `${d ?? '?'} d`, retraso: false, desdeTramitacion: true };
+}
+
 function _buildInsights(d) {
   const out = []; // { icon, tone, html, prio } — prio más bajo = más arriba
 
@@ -5119,7 +5131,9 @@ function _buildInsights(d) {
   if (na && na.nivel_alerta === 'urgente') {
     out.push({ icon: '🔴', tone: 'negative', prio: 0, html:
       `El pedido <b>${na.pedido_num || ('#' + (na.norden || na.id))}</b> (${na.hotel_codigo || '—'}, ${na.proveedor_nombre || 'sin proveedor'}) lleva
-       <b>${na.dias_tramitacion ?? '?'} días</b> en «${(na.estado || '').toLowerCase()}» y necesita atención urgente.` });
+       ${na.por_plazo && na.dias_exceso != null
+         ? `<b>${_alertaTiempo(na).txt}</b> sobre la fecha de entrega prevista (en «${(na.estado || '').toLowerCase()}») y necesita atención urgente.`
+         : `<b>${na.dias_tramitacion ?? '?'} días</b> en «${(na.estado || '').toLowerCase()}» y necesita atención urgente.`}` });
   }
 
   // 2) Variación de volumen de pedidos
@@ -5317,7 +5331,9 @@ async function loadDashboardResumen() {
       <span class="na-icon">${esUrgente ? '🔴' : '🟡'}</span>
       <span class="na-body">
         <strong>Pedido ${na.pedido_num || ('#' + (na.norden || na.id))}</strong> (${na.hotel_codigo || '—'}, ${na.proveedor_nombre || 'sin proveedor'})
-        lleva <strong>${na.dias_tramitacion} día${na.dias_tramitacion!==1?'s':''}</strong> en «${na.estado}» sin avanzar.
+        ${na.por_plazo && na.dias_exceso != null
+          ? `lleva <strong>${_alertaTiempo(na).txt}</strong> sobre la fecha de entrega prevista (en «${na.estado}»).`
+          : `lleva <strong>${na.dias_tramitacion} día${na.dias_tramitacion!==1?'s':''}</strong> en «${na.estado}» sin avanzar.`}
       </span>
       <button class="na-btn" onclick="openPedidoModal(${na.id})">Abrir pedido</button>`;
   } else {
@@ -8153,7 +8169,9 @@ function _renderAlertasTabla(lista) {
     const nivelBadge = esUrgente
       ? '<span class="badge-alerta urgente">🔴 URGENTE</span>'
       : '<span class="badge-alerta aviso">⚠️ AVISO</span>';
-    const diasLabel = `<span class="alert-dias ${esUrgente ? 'urgente' : ''}">${p.dias_tramitacion} días</span>`;
+    const _t = _alertaTiempo(p);
+    const diasLabel = `<span class="alert-dias ${esUrgente ? 'urgente' : ''}">${_t.txt}</span>` +
+      (p.por_plazo ? `<br><span style="font-size:10px;color:var(--muted)" title="Días desde la fecha de tramitación">tramitado hace ${p.dias_tramitacion} d</span>` : '');
     const fechaRef = p.estado === 'PENDIENTE COTIZACIÓN' ? p.fecha_solicitud : p.fecha_tramitacion;
     const fechaLabel = p.estado === 'PENDIENTE COTIZACIÓN'
       ? `<span title="Fecha de solicitud">${fmtDate(fechaRef)||'—'}</span>`
@@ -14785,7 +14803,7 @@ async function imprimirAlertas(codigosSeleccionados) {
       '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;color:' + estadoColor + ';font-weight:600">' + (p.estado || '\u2014') + '</td>' +
       '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.proveedor_nombre || '\u2014') + '</td>' +
       '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:center">' + fmtFecha + '</td>' +
-      '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:center;font-weight:700;color:' + (esUrgente?'#dc3545':'#e67e00') + '">' + p.dias_tramitacion + ' d\u00edas</td>' +
+      '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:center;font-weight:700;color:' + (esUrgente?'#dc3545':'#e67e00') + '">' + _alertaTiempo(p).txt + '</td>' +
       '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;font-weight:700;color:' + nivelColor + '">' + nivelText + '</td>' +
       '<td style="padding:7px 8px;font-size:11px;border-bottom:1px solid #eee;font-weight:600;color:' + notifColor + '">' + notifTxt + '</td>' +
     '</tr>';
@@ -14794,7 +14812,7 @@ async function imprimirAlertas(codigosSeleccionados) {
   var tablaHtml = alertas.length
     ? '<table><thead><tr>' +
         '<th>N\u00ba Orden</th><th>Hotel</th><th>Pedido DALI/SAP</th><th>Estado</th>' +
-        '<th>Proveedor</th><th>Fecha Ref.</th><th>D\u00edas</th><th>Nivel</th><th>Notificaci\u00f3n</th>' +
+        '<th>Proveedor</th><th>Fecha Ref.</th><th>Tiempo</th><th>Nivel</th><th>Notificaci\u00f3n</th>' +
       '</tr></thead><tbody>' + filas + '</tbody></table>'
     : '<p style="color:#999;font-style:italic">No hay alertas activas.</p>';
 
