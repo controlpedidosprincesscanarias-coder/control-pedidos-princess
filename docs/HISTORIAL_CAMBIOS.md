@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Contador de tiempo en «Cargar listados SAP» (v12.32.98)
+
+- **Novedad**: contador `mm:ss` junto al spinner de la carga (`_cslTimerStart`/`_cslTimerStop`, basado en `Date.now()`). Solo front (`templates/index.html`).
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Carga única de listados SAP con cruce por líneas (v12.32.97)
 
 - **Petición**: simplificar la carga de listados (Comparar, Departamentos y líneas, Importar albaranes, Sugerencias) y que al cargar se actualicen solos estado, nº de albarán, fecha y base imponible, y se creen los pedidos de proveedores «Sujeto a seguimiento».

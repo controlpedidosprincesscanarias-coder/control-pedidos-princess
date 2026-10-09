@@ -1429,7 +1429,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.97
+          V 12.32.98
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3008,7 +3008,7 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-gold" id="btn-csl-cargar" onclick="cslCargar()">Cargar y cruzar</button>
         </div>
       </div>
-      <div id="csl-loading" class="loading" style="display:none">Leyendo los listados y cruzando pedidos con albaranes… puede tardar unos minutos.</div>
+      <div id="csl-loading" class="loading" style="display:none"><span id="csl-timer" style="position:absolute;top:30px;left:calc(50% + 44px);font:600 20px 'DM Mono',monospace;color:var(--navy2)">00:00</span>Leyendo los listados y cruzando pedidos con albaranes… puede tardar unos minutos.</div>
       <div id="csl-resultado" style="display:none"></div>
 
       <details style="margin-top:22px">
@@ -8911,6 +8911,7 @@ function abrirModalCruceSap() {
     (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
   }
   document.getElementById('csl-form').style.display = '';
+  _cslTimerStop();
   document.getElementById('csl-loading').style.display = 'none';
   document.getElementById('csl-resultado').style.display = 'none';
   openModal('modal-cruce-sap');
@@ -8932,6 +8933,7 @@ async function cslCargar() {
   document.getElementById('csl-form').style.display = 'none';
   document.getElementById('csl-loading').style.display = '';
   document.getElementById('csl-resultado').style.display = 'none';
+  _cslTimerStart();
   const fd = new FormData();
   fd.append('hotel_id', hotelId);
   fs.forEach(f => fd.append('files', f));
@@ -8945,7 +8947,23 @@ async function cslCargar() {
   _cslPoll(jobId, 0);
 }
 
+// (v12.32.97) Contador de tiempo junto al spinner: se calcula con Date.now(),
+// así que es exacto aunque el navegador frene los timers en segundo plano.
+let _cslTimerId = null;
+function _cslTimerStart() {
+  _cslTimerStop();
+  const t0 = Date.now(), el = document.getElementById('csl-timer');
+  const pintar = () => {
+    const s = Math.floor((Date.now() - t0) / 1000);
+    if (el) el.textContent = String(Math.floor(s / 60)).padStart(2, '0') + ':' + String(s % 60).padStart(2, '0');
+  };
+  pintar();
+  _cslTimerId = setInterval(pintar, 1000);
+}
+function _cslTimerStop() { if (_cslTimerId) { clearInterval(_cslTimerId); _cslTimerId = null; } }
+
 function _cslError(msg) {
+  _cslTimerStop();
   toast(msg, 'error', 8000);
   document.getElementById('csl-form').style.display = '';
   document.getElementById('csl-loading').style.display = 'none';
@@ -9008,6 +9026,7 @@ function _cslMostrarResultado(res) {
         <td ${td}>${(a.motivos || []).map(m => E(m)).join('<br>')}</td>
         <td ${td}>${a.entradas && a.entradas.length ? entradas(a.entradas) : '—'}</td><td ${td}>${verPedido(a.pedido_id)}</td></tr>`).join('') + '</tbody></table></div>';
   }
+  _cslTimerStop();
   document.getElementById('csl-loading').style.display = 'none';
   const cont = document.getElementById('csl-resultado');
   cont.innerHTML = h + `<div style="margin-top:14px;text-align:right"><button class="btn btn-ghost" onclick="abrirModalCruceSap()">Cargar otros listados</button></div>`;

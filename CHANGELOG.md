@@ -1,3 +1,11 @@
+# v12.32.98 — 9 octubre 2026
+
+⏱️ Cargar listados SAP: contador de tiempo transcurrido junto a la rueda de «Leyendo los listados…»
+
+**Petición de Víctor**: ver de forma más visual el tiempo transcurrido durante la carga, para saber que sigue trabajando sin error.
+
+**Cambios** (`templates/index.html`): contador `mm:ss` a la derecha del spinner; se calcula con la hora real (`Date.now()`), por lo que no se retrasa aunque el navegador pause la pestaña; se detiene al terminar, al dar error o al reabrir el modal. Sin cambios en `app.py`.
+
 # v12.32.97 — 9 octubre 2026
 
 📥 Carga única de listados SAP: un solo botón reconoce los 4 PDF, crea los pedidos que faltan y registra estado, nº de albarán, fecha y base imponible cuando el cruce por líneas es seguro
