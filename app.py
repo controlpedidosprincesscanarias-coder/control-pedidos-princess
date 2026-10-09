@@ -15164,6 +15164,53 @@ def _volcar_lineas_sap_hotel(hotel_id: int, solo_pedido_ids=None) -> dict:
     return {"pedidos": n_ped, "lineas": len(filas)}
 
 
+def _completar_departamentos_sap_hotel(hotel_id: int, solo_pedido_ids=None) -> dict:
+    """(v12.33.06) Rellena el Departamento de los pedidos dados de alta solos que lo tienen vacío, con el código de
+    departamento de SAP guardado (listado de pedidos o, si no, el más frecuente entre las líneas del listado
+    detallado). Solo toca pedidos con `departamento_id` NULL creados por «Carga automática SAP»; no cambia el
+    «Modificado por». Hace commit. Devuelve {"completados": n, "sin_codigo": n, "sin_mapa": {codigo: n}}."""
+    from collections import Counter, defaultdict
+    cond, args = "", [hotel_id, _AUTOR_SAP_AUTO]
+    if solo_pedido_ids:
+        cond, args = " AND p.id = ANY(%s)", [hotel_id, _AUTOR_SAP_AUTO, list(solo_pedido_ids)]
+    cand = rows_to_list(query(
+        f"""SELECT p.id, p.pedido_num FROM pedidos p
+             WHERE p.hotel_id=%s AND p.creado_por_nombre=%s AND p.departamento_id IS NULL
+               AND p.pedido_num IS NOT NULL AND p.pedido_num <> ''{cond}""", tuple(args)))
+    if not cand:
+        return {"completados": 0, "sin_codigo": 0, "sin_mapa": {}}
+    hot = query("SELECT codigo FROM hoteles WHERE id=%s", (hotel_id,), one=True)
+    hotel_codigo = hot["codigo"] if hot else None
+    dep_id = {d["nombre"]: d["id"] for d in rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1"))}
+    cod_listado = {}
+    for f in rows_to_list(query("SELECT pedido_num_sap, departamento_sap_codigo FROM sap_pedidos_listado WHERE hotel_id=%s", (hotel_id,))):
+        if f["departamento_sap_codigo"]:
+            cod_listado[_normalizar_pedido_num(f["pedido_num_sap"])] = f["departamento_sap_codigo"].strip()
+    cod_lineas = defaultdict(Counter)
+    for f in rows_to_list(query("SELECT pedido_num_sap, departamento_sap_codigo FROM sap_pedidos_lineas "
+                                "WHERE hotel_id=%s AND departamento_sap_codigo IS NOT NULL AND departamento_sap_codigo <> ''", (hotel_id,))):
+        cod_lineas[_normalizar_pedido_num(f["pedido_num_sap"])][f["departamento_sap_codigo"].strip()] += 1
+    hechos, sin_codigo, sin_mapa, updates = 0, 0, Counter(), []
+    for c in cand:
+        num = _normalizar_pedido_num(c["pedido_num"])
+        codigo = cod_listado.get(num) or (cod_lineas[num].most_common(1)[0][0] if cod_lineas.get(num) else None)
+        if not codigo:
+            sin_codigo += 1
+            continue
+        nombre = _resolver_departamento_sap(codigo, hotel_codigo)
+        did = dep_id.get(nombre) if nombre else None
+        if not did:
+            sin_mapa[codigo + (f" ({nombre})" if nombre else "")] += 1
+            continue
+        updates.append((did, c["id"]))
+    if updates:
+        with get_db().cursor() as cur:
+            cur.executemany("UPDATE pedidos SET departamento_id=%s WHERE id=%s AND departamento_id IS NULL", updates)
+        get_db().commit()
+        hechos = len(updates)
+    return {"completados": hechos, "sin_codigo": sin_codigo, "sin_mapa": dict(sin_mapa)}
+
+
 def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: dict, uid=None) -> dict:
     """(v12.32.97) Cuerpo de crear_pedidos_desde_sap() extraído tal cual para poder reutilizarlo desde
     la carga unificada de listados SAP (_cargar_listados_sap_logica). Mismas reglas, mismo alta «cáscara»
@@ -15268,6 +15315,12 @@ def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: di
                  f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']})")
             )
             db.commit()
+            try:   # (v12.33.06) departamento desde SAP si el alta no lo trajo
+                if not fila.get("departamento_id"):
+                    _completar_departamentos_sap_hotel(hotel_id, [pedido_id])
+            except Exception as exc_d:
+                db.rollback()
+                log.warning("[CREAR-DESDE-SAP] Pedido %s: no se pudo completar el departamento: %s", num, exc_d)
             try:   # (v12.33.03) artículos y cantidades desde el listado detallado, sin pedir el PDF
                 con_lineas += _volcar_lineas_sap_hotel(hotel_id, [pedido_id])["pedidos"]
             except Exception as exc_l:
@@ -15889,6 +15942,22 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
         res["avisos"].append(f"No se han podido copiar los artículos de SAP a los pedidos ({exc}). El resto de la carga continúa.")
     vol = {"pedidos": vol["pedidos"] + res.get("lineas_copiadas_alta", 0), "lineas": vol["lineas"]}
     res["lineas_copiadas"] = vol
+    # ── 1c. Departamento de los pedidos automáticos que lo tengan vacío (también los creados antes) ──
+    _csl_paso("completar el departamento de los pedidos")
+    try:
+        dep = _completar_departamentos_sap_hotel(hotel_id)
+    except Exception as exc:
+        get_db().rollback()
+        log.exception("[CARGA-LISTADOS-SAP] No se pudo completar el departamento: %s", exc)
+        dep = {"completados": 0, "sin_codigo": 0, "sin_mapa": {}}
+        res["avisos"].append(f"No se ha podido completar el departamento de los pedidos ({exc}). El resto de la carga continúa.")
+    res["departamentos"] = dep
+    if dep["sin_mapa"]:
+        res["avisos"].append("Pedidos sin departamento porque el departamento de SAP no existe en la app (Admin → Departamentos) o no está "
+                             "mapeado: " + ", ".join(f"{k} ({n})" for k, n in dep["sin_mapa"].items()))
+    if dep["sin_codigo"]:
+        res["avisos"].append(f"{dep['sin_codigo']} pedido(s) automático(s) siguen sin departamento: SAP no trae el departamento de sus líneas "
+                             "(sube el Listado de Pedidos DETALLADO que los incluya).")
 
     # ── 2. Cruce por líneas y aplicación de lo seguro ──────────────────────────────────────────────
     _csl_paso("cruzar pedidos con albaranes")
@@ -15939,6 +16008,7 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
         "sin_recepcion": cruce["sin_recepcion"], "evaluados": cruce["evaluados"],
         "con_lineas": res.get("lineas_copiadas", {}).get("pedidos", 0),
         "detalle_entradas": n_detalle,
+        "departamentos": res.get("departamentos", {}).get("completados", 0),
     }
     return res
 
@@ -16019,7 +16089,7 @@ def _ejecutar_regularizar_sap_bg(job_id, hotel_ids, usuario_id):
         try:
             _CSL_PASO.v = None
             hoteles = []
-            tot = {"creados": 0, "aplicados": 0, "revisar": 0, "sin_recepcion": 0, "evaluados": 0, "con_lineas": 0, "detalle_entradas": 0}
+            tot = {"creados": 0, "aplicados": 0, "revisar": 0, "sin_recepcion": 0, "evaluados": 0, "con_lineas": 0, "detalle_entradas": 0, "departamentos": 0}
             unico = None
             for hid in hotel_ids:
                 _csl_paso(f"regularizar el hotel {hid}")
@@ -21477,6 +21547,7 @@ def get_lineas_pedido(pid):
         try:
             if _volcar_lineas_sap_hotel(ped["hotel_id"], [pid])["lineas"]:
                 hay = True
+            _completar_departamentos_sap_hotel(ped["hotel_id"], [pid])
         except Exception as exc_v:
             get_db().rollback()
             log.warning("[PEDIDO-LINEAS] No se pudieron copiar las líneas de SAP al pedido %s: %s", pid, exc_v)

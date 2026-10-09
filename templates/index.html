@@ -1438,7 +1438,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.05
+          V 12.33.06
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -9171,6 +9171,7 @@ function _cslMostrarResultado(res) {
     ${pill(`${R.aplicados ?? 0} aplicado(s) solo`, '#d4edda', '#155724')}
     ${pill(`${R.creados ?? 0} pedido(s) creado(s)`, '#e7e0f7', '#4d2f8f')}
     ${(R.con_lineas || 0) > 0 ? pill(`${R.con_lineas} pedido(s) con artículos copiados de SAP`, '#e7e0f7', '#4d2f8f') : ''}
+    ${(R.departamentos || 0) > 0 ? pill(`${R.departamentos} pedido(s) con el departamento completado`, '#e7e0f7', '#4d2f8f') : ''}
     ${(R.detalle_entradas || 0) > 0 ? pill(`${R.detalle_entradas} pedido(s) con el detalle de referencias de sus entradas completado`, '#e7e0f7', '#4d2f8f') : ''}
     ${pill(`${R.revisar ?? 0} para revisar`, (R.revisar ? '#fff3cd' : '#f8f9fa'), (R.revisar ? '#856404' : '#666'))}
     ${pill(`${R.sin_recepcion ?? 0} sin nada recibido`, '#f8f9fa', '#666')}

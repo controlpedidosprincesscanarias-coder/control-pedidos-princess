@@ -1,3 +1,17 @@
+# v12.33.06 — 9 octubre 2026
+
+🏷️ Pedidos automáticos: se completa el departamento desde SAP (también en los ya creados) y se avisa de los que no se pueden
+
+**Petición de Víctor**: los pedidos creados automáticamente no tienen asignado el departamento de destino.
+
+**Causa**: el departamento solo se tomaba del código guardado en el Listado de Pedidos (resumido) en el momento del alta; si ese código no estaba (pedido que entró por el resumido y el detallado no lo traía en esa carga, o se cargó en otro orden), el pedido se quedaba con «—» y nada lo volvía a intentar.
+
+**Cambios** (`app.py`, `templates/index.html`):
+- `_completar_departamentos_sap_hotel`: para los pedidos de «Carga automática SAP» sin departamento, usa el código guardado (listado de pedidos o, si no, el más frecuente de las líneas del Listado detallado), lo traduce con `_resolver_departamento_sap` (Restaurante/Bares según hotel) y lo asigna. No cambia «Modificado por».
+- Se ejecuta al crear cada pedido, en cada «Cargar y cruzar», en «Regularizar con lo ya guardado (sin PDF)» (arregla los ya creados) y al abrir un pedido antiguo.
+- Avisos explícitos si algo queda sin departamento: departamento de SAP que no existe/no está mapeado en la app (con el código y cuántos pedidos) o pedidos que SAP no trae en el detallado cargado. Indicador «N pedido(s) con el departamento completado».
+- Prueba: quitando el departamento a los 292 pedidos automáticos y regularizando sin PDF, se recuperan los 292.
+
 # v12.33.05 — 9 octubre 2026
 
 🛠️ Corrección: «'<' not supported between instances of 'datetime.datetime' and 'float'» al cargar listados después de regularizar

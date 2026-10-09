@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Departamento de los pedidos automáticos desde SAP (v12.33.06)
+
+- **Corrección**: `_completar_departamentos_sap_hotel` asigna el departamento (código del listado o de las líneas del detallado) a los pedidos automáticos que lo tengan vacío; se llama en alta, carga, regularización y apertura; avisos de lo que quede sin departamento.
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Corrección datetime/float en tareas de carga SAP (v12.33.05)
 
 - **Corrección**: `regularizar_sap` guardaba `creado_en` como `datetime`; ahora `time.time()` y purga de tareas antiguas, como el resto de cargas.
