@@ -3450,16 +3450,20 @@ def _datos_pendientes(pedido: dict):
                                       "ud": l["unidad"], "pedida": 0.0}
                 orden.append(cod)
             g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
-        filas = []
+        filas, sobrantes = [], []
         for cod in orden:
             g = agrupadas[cod]
             rec = ent.get(cod, {"total": 0.0})["total"]
             pend = round(g["pedida"] - rec, 4)
+            if pend < -0.00001:      # (v12.32.96) llegó MÁS de lo pedido → material en exceso
+                g["recibida"], g["exceso"] = rec, round(-pend, 4)
+                sobrantes.append(g)
+                continue
             if pend <= 0.00001:
                 continue
             g["recibida"], g["pendiente"] = rec, pend
             filas.append(g)
-        return {"filas": filas, "sin_detalle": sin_detalle}
+        return {"filas": filas, "sobrantes": sobrantes, "sin_detalle": sin_detalle}
     except Exception as exc:
         log.warning(f"[PENDIENTES-EMAIL] No se pudo calcular las referencias pendientes: {exc}")
         return None
@@ -3469,48 +3473,78 @@ def _fmt_cant_email(x) -> str:
     return (f"{float(x):.4f}".rstrip("0").rstrip(".")).replace(".", ",")
 
 
-def _html_bloque_pendientes(pedido: dict, permitir_parcial: bool = False) -> str:
-    """Tabla HTML «Referencias pendientes de entregar» (código, Ref. Prov., descripción, pedido,
-    recibido, pendiente — sin precios). Por defecto (correo al PROVEEDOR) solo se genera si TODAS las
+def _html_bloque_pendientes(pedido: dict, permitir_parcial: bool = False, solo_sobrantes: bool = False,
+                            interno: bool = False) -> str:
+    """Bloques HTML «Referencias pendientes de entregar» (código, Ref. Prov., descripción, pedido,
+    recibido, pendiente — sin precios) y «Material recibido en exceso» (cantidad recibida superior a la
+    pedida; v12.32.96). El de pendientes, por defecto (correo al PROVEEDOR), solo se genera si TODAS las
     entradas DALI/SAP del pedido tienen detalle: con detalle a medias el «pendiente» sería falso y no se
-    le puede decir eso a un proveedor. Con permitir_parcial=True (aviso INTERNO) se genera igualmente
-    con un aviso de qué entradas faltan por detallar. '' si no hay nada que mostrar."""
+    le puede decir eso a un proveedor. Con permitir_parcial=True (aviso INTERNO) se genera igualmente con
+    un aviso de qué entradas faltan por detallar. El de excedentes SÍ se genera siempre: lo ya recibido
+    es un mínimo cierto aunque falte detallar alguna entrada. `solo_sobrantes` omite los pendientes
+    (aviso interno de ENTREGADO). '' si no hay nada que mostrar."""
     d = _datos_pendientes(pedido)
-    if not d or not d["filas"]:
+    if not d:
         return ""
-    if d["sin_detalle"] and not permitir_parcial:
-        return ""
-    filas = "".join(
-        f'<tr><td>{_html_escape(str(g["codigo"]))}</td><td>{_html_escape(str(g["ref"] or "—"))}</td>'
-        f'<td>{_html_escape(str(g["desc"] or ""))}</td><td align="right">{_fmt_cant_email(g["pedida"])}</td>'
-        f'<td align="right">{_fmt_cant_email(g["recibida"])}</td>'
-        f'<td align="right"><b>{_fmt_cant_email(g["pendiente"])}</b> {_html_escape(str(g["ud"] or ""))}</td></tr>'
-        for g in d["filas"])
-    aviso = ""
-    if d["sin_detalle"]:
-        aviso = ('<p style="margin:6px 0 0;font-size:12px;color:#8a6d00">⚠️ Calculado solo con las entradas que tienen '
-                 'detalle de referencias; sin detallar: ' + _html_escape(", ".join(d["sin_detalle"])) +
-                 '. Puede haber llegado más de lo indicado.</p>')
-    return (
-        f'<p style="margin:16px 0 6px"><b>Referencias pendientes de entregar</b> ({len(d["filas"])}):</p>'
-        '<table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'
-        '<tr style="background:#f0f0f0"><th>Código</th><th>Ref. Prov.</th><th>Descripción</th>'
-        '<th>Pedido</th><th>Recibido</th><th>Pendiente</th></tr>' + filas + '</table>' + aviso
-    )
+    partes = []
+    if d["filas"] and not solo_sobrantes and (permitir_parcial or not d["sin_detalle"]):
+        filas = "".join(
+            f'<tr><td>{_html_escape(str(g["codigo"]))}</td><td>{_html_escape(str(g["ref"] or "—"))}</td>'
+            f'<td>{_html_escape(str(g["desc"] or ""))}</td><td align="right">{_fmt_cant_email(g["pedida"])}</td>'
+            f'<td align="right">{_fmt_cant_email(g["recibida"])}</td>'
+            f'<td align="right"><b>{_fmt_cant_email(g["pendiente"])}</b> {_html_escape(str(g["ud"] or ""))}</td></tr>'
+            for g in d["filas"])
+        aviso = ""
+        if d["sin_detalle"]:
+            aviso = ('<p style="margin:6px 0 0;font-size:12px;color:#8a6d00">⚠️ Calculado solo con las entradas que tienen '
+                     'detalle de referencias; sin detallar: ' + _html_escape(", ".join(d["sin_detalle"])) +
+                     '. Puede haber llegado más de lo indicado.</p>')
+        partes.append(
+            f'<p style="margin:16px 0 6px"><b>Referencias pendientes de entregar</b> ({len(d["filas"])}):</p>'
+            '<table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'
+            '<tr style="background:#f0f0f0"><th>Código</th><th>Ref. Prov.</th><th>Descripción</th>'
+            '<th>Pedido</th><th>Recibido</th><th>Pendiente</th></tr>' + filas + '</table>' + aviso)
+    if d.get("sobrantes"):
+        filas_e = "".join(
+            f'<tr><td>{_html_escape(str(g["codigo"]))}</td><td>{_html_escape(str(g["ref"] or "—"))}</td>'
+            f'<td>{_html_escape(str(g["desc"] or ""))}</td><td align="right">{_fmt_cant_email(g["pedida"])}</td>'
+            f'<td align="right">{_fmt_cant_email(g["recibida"])}</td>'
+            f'<td align="right"><b>+{_fmt_cant_email(g["exceso"])}</b> {_html_escape(str(g["ud"] or ""))}</td></tr>'
+            for g in d["sobrantes"])
+        nota = ("Valorar con el proveedor la devolución o el abono del material sobrante." if interno else
+                "Les rogamos nos indiquen cómo desean proceder con el material recibido en exceso.")
+        partes.append(
+            f'<p style="margin:16px 0 6px"><b>Material recibido en exceso</b> ({len(d["sobrantes"])}) — '
+            'cantidad recibida superior a la solicitada:</p>'
+            '<table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'
+            '<tr style="background:#fff3e0"><th>Código</th><th>Ref. Prov.</th><th>Descripción</th>'
+            '<th>Pedido</th><th>Recibido</th><th>Exceso</th></tr>' + filas_e + '</table>'
+            f'<p style="margin:6px 0 0;font-size:12.5px;color:#7a4b00">{nota}</p>')
+    return "".join(partes)
 
 
-def _text_bloque_pendientes(pedido: dict, permitir_parcial: bool = True) -> str:
+def _text_bloque_pendientes(pedido: dict, permitir_parcial: bool = True, solo_sobrantes: bool = False) -> str:
     """Versión en texto plano de _html_bloque_pendientes (para el aviso interno)."""
     d = _datos_pendientes(pedido)
-    if not d or not d["filas"] or (d["sin_detalle"] and not permitir_parcial):
+    if not d:
         return ""
-    lineas = [f"Referencias pendientes de entregar ({len(d['filas'])}):"]
-    for g in d["filas"]:
-        lineas.append(f"  - {g['codigo']} · Ref. Prov. {g['ref'] or '—'} · {g['desc'] or ''}: pedido {_fmt_cant_email(g['pedida'])}, "
-                      f"recibido {_fmt_cant_email(g['recibida'])}, PENDIENTE {_fmt_cant_email(g['pendiente'])} {g['ud'] or ''}".rstrip())
-    if d["sin_detalle"]:
-        lineas.append("  (Calculado solo con las entradas con detalle; sin detallar: " + ", ".join(d["sin_detalle"]) + ".)")
-    return "\n".join(lineas)
+    bloques = []
+    if d["filas"] and not solo_sobrantes and (permitir_parcial or not d["sin_detalle"]):
+        lineas = [f"Referencias pendientes de entregar ({len(d['filas'])}):"]
+        for g in d["filas"]:
+            lineas.append(f"  - {g['codigo']} · Ref. Prov. {g['ref'] or '—'} · {g['desc'] or ''}: pedido {_fmt_cant_email(g['pedida'])}, "
+                          f"recibido {_fmt_cant_email(g['recibida'])}, PENDIENTE {_fmt_cant_email(g['pendiente'])} {g['ud'] or ''}".rstrip())
+        if d["sin_detalle"]:
+            lineas.append("  (Calculado solo con las entradas con detalle; sin detallar: " + ", ".join(d["sin_detalle"]) + ".)")
+        bloques.append("\n".join(lineas))
+    if d.get("sobrantes"):
+        lineas = [f"Material recibido en exceso ({len(d['sobrantes'])}) — cantidad recibida superior a la solicitada:"]
+        for g in d["sobrantes"]:
+            lineas.append(f"  - {g['codigo']} · Ref. Prov. {g['ref'] or '—'} · {g['desc'] or ''}: pedido {_fmt_cant_email(g['pedida'])}, "
+                          f"recibido {_fmt_cant_email(g['recibida'])}, EXCESO +{_fmt_cant_email(g['exceso'])} {g['ud'] or ''}".rstrip())
+        lineas.append("  Valorar con el proveedor la devolución o el abono del material sobrante.")
+        bloques.append("\n".join(lineas))
+    return "\n\n".join(bloques)
 
 
 def _enlace_pedido_app(pedido_id) -> str:
@@ -4516,7 +4550,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         {_bloque_doc_html_interno}
         {_nota_base_imponible_html() if not _resumen_ent["entregas"] else ''}
         {_html_bloque_entregas(_resumen_ent, estado_nuevo)}
-        {_html_bloque_pendientes(pedido, permitir_parcial=True) if estado_nuevo == "ENTREGA PARCIAL" else ''}
+        {_html_bloque_pendientes(pedido, permitir_parcial=True, interno=True) if estado_nuevo == "ENTREGA PARCIAL" else (_html_bloque_pendientes(pedido, permitir_parcial=True, solo_sobrantes=True, interno=True) if estado_nuevo == "ENTREGADO" else '')}
         {('<p style="margin:14px 0 4px">Puede abrir este pedido directamente en la aplicación:</p><p style="margin:4px 0 14px"><a href="' + _enlace_pedido_app(pedido_id) + '" style="display:inline-block;background:#8B6914;color:#fff;text-decoration:none;padding:9px 18px;border-radius:5px;font-size:13px;font-weight:700">🔎 Abrir el pedido en Control de Pedidos</a></p>') if estado_nuevo == "ENTREGA PARCIAL" else ''}
         """
         if estado_nuevo in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL") and _motivo_estado:
@@ -4634,10 +4668,11 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _bloque_text_ent = _text_bloque_entregas(_resumen_ent, estado_nuevo)
         if _bloque_text_ent:
             body_text_i += "\n\n📦 " + _bloque_text_ent
-        if estado_nuevo == "ENTREGA PARCIAL":
-            _bloque_text_pend = _text_bloque_pendientes(pedido, permitir_parcial=True)
+        if estado_nuevo in ("ENTREGA PARCIAL", "ENTREGADO"):
+            _bloque_text_pend = _text_bloque_pendientes(pedido, permitir_parcial=True, solo_sobrantes=(estado_nuevo == "ENTREGADO"))
             if _bloque_text_pend:
                 body_text_i += "\n\n" + _bloque_text_pend
+        if estado_nuevo == "ENTREGA PARCIAL":
             body_text_i += f"\n\nAbrir el pedido en la aplicación: {_enlace_pedido_app(pedido_id)}"
         if estado_nuevo in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL") and _motivo_estado:
             _label_motivo_txt = "Motivo de la denegación" if estado_nuevo == "DENEGADO POR DIRECCION GENERAL" else "Motivo de la cancelación"
@@ -20869,7 +20904,7 @@ def _calcular_faltantes_pedido(lineas: list, entregas: list, entrada_albaran_num
       · "parcial"      alguna entrada sin detalle → faltantes calculados solo con las entradas detalladas.
       · "sin_detalle"  hay entradas pero ninguna tiene detalle → no se puede saber qué falta."""
     if not lineas:
-        return {"cobertura": "sin_lineas", "faltantes": [], "sin_detalle": []}
+        return {"cobertura": "sin_lineas", "faltantes": [], "sobrantes": [], "sin_detalle": []}
     ent = {}
     for r in entregas:
         d = ent.setdefault(r["codigo"], {"total": 0.0, "albaranes": set()})
@@ -20879,7 +20914,7 @@ def _calcular_faltantes_pedido(lineas: list, entregas: list, entrada_albaran_num
     entradas = [e["num"] for e in _parse_albaran_entries(entrada_albaran_num)]
     sin_detalle = [n for n in entradas if n not in con_detalle]
     if entradas and not con_detalle:
-        return {"cobertura": "sin_detalle", "faltantes": [], "sin_detalle": sin_detalle}
+        return {"cobertura": "sin_detalle", "faltantes": [], "sobrantes": [], "sin_detalle": sin_detalle}
     agrupadas, orden = {}, []
     for l, cod in zip(lineas, _claves_lineas(lineas)):
         if not cod:
@@ -20890,7 +20925,7 @@ def _calcular_faltantes_pedido(lineas: list, entregas: list, entrada_albaran_num
                                   "ud": l["unidad"], "pedida": 0.0}
             orden.append(cod)
         g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
-    faltantes = []
+    faltantes, sobrantes = [], []
     for cod in orden:
         g = agrupadas[cod]
         rec = ent.get(cod, {"total": 0.0})["total"]
@@ -20898,7 +20933,11 @@ def _calcular_faltantes_pedido(lineas: list, entregas: list, entrada_albaran_num
         if pend > 0.00001:
             g["recibida"], g["pendiente"] = rec, pend
             faltantes.append(g)
-    return {"cobertura": "parcial" if sin_detalle else "completa", "faltantes": faltantes, "sin_detalle": sin_detalle}
+        elif pend < -0.00001:        # (v12.32.96) recibido MÁS de lo pedido
+            g["recibida"], g["exceso"] = rec, round(-pend, 4)
+            sobrantes.append(g)
+    return {"cobertura": "parcial" if sin_detalle else "completa", "faltantes": faltantes, "sobrantes": sobrantes,
+            "sin_detalle": sin_detalle}
 
 
 @app.route("/api/pedidos/pendientes-entrega", methods=["GET"])
@@ -20911,6 +20950,8 @@ def pedidos_pendientes_entrega():
     ESTADOS = ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL")
     hotel_id = request.args.get("hotel_id", type=int)
     estado = (request.args.get("estado") or "").strip()
+    # (v12.32.96) «solo_exceso=1»: solo pedidos con material recibido en exceso (incluye ENTREGADO)
+    solo_exceso = (request.args.get("solo_exceso") or "") in ("1", "true", "on")
     q = (request.args.get("q") or "").strip()
     solo_vencidos = (request.args.get("solo_vencidos") or "") in ("1", "true", "on")
     if estado and estado not in ESTADOS:
@@ -20925,7 +20966,10 @@ def pedidos_pendientes_entrega():
         LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
         WHERE p.estado = ANY(%s) {extra}
     """
-    args = [list(ESTADOS if not estado else (estado,))] + args_extra
+    estados_busq = list(ESTADOS if not estado else (estado,))
+    if solo_exceso and not estado:
+        estados_busq.append("ENTREGADO")
+    args = [estados_busq] + args_extra
     if hotel_id:
         sql += " AND p.hotel_id = %s"; args.append(hotel_id)
     if q:
@@ -20953,6 +20997,11 @@ def pedidos_pendientes_entrega():
             continue
         calc = _calcular_faltantes_pedido(lineas_por.get(p["id"], []), entregas_por.get(p["id"], []),
                                           p.get("entrada_albaran_num"), p["estado"])
+        sobrantes = calc.get("sobrantes") or []
+        if p["estado"] == "ENTREGADO" and not sobrantes:
+            continue                      # ENTREGADO solo interesa si trae exceso
+        if solo_exceso and not sobrantes:
+            continue
         entradas = _parse_albaran_entries(p.get("entrada_albaran_num"))
         salida.append({
             "pedido_id": p["id"], "norden": p["norden"], "pedido_num": p["pedido_num"], "estado": p["estado"],
@@ -20962,7 +21011,8 @@ def pedidos_pendientes_entrega():
             "fecha_entrega_prevista": fecha_prev.isoformat() if fecha_prev else None,
             "dias_retraso": dias_retraso,
             "num_entradas": len(entradas),
-            "cobertura": calc["cobertura"], "faltantes": calc["faltantes"], "sin_detalle": calc["sin_detalle"],
+            "cobertura": calc["cobertura"], "faltantes": calc["faltantes"], "sobrantes": sobrantes,
+            "sin_detalle": calc["sin_detalle"],
             "num_lineas": len([c for c in _claves_lineas(lineas_por.get(p["id"], [])) if c]),
         })
     # Más vencidos primero; los que no tienen fecha prevista, al final (por hotel y nº de pedido)
@@ -20971,6 +21021,7 @@ def pedidos_pendientes_entrega():
         "ok": True, "pedidos": salida,
         "resumen": {
             "total": len(salida),
+            "con_exceso": sum(1 for x in salida if x.get("sobrantes")),
             "enviados": sum(1 for x in salida if x["estado"] == "ENVIADO AL PROVEEDOR"),
             "parciales": sum(1 for x in salida if x["estado"] == "ENTREGA PARCIAL"),
             "vencidos": sum(1 for x in salida if (x["dias_retraso"] or 0) > 0),

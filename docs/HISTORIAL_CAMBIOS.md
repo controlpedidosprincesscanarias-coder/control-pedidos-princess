@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Material recibido en exceso en correos y listados de pendientes (v12.32.96)
+
+- **Origen**: Víctor: cuando llega más cantidad de la pedida (pedido 16134, +10/+5) debe constar en la reclamación al proveedor, en los correos internos y en los listados de faltantes, como sobrante / material entregado en exceso.
+- **Hallazgo**: el cálculo solo contemplaba lo pendiente; las líneas con recibido > pedido se ignoraban.
+- **Corrección**: `sobrantes` en `_datos_pendientes` y `_calcular_faltantes_pedido`; bloque «Material recibido en exceso» en correo a proveedor, internos (parcial y entregado) y en el listado/PDF de pendientes, con filtro `solo_exceso` (ver CHANGELOG v12.32.96).
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL de migración; resto: no aplica.
+- **Pendiente / ideas**: opción de registrar la decisión sobre el exceso (devolución / abono / quedárselo) y exportar a Excel.
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Líneas con el mismo código en un pedido: cada una por separado (v12.32.95)
 
 - **Origen**: Víctor: en el listado de pendientes, el pedido 28289 mostraba una sola referencia («DUNI», 6 uds.) en vez de las tres líneas del PDF; las referencias sin precio no salían como faltantes.

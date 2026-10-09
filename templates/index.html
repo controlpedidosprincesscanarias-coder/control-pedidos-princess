@@ -1429,7 +1429,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.95
+          V 12.32.96
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1621,6 +1621,7 @@ tbody tr:last-child{border-bottom:none}
               <option value="">Enviados y parciales</option>
               <option value="ENVIADO AL PROVEEDOR">Solo enviados (sin recibir nada)</option>
               <option value="ENTREGA PARCIAL">Solo entregas parciales</option>
+              <option value="EXCESO">Con material recibido en exceso (incl. entregados)</option>
             </select>
             <input class="filter-input" id="bp-q" style="min-width:220px" placeholder="🔎 Nº de pedido o proveedor…"
                    onkeydown="if(event.key==='Enter')cargarPendientesEntrega()">
@@ -1630,7 +1631,7 @@ tbody tr:last-child{border-bottom:none}
             <button class="btn btn-sm" style="background:#1a3a6b;color:#fff;border:none" onclick="cargarPendientesEntrega()">Actualizar</button>
             <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
               <button class="btn btn-ghost btn-sm" onclick="imprimirPendientesEntrega(false)" title="Una línea por pedido — se imprime o se guarda como PDF">🖨️ Listado (PDF)</button>
-              <button class="btn btn-ghost btn-sm" onclick="imprimirPendientesEntrega(true)" title="Cada pedido con sus referencias y cantidades faltantes — se imprime o se guarda como PDF">🖨️ Detallado con faltantes (PDF)</button>
+              <button class="btn btn-ghost btn-sm" onclick="imprimirPendientesEntrega(true)" title="Cada pedido con sus referencias y cantidades faltantes — se imprime o se guarda como PDF">🖨️ Detallado con faltantes y excesos (PDF)</button>
             </span>
           </div>
           <div class="card">
@@ -7295,14 +7296,30 @@ function _bpRetraso(d) {
 function _bpFaltan(p) {
   if (p.cobertura === 'sin_lineas') return '<span style="color:#7a5b00" title="El pedido no tiene líneas leídas del PDF oficial">⚠️ Sin líneas del PDF</span>';
   if (p.cobertura === 'sin_detalle') return '<span style="color:#7a5b00" title="Hay entradas registradas pero sin detallar sus referencias («Referencias de la entrada»)">⚠️ Sin detalle de las entradas</span>';
-  const n = p.faltantes.length;
-  const base = n ? `<strong style="color:#b45309">${n}</strong> de ${p.num_lineas} ref.` : '<span style="color:#1a7a1a">✔ nada pendiente</span>';
+  const n = p.faltantes.length, ns = (p.sobrantes || []).length;
+  const exc = ns ? ` <span style="color:#b91c1c;font-weight:600" title="Material recibido en cantidad superior a la solicitada">· ${ns} en exceso</span>` : '';
+  const base = (n ? `<strong style="color:#b45309">${n}</strong> de ${p.num_lineas} ref.` : '<span style="color:#1a7a1a">✔ nada pendiente</span>') + exc;
   return p.cobertura === 'parcial' ? base + ' <span title="Calculado solo con las entradas que tienen detalle; puede haber llegado más" style="color:#7a5b00">⚠️</span>' : base;
 }
+function _bpSobrantesHtml(p) {
+  const sob = p.sobrantes || [];
+  if (!sob.length) return '';
+  const t = 'padding:3px 6px';
+  return `<div style="margin:${p.faltantes.length ? '10px' : '0'} 0 3px;font-weight:700;color:#b91c1c">Material recibido en exceso (${sob.length}) — cantidad recibida superior a la solicitada</div>
+    <table style="width:100%;border-collapse:collapse;font-size:11.5px">
+    <thead><tr style="background:#fdecec;text-align:left"><th style="${t}">Código</th><th style="${t}">Ref. Prov.</th><th style="${t}">Descripción</th>
+      <th style="${t};text-align:right">Pedido</th><th style="${t};text-align:right">Recibido</th><th style="${t};text-align:right">Exceso</th><th style="${t}">Ud.</th></tr></thead>
+    <tbody>${sob.map(g => `<tr>
+      <td class="monospace" style="${t}">${_htmlLinea(g.codigo)}</td><td class="monospace" style="${t}">${_htmlLinea(g.ref || '—')}</td>
+      <td style="${t}">${_htmlLinea(g.desc || '')}</td>
+      <td style="${t};text-align:right">${_bpCantidad(g.pedida)}</td><td style="${t};text-align:right">${_bpCantidad(g.recibida)}</td>
+      <td style="${t};text-align:right;font-weight:700;color:#b91c1c">+${_bpCantidad(g.exceso)}</td><td style="${t}">${_htmlLinea(g.ud || '')}</td></tr>`).join('')}</tbody></table>`;
+}
 function _bpDetalleHtml(p) {
+  const sob = _bpSobrantesHtml(p);
   if (p.cobertura === 'sin_lineas') return 'Este pedido no tiene líneas leídas de su PDF oficial, así que no se pueden calcular las referencias pendientes.';
   if (p.cobertura === 'sin_detalle') return `Hay ${p.num_entradas} entrada(s) registradas (${p.sin_detalle.map(_htmlLinea).join(', ')}) sin detallar las referencias recibidas: abre el pedido y rellena «Referencias de la entrada» para saber qué falta.`;
-  if (!p.faltantes.length) return '✔ Todas las referencias están recibidas.';
+  if (!p.faltantes.length) return sob ? (p.estado === 'ENTREGADO' ? '' : '✔ Todas las referencias solicitadas están recibidas.<br>') + sob : '✔ Todas las referencias están recibidas.';
   const aviso = p.cobertura === 'parcial'
     ? `<div style="color:#7a5b00;margin-bottom:4px">⚠️ Entradas sin detallar: ${p.sin_detalle.map(_htmlLinea).join(', ')} — puede haber llegado más de lo indicado.</div>` : '';
   return aviso + `<table style="width:100%;border-collapse:collapse;font-size:11.5px">
@@ -7312,7 +7329,7 @@ function _bpDetalleHtml(p) {
       <td class="monospace" style="padding:3px 6px">${_htmlLinea(g.codigo)}</td><td class="monospace" style="padding:3px 6px">${_htmlLinea(g.ref || '—')}</td>
       <td style="padding:3px 6px">${_htmlLinea(g.desc || '')}</td>
       <td style="padding:3px 6px;text-align:right">${_bpCantidad(g.pedida)}</td><td style="padding:3px 6px;text-align:right;color:#1a7a1a">${_bpCantidad(g.recibida)}</td>
-      <td style="padding:3px 6px;text-align:right;font-weight:700;color:#b45309">${_bpCantidad(g.pendiente)}</td><td style="padding:3px 6px">${_htmlLinea(g.ud || '')}</td></tr>`).join('')}</tbody></table>`;
+      <td style="padding:3px 6px;text-align:right;font-weight:700;color:#b45309">${_bpCantidad(g.pendiente)}</td><td style="padding:3px 6px">${_htmlLinea(g.ud || '')}</td></tr>`).join('')}</tbody></table>` + sob;
 }
 function bpToggle(i) {
   const d = document.getElementById('bp-det-' + i), f = document.getElementById('bp-flecha-' + i);
@@ -7327,7 +7344,7 @@ async function cargarPendientesEntrega() {
   resumen.textContent = 'Cargando…';
   const params = new URLSearchParams();
   const h = document.getElementById('bp-hotel').value; if (h) params.set('hotel_id', h);
-  const e = document.getElementById('bp-estado').value; if (e) params.set('estado', e);
+  const e = document.getElementById('bp-estado').value; if (e === 'EXCESO') params.set('solo_exceso', '1'); else if (e) params.set('estado', e);
   const q = document.getElementById('bp-q').value.trim(); if (q) params.set('q', q);
   if (document.getElementById('bp-vencidos').checked) params.set('solo_vencidos', '1');
   let d;
@@ -7353,7 +7370,7 @@ async function cargarPendientesEntrega() {
   vacio.classList.toggle('section-hidden', _bpDatos.length > 0);
   const r = d.resumen || {};
   resumen.textContent = _bpDatos.length
-    ? `${r.total} pedido(s): ${r.enviados} enviado(s) sin recibir, ${r.parciales} con entrega parcial · ${r.vencidos} con la entrega vencida` + (r.sin_referencias ? ` · ${r.sin_referencias} sin referencias calculables` : '')
+    ? `${r.total} pedido(s): ${r.enviados} enviado(s) sin recibir, ${r.parciales} con entrega parcial · ${r.vencidos} con la entrega vencida` + (r.con_exceso ? ` · ${r.con_exceso} con material en exceso` : '') + (r.sin_referencias ? ` · ${r.sin_referencias} sin referencias calculables` : '')
     : '';
 }
 function imprimirPendientesEntrega(detallado) {
@@ -7369,8 +7386,16 @@ function imprimirPendientesEntrega(detallado) {
   const th = 'padding:5px 8px;font-size:10px;text-align:left;border-bottom:2px solid #dee2e6;background:#f8f9fa';
   const td = 'padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;vertical-align:top';
   const retrasoTxt = d => d == null ? '—' : (d > 0 ? `<b style="color:#b91c1c">${d} d</b>` : (d === 0 ? '<b>Hoy</b>' : `faltan ${-d} d`));
+  const excTxt = p => (p.sobrantes || []).length ? ` · <b style="color:#b91c1c">${p.sobrantes.length} en exceso</b>` : '';
   const faltanTxt = p => p.cobertura === 'sin_lineas' ? 'Sin líneas del PDF' : (p.cobertura === 'sin_detalle' ? 'Sin detalle de las entradas'
-    : (p.faltantes.length ? `${p.faltantes.length} de ${p.num_lineas} ref.` + (p.cobertura === 'parcial' ? ' (*)' : '') : 'Nada pendiente'));
+    : (p.faltantes.length ? `${p.faltantes.length} de ${p.num_lineas} ref.` + (p.cobertura === 'parcial' ? ' (*)' : '') : 'Nada pendiente') + excTxt(p));
+  const sobrantesPrint = p => !(p.sobrantes || []).length ? '' :
+    `<p style="font-size:11px;font-weight:700;color:#b91c1c;margin:${p.faltantes.length ? '10px' : '2px'} 0 3px">Material recibido en exceso (${p.sobrantes.length}) — cantidad recibida superior a la solicitada</p>` +
+    `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">Código</th><th style="${th}">Ref. Prov.</th><th style="${th}">Descripción</th>
+      <th style="${th};text-align:right">Pedido</th><th style="${th};text-align:right">Recibido</th><th style="${th};text-align:right">Exceso</th><th style="${th}">Ud.</th></tr></thead><tbody>` +
+    p.sobrantes.map(g => `<tr><td style="${td};font-family:monospace">${_htmlLinea(g.codigo)}</td><td style="${td};font-family:monospace">${_htmlLinea(g.ref || '—')}</td>
+      <td style="${td}">${_htmlLinea(g.desc || '')}</td><td style="${td};text-align:right">${_bpCantidad(g.pedida)}</td><td style="${td};text-align:right">${_bpCantidad(g.recibida)}</td>
+      <td style="${td};text-align:right;color:#b91c1c"><b>+${_bpCantidad(g.exceso)}</b></td><td style="${td}">${_htmlLinea(g.ud || '')}</td></tr>`).join('') + '</tbody></table>';
   const bloques = Object.keys(porHotel).sort().map(cod => {
     const ps = porHotel[cod];
     const nombre = ps[0].hotel_nombre || '';
@@ -7388,13 +7413,14 @@ function imprimirPendientesEntrega(detallado) {
         let det;
         if (p.cobertura === 'sin_lineas') det = '<p style="font-size:11px;color:#7a5b00;margin:4px 0">Este pedido no tiene líneas leídas de su PDF oficial: no se pueden calcular las referencias pendientes.</p>';
         else if (p.cobertura === 'sin_detalle') det = `<p style="font-size:11px;color:#7a5b00;margin:4px 0">Hay entradas registradas (${p.sin_detalle.map(_htmlLinea).join(', ')}) sin detallar sus referencias: no se puede saber qué falta.</p>`;
-        else if (!p.faltantes.length) det = '<p style="font-size:11px;color:#1a7a1a;margin:4px 0">Todas las referencias están recibidas.</p>';
+        else if (!p.faltantes.length) det = ((p.sobrantes || []).length ? (p.estado === 'ENTREGADO' ? '' : '<p style="font-size:11px;color:#1a7a1a;margin:4px 0">Todas las referencias solicitadas están recibidas.</p>') + sobrantesPrint(p)
+          : '<p style="font-size:11px;color:#1a7a1a;margin:4px 0">Todas las referencias están recibidas.</p>');
         else det = (p.cobertura === 'parcial' ? `<p style="font-size:10.5px;color:#7a5b00;margin:4px 0">(*) Entradas sin detallar: ${p.sin_detalle.map(_htmlLinea).join(', ')} — puede haber llegado más de lo indicado.</p>` : '') +
           `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">Código</th><th style="${th}">Ref. Prov.</th><th style="${th}">Descripción</th>
             <th style="${th};text-align:right">Pedido</th><th style="${th};text-align:right">Recibido</th><th style="${th};text-align:right">Pendiente</th><th style="${th}">Ud.</th></tr></thead><tbody>` +
           p.faltantes.map(g => `<tr><td style="${td};font-family:monospace">${_htmlLinea(g.codigo)}</td><td style="${td};font-family:monospace">${_htmlLinea(g.ref || '—')}</td>
             <td style="${td}">${_htmlLinea(g.desc || '')}</td><td style="${td};text-align:right">${_bpCantidad(g.pedida)}</td><td style="${td};text-align:right">${_bpCantidad(g.recibida)}</td>
-            <td style="${td};text-align:right"><b>${_bpCantidad(g.pendiente)}</b></td><td style="${td}">${_htmlLinea(g.ud || '')}</td></tr>`).join('') + '</tbody></table>';
+            <td style="${td};text-align:right"><b>${_bpCantidad(g.pendiente)}</b></td><td style="${td}">${_htmlLinea(g.ud || '')}</td></tr>`).join('') + '</tbody></table>' + sobrantesPrint(p);
         return `<div style="border:1px solid #d5dbe5;border-radius:8px;padding:10px 12px;margin-bottom:10px;page-break-inside:avoid">
           <div style="font-size:12.5px;margin-bottom:3px"><b>Pedido ${_htmlLinea(p.pedido_num || ('#' + p.norden))}</b> — ${_htmlLinea(p.estado)} — ${_htmlLinea(p.proveedor_nombre || 'Sin proveedor')}</div>
           <div style="font-size:11px;color:#555;margin-bottom:4px">Tramitado: ${_bpFecha(p.fecha_tramitacion)} &nbsp;|&nbsp; Entrega prevista: ${_bpFecha(p.fecha_entrega_prevista)} &nbsp;|&nbsp; Retraso: ${retrasoTxt(p.dias_retraso)}</div>
@@ -7403,12 +7429,12 @@ function imprimirPendientesEntrega(detallado) {
     }
     return `<div style="margin-bottom:18px"><h2 style="font-size:14px;margin:0 0 6px;padding:5px 8px;background:#eef2f9;border-radius:6px">${_htmlLinea(cod)} — ${_htmlLinea(nombre)} <span style="font-weight:400;font-size:11px;color:#555">(${ps.length} pedido${ps.length !== 1 ? 's' : ''})</span></h2>${cuerpo}</div>`;
   }).join('');
-  const r = { total: _bpDatos.length, venc: _bpDatos.filter(p => (p.dias_retraso || 0) > 0).length };
+  const r = { total: _bpDatos.length, venc: _bpDatos.filter(p => (p.dias_retraso || 0) > 0).length, exc: _bpDatos.filter(p => (p.sobrantes || []).length).length };
   const html = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Pedidos con entregas pendientes</title>' +
     '<style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#1a1a2e;margin:0;padding:24px}h1{font-size:20px;margin:0 0 4px}.sub{font-size:12px;color:#666;margin-bottom:16px}' +
     '@media print{body{padding:10px}@page{margin:8mm;size:A4 ' + (detallado ? 'portrait' : 'landscape') + '}thead{display:table-header-group}tr{page-break-inside:avoid}}</style></head><body>' +
     `<h1>📋 Pedidos con entregas pendientes${detallado ? ' — detalle de faltantes' : ''}</h1>` +
-    `<div class="sub">${_htmlLinea(filtros)} &nbsp;|&nbsp; ${r.total} pedido(s), ${r.venc} con la entrega vencida &nbsp;|&nbsp; Generado: ${ahora} &nbsp;|&nbsp; Usuario: ${_htmlLinea(G.nombre || G.user || '—')}</div>` +
+    `<div class="sub">${_htmlLinea(filtros)} &nbsp;|&nbsp; ${r.total} pedido(s), ${r.venc} con la entrega vencida${r.exc ? ', ' + r.exc + ' con material en exceso' : ''} &nbsp;|&nbsp; Generado: ${ahora} &nbsp;|&nbsp; Usuario: ${_htmlLinea(G.nombre || G.user || '—')}</div>` +
     bloques +
     (_bpDatos.some(p => p.cobertura === 'parcial') ? '<p style="font-size:10.5px;color:#7a5b00">(*) Calculado solo con las entradas que tienen detalle de referencias; puede haber llegado más de lo indicado.</p>' : '') +
     '</body></html>';

@@ -1,3 +1,17 @@
+# v12.32.96 — 9 octubre 2026
+
+✨ Material recibido en exceso («sobrante»): ahora figura en la reclamación al proveedor, en los correos internos y en los listados de pendientes
+
+**Petición de Víctor**: cuando se entrega más cantidad de la solicitada (p. ej. pedido 16134: +10 / +5), debe constar en el correo de reclamación al proveedor, en los correos internos y en los listados de faltantes, con un tratamiento profesional («material recibido en exceso»).
+
+**Cambios** (`app.py`, `templates/index.html`):
+- `_datos_pendientes` / `_calcular_faltantes_pedido` devuelven también `sobrantes` (recibido > pedido, por línea, con su exceso).
+- **Correo al proveedor** (reclamación de entrega parcial): además de lo pendiente, tabla «Material recibido en exceso — cantidad recibida superior a la solicitada» (Código, Ref. Prov., Descripción, Pedido, Recibido, Exceso `+N`) y la nota «Les rogamos nos indiquen cómo desean proceder con el material recibido en exceso».
+- **Correos internos**: en ENTREGA PARCIAL se añade la misma tabla (nota: «Valorar con el proveedor la devolución o el abono del material sobrante»); en ENTREGADO se incluye solo si hay exceso (HTML y texto).
+- **Buscar artículo → Pedidos con entregas pendientes**: la columna «Faltan» añade «· N en exceso»; el desplegable muestra la tabla de exceso; el resumen cuenta los pedidos con exceso; nueva opción de filtro «Con material recibido en exceso (incl. entregados)» (también trae pedidos ya ENTREGADOS con sobrante); el PDF «Detallado con faltantes y excesos» y el Listado (PDF) lo incluyen.
+- API: `/api/pedidos/pendientes-entrega` devuelve `sobrantes` y `resumen.con_exceso`; nuevo parámetro `solo_exceso=1`.
+- Sin migración. Badge `V 12.32.95` → `V 12.32.96`; README: línea de versión.
+
 # v12.32.95 — 9 octubre 2026
 
 🔧 Referencias con el mismo código en un pedido: cada línea cuenta por separado (pedido 28289)
