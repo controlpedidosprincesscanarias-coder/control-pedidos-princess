@@ -16075,10 +16075,16 @@ def regularizar_sap():
             hoteles = [h for h in hoteles if not _es_hotel_pruebas_id(h)]
     if not hoteles:
         return jsonify({"error": "No hay listados de SAP guardados que regularizar."}), 400
+    import time as _time_rg
     job_id = secrets.token_hex(16)
     with _PDF_JOBS_LOCK:
+        # «creado_en» es un número (time.time()) como en el resto de jobs: otra clase de valor rompe la limpieza de
+        # jobs antiguos de las demás cargas («'<' not supported between 'datetime' and 'float'»).
+        limite = _time_rg.time() - 1800
+        for jid in [j for j, v in _PDF_JOBS.items() if v.get("creado_en", 0) < limite]:
+            del _PDF_JOBS[jid]
         _PDF_JOBS[job_id] = {"status": "processing", "hotel_id": hid or None, "usuario_id": session.get("user_id"),
-                             "creado_en": datetime.now(timezone.utc)}
+                             "creado_en": _time_rg.time()}
     threading.Thread(target=_ejecutar_regularizar_sap_bg, args=(job_id, hoteles, session.get("user_id")), daemon=True).start()
     return jsonify({"ok": True, "job_id": job_id, "hoteles": len(hoteles)}), 202
 

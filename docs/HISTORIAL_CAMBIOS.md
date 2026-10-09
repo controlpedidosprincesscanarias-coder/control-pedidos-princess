@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Corrección datetime/float en tareas de carga SAP (v12.33.05)
+
+- **Corrección**: `regularizar_sap` guardaba `creado_en` como `datetime`; ahora `time.time()` y purga de tareas antiguas, como el resto de cargas.
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Regularizar con lo ya guardado en la base de datos, sin PDF (v12.33.04)
 
 - **Novedad**: `POST /api/sap/regularizar` + botón en «Cargar listados SAP»; `_cargar_listados_sap_logica` admite `archivos=[]`; `_cruce_lineas_sap_hotel(solo_detalle=True)` y `_aplicar_cruce_lineas_pedido(solo_detalle=True)` completan el detalle de entradas de pedidos ya registrados; relleno de líneas al abrir un pedido antiguo.

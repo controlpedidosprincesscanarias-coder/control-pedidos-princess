@@ -1,3 +1,11 @@
+# v12.33.05 — 9 octubre 2026
+
+🛠️ Corrección: «'<' not supported between instances of 'datetime.datetime' and 'float'» al cargar listados después de regularizar
+
+**Causa**: el botón «Regularizar con lo ya guardado» (v12.33.04) guardaba la hora de creación de su tarea como fecha (`datetime`) y el resto de cargas la guardan como número (`time.time()`); al lanzar después «Cargar y cruzar», la limpieza de tareas antiguas comparaba ambos tipos y fallaba antes de empezar.
+
+**Cambio** (`app.py`): `regularizar_sap` usa `time.time()` y también limpia las tareas de más de 30 min, igual que las demás cargas. Verificado: regularizar + cargar los 4 PDF (1–10 de octubre) seguidos termina sin error (157 pedidos, 1.123 líneas, 174 albaranes con fecha, 1.193 líneas de albarán).
+
 # v12.33.04 — 9 octubre 2026
 
 🔄 Regularizar con lo ya guardado: rellena los pedidos y listados anteriores a la v12.33.03 sin volver a subir PDF
