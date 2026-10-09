@@ -20,6 +20,24 @@ from flask import Flask, request, jsonify, send_from_directory, session, g, Resp
 from werkzeug.security import generate_password_hash, check_password_hash
 from models import ESTADOS_VALIDOS, ESTADOS_EMAIL_PROVEEDOR, ESTADOS_EMAIL_INTERNO
 
+# (v12.33.00) Autor fijo de todo lo que la app crea o modifica sola a partir de los listados de SAP — igual que
+# SAP muestra «Autor de última modificación: SAP Workflow Runtime» cuando un proceso automático toca un documento.
+_AUTOR_SAP_AUTO = "Carga automática SAP"
+# Nombres antiguos (v12.32.x) que se unifican en _AUTOR_SAP_AUTO al arrancar.
+_AUTORES_SAP_AUTO_ANTIGUOS = ("Automática — alta desde listado de pedidos SAP", "Automática — carga de listados SAP")
+
+
+def _ahora_canarias_txt() -> str:
+    """Fecha y hora actuales en Canarias, «dd/mm/aaaa hh:mm» (para la trazabilidad de lo automático)."""
+    import pytz
+    return datetime.now(pytz.timezone("Atlantic/Canary")).strftime("%d/%m/%Y %H:%M")
+
+
+def _obs_alta_automatica_sap(num_sap) -> str:
+    """Observación de los pedidos dados de alta solos desde los listados de SAP (formato de trazabilidad)."""
+    return (f"Alta automática · {_AUTOR_SAP_AUTO} · {_ahora_canarias_txt()} · Nº SAP {num_sap} · "
+            "Pendiente de completar el resto de la documentación")
+
 # ── Configuración ──────────────────────────────────────────────────────────────
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")          # Supabase → Settings → Database → URI
@@ -604,7 +622,7 @@ def _auto_migrate():
             # definido más abajo en el archivo; y cada pedido del lote se
             # procesa ahora en su propio try/except, para que un dato raro
             # en un pedido no bloquee la corrección del resto.
-            _NOMBRE_AUTO_SAP = "Automática — alta desde listado de pedidos SAP"
+            _NOMBRE_AUTO_SAP = _AUTOR_SAP_AUTO   # (v12.33.00) autor unificado
 
             def _parse_importe_es_local(_s):
                 # Copia en línea de _parse_importe_es() (definida más abajo
@@ -714,6 +732,18 @@ def _auto_migrate():
                                          "aquí a partir del listado SAP guardado")
                                     )
                                     _corregidos_estado += 1
+                        # 2b) (v12.33.00) Observación antigua → formato de trazabilidad (solo si nadie la ha editado).
+                        cur.execute(
+                            "SELECT observaciones, to_char(creado_en AT TIME ZONE 'Atlantic/Canary','DD/MM/YYYY HH24:MI') AS f "
+                            "FROM pedidos WHERE id=%s", (_p["id"],))
+                        _fo = cur.fetchone()
+                        _m = re.fullmatch(r"Pedido creado automáticamente desde el listado SAP \(Nº SAP (\S+)\) el \d{2}/\d{2}/\d{4}"
+                                          r" — pendiente de completar el resto de la documentación\.",
+                                          (_fo or {}).get("observaciones") or "")
+                        if _m and _fo.get("f"):
+                            cur.execute("UPDATE pedidos SET observaciones=%s WHERE id=%s",
+                                        (f"Alta automática · {_AUTOR_SAP_AUTO} · {_fo['f']} · Nº SAP {_m.group(1)} · "
+                                         "Pendiente de completar el resto de la documentación", _p["id"]))
                         # 3) Reclamaciones automáticas todavía sin enviar
                         # para este pedido — se purgan de la cola en
                         # cualquier caso.
@@ -759,6 +789,15 @@ def _auto_migrate():
                               _corregidos_estado)
             except Exception as exc:
                 log.warning(f"No se pudo ejecutar la corrección retroactiva de pedidos creados desde SAP (v12.32.13): {exc}")
+
+            # (v12.33.00) Unifica el autor de lo automático de SAP (nombres antiguos → «Carga automática SAP»).
+            try:
+                for _ant in _AUTORES_SAP_AUTO_ANTIGUOS:
+                    cur.execute("UPDATE pedidos SET creado_por_nombre=%s WHERE creado_por_nombre=%s", (_AUTOR_SAP_AUTO, _ant))
+                    cur.execute("UPDATE pedidos SET modificado_por_nombre=%s WHERE modificado_por_nombre=%s", (_AUTOR_SAP_AUTO, _ant))
+                    cur.execute("UPDATE historial_estados SET usuario_nombre=%s WHERE usuario_nombre=%s", (_AUTOR_SAP_AUTO, _ant))
+            except Exception as exc:
+                log.warning(f"No se pudo unificar el autor de lo automático de SAP (v12.33.00): {exc}")
 
             # ── Índices de búsqueda de proveedores (2026-08-31, auditoría de
             # rendimiento — Víctor: "la ficha proveedores se atasca un poco")
@@ -15084,7 +15123,7 @@ def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: di
     # queda registrado en el pedido y en su historial NO es el del admin
     # que pulsó el botón, es un texto fijo que deja claro que fue una
     # automatización la que lo creó. `uid` (el id real) sí se conserva.
-    _NOMBRE_AUTO_CREACION_SAP = "Automática — alta desde listado de pedidos SAP"
+    _NOMBRE_AUTO_CREACION_SAP = _AUTOR_SAP_AUTO   # (v12.33.00) autor unificado
     # (2026-09-04, v12.32.13) Mapeo del estado de entrega de SAP al estado
     # inicial del pedido — ver CORRECCIÓN v12.32.13 en el docstring de
     # arriba: "No entregado" (o cualquier otro valor) siempre cae a
@@ -15136,10 +15175,7 @@ def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: di
             else:
                 total_pedido_val = importe_base  # se queda en 0,00 — sin líneas todavía de las que aproximar
                 total_pedido_aproximado = False
-            observ = (
-                f"Pedido creado automáticamente desde el listado SAP (Nº SAP {fila['pedido_num_sap']}) "
-                f"el {datetime.now().strftime('%d/%m/%Y')} — pendiente de completar el resto de la documentación."
-            )
+            observ = _obs_alta_automatica_sap(fila['pedido_num_sap'])
 
             cur = execute("""
                 INSERT INTO pedidos (
@@ -15324,7 +15360,7 @@ def crear_pedidos_desde_sap():
 # (ni al proveedor ni internos) ni Telegram: son altas/regularizaciones retroactivas, no decisiones nuevas.
 # ═══════════════════════════════════════════════════════════════════════════
 
-_NOMBRE_AUTO_CARGA_SAP = "Automática — carga de listados SAP"
+_NOMBRE_AUTO_CARGA_SAP = _AUTOR_SAP_AUTO   # (v12.33.00) mismo autor que el alta automática
 _TIPOS_LISTADO_SAP = {
     "pedidos_resumido":    "Listado de Pedidos (resumido)",
     "pedidos_detallado":   "Listado de Pedidos (detallado)",

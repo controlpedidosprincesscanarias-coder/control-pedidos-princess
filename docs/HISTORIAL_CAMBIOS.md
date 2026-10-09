@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Trazabilidad de lo automático al estilo SAP (v12.33.00)
+
+- **Novedad**: autor único «Carga automática SAP» (`_AUTOR_SAP_AUTO`) para altas y cambios de la carga de listados, con renombrado de los autores antiguos al arrancar; observación de alta automática en formato de trazabilidad (`_obs_alta_automatica_sap`, con migración de las antiguas); bloque «Trazabilidad» en Editar pedido (`_renderTrazabilidadPedido`) con autor y fecha de creación y de última modificación en formato SAP.
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Corrección «tuple index out of range» en Cargar listados SAP + errores concretos y persistentes (v12.32.99)
 
 - **Corrección**: `%` sin escapar (`c % 2`) en la consulta de albaranes duplicados de `_cargar_listados_sap_logica` → `%%`; la comprobación pasa a ser opcional (no detiene la carga).

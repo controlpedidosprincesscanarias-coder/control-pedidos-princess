@@ -1429,7 +1429,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.99
+          V 12.33.00
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2766,6 +2766,9 @@ tbody tr:last-child{border-bottom:none}
           <textarea class="form-control" id="p-observaciones" rows="3" placeholder="Texto libre…" style="resize:vertical"></textarea>
           <div style="font-size:.78rem;color:var(--text-secondary);margin-top:3px">Observaciones internas de este pedido — independientes de las observaciones del proveedor.</div>
         </div>
+
+        <!-- (v12.33.00) Trazabilidad al estilo SAP: autor y fecha de creación / última modificación -->
+        <div id="p-traza" class="form-group full" style="display:none"></div>
 
         <!-- Imágenes de artículos -->
         <div class="form-section">Imágenes de artículos</div>
@@ -5534,12 +5537,46 @@ function clearFilters() {
 /* ═══════════════════════════════════════════════════════════════════════════
    Modal Pedido
 ═══════════════════════════════════════════════════════════════════════════ */
+// (v12.33.00) Trazabilidad al estilo SAP («Autor de última modificación» + «Fecha de última modificación»).
+// Lo que hace la carga automática de listados figura con autor «Carga automática SAP» (en azul, con etiqueta).
+function _fmtFechaSap(s) {
+  if (!s) return '—';
+  try {
+    const parts = new Intl.DateTimeFormat('es-ES', { timeZone: 'Atlantic/Canary', day: '2-digit', month: '2-digit',
+      year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false }).formatToParts(new Date(s));
+    const g = t => (parts.find(x => x.type === t) || {}).value || '';
+    return `${g('day')}.${g('month')}.${g('year')}, ${g('hour')}:${g('minute')}:${g('second')}`;
+  } catch (e) { return String(s); }
+}
+function _renderTrazabilidadPedido(p) {
+  const el = document.getElementById('p-traza');
+  if (!el) return;
+  if (!p || !p.id) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const E = v => String(v == null ? '' : v).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  const autor = n => {
+    if (!n) return '<span style="color:var(--muted)">—</span>';
+    const auto = n === 'Carga automática SAP';
+    return `<span style="color:${auto ? '#0a6ed1' : 'inherit'};font-weight:${auto ? 600 : 400}">${E(n)}</span>` +
+           (auto ? ' <span style="font-size:.68rem;background:#e8f1fb;color:#0a6ed1;border-radius:4px;padding:1px 6px;margin-left:4px">automático</span>' : '');
+  };
+  const campo = (t, v) => `<div style="margin-bottom:10px"><div style="font-size:.78rem;color:var(--muted)">${t}</div><div style="font-size:.92rem">${v}</div></div>`;
+  el.innerHTML = `<div class="form-section" style="margin-top:6px">Trazabilidad</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 24px">
+      ${campo('Autor de creación:', autor(p.creado_por_nombre))}
+      ${campo('Fecha de creación:', E(_fmtFechaSap(p.creado_en)))}
+      ${campo('Autor de última modificación:', autor(p.modificado_por_nombre))}
+      ${campo('Fecha de última modificación:', E(_fmtFechaSap(p.modificado_en)))}
+    </div>`;
+  el.style.display = '';
+}
+
 async function openPedidoModal(id=null) {
   G.editingPedidoId = id;
   G.currentPedidoData = null;
   _estadoSelectorPrevio = null;   // reset rastreador al abrir modal
   G.estadoPendienteRevision = false;   // (v12.32.83)
   clearPedidoForm();
+  _renderTrazabilidadPedido(null);
   document.getElementById('modal-pedido-title').textContent = id ? 'Editar pedido' : 'Nuevo pedido';
   document.getElementById('btn-delete-pedido').style.display = (id && G.rol==='admin') ? '' : 'none';
   document.getElementById('p-historial-section').style.display = 'none';
@@ -5612,6 +5649,7 @@ async function openPedidoModal(id=null) {
       hotel_nombre_actual: p.hotel_nombre,
     });
     setVal('p-observaciones', p.observaciones);
+    _renderTrazabilidadPedido(p);
     document.getElementById('p-ab').checked       = !!p.comunicado_ab;
     document.getElementById('p-jefe').checked     = !!p.comunicado_jefe_dep;
     document.getElementById('p-rotura').checked   = !!p.parte_rotura;

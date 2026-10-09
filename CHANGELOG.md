@@ -1,3 +1,15 @@
+# v12.33.00 — 9 octubre 2026
+
+🧾 Trazabilidad de lo automático al estilo SAP: autor fijo «Carga automática SAP», fecha y hora exactas y observación unificada
+
+**Petición de Víctor**: SAP marca los cambios en masa con «Autor de última modificación: SAP Workflow Runtime» + «Fecha de última modificación»; hacer algo parecido con lo que la app crea o cambia sola, y modificar las observaciones de los pedidos generados así.
+
+**Cambios** (`app.py`, `templates/index.html`):
+- **Autor único** `_AUTOR_SAP_AUTO = «Carga automática SAP»` para el alta automática de pedidos y para todo lo que aplica la carga de listados (estados, albaranes, bases). Sustituye a los dos nombres antiguos («Automática — alta desde listado de pedidos SAP» / «Automática — carga de listados SAP»); al arrancar se renombran los ya existentes (pedidos e historial).
+- **Observación** de los pedidos dados de alta solos: «Alta automática · Carga automática SAP · 09/10/2026 23:17 · Nº SAP 00041866 · Pendiente de completar el resto de la documentación» (hora de Canarias). Los pedidos antiguos con el texto anterior se reescriben al arrancar si nadie había editado la observación.
+- **Bloque «Trazabilidad»** en Editar pedido (solo lectura, formato SAP `09.10.2026, 23:17:37`, hora Canarias): autor y fecha de creación, autor y fecha de última modificación. Si el autor es la carga automática sale en azul con la etiqueta «automático»; en cuanto un usuario edita el pedido pasa a figurar él.
+- Las modificaciones de la carga automática no añaden texto a la observación: quedan en el autor/fecha de última modificación y en el Historial de estados.
+
 # v12.32.99 — 9 octubre 2026
 
 🛠️ Cargar listados SAP: corregido el error «tuple index out of range» que impedía terminar la carga; los errores ahora son concretos y se quedan en pantalla hasta pulsar una tecla
