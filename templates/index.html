@@ -1438,7 +1438,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.03
+          V 12.33.04
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3019,6 +3019,14 @@ tbody tr:last-child{border-bottom:none}
         <div id="csl-lista" style="font-size:.8rem;color:var(--text-secondary);margin-top:8px"></div>
         <div style="margin-top:14px;text-align:right">
           <button class="btn btn-gold" id="btn-csl-cargar" onclick="cslCargar()">Cargar y cruzar</button>
+        </div>
+        <div style="margin-top:16px;padding-top:12px;border-top:1px dashed #d5dbe8;font-size:.8rem;color:var(--text-secondary)">
+          <b>¿Ya subiste listados antes?</b> No hace falta volver a subirlos: esta opción aplica lo que ya está guardado
+          (altas que falten, artículos y cantidades de cada pedido, albaranes, fechas, bases y estados).
+          Con el hotel elegido arriba solo ese hotel; sin elegir hotel, <b>todos</b> los que tengan listados guardados.
+          <div style="text-align:right;margin-top:8px">
+            <button class="btn btn-ghost" id="btn-csl-regularizar" onclick="cslRegularizar()">🔄 Regularizar con lo ya guardado (sin PDF)</button>
+          </div>
         </div>
       </div>
       <div id="csl-error" role="alert" style="display:none;margin-top:14px;background:#fef2f2;border:2px solid #991b1b;border-radius:10px;padding:12px 14px;color:#7f1d1d;font-size:.85rem">
@@ -9098,6 +9106,23 @@ function _cslTimerStart() {
 }
 function _cslTimerStop() { if (_cslTimerId) { clearInterval(_cslTimerId); _cslTimerId = null; } }
 
+async function cslRegularizar() {
+  const hotelId = val('csl-hotel');
+  document.getElementById('csl-form').style.display = 'none';
+  document.getElementById('csl-loading').style.display = '';
+  document.getElementById('csl-resultado').style.display = 'none';
+  _cslTimerStart(); _cslErrorCerrar();
+  let jobId;
+  try {
+    const r = await fetch('/api/sap/regularizar', { method: 'POST', credentials: 'same-origin',
+      headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ hotel_id: hotelId ? Number(hotelId) : 0 }) });
+    const d = await r.json();
+    if (!r.ok || d.error) { _cslError(d.error || 'No se ha podido iniciar la regularización'); return; }
+    jobId = d.job_id;
+  } catch (e) { _cslError('No se ha podido iniciar la regularización: ' + e.message); return; }
+  _cslPoll(jobId, 0);
+}
+
 function _cslErrorCerrar() {
   const b = document.getElementById('csl-error');
   if (b) b.style.display = 'none';
@@ -9146,6 +9171,7 @@ function _cslMostrarResultado(res) {
     ${pill(`${R.aplicados ?? 0} aplicado(s) solo`, '#d4edda', '#155724')}
     ${pill(`${R.creados ?? 0} pedido(s) creado(s)`, '#e7e0f7', '#4d2f8f')}
     ${(R.con_lineas || 0) > 0 ? pill(`${R.con_lineas} pedido(s) con artículos copiados de SAP`, '#e7e0f7', '#4d2f8f') : ''}
+    ${(R.detalle_entradas || 0) > 0 ? pill(`${R.detalle_entradas} pedido(s) con el detalle de referencias de sus entradas completado`, '#e7e0f7', '#4d2f8f') : ''}
     ${pill(`${R.revisar ?? 0} para revisar`, (R.revisar ? '#fff3cd' : '#f8f9fa'), (R.revisar ? '#856404' : '#666'))}
     ${pill(`${R.sin_recepcion ?? 0} sin nada recibido`, '#f8f9fa', '#666')}
   </div>`;
@@ -9153,6 +9179,12 @@ function _cslMostrarResultado(res) {
       ? `<div style="color:#c0392b">⚠️ ${E(a.nombre)}: ${E(a.error)}</div>`
       : `<div>✅ ${E(a.tipo_texto)} — ${E(a.detalle || '')} <span style="color:#999">(${E(a.nombre)})</span></div>`).join('') + '</div>';
   (res.avisos || []).forEach(a => { h += `<div style="background:#fff3cd;color:#856404;border-radius:6px;padding:6px 10px;font-size:.82rem;margin-bottom:6px">⚠️ ${E(a)}</div>`; });
+  if (res.hoteles && res.hoteles.length > 1) {   // regularización de varios hoteles: resumen por hotel
+    h += '<div style="overflow:auto;margin-bottom:10px"><table style="width:100%;border-collapse:collapse;font-size:.8rem"><thead>' +
+      th(['Hotel', 'Aplicados', 'Creados', 'Con artículos', 'Para revisar', 'Sin recepción']) + '</thead><tbody>' +
+      res.hoteles.map(x => `<tr><td ${td}><b>${E(x.hotel)}</b></td><td ${td}>${x.aplicados ?? 0}</td><td ${td}>${x.creados ?? 0}</td><td ${td}>${x.con_lineas ?? 0}</td><td ${td}>${x.revisar ?? 0}</td><td ${td}>${x.sin_recepcion ?? 0}</td></tr>`).join('') +
+      '</tbody></table></div><div style="font-size:.78rem;color:#666;margin-bottom:8px">Para ver el detalle de «para revisar» de un hotel, regulariza solo ese hotel.</div>';
+  }
 
   if ((res.aplicados || []).length) {
     h += `<div style="font-weight:700;color:#155724;margin:14px 0 4px">✅ Aplicado automáticamente (${res.aplicados.length})</div>

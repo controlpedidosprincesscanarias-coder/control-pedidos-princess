@@ -1,3 +1,16 @@
+# v12.33.04 — 9 octubre 2026
+
+🔄 Regularizar con lo ya guardado: rellena los pedidos y listados anteriores a la v12.33.03 sin volver a subir PDF
+
+**Petición de Víctor**: qué pasa con los listados ya subidos y los pedidos creados automáticamente antes de la última actualización; cómo rellenar todo lo ya grabado en Supabase.
+
+**Cambios** (`app.py`, `templates/index.html`):
+- **Botón «🔄 Regularizar con lo ya guardado (sin PDF)»** en «Cargar listados SAP» (`POST /api/sap/regularizar`, solo admin, en segundo plano). Con hotel elegido regulariza ese hotel; sin hotel, todos los que tengan listados guardados. Reutiliza la misma carga de listados pero leyendo lo que ya hay en la base de datos: altas que falten (proveedores «Sujeto a seguimiento»), artículos y cantidades de cada pedido, cruce por líneas, albaranes, fechas, bases y estados. Es idempotente (repetirlo no duplica nada).
+- **Detalle de entregas de pedidos ya registrados**: los pedidos ENTREGADOS (o parciales) cuyas entradas se registraron antes de que el pedido tuviera líneas reciben ahora el detalle «Referencias de la entrada»; solo se completa lo que falta, sin añadir entradas ni cambiar estados ni el «Modificado por» (`solo_detalle`).
+- **Relleno al abrir**: si se abre un pedido antiguo con Nº de pedido, sin PDF y sin líneas, y su Listado detallado está guardado, se le copian las líneas en ese momento (`get_lineas_pedido`).
+- Resultado: indicadores «pedidos con artículos copiados» y «detalle de referencias de entradas completado»; con varios hoteles, tabla resumen por hotel.
+- Prueba (GY, octubre): borrando líneas y detalle de los 153 pedidos automáticos, la regularización sin PDF recupera 153/153 con líneas y 44/44 con detalle de entregas en 2 s; una segunda ejecución no cambia nada.
+
 # v12.33.03 — 9 octubre 2026
 
 📋 Pedidos dados de alta solos desde SAP: se guardan sus artículos y cantidades del listado detallado y el PDF oficial deja de ser necesario

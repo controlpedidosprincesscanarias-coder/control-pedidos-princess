@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Regularizar con lo ya guardado en la base de datos, sin PDF (v12.33.04)
+
+- **Novedad**: `POST /api/sap/regularizar` + botón en «Cargar listados SAP»; `_cargar_listados_sap_logica` admite `archivos=[]`; `_cruce_lineas_sap_hotel(solo_detalle=True)` y `_aplicar_cruce_lineas_pedido(solo_detalle=True)` completan el detalle de entradas de pedidos ya registrados; relleno de líneas al abrir un pedido antiguo.
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Líneas de SAP en los pedidos creados solos; PDF oficial opcional (v12.33.03)
 
 - **Novedad**: `_volcar_lineas_sap_hotel` copia a `pedido_lineas` (origen='sap') las líneas del listado detallado en pedidos sin PDF; panel de líneas y nota «PDF opcional» en la ficha; `_validar_pedido_envio_proveedor` y `savePedido` no exigen el PDF a pedidos creados por «Carga automática SAP».

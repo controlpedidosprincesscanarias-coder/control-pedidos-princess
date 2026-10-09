@@ -15136,9 +15136,13 @@ def _volcar_lineas_sap_hotel(hotel_id: int, solo_pedido_ids=None) -> dict:
     if not cand:
         return {"pedidos": 0, "lineas": 0}
     sap = {}
-    for r in rows_to_list(query(
-            "SELECT pedido_num_sap, codigo_articulo, descripcion, unidad, cantidad_pedida_txt, precio_txt, importe_linea_txt "
-            "FROM sap_pedidos_lineas WHERE hotel_id=%s ORDER BY id", (hotel_id,))):
+    sql_sap = ("SELECT pedido_num_sap, codigo_articulo, descripcion, unidad, cantidad_pedida_txt, precio_txt, importe_linea_txt "
+               "FROM sap_pedidos_lineas WHERE hotel_id=%s")
+    args_sap = [hotel_id]
+    if solo_pedido_ids:   # pocos pedidos: no hace falta leer todo el listado del hotel
+        sql_sap += " AND LTRIM(pedido_num_sap, '0') = ANY(%s)"
+        args_sap.append([(_normalizar_pedido_num(c["pedido_num"]) or "").lstrip("0") for c in cand])
+    for r in rows_to_list(query(sql_sap + " ORDER BY id", tuple(args_sap))):
         sap.setdefault(_normalizar_pedido_num(r["pedido_num_sap"]), []).append(r)
     filas, n_ped = [], 0
     for c in cand:
@@ -15521,7 +15525,7 @@ def _mismo_prov_sap(a: str, b: str) -> bool:
     return len(corto) >= 15 and largo.startswith(corto)
 
 
-def _cruce_lineas_sap_hotel(hotel_id: int) -> dict:
+def _cruce_lineas_sap_hotel(hotel_id: int, solo_detalle: bool = False) -> dict:
     """SOLO LECTURA. Propone, para cada pedido pendiente de la app (proveedor «Sujeto a seguimiento»), qué
     albaranes de SAP corresponden a lo recibido, cruzando por LÍNEAS: para cada referencia con cantidad
     recibida en el listado de pedidos detallado se buscan, entre los albaranes del mismo proveedor, las
@@ -15545,7 +15549,15 @@ def _cruce_lineas_sap_hotel(hotel_id: int) -> dict:
            WHERE p.hotel_id=%s AND pr.sujeto_seguimiento = TRUE AND p.pedido_num IS NOT NULL AND p.pedido_num <> ''
              AND p.estado IN ('ENVIADO AL PROVEEDOR','PENDIENTE COTIZACIÓN','ENTREGA PARCIAL','ENTREGADO')""",
         (hotel_id,)))
-    cands = [c for c in cands if c["estado"] != "ENTREGADO" or not _parse_albaran_entries(c["entrada_albaran_num"])]
+    if solo_detalle:
+        # (v12.33.03) Pedidos ENTREGADOS que ya tenían sus entradas registradas antes de guardarse sus líneas: solo se
+        # completa el detalle «Referencias de la entrada» de esas entradas (no se añade ni cambia nada más).
+        con_det = {r["pedido_id"] for r in rows_to_list(query("SELECT DISTINCT pedido_id FROM pedido_lineas_entregas"))}
+        con_lin = {r["pedido_id"] for r in rows_to_list(query(
+            "SELECT DISTINCT l.pedido_id FROM pedido_lineas l JOIN pedidos p ON p.id = l.pedido_id WHERE p.hotel_id=%s", (hotel_id,)))}
+        cands = [c for c in cands if _parse_albaran_entries(c["entrada_albaran_num"]) and c["id"] in con_lin and c["id"] not in con_det]
+    else:
+        cands = [c for c in cands if c["estado"] != "ENTREGADO" or not _parse_albaran_entries(c["entrada_albaran_num"])]
 
     # ── Lo que SAP dice de cada pedido: estado, proveedor y líneas con cantidad recibida ─────────
     listado = {}
@@ -15707,7 +15719,7 @@ def _cruce_lineas_sap_hotel(hotel_id: int) -> dict:
     return {"seguros": seguros, "revisar": revisar, "sin_recepcion": sin_recepcion, "evaluados": len(cands)}
 
 
-def _aplicar_cruce_lineas_pedido(db, item: dict, usuario_id) -> dict:
+def _aplicar_cruce_lineas_pedido(db, item: dict, usuario_id, solo_detalle: bool = False) -> dict:
     """Aplica UN resultado «seguro» de _cruce_lineas_sap_hotel(): añade las entradas de albarán que falten
     (nº, fecha y base imponible), guarda el detalle «Referencias de la entrada» si el pedido tiene líneas y
     sube el estado si procede. Idempotente. SIN correos ni Telegram. Devuelve {"aplicado", "cambios"}."""
@@ -15723,6 +15735,8 @@ def _aplicar_cruce_lineas_pedido(db, item: dict, usuario_id) -> dict:
     nuevas_lineas = {}
     for e in item["entradas"]:
         existente = next((x for x in entradas if _normalizar_num_albaran(x["num"]) == _normalizar_num_albaran(e["albaran_id"])), None)
+        if solo_detalle:
+            continue   # solo se completa el detalle de entradas ya registradas
         if existente is None:
             entradas.append({"num": e["albaran_id"], "fecha_iso": e["fecha_iso"], "base_imponible": e["base"]})
             nuevas_lineas[e["albaran_id"]] = e["lineas"]
@@ -15736,23 +15750,34 @@ def _aplicar_cruce_lineas_pedido(db, item: dict, usuario_id) -> dict:
                 cambios.append(f"fecha de la entrada {e['albaran_id']} → {e['fecha_iso']}")
     estado_nuevo = estado_antes
     objetivo = item["estado_objetivo"]
-    if _ORDEN_ENTREGA_ESTADOS.get(objetivo, 0) > _ORDEN_ENTREGA_ESTADOS.get(estado_antes, 0):
+    if not solo_detalle and _ORDEN_ENTREGA_ESTADOS.get(objetivo, 0) > _ORDEN_ENTREGA_ESTADOS.get(estado_antes, 0):
         estado_nuevo = objetivo
         cambios.append(f"estado → {objetivo}")
+    cambios_cabecera = bool(cambios)
+    # (v12.33.03) Entradas ya registradas antes de que el pedido tuviera líneas: se completa su detalle
+    # «Referencias de la entrada» (solo las que aún no lo tienen; no se toca lo que alguien haya detallado).
+    lin = rows_to_list(query("SELECT codigo, orden FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pid,)))
+    previas = {}
+    if lin:
+        for r in rows_to_list(query("SELECT albaran_num, codigo, cantidad FROM pedido_lineas_entregas WHERE pedido_id=%s ORDER BY id", (pid,))):
+            previas.setdefault(r["albaran_num"], {})[r["codigo"]] = float(r["cantidad"])
+        con_detalle = {_normalizar_num_albaran(k) for k in previas}
+        registradas = {_normalizar_num_albaran(x["num"]) for x in entradas}
+        for e in item["entradas"]:
+            if (e["albaran_id"] not in nuevas_lineas and _normalizar_num_albaran(e["albaran_id"]) not in con_detalle
+                    and _normalizar_num_albaran(e["albaran_id"]) in registradas):
+                nuevas_lineas[e["albaran_id"]] = e["lineas"]
+                cambios.append(f"detalle de referencias de la entrada {e['albaran_id']}")
     if not cambios:
         return {"aplicado": False, "cambios": ["Ya estaba todo al día"]}
-    nuevo_str = _construir_entrada_albaran_num(entradas)
-    execute("UPDATE pedidos SET entrada_albaran_num=%s, estado=%s, modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW() WHERE id=%s",
-            (nuevo_str, estado_nuevo, usuario_id, _NOMBRE_AUTO_CARGA_SAP, pid))
-    if nuevas_lineas:
-        lin = rows_to_list(query("SELECT codigo, orden FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pid,)))
-        if lin:
-            previas = {}
-            for r in rows_to_list(query("SELECT albaran_num, codigo, cantidad FROM pedido_lineas_entregas WHERE pedido_id=%s ORDER BY id", (pid,))):
-                previas.setdefault(r["albaran_num"], {})[r["codigo"]] = float(r["cantidad"])
-            for alb_num, lineas in nuevas_lineas.items():
-                previas[alb_num] = dict(lineas)
-            _guardar_entregas_lineas(pid, previas, usuario_id, _NOMBRE_AUTO_CARGA_SAP)
+    if cambios_cabecera:
+        nuevo_str = _construir_entrada_albaran_num(entradas)
+        execute("UPDATE pedidos SET entrada_albaran_num=%s, estado=%s, modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW() WHERE id=%s",
+                (nuevo_str, estado_nuevo, usuario_id, _NOMBRE_AUTO_CARGA_SAP, pid))
+    if nuevas_lineas and lin:
+        for alb_num, lineas in nuevas_lineas.items():
+            previas[alb_num] = dict(lineas)
+        _guardar_entregas_lineas(pid, previas, usuario_id, _NOMBRE_AUTO_CARGA_SAP)
     if estado_nuevo != estado_antes:
         execute("INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
                 (pid, estado_antes, estado_nuevo, usuario_id, _NOMBRE_AUTO_CARGA_SAP,
@@ -15785,7 +15810,7 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
                                     "error": "Ya hay otro PDF de este mismo tipo en la carga: se ignora"})
             continue
         por_tipo[tipo] = (nombre, datos)
-    if not por_tipo:
+    if not por_tipo and archivos:
         raise RuntimeError("Ningún PDF se reconoce como listado de SAP (pedidos resumido/detallado o albaranes resumido/detallado).")
 
     for tipo in _ORDEN_CARGA_LISTADOS_SAP:
@@ -15814,7 +15839,7 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
             log.exception("[CARGA-LISTADOS-SAP] Error leyendo %s: %s", nombre, exc)
             info["error"] = str(exc)
         res["archivos"].append(info)
-    if not any("error" not in a and a.get("tipo") for a in res["archivos"]):
+    if archivos and not any("error" not in a and a.get("tipo") for a in res["archivos"]):
         raise RuntimeError("No se ha podido leer ningún listado: " + "; ".join(a.get("error", "") for a in res["archivos"]))
 
     # Aviso de cargas antiguas duplicadas (el listado de albaranes «sin periodo» se duplicaba al repetir la carga).
@@ -15889,10 +15914,31 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
             log.exception("[CARGA-LISTADOS-SAP] Error aplicando pedido %s: %s", it.get("pedido_num"), exc)
             res["revisar"].append({**it, "motivos": [f"Error al aplicar: {exc}"]})
     res["revisar"].extend(cruce["revisar"])
+    # (v12.33.03) Pedidos ENTREGADOS con entradas anteriores a las líneas: completar solo el detalle de sus entradas.
+    n_detalle = 0
+    if hay_pedidos_det and hay_albaranes:
+        _csl_paso("completar el detalle de referencias de entradas ya registradas")
+        try:
+            for _vuelta in range(3):   # lo completado en una vuelta puede desbloquear algún pedido de la siguiente
+                hechos = 0
+                for it in _cruce_lineas_sap_hotel(hotel_id, solo_detalle=True)["seguros"]:
+                    try:
+                        if _aplicar_cruce_lineas_pedido(db, it, usuario_id, solo_detalle=True)["aplicado"]:
+                            hechos += 1
+                    except Exception as exc_d:
+                        db.rollback()
+                        log.warning("[CARGA-LISTADOS-SAP] Detalle de entradas del pedido %s: %s", it.get("pedido_num"), exc_d)
+                n_detalle += hechos
+                if not hechos:
+                    break
+        except Exception as exc:
+            db.rollback()
+            log.exception("[CARGA-LISTADOS-SAP] Pasada de detalle de entradas: %s", exc)
     res["resumen"] = {
         "creados": len(res["creados"]), "aplicados": len(res["aplicados"]), "revisar": len(res["revisar"]),
         "sin_recepcion": cruce["sin_recepcion"], "evaluados": cruce["evaluados"],
         "con_lineas": res.get("lineas_copiadas", {}).get("pedidos", 0),
+        "detalle_entradas": n_detalle,
     }
     return res
 
@@ -15964,6 +16010,77 @@ def cargar_listados_sap():
     threading.Thread(target=_ejecutar_carga_listados_sap_bg, args=(job_id, hotel_id, archivos, session.get("user_id")),
                      daemon=True).start()
     return jsonify({"ok": True, "job_id": job_id}), 202
+
+
+def _ejecutar_regularizar_sap_bg(job_id, hotel_ids, usuario_id):
+    """(v12.33.03) Aplica el mismo proceso de la carga de listados, pero sobre lo que YA está guardado en la base
+    de datos (sin subir PDF): altas que falten, artículos y cantidades, cruce por líneas y estados."""
+    with app.app_context():
+        try:
+            _CSL_PASO.v = None
+            hoteles = []
+            tot = {"creados": 0, "aplicados": 0, "revisar": 0, "sin_recepcion": 0, "evaluados": 0, "con_lineas": 0, "detalle_entradas": 0}
+            unico = None
+            for hid in hotel_ids:
+                _csl_paso(f"regularizar el hotel {hid}")
+                r = _cargar_listados_sap_logica(hid, [], usuario_id)
+                cod = (query("SELECT codigo FROM hoteles WHERE id=%s", (hid,), one=True) or {}).get("codigo") or str(hid)
+                hoteles.append({"hotel": cod, **r["resumen"], "avisos": r["avisos"]})
+                for k in tot:
+                    tot[k] += int(r["resumen"].get(k, 0) or 0)
+                unico = r
+            resultado = unico if len(hotel_ids) == 1 else {"ok": True, "archivos": [], "avisos": [], "creados": [], "no_creados": [],
+                                                           "aplicados": [], "revisar": []}
+            resultado = {**resultado, "resumen": tot, "hoteles": hoteles, "regularizacion": True}
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "done", "resultado": resultado}
+        except Exception as exc:
+            log.exception("[REGULARIZAR-SAP] Error en job %s: %s", job_id, exc)
+            donde = ""
+            try:
+                fr = [f for f in traceback.extract_tb(exc.__traceback__) if f.filename.endswith("app.py")]
+                if fr:
+                    donde = f" [{fr[-1].name}, línea {fr[-1].lineno}]"
+            except Exception:
+                pass
+            paso = getattr(_CSL_PASO, "v", None)
+            with _PDF_JOBS_LOCK:
+                if job_id in _PDF_JOBS:
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error",
+                                         "error": (f"Error al {paso}: " if paso else "Error: ") + f"{type(exc).__name__}: {exc}{donde}"}
+
+
+@app.route("/api/sap/regularizar", methods=["POST"])
+@login_required
+def regularizar_sap():
+    """Regulariza con lo ya guardado (sin PDF). JSON {hotel_id?}: sin hotel_id, todos los hoteles que tengan listados
+    de SAP guardados. Solo admin. → 202 {job_id}; el resultado se consulta con GET /api/sap/cargar-listados/<job_id>."""
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    data = request.get_json(silent=True) or {}
+    try:
+        hid = int(data.get("hotel_id") or 0)
+    except (TypeError, ValueError):
+        hid = 0
+    if hid:
+        if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(hid):
+            return jsonify({"error": "Hotel no disponible"}), 403
+        hoteles = [hid]
+    else:
+        hoteles = [r["hotel_id"] for r in rows_to_list(query(
+            "SELECT DISTINCT hotel_id FROM (SELECT hotel_id FROM sap_pedidos_lineas UNION SELECT hotel_id FROM sap_pedidos_listado "
+            "UNION SELECT hotel_id FROM sap_albaranes_lineas) x ORDER BY hotel_id"))]
+        if not _puede_ver_hotel_pruebas():
+            hoteles = [h for h in hoteles if not _es_hotel_pruebas_id(h)]
+    if not hoteles:
+        return jsonify({"error": "No hay listados de SAP guardados que regularizar."}), 400
+    job_id = secrets.token_hex(16)
+    with _PDF_JOBS_LOCK:
+        _PDF_JOBS[job_id] = {"status": "processing", "hotel_id": hid or None, "usuario_id": session.get("user_id"),
+                             "creado_en": datetime.now(timezone.utc)}
+    threading.Thread(target=_ejecutar_regularizar_sap_bg, args=(job_id, hoteles, session.get("user_id")), daemon=True).start()
+    return jsonify({"ok": True, "job_id": job_id, "hoteles": len(hoteles)}), 202
 
 
 @app.route("/api/sap/cargar-listados/<job_id>", methods=["GET"])
@@ -21350,6 +21467,13 @@ def get_lineas_pedido(pid):
     )
     aviso = None
     hay = query("SELECT 1 AS x FROM pedido_lineas WHERE pedido_id=%s LIMIT 1", (pid,), one=True)
+    if not hay and not adj:   # (v12.33.03) pedido antiguo con Nº de pedido y listado detallado ya guardado: se rellena al abrirlo
+        try:
+            if _volcar_lineas_sap_hotel(ped["hotel_id"], [pid])["lineas"]:
+                hay = True
+        except Exception as exc_v:
+            get_db().rollback()
+            log.warning("[PEDIDO-LINEAS] No se pudieron copiar las líneas de SAP al pedido %s: %s", pid, exc_v)
     forzar = request.args.get("releer") == "1" and not es_hotel
     if adj and (forzar or (not hay and not adj["lineas_leidas"])):
         n_leidas, aviso = _leer_y_guardar_lineas_de_adjunto(pid, adj, conservar_si_falla=bool(hay))
