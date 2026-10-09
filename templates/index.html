@@ -811,10 +811,18 @@ tbody tr:last-child{border-bottom:none}
   font-weight: 500;
   z-index: 10000;
   box-shadow: 0 4px 24px rgba(0,0,0,0.35);
-  max-width: 420px;
-  text-align: center;
+  max-width: 560px;
+  min-width: 300px;
+  text-align: left;
   display: none;
-  pointer-events: none;
+  pointer-events: auto;
+  cursor: pointer;
+}
+#form-alert-toast .sb-toast-hint {
+  font-size: 11px;
+  color: rgba(255,255,255,0.55);
+  margin-top: 10px;
+  text-align: right;
 }
 #form-alert-toast .sb-toast-title {
   font-size: 14px;
@@ -1323,7 +1331,8 @@ tbody tr:last-child{border-bottom:none}
 <div id="form-alert-toast">
   <div class="sb-toast-title" id="form-alert-toast-title">⚠️ Faltan datos</div>
   <div class="sb-toast-msg" id="form-alert-toast-msg"></div>
-  <div class="sb-toast-roles" id="form-alert-toast-detail"></div>
+  <div class="sb-toast-roles" id="form-alert-toast-detail" style="white-space:normal;user-select:text"></div>
+  <div class="sb-toast-hint" id="form-alert-toast-hint">Pulsa una tecla o haz clic para cerrar</div>
 </div>
 
 <div id="app" style="display:none">
@@ -1429,7 +1438,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.01
+          V 12.33.02
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -4669,9 +4678,12 @@ function _showSbAccessToast(view, allowedRoles) {
 // { title:'⚠️ Otro título', detail:'línea secundaria o lista', duracion:7000 }).
 let _formAlertTimer = null;
 function showFormAlert(message, opts = {}) {
+  // (v12.33.02) Los avisos rojos del formulario se quedan en pantalla hasta que el usuario pulse una tecla (o
+  // haga clic). Solo los mensajes de éxito (título que empieza por ✅) o con `persistente:false` se cierran solos.
   const title    = opts.title || '⚠️ Faltan datos';
   const detail   = opts.detail || '';
   const duracion = opts.duracion || 6000;
+  const persistente = opts.persistente !== false && !String(title).startsWith('✅');
   const esc = (s) => String(s)
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
   document.getElementById('form-alert-toast-title').textContent = title;
@@ -4685,11 +4697,45 @@ function showFormAlert(message, opts = {}) {
     detailEl.style.display = 'none';
   }
   const t = document.getElementById('form-alert-toast');
+  document.getElementById('form-alert-toast-hint').style.display = persistente ? '' : 'none';
   t.style.display = 'block';
   if (_formAlertTimer) clearTimeout(_formAlertTimer);
-  _formAlertTimer = setTimeout(() => { t.style.display = 'none'; }, duracion);
+  _formAlertTimer = null;
+  _formAlertCerrarListeners();
+  if (!persistente) { _formAlertTimer = setTimeout(() => { t.style.display = 'none'; }, duracion); return; }
+  const cerrar = () => { t.style.display = 'none'; _formAlertCerrarListeners(); };
+  const onKey = (ev) => { if (['Shift','Control','Alt','Meta','Tab','CapsLock'].includes(ev.key)) return; cerrar(); };
+  t.addEventListener('click', cerrar);
+  // Pequeño retardo para que la tecla que provocó el aviso (p. ej. Enter) no lo cierre al instante.
+  _formAlertTimer = setTimeout(() => document.addEventListener('keydown', onKey, true), 400);
+  _formAlertListeners = { t, cerrar, onKey };
+}
+let _formAlertListeners = null;
+function _formAlertCerrarListeners() {
+  if (!_formAlertListeners) return;
+  const { t, cerrar, onKey } = _formAlertListeners;
+  t.removeEventListener('click', cerrar);
+  document.removeEventListener('keydown', onKey, true);
+  _formAlertListeners = null;
 }
 
+// (v12.33.02) Contexto del pedido para los avisos de error al guardar: qué se intentaba hacer y con qué datos.
+function _detalleGuardadoPedido(body, extra) {
+  const txtSel = id => { const e = document.getElementById(id); return e && e.selectedOptions && e.selectedOptions[0] ? e.selectedOptions[0].textContent.trim() : ''; };
+  const ref = G.currentPedidoData ? (G.currentPedidoData.pedido_num || ('Nº ' + (G.currentPedidoData.norden || G.editingPedidoId))) : '';
+  const l = [];
+  l.push('Operación: ' + (G.editingPedidoId ? `editar el pedido ${ref}` : 'crear un pedido nuevo'));
+  const hotel = txtSel('p-hotel'), dep = txtSel('p-depto');
+  if (hotel) l.push('Hotel: ' + hotel + (dep && !dep.startsWith('—') ? ' · Departamento: ' + dep : ' · Departamento: sin seleccionar'));
+  if (body && body.estado) l.push('Estado: ' + body.estado);
+  const prov = (document.getElementById('p-proveedor-input') || {}).value;
+  if (prov) l.push('Proveedor: ' + prov);
+  if (body && body.importe) l.push('Importe: ' + body.importe + ' €');
+  if (extra) l.push(...[].concat(extra).filter(Boolean));
+  l.push('Hora: ' + new Date().toLocaleTimeString('es-ES'));
+  l.push('Los datos del formulario siguen en pantalla: corrige el problema y pulsa Guardar de nuevo.');
+  return l.join('\n');
+}
 
 function showViewGuarded(view, el) {
   const item = el || document.querySelector(`[data-view="${view}"]`);
@@ -7990,7 +8036,11 @@ async function savePedido() {
       else showView('techo', document.querySelector('[data-view="techo"]'));
       return;
     }
-    if (r.error) { showFormAlert(r.error); return; }
+    if (r.error) {
+      const listas = [].concat(r.errores || [], r.techo_errores || []).map(e => '• ' + (typeof e === 'string' ? e : (e.mensaje || e.error || JSON.stringify(e))));
+      showFormAlert(r.error, { title: '✕ No se ha podido guardar el pedido', detail: _detalleGuardadoPedido(body, listas.length ? ['Detalle del servidor:'].concat(listas) : null) });
+      return;
+    }
     // (2026-08-01 — rediseño Techo de Gastos, Fase 6) Antes aquí se
     // interpretaba `r.techo_errores` con un confirm() de JS que cualquiera
     // podía saltarse sin dejar rastro (_forzar_techo). Ya no existe: el
@@ -8023,7 +8073,11 @@ async function savePedido() {
   } catch(e) {
     const msg = e?.message || String(e) || 'Error desconocido';
     console.error('[guardarPedido]', e);
-    showFormAlert('Error de conexión: ' + msg, { title: '🔌 Error de conexión' });
+    const m = /^\[(\d+)\]\s*(.*)$/s.exec(msg);
+    showFormAlert(m ? m[2] : msg, {
+      title: m ? `✕ El servidor ha rechazado el guardado (error ${m[1]})` : '🔌 Error de conexión: no se ha podido guardar el pedido',
+      detail: _detalleGuardadoPedido(typeof body !== 'undefined' ? body : null, 'Error técnico: ' + msg),
+    });
   }
   finally { btn.disabled=false; btn.textContent='Guardar'; }
 }

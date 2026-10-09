@@ -1,3 +1,13 @@
+# v12.33.02 — 9 octubre 2026
+
+🔴 Formulario de pedidos: los avisos rojos de error se quedan en pantalla hasta pulsar una tecla y dan más detalle
+
+**Petición de Víctor**: en la creación de pedidos, cuando sale un error rojo, hacer lo mismo que en la carga de listados SAP: más detallado y fijo hasta pulsar una tecla.
+
+**Cambios** (`templates/index.html`; sin cambios en `app.py`):
+- `showFormAlert` (el aviso rojo de todos los formularios de pedido, también validaciones como «Selecciona un hotel» o «Falta la base imponible»): ya no se cierra a los pocos segundos; se cierra con cualquier tecla (Shift/Ctrl/Alt/Tab no cuentan) o con un clic. Más ancho y con la indicación «Pulsa una tecla o haz clic para cerrar». Solo los mensajes de éxito (título «✅…») siguen desapareciendo solos.
+- Al guardar/crear un pedido, el aviso incluye ahora el contexto: operación (crear / editar el pedido N), hotel y departamento, estado, proveedor, importe, hora, la lista de errores que devuelva el servidor y, si falla la conexión o el servidor, el error técnico con su código (p. ej. «El servidor ha rechazado el guardado (error 500)»). Los datos del formulario no se pierden.
+
 # v12.33.01 — 9 octubre 2026
 
 ⏱️ Alertas: si el pedido tiene fecha de entrega (o plazo), el tiempo que se muestra y con el que se ordena es el retraso sobre esa fecha, no los días desde la tramitación

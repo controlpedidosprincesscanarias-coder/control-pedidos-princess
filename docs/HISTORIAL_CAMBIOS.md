@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Avisos de error del formulario de pedidos: persistentes y con detalle (v12.33.02)
+
+- **Novedad**: `showFormAlert` se mantiene hasta pulsar una tecla / clic (salvo ✅ éxito o `persistente:false`); `_detalleGuardadoPedido` añade operación, hotel, estado, proveedor, importe, hora y error técnico al fallar `savePedido`. Solo front.
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Alertas: tiempo contado desde la fecha de entrega cuando existe (v12.33.01)
 
 - **Corrección**: `_clasificar_alertas` expone `por_plazo` / `dias_exceso` y ordena por retraso sobre la fecha de entrega; la UI (Alertas, impresión, Dashboard) muestra «N días de retraso», «Vence hoy» o «Faltan N días» (`_alertaTiempo`) en vez de los días desde tramitación. La lógica de cuándo avisar no cambia.
