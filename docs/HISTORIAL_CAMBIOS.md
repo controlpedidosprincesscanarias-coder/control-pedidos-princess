@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Buscar artículo: pedidos con entregas pendientes, listado y detallado en PDF (v12.32.94)
+
+- **Origen**: Víctor: listar en pantalla y PDF los pedidos enviados al proveedor con entregas pendientes (totales o parciales) y poder imprimir el detalle de los faltantes de cada uno.
+- **Hallazgo**: las referencias pendientes ya se calculaban para los correos de reclamación (`_datos_pendientes`), pero solo pedido a pedido y sin vista de conjunto.
+- **Corrección**: endpoint `/api/pedidos/pendientes-entrega` con cálculo en bloque + modo nuevo en «Buscar artículo» con tabla desplegable e impresión (listado / detallado) — ver CHANGELOG v12.32.94.
+- **Ficheros editados en este repo**: `app.py`, `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; resto: no aplica.
+- **Pendiente / ideas**: exportar a Excel; enviar este informe por correo a compras; sustituir el cálculo por el del Listado de Pedidos detallado de SAP cuando se automatice la entrega (ver conversación del 09/10).
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Ficha del pedido: tabla de líneas a todo el ancho (v12.32.93)
 
 - **Origen**: Víctor: aprovechar el espacio libre a la derecha en la ficha y ocuparlo con el contenido del pedido.

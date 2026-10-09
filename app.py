@@ -20834,6 +20834,127 @@ def buscar_lineas_pedidos():
     })
 
 
+def _calcular_faltantes_pedido(lineas: list, entregas: list, entrada_albaran_num: str, estado: str) -> dict:
+    """(v12.32.94) Referencias que faltan por entregar de UN pedido, a partir de sus líneas (PDF oficial) y
+    del detalle opcional «Referencias de la entrada» (pedido_lineas_entregas) ya cargados en memoria — mismo
+    criterio que _datos_pendientes(), pero sin consultar la BD por pedido (el listado de pendientes evalúa
+    cientos de pedidos de una vez). Devuelve {"cobertura": ..., "faltantes": [...], "sin_detalle": [...]}:
+      · "sin_lineas"   el pedido no tiene líneas leídas del PDF → no se pueden calcular referencias.
+      · "completa"     ENVIADO sin entradas, o todas las entradas DALI/SAP tienen detalle → faltantes fiables.
+      · "parcial"      alguna entrada sin detalle → faltantes calculados solo con las entradas detalladas.
+      · "sin_detalle"  hay entradas pero ninguna tiene detalle → no se puede saber qué falta."""
+    if not lineas:
+        return {"cobertura": "sin_lineas", "faltantes": [], "sin_detalle": []}
+    ent = {}
+    for r in entregas:
+        d = ent.setdefault(r["codigo"], {"total": 0.0, "albaranes": set()})
+        d["total"] = round(d["total"] + float(r["cantidad"]), 4)
+        d["albaranes"].add(r["albaran_num"])
+    con_detalle = {a for d in ent.values() for a in d["albaranes"]}
+    entradas = [e["num"] for e in _parse_albaran_entries(entrada_albaran_num)]
+    sin_detalle = [n for n in entradas if n not in con_detalle]
+    if entradas and not con_detalle:
+        return {"cobertura": "sin_detalle", "faltantes": [], "sin_detalle": sin_detalle}
+    agrupadas, orden = {}, []
+    for l in lineas:
+        cod = l["codigo"]
+        if not cod:
+            continue
+        g = agrupadas.get(cod)
+        if g is None:
+            g = agrupadas[cod] = {"codigo": cod, "ref": l["ref_proveedor"], "desc": l["descripcion"],
+                                  "ud": l["unidad"], "pedida": 0.0}
+            orden.append(cod)
+        g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
+    faltantes = []
+    for cod in orden:
+        g = agrupadas[cod]
+        rec = ent.get(cod, {"total": 0.0})["total"]
+        pend = round(g["pedida"] - rec, 4)
+        if pend > 0.00001:
+            g["recibida"], g["pendiente"] = rec, pend
+            faltantes.append(g)
+    return {"cobertura": "parcial" if sin_detalle else "completa", "faltantes": faltantes, "sin_detalle": sin_detalle}
+
+
+@app.route("/api/pedidos/pendientes-entrega", methods=["GET"])
+@login_required
+def pedidos_pendientes_entrega():
+    """(v12.32.94) Pedidos ENVIADOS AL PROVEEDOR o en ENTREGA PARCIAL que aún tienen entregas pendientes,
+    con las referencias que faltan de cada uno (para listar en pantalla, imprimir y PDF desde «Buscar
+    artículo»). Filtros opcionales: hotel_id, estado (uno de los dos), q (nº de pedido o proveedor),
+    solo_vencidos=1. Respeta la visibilidad por hotel (rol hotel: solo los suyos; hotel de pruebas oculto)."""
+    ESTADOS = ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL")
+    hotel_id = request.args.get("hotel_id", type=int)
+    estado = (request.args.get("estado") or "").strip()
+    q = (request.args.get("q") or "").strip()
+    solo_vencidos = (request.args.get("solo_vencidos") or "") in ("1", "true", "on")
+    if estado and estado not in ESTADOS:
+        return jsonify({"ok": False, "error": "Estado no válido"}), 400
+    extra, args_extra = _filtro_hoteles_visibles_sql("p")
+    sql = f"""
+        SELECT p.id, p.norden, p.pedido_num, p.estado, p.fecha_tramitacion, p.plazo_entrega_dias,
+               p.fecha_entrega_especifica, p.entrada_albaran_num,
+               h.codigo AS hotel_codigo, h.nombre AS hotel_nombre, pr.nombre AS proveedor_nombre
+        FROM pedidos p
+        LEFT JOIN hoteles h ON h.id = p.hotel_id
+        LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
+        WHERE p.estado = ANY(%s) {extra}
+    """
+    args = [list(ESTADOS if not estado else (estado,))] + args_extra
+    if hotel_id:
+        sql += " AND p.hotel_id = %s"; args.append(hotel_id)
+    if q:
+        sql += " AND (p.pedido_num ILIKE %s OR pr.nombre ILIKE %s OR CAST(p.norden AS TEXT) = %s)"
+        args += [f"%{q}%", f"%{q}%", q]
+    sql += " ORDER BY h.codigo, p.id"
+    pedidos = rows_to_list(query(sql, tuple(args)))
+    ids = [p["id"] for p in pedidos]
+    lineas_por, entregas_por = {}, {}
+    if ids:
+        for l in rows_to_list(query(
+                "SELECT pedido_id, codigo, ref_proveedor, descripcion, unidad, cantidad FROM pedido_lineas "
+                "WHERE pedido_id = ANY(%s) ORDER BY pedido_id, orden", (ids,))):
+            lineas_por.setdefault(l["pedido_id"], []).append(l)
+        for e in rows_to_list(query(
+                "SELECT pedido_id, albaran_num, codigo, cantidad FROM pedido_lineas_entregas "
+                "WHERE pedido_id = ANY(%s)", (ids,))):
+            entregas_por.setdefault(e["pedido_id"], []).append(e)
+    hoy = _date.today()
+    salida = []
+    for p in pedidos:
+        fecha_prev = _resolver_fecha_entrega_prevista(p)
+        dias_retraso = (hoy - fecha_prev).days if fecha_prev else None
+        if solo_vencidos and not (dias_retraso is not None and dias_retraso > 0):
+            continue
+        calc = _calcular_faltantes_pedido(lineas_por.get(p["id"], []), entregas_por.get(p["id"], []),
+                                          p.get("entrada_albaran_num"), p["estado"])
+        entradas = _parse_albaran_entries(p.get("entrada_albaran_num"))
+        salida.append({
+            "pedido_id": p["id"], "norden": p["norden"], "pedido_num": p["pedido_num"], "estado": p["estado"],
+            "hotel_codigo": p["hotel_codigo"], "hotel_nombre": p["hotel_nombre"],
+            "proveedor_nombre": p["proveedor_nombre"],
+            "fecha_tramitacion": str(p["fecha_tramitacion"])[:10] if p["fecha_tramitacion"] else None,
+            "fecha_entrega_prevista": fecha_prev.isoformat() if fecha_prev else None,
+            "dias_retraso": dias_retraso,
+            "num_entradas": len(entradas),
+            "cobertura": calc["cobertura"], "faltantes": calc["faltantes"], "sin_detalle": calc["sin_detalle"],
+            "num_lineas": len({l["codigo"] for l in lineas_por.get(p["id"], []) if l["codigo"]}),
+        })
+    # Más vencidos primero; los que no tienen fecha prevista, al final (por hotel y nº de pedido)
+    salida.sort(key=lambda x: (x["dias_retraso"] is None, -(x["dias_retraso"] or 0), x["hotel_codigo"] or "", x["norden"] or 0))
+    return jsonify({
+        "ok": True, "pedidos": salida,
+        "resumen": {
+            "total": len(salida),
+            "enviados": sum(1 for x in salida if x["estado"] == "ENVIADO AL PROVEEDOR"),
+            "parciales": sum(1 for x in salida if x["estado"] == "ENTREGA PARCIAL"),
+            "vencidos": sum(1 for x in salida if (x["dias_retraso"] or 0) > 0),
+            "sin_referencias": sum(1 for x in salida if x["cobertura"] in ("sin_lineas", "sin_detalle")),
+        },
+    })
+
+
 @app.route("/api/pedidos/lineas/leer-pendientes", methods=["POST"])
 @login_required
 def leer_lineas_pendientes():

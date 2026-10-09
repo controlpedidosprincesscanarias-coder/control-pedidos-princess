@@ -1,3 +1,15 @@
+# v12.32.94 — 9 octubre 2026
+
+✨ Buscar artículo: nuevo modo «Pedidos con entregas pendientes» (pantalla, listado PDF y detallado de faltantes)
+
+**Petición de Víctor**: poder listar, en pantalla y en PDF, los números de pedido enviados al proveedor con entregas pendientes (totales o parciales), con opción de imprimir el detalle de lo que falta de cada uno.
+
+**Cambios**:
+- `app.py`: nuevo `GET /api/pedidos/pendientes-entrega` (filtros `hotel_id`, `estado`, `q` —nº de pedido o proveedor— y `solo_vencidos`). Devuelve los pedidos en ENVIADO AL PROVEEDOR / ENTREGA PARCIAL con fecha de tramitación, entrega prevista, días de retraso y las referencias que faltan (código, Ref. Prov., descripción, pedido, recibido, pendiente). Cálculo en bloque (`_calcular_faltantes_pedido`, mismo criterio que las referencias pendientes de los correos) — 3 consultas, no una por pedido. Respeta la visibilidad por hotel (rol hotel: solo los suyos; hotel de pruebas oculto). No devuelve precios.
+- `templates/index.html`: en «Buscar artículo» aparece un selector de modo («🔎 Buscar artículo» / «📋 Pedidos con entregas pendientes»). El nuevo modo muestra una tabla ordenada por retraso (los más vencidos primero) con resumen, filtros (hotel, enviados/parciales, nº pedido o proveedor, solo entrega vencida) y fila desplegable con las referencias que faltan y el botón «Abrir el pedido». Botones **🖨️ Listado (PDF)** (una línea por pedido, agrupado por hotel) y **🖨️ Detallado con faltantes (PDF)** (cada pedido con sus referencias y cantidades pendientes, sin partir un pedido entre páginas) — se imprimen o se guardan como PDF desde el diálogo de impresión.
+- Los faltantes solo son fiables si el pedido tiene líneas leídas del PDF y, en las entregas parciales, el detalle de «Referencias de la entrada»: si no, la fila lo indica («Sin líneas del PDF», «Sin detalle de las entradas», o «(*)» cuando solo algunas entradas están detalladas).
+- Badge `V 12.32.93` → `V 12.32.94`; README: línea de versión. Sin migración.
+
 # v12.32.93 — 9 octubre 2026
 
 🎨 Ficha del pedido: la tabla de líneas ocupa todo el ancho del modal

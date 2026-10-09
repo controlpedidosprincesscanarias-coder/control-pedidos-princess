@@ -1429,7 +1429,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.93
+          V 12.32.94
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1571,6 +1571,12 @@ tbody tr:last-child{border-bottom:none}
 
       <!-- VIEW: BUSCAR ARTÍCULO (v12.32.76) ─────────────────────────────── -->
       <div id="view-buscador" class="section-hidden">
+        <!-- (v12.32.94) Dos modos: buscar un artículo, o listar los pedidos enviados con entregas pendientes -->
+        <div class="bq-modos" style="display:flex;gap:6px;margin-bottom:10px">
+          <button type="button" class="btn btn-sm bq-modo-btn" id="bq-modo-buscar" onclick="bqCambiarModo('buscar')">🔎 Buscar artículo</button>
+          <button type="button" class="btn btn-sm bq-modo-btn" id="bq-modo-pend" onclick="bqCambiarModo('pend')">📋 Pedidos con entregas pendientes</button>
+        </div>
+        <div id="bq-modo-buscar-wrap">
         <div class="filters">
           <select class="filter-select" id="bq-hotel" onchange="buscarArticuloPedidos()">
             <option value="">Todos los hoteles</option>
@@ -1602,6 +1608,49 @@ tbody tr:last-child{border-bottom:none}
             </table>
           </div>
           <div id="bq-empty" class="empty-state section-hidden">Sin resultados.</div>
+        </div>
+        </div><!-- /bq-modo-buscar-wrap -->
+
+        <!-- (v12.32.94) MODO: pedidos enviados al proveedor con entregas pendientes (totales o parciales) -->
+        <div id="bq-modo-pend-wrap" style="display:none">
+          <div class="filters">
+            <select class="filter-select" id="bp-hotel" onchange="cargarPendientesEntrega()">
+              <option value="">Todos los hoteles</option>
+            </select>
+            <select class="filter-select" id="bp-estado" onchange="cargarPendientesEntrega()">
+              <option value="">Enviados y parciales</option>
+              <option value="ENVIADO AL PROVEEDOR">Solo enviados (sin recibir nada)</option>
+              <option value="ENTREGA PARCIAL">Solo entregas parciales</option>
+            </select>
+            <input class="filter-input" id="bp-q" style="min-width:220px" placeholder="🔎 Nº de pedido o proveedor…"
+                   onkeydown="if(event.key==='Enter')cargarPendientesEntrega()">
+            <label style="display:flex;align-items:center;gap:5px;font-size:12.5px;color:var(--text-secondary);cursor:pointer">
+              <input type="checkbox" id="bp-vencidos" onchange="cargarPendientesEntrega()"> Solo con la entrega vencida
+            </label>
+            <button class="btn btn-sm" style="background:#1a3a6b;color:#fff;border:none" onclick="cargarPendientesEntrega()">Actualizar</button>
+            <span style="margin-left:auto;display:flex;gap:6px;flex-wrap:wrap">
+              <button class="btn btn-ghost btn-sm" onclick="imprimirPendientesEntrega(false)" title="Una línea por pedido — se imprime o se guarda como PDF">🖨️ Listado (PDF)</button>
+              <button class="btn btn-ghost btn-sm" onclick="imprimirPendientesEntrega(true)" title="Cada pedido con sus referencias y cantidades faltantes — se imprime o se guarda como PDF">🖨️ Detallado con faltantes (PDF)</button>
+            </span>
+          </div>
+          <div class="card">
+            <div class="card-header">
+              <span class="card-title">📋 Pedidos enviados con entregas pendientes</span>
+              <span id="bp-resumen" style="margin-left:auto;font-size:12px;color:var(--text-secondary)"></span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead>
+                  <tr>
+                    <th style="width:24px"></th><th>Hotel</th><th>Nº Pedido</th><th>Estado</th><th>Proveedor</th>
+                    <th>F. tramitación</th><th>Entrega prevista</th><th>Retraso</th><th>Faltan</th>
+                  </tr>
+                </thead>
+                <tbody id="bp-tbody"></tbody>
+              </table>
+            </div>
+            <div id="bp-empty" class="empty-state section-hidden">No hay pedidos con entregas pendientes con estos filtros.</div>
+          </div>
         </div>
       </div>
 
@@ -7201,6 +7250,7 @@ async function cargarLineasPedido(forzar = false) {
 /* (v12.32.76) Buscador de artículos en las líneas de los pedidos: por hotel y
    referencia (o código/descripción) → Nº de pedido, cantidad y estado. */
 function prepararBuscadorArticulo() {
+  if (!document.getElementById('bq-modo-buscar').style.background) bqCambiarModo('buscar');
   const fh = document.getElementById('bq-hotel');
   if (fh && fh.options.length <= 1 && G.maestros) {
     (G.maestros.hoteles || []).forEach(h => fh.insertAdjacentHTML('beforeend', `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`));
@@ -7211,6 +7261,160 @@ function prepararBuscadorArticulo() {
   }
   const q = document.getElementById('bq-q'); if (q) q.focus();
 }
+/* (v12.32.94) Modo «Pedidos con entregas pendientes» del buscador: lista en pantalla, listado e informe
+   detallado (con las referencias y cantidades que faltan de cada pedido) para imprimir o guardar como PDF. */
+let _bpDatos = [];
+let _bpReq = 0;
+function bqCambiarModo(modo) {
+  const pend = modo === 'pend';
+  document.getElementById('bq-modo-buscar-wrap').style.display = pend ? 'none' : '';
+  document.getElementById('bq-modo-pend-wrap').style.display = pend ? '' : 'none';
+  [['bq-modo-buscar', !pend], ['bq-modo-pend', pend]].forEach(([id, on]) => {
+    const b = document.getElementById(id);
+    if (!b) return;
+    b.style.background = on ? '#1a3a6b' : '#fff';
+    b.style.color = on ? '#fff' : '#1a3a6b';
+    b.style.border = '1px solid #1a3a6b';
+  });
+  if (pend) {
+    const fh = document.getElementById('bp-hotel');
+    if (fh && fh.options.length <= 1 && G.maestros) {
+      (G.maestros.hoteles || []).forEach(h => fh.insertAdjacentHTML('beforeend', `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`));
+    }
+    cargarPendientesEntrega();
+  }
+}
+function _bpFecha(iso) { return iso ? iso.slice(0, 10).split('-').reverse().join('/') : '—'; }
+function _bpCantidad(v) { return v == null ? '—' : Number(v).toLocaleString('es-ES', { maximumFractionDigits: 4, useGrouping: 'always' }); }
+function _bpRetraso(d) {
+  if (d == null) return '<span style="color:#bbb">—</span>';
+  if (d > 0) return `<span style="color:#b91c1c;font-weight:700">${d} día${d !== 1 ? 's' : ''}</span>`;
+  if (d === 0) return '<span style="color:#b45309;font-weight:700">Hoy</span>';
+  return `<span style="color:#888">faltan ${-d}</span>`;
+}
+function _bpFaltan(p) {
+  if (p.cobertura === 'sin_lineas') return '<span style="color:#7a5b00" title="El pedido no tiene líneas leídas del PDF oficial">⚠️ Sin líneas del PDF</span>';
+  if (p.cobertura === 'sin_detalle') return '<span style="color:#7a5b00" title="Hay entradas registradas pero sin detallar sus referencias («Referencias de la entrada»)">⚠️ Sin detalle de las entradas</span>';
+  const n = p.faltantes.length;
+  const base = n ? `<strong style="color:#b45309">${n}</strong> de ${p.num_lineas} ref.` : '<span style="color:#1a7a1a">✔ nada pendiente</span>';
+  return p.cobertura === 'parcial' ? base + ' <span title="Calculado solo con las entradas que tienen detalle; puede haber llegado más" style="color:#7a5b00">⚠️</span>' : base;
+}
+function _bpDetalleHtml(p) {
+  if (p.cobertura === 'sin_lineas') return 'Este pedido no tiene líneas leídas de su PDF oficial, así que no se pueden calcular las referencias pendientes.';
+  if (p.cobertura === 'sin_detalle') return `Hay ${p.num_entradas} entrada(s) registradas (${p.sin_detalle.map(_htmlLinea).join(', ')}) sin detallar las referencias recibidas: abre el pedido y rellena «Referencias de la entrada» para saber qué falta.`;
+  if (!p.faltantes.length) return '✔ Todas las referencias están recibidas.';
+  const aviso = p.cobertura === 'parcial'
+    ? `<div style="color:#7a5b00;margin-bottom:4px">⚠️ Entradas sin detallar: ${p.sin_detalle.map(_htmlLinea).join(', ')} — puede haber llegado más de lo indicado.</div>` : '';
+  return aviso + `<table style="width:100%;border-collapse:collapse;font-size:11.5px">
+    <thead><tr style="background:#eef2f9;text-align:left"><th style="padding:3px 6px">Código</th><th style="padding:3px 6px">Ref. Prov.</th><th style="padding:3px 6px">Descripción</th>
+      <th style="padding:3px 6px;text-align:right">Pedido</th><th style="padding:3px 6px;text-align:right">Recibido</th><th style="padding:3px 6px;text-align:right">Pendiente</th><th style="padding:3px 6px">Ud.</th></tr></thead>
+    <tbody>${p.faltantes.map(g => `<tr>
+      <td class="monospace" style="padding:3px 6px">${_htmlLinea(g.codigo)}</td><td class="monospace" style="padding:3px 6px">${_htmlLinea(g.ref || '—')}</td>
+      <td style="padding:3px 6px">${_htmlLinea(g.desc || '')}</td>
+      <td style="padding:3px 6px;text-align:right">${_bpCantidad(g.pedida)}</td><td style="padding:3px 6px;text-align:right;color:#1a7a1a">${_bpCantidad(g.recibida)}</td>
+      <td style="padding:3px 6px;text-align:right;font-weight:700;color:#b45309">${_bpCantidad(g.pendiente)}</td><td style="padding:3px 6px">${_htmlLinea(g.ud || '')}</td></tr>`).join('')}</tbody></table>`;
+}
+function bpToggle(i) {
+  const d = document.getElementById('bp-det-' + i), f = document.getElementById('bp-flecha-' + i);
+  if (!d) return;
+  const abrir = d.style.display === 'none';
+  d.style.display = abrir ? '' : 'none';
+  if (f) f.textContent = abrir ? '▾' : '▸';
+}
+async function cargarPendientesEntrega() {
+  const tb = document.getElementById('bp-tbody'), vacio = document.getElementById('bp-empty'), resumen = document.getElementById('bp-resumen');
+  const req = ++_bpReq;
+  resumen.textContent = 'Cargando…';
+  const params = new URLSearchParams();
+  const h = document.getElementById('bp-hotel').value; if (h) params.set('hotel_id', h);
+  const e = document.getElementById('bp-estado').value; if (e) params.set('estado', e);
+  const q = document.getElementById('bp-q').value.trim(); if (q) params.set('q', q);
+  if (document.getElementById('bp-vencidos').checked) params.set('solo_vencidos', '1');
+  let d;
+  try { d = await api('/api/pedidos/pendientes-entrega?' + params.toString()); } catch (x) { d = null; }
+  if (req !== _bpReq) return;
+  if (!d || !d.ok) { resumen.textContent = (d && d.error) || 'No se ha podido cargar el listado.'; tb.innerHTML = ''; _bpDatos = []; return; }
+  _bpDatos = d.pedidos || [];
+  tb.innerHTML = _bpDatos.map((p, i) => `<tr style="cursor:pointer" onclick="bpToggle(${i})" title="Ver las referencias que faltan">
+      <td id="bp-flecha-${i}" style="color:#888;text-align:center">▸</td>
+      <td><strong>${_htmlLinea(p.hotel_codigo || '')}</strong></td>
+      <td class="monospace">${_htmlLinea(p.pedido_num || '—')}<div style="font-size:10px;color:#888">Nº orden ${_htmlLinea(p.norden)}</div></td>
+      <td>${estadoBadge(p.estado)}</td>
+      <td>${_htmlLinea(p.proveedor_nombre || '—')}</td>
+      <td>${_bpFecha(p.fecha_tramitacion)}</td>
+      <td>${_bpFecha(p.fecha_entrega_prevista)}</td>
+      <td>${_bpRetraso(p.dias_retraso)}</td>
+      <td>${_bpFaltan(p)}</td>
+    </tr>
+    <tr id="bp-det-${i}" style="display:none"><td></td><td colspan="8" style="background:#fafbfd;font-size:12px;padding:8px 10px">
+      ${_bpDetalleHtml(p)}
+      <div style="margin-top:6px"><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openPedidoModal(${p.pedido_id})">✏ Abrir el pedido</button></div>
+    </td></tr>`).join('');
+  vacio.classList.toggle('section-hidden', _bpDatos.length > 0);
+  const r = d.resumen || {};
+  resumen.textContent = _bpDatos.length
+    ? `${r.total} pedido(s): ${r.enviados} enviado(s) sin recibir, ${r.parciales} con entrega parcial · ${r.vencidos} con la entrega vencida` + (r.sin_referencias ? ` · ${r.sin_referencias} sin referencias calculables` : '')
+    : '';
+}
+function imprimirPendientesEntrega(detallado) {
+  if (!_bpDatos.length) { toast('No hay pedidos que imprimir con estos filtros', 'warning'); return; }
+  const ahora = new Date().toLocaleString('es-ES');
+  const hotelSel = document.getElementById('bp-hotel');
+  const filtros = [hotelSel.value ? hotelSel.options[hotelSel.selectedIndex].text : 'Todos los hoteles',
+    document.getElementById('bp-estado').selectedOptions[0].text,
+    document.getElementById('bp-vencidos').checked ? 'solo entrega vencida' : ''].filter(Boolean).join(' · ');
+  // Agrupado por hotel (código), dentro de cada hotel los más vencidos primero (ya vienen ordenados)
+  const porHotel = {};
+  _bpDatos.forEach(p => { (porHotel[p.hotel_codigo || '—'] = porHotel[p.hotel_codigo || '—'] || []).push(p); });
+  const th = 'padding:5px 8px;font-size:10px;text-align:left;border-bottom:2px solid #dee2e6;background:#f8f9fa';
+  const td = 'padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;vertical-align:top';
+  const retrasoTxt = d => d == null ? '—' : (d > 0 ? `<b style="color:#b91c1c">${d} d</b>` : (d === 0 ? '<b>Hoy</b>' : `faltan ${-d} d`));
+  const faltanTxt = p => p.cobertura === 'sin_lineas' ? 'Sin líneas del PDF' : (p.cobertura === 'sin_detalle' ? 'Sin detalle de las entradas'
+    : (p.faltantes.length ? `${p.faltantes.length} de ${p.num_lineas} ref.` + (p.cobertura === 'parcial' ? ' (*)' : '') : 'Nada pendiente'));
+  const bloques = Object.keys(porHotel).sort().map(cod => {
+    const ps = porHotel[cod];
+    const nombre = ps[0].hotel_nombre || '';
+    let cuerpo;
+    if (!detallado) {
+      cuerpo = `<table style="width:100%;border-collapse:collapse;table-layout:fixed"><colgroup><col style="width:9%"><col style="width:17%"><col style="width:24%"><col style="width:12%"><col style="width:12%"><col style="width:10%"><col style="width:16%"></colgroup><thead><tr>
+        <th style="${th}">Nº Pedido</th><th style="${th}">Estado</th><th style="${th}">Proveedor</th><th style="${th}">F. tramitación</th>
+        <th style="${th}">Entrega prevista</th><th style="${th}">Retraso</th><th style="${th}">Faltan</th></tr></thead><tbody>` +
+        ps.map(p => `<tr><td style="${td}"><b>${_htmlLinea(p.pedido_num || ('#' + p.norden))}</b></td><td style="${td}">${_htmlLinea(p.estado)}</td>
+          <td style="${td}">${_htmlLinea(p.proveedor_nombre || '—')}</td><td style="${td}">${_bpFecha(p.fecha_tramitacion)}</td>
+          <td style="${td}">${_bpFecha(p.fecha_entrega_prevista)}</td><td style="${td}">${retrasoTxt(p.dias_retraso)}</td><td style="${td}">${faltanTxt(p)}</td></tr>`).join('') +
+        '</tbody></table>';
+    } else {
+      cuerpo = ps.map(p => {
+        let det;
+        if (p.cobertura === 'sin_lineas') det = '<p style="font-size:11px;color:#7a5b00;margin:4px 0">Este pedido no tiene líneas leídas de su PDF oficial: no se pueden calcular las referencias pendientes.</p>';
+        else if (p.cobertura === 'sin_detalle') det = `<p style="font-size:11px;color:#7a5b00;margin:4px 0">Hay entradas registradas (${p.sin_detalle.map(_htmlLinea).join(', ')}) sin detallar sus referencias: no se puede saber qué falta.</p>`;
+        else if (!p.faltantes.length) det = '<p style="font-size:11px;color:#1a7a1a;margin:4px 0">Todas las referencias están recibidas.</p>';
+        else det = (p.cobertura === 'parcial' ? `<p style="font-size:10.5px;color:#7a5b00;margin:4px 0">(*) Entradas sin detallar: ${p.sin_detalle.map(_htmlLinea).join(', ')} — puede haber llegado más de lo indicado.</p>` : '') +
+          `<table style="width:100%;border-collapse:collapse"><thead><tr><th style="${th}">Código</th><th style="${th}">Ref. Prov.</th><th style="${th}">Descripción</th>
+            <th style="${th};text-align:right">Pedido</th><th style="${th};text-align:right">Recibido</th><th style="${th};text-align:right">Pendiente</th><th style="${th}">Ud.</th></tr></thead><tbody>` +
+          p.faltantes.map(g => `<tr><td style="${td};font-family:monospace">${_htmlLinea(g.codigo)}</td><td style="${td};font-family:monospace">${_htmlLinea(g.ref || '—')}</td>
+            <td style="${td}">${_htmlLinea(g.desc || '')}</td><td style="${td};text-align:right">${_bpCantidad(g.pedida)}</td><td style="${td};text-align:right">${_bpCantidad(g.recibida)}</td>
+            <td style="${td};text-align:right"><b>${_bpCantidad(g.pendiente)}</b></td><td style="${td}">${_htmlLinea(g.ud || '')}</td></tr>`).join('') + '</tbody></table>';
+        return `<div style="border:1px solid #d5dbe5;border-radius:8px;padding:10px 12px;margin-bottom:10px;page-break-inside:avoid">
+          <div style="font-size:12.5px;margin-bottom:3px"><b>Pedido ${_htmlLinea(p.pedido_num || ('#' + p.norden))}</b> — ${_htmlLinea(p.estado)} — ${_htmlLinea(p.proveedor_nombre || 'Sin proveedor')}</div>
+          <div style="font-size:11px;color:#555;margin-bottom:4px">Tramitado: ${_bpFecha(p.fecha_tramitacion)} &nbsp;|&nbsp; Entrega prevista: ${_bpFecha(p.fecha_entrega_prevista)} &nbsp;|&nbsp; Retraso: ${retrasoTxt(p.dias_retraso)}</div>
+          ${det}</div>`;
+      }).join('');
+    }
+    return `<div style="margin-bottom:18px"><h2 style="font-size:14px;margin:0 0 6px;padding:5px 8px;background:#eef2f9;border-radius:6px">${_htmlLinea(cod)} — ${_htmlLinea(nombre)} <span style="font-weight:400;font-size:11px;color:#555">(${ps.length} pedido${ps.length !== 1 ? 's' : ''})</span></h2>${cuerpo}</div>`;
+  }).join('');
+  const r = { total: _bpDatos.length, venc: _bpDatos.filter(p => (p.dias_retraso || 0) > 0).length };
+  const html = '<!DOCTYPE html><html lang="es"><head><meta charset="UTF-8"><title>Pedidos con entregas pendientes</title>' +
+    '<style>*{box-sizing:border-box}body{font-family:Arial,sans-serif;color:#1a1a2e;margin:0;padding:24px}h1{font-size:20px;margin:0 0 4px}.sub{font-size:12px;color:#666;margin-bottom:16px}' +
+    '@media print{body{padding:10px}@page{margin:8mm;size:A4 ' + (detallado ? 'portrait' : 'landscape') + '}thead{display:table-header-group}tr{page-break-inside:avoid}}</style></head><body>' +
+    `<h1>📋 Pedidos con entregas pendientes${detallado ? ' — detalle de faltantes' : ''}</h1>` +
+    `<div class="sub">${_htmlLinea(filtros)} &nbsp;|&nbsp; ${r.total} pedido(s), ${r.venc} con la entrega vencida &nbsp;|&nbsp; Generado: ${ahora} &nbsp;|&nbsp; Usuario: ${_htmlLinea(G.nombre || G.user || '—')}</div>` +
+    bloques +
+    (_bpDatos.some(p => p.cobertura === 'parcial') ? '<p style="font-size:10.5px;color:#7a5b00">(*) Calculado solo con las entradas que tienen detalle de referencias; puede haber llegado más de lo indicado.</p>' : '') +
+    '</body></html>';
+  _abrirVentanaImpresion(html);
+}
+
 function limpiarBuscadorArticulo() {
   ['bq-hotel','bq-q','bq-estado'].forEach(id => { const e = document.getElementById(id); if (e) e.value = ''; });
   document.getElementById('bq-tbody').innerHTML = '';
