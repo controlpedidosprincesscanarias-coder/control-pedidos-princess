@@ -49,6 +49,13 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Corrección «tuple index out of range» en Cargar listados SAP + errores concretos y persistentes (v12.32.99)
+
+- **Corrección**: `%` sin escapar (`c % 2`) en la consulta de albaranes duplicados de `_cargar_listados_sap_logica` → `%%`; la comprobación pasa a ser opcional (no detiene la carga).
+- **Novedad**: error de la carga con paso, tipo y función/línea (`_csl_paso`); caja roja en el modal y `toast(…, 0)` persistente hasta pulsar una tecla.
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Contador de tiempo en «Cargar listados SAP» (v12.32.98)
 
 - **Novedad**: contador `mm:ss` junto al spinner de la carga (`_cslTimerStart`/`_cslTimerStop`, basado en `Date.now()`). Solo front (`templates/index.html`).

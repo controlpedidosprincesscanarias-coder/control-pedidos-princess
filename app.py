@@ -3,7 +3,7 @@ Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase)
 Despliegue: Render.com  |  BD: Supabase  |  Email: EmailJS (frontend)
 """
 
-import os, json, logging, secrets, atexit, hashlib, re, threading, base64, hmac, gzip
+import os, json, logging, secrets, atexit, hashlib, re, threading, base64, hmac, gzip, traceback
 from html import unescape as _html_unescape
 from html import escape as _html_escape
 from datetime import datetime, timedelta, timezone, date as _date
@@ -15671,6 +15671,13 @@ def _aplicar_cruce_lineas_pedido(db, item: dict, usuario_id) -> dict:
     return {"aplicado": True, "cambios": cambios, "estado_nuevo": estado_nuevo}
 
 
+_CSL_PASO = threading.local()   # paso en curso de la carga (para dar errores concretos)
+
+
+def _csl_paso(texto: str):
+    _CSL_PASO.v = texto
+
+
 def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> dict:
     """Orquesta la carga unificada: reconoce y guarda cada PDF, crea los pedidos que faltan, cruza por
     líneas y aplica lo seguro. `archivos` = [(nombre, bytes)]. Devuelve el resumen para la pantalla."""
@@ -15695,6 +15702,7 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
             continue
         nombre, datos = por_tipo[tipo]
         info = {"nombre": nombre, "tipo": tipo, "tipo_texto": _TIPOS_LISTADO_SAP[tipo]}
+        _csl_paso(f"leer y guardar «{_TIPOS_LISTADO_SAP[tipo]}» ({nombre})")
         try:
             if tipo == "pedidos_resumido":
                 r = _comparar_listado_pdf_logica(hotel_id, datos, escribir_base_ultima_entrada=False)
@@ -15719,16 +15727,23 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
         raise RuntimeError("No se ha podido leer ningún listado: " + "; ".join(a.get("error", "") for a in res["archivos"]))
 
     # Aviso de cargas antiguas duplicadas (el listado de albaranes «sin periodo» se duplicaba al repetir la carga).
-    dup = query("""SELECT COUNT(*) AS n FROM (
+    _csl_paso("comprobar albaranes duplicados")
+    try:
+      dup = query("""SELECT COUNT(*) AS n FROM (
                        SELECT albaran_id FROM (
                            SELECT albaran_id, COUNT(*) AS c FROM sap_albaranes_lineas WHERE hotel_id=%s
                            GROUP BY albaran_id, codigo_articulo, cantidad_txt, importe_txt) g
-                       GROUP BY albaran_id HAVING BOOL_AND(c >= 2 AND c % 2 = 0)) x""", (hotel_id,), one=True)
+                       GROUP BY albaran_id HAVING BOOL_AND(c >= 2 AND c %% 2 = 0)) x""", (hotel_id,), one=True)
+    except Exception as exc:   # solo es un aviso: nunca debe impedir la carga
+        get_db().rollback()
+        log.warning("[CARGA-LISTADOS-SAP] Comprobación de duplicados omitida: %s", exc)
+        dup = None
     if dup and dup["n"]:
         res["avisos"].append(f"{dup['n']} albarán(es) guardados tienen TODAS sus líneas duplicadas (carga repetida de antes). "
                              "No se aplicará nada que dependa de ellos sin cuadrar; vuelve a cargar su Listado de Albaranes detallado y se corrigen solos.")
 
     # ── 1. Alta de los pedidos que SAP tiene y la app no ───────────────────────────────────────────
+    _csl_paso("detectar y crear los pedidos de SAP que faltan en la app")
     filas = _pedidos_sap_no_registrados(hotel_id)
     ident = [f for f in filas if f.get("proveedor_identificado")]
     sin_ident = [f for f in filas if not f.get("proveedor_identificado")]
@@ -15747,6 +15762,7 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
                              + ("…" if len({f['proveedor_pdf'] for f in sin_ident}) > 8 else ""))
 
     # ── 2. Cruce por líneas y aplicación de lo seguro ──────────────────────────────────────────────
+    _csl_paso("cruzar pedidos con albaranes")
     hay_pedidos_det = "pedidos_detallado" in por_tipo or bool(query("SELECT 1 FROM sap_pedidos_lineas WHERE hotel_id=%s LIMIT 1", (hotel_id,), one=True))
     hay_albaranes = bool(query("SELECT 1 FROM sap_albaranes_lineas WHERE hotel_id=%s LIMIT 1", (hotel_id,), one=True))
     if not hay_pedidos_det or not hay_albaranes:
@@ -15758,6 +15774,7 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
         if not query("SELECT 1 FROM sap_albaranes_cab WHERE hotel_id=%s LIMIT 1", (hotel_id,), one=True):
             res["avisos"].append("Falta el Listado de Albaranes RESUMIDO: sin él no hay fecha de albarán y todo queda para revisar.")
     db = get_db()
+    _csl_paso("aplicar estados, albaranes y bases a los pedidos")
     for it in cruce["seguros"]:
         try:
             ap = _aplicar_cruce_lineas_pedido(db, it, usuario_id)
@@ -15776,6 +15793,7 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
 
 
 def _ejecutar_carga_listados_sap_bg(job_id, hotel_id, archivos, usuario_id):
+    _CSL_PASO.v = None
     with app.app_context():
         try:
             resultado = _cargar_listados_sap_logica(hotel_id, archivos, usuario_id)
@@ -15784,9 +15802,19 @@ def _ejecutar_carga_listados_sap_bg(job_id, hotel_id, archivos, usuario_id):
                     _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "done", "resultado": resultado}
         except Exception as exc:
             log.exception("[CARGA-LISTADOS-SAP] Error en job %s: %s", job_id, exc)
+            # Mensaje concreto: paso en curso + tipo de error + función y línea de app.py donde ocurrió.
+            donde = ""
+            try:
+                fr = [f for f in traceback.extract_tb(exc.__traceback__) if f.filename.endswith("app.py")]
+                if fr:
+                    donde = f" [{fr[-1].name}, línea {fr[-1].lineno}]"
+            except Exception:
+                pass
+            paso = getattr(_CSL_PASO, "v", None)
+            msg = (f"Error al {paso}: " if paso else "Error: ") + f"{type(exc).__name__}: {exc}{donde}"
             with _PDF_JOBS_LOCK:
                 if job_id in _PDF_JOBS:
-                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": str(exc)}
+                    _PDF_JOBS[job_id] = {**_PDF_JOBS[job_id], "status": "error", "error": msg}
 
 
 @app.route("/api/sap/cargar-listados", methods=["POST"])

@@ -1,3 +1,13 @@
+# v12.32.99 — 9 octubre 2026
+
+🛠️ Cargar listados SAP: corregido el error «tuple index out of range» que impedía terminar la carga; los errores ahora son concretos y se quedan en pantalla hasta pulsar una tecla
+
+**Causa** (reproducida con los 4 PDF del 1–10 de octubre de Víctor): la consulta que avisa de albaranes con líneas duplicadas usaba `c % 2` dentro de una consulta con parámetros y psycopg2 interpretaba el `%` como parámetro → `IndexError: tuple index out of range` al terminar de leer los PDF (por eso la rueda no finalizaba). Se escribe `%%` y, además, esa comprobación es solo un aviso: si fallara, se omite y la carga continúa.
+
+**Cambios** (`app.py`, `templates/index.html`):
+- **Error concreto**: el mensaje indica el paso en curso («Error al cruzar pedidos con albaranes: …»), el tipo de error y la función y línea de `app.py` donde ocurrió.
+- **Error que no desaparece**: caja roja dentro del modal («La carga no ha terminado») + aviso rojo fijo abajo a la derecha; se cierran al pulsar cualquier tecla (o clic / «Entendido»). `toast(msg, tipo, 0)` = aviso persistente, reutilizable.
+
 # v12.32.98 — 9 octubre 2026
 
 ⏱️ Cargar listados SAP: contador de tiempo transcurrido junto a la rueda de «Leyendo los listados…»

@@ -1429,7 +1429,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.98
+          V 12.32.99
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3007,6 +3007,12 @@ tbody tr:last-child{border-bottom:none}
         <div style="margin-top:14px;text-align:right">
           <button class="btn btn-gold" id="btn-csl-cargar" onclick="cslCargar()">Cargar y cruzar</button>
         </div>
+      </div>
+      <div id="csl-error" role="alert" style="display:none;margin-top:14px;background:#fef2f2;border:2px solid #991b1b;border-radius:10px;padding:12px 14px;color:#7f1d1d;font-size:.85rem">
+        <div style="font-weight:700;margin-bottom:6px">✕ La carga no ha terminado</div>
+        <div id="csl-error-txt" style="white-space:pre-wrap;word-break:break-word;user-select:text"></div>
+        <div style="margin-top:8px;font-size:.75rem;color:#991b1b">Los PDF que ya se hubieran leído se han guardado. Corrige el problema o envíame este mensaje, y vuelve a cargar.</div>
+        <div style="text-align:right;margin-top:8px"><button class="btn btn-ghost" id="csl-error-ok" onclick="_cslErrorCerrar()">Entendido (o pulsa una tecla)</button></div>
       </div>
       <div id="csl-loading" class="loading" style="display:none"><span id="csl-timer" style="position:absolute;top:30px;left:calc(50% + 44px);font:600 20px 'DM Mono',monospace;color:var(--navy2)">00:00</span>Leyendo los listados y cruzando pedidos con albaranes… puede tardar unos minutos.</div>
       <div id="csl-resultado" style="display:none"></div>
@@ -4606,6 +4612,15 @@ function toast(msg, type='', duracion=3500) {
   t.className = `toast ${type}`;
   t.textContent = (type==='success'?'✓ ':type==='error'?'✕ ':'')+msg;
   c.appendChild(t);
+  if (duracion === 0) {   // persistente: se queda hasta que el usuario pulse una tecla o haga clic
+    t.style.cursor = 'pointer'; t.style.maxWidth = '560px'; t.style.whiteSpace = 'pre-wrap';
+    t.title = 'Pulsa una tecla o haz clic para cerrar';
+    const cerrar = () => { t.remove(); document.removeEventListener('keydown', onKey, true); };
+    const onKey = (ev) => { if (['Shift','Control','Alt','Meta'].includes(ev.key)) return; cerrar(); };
+    t.addEventListener('click', cerrar);
+    setTimeout(() => document.addEventListener('keydown', onKey, true), 400);
+    return;
+  }
   setTimeout(() => t.remove(), duracion);
 }
 
@@ -8911,7 +8926,7 @@ function abrirModalCruceSap() {
     (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
   }
   document.getElementById('csl-form').style.display = '';
-  _cslTimerStop();
+  _cslTimerStop(); _cslErrorCerrar();
   document.getElementById('csl-loading').style.display = 'none';
   document.getElementById('csl-resultado').style.display = 'none';
   openModal('modal-cruce-sap');
@@ -8933,7 +8948,7 @@ async function cslCargar() {
   document.getElementById('csl-form').style.display = 'none';
   document.getElementById('csl-loading').style.display = '';
   document.getElementById('csl-resultado').style.display = 'none';
-  _cslTimerStart();
+  _cslTimerStart(); _cslErrorCerrar();
   const fd = new FormData();
   fd.append('hotel_id', hotelId);
   fs.forEach(f => fd.append('files', f));
@@ -8962,11 +8977,25 @@ function _cslTimerStart() {
 }
 function _cslTimerStop() { if (_cslTimerId) { clearInterval(_cslTimerId); _cslTimerId = null; } }
 
+function _cslErrorCerrar() {
+  const b = document.getElementById('csl-error');
+  if (b) b.style.display = 'none';
+}
+// El error se queda en pantalla (caja roja en el modal + aviso fijo) hasta que el usuario pulse una tecla.
 function _cslError(msg) {
   _cslTimerStop();
-  toast(msg, 'error', 8000);
   document.getElementById('csl-form').style.display = '';
   document.getElementById('csl-loading').style.display = 'none';
+  document.getElementById('csl-error-txt').textContent = msg;
+  document.getElementById('csl-error').style.display = '';
+  toast(msg, 'error', 0);
+  setTimeout(() => {
+    const onKey = (ev) => {
+      if (['Shift','Control','Alt','Meta','Tab'].includes(ev.key)) return;
+      _cslErrorCerrar(); document.removeEventListener('keydown', onKey, true);
+    };
+    document.addEventListener('keydown', onKey, true);
+  }, 450);
 }
 
 async function _cslPoll(jobId, intentos) {
