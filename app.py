@@ -26,6 +26,13 @@ _AUTOR_SAP_AUTO = "Carga automática SAP"
 # Nombres antiguos (v12.32.x) que se unifican en _AUTOR_SAP_AUTO al arrancar.
 _AUTORES_SAP_AUTO_ANTIGUOS = ("Automática — alta desde listado de pedidos SAP", "Automática — carga de listados SAP")
 
+# (v12.33.07) Candado anti-duplicados en la base de datos: un mismo Nº de pedido (normalizado: sin ceros a la izquierda,
+# sin espacios, en mayúsculas) no puede repetirse dentro del mismo hotel. Misma normalización que _normalizar_pedido_num().
+_SQL_PEDIDO_NUM_NORM = ("CASE WHEN trim(pedido_num) ~ '^0*[0-9]+$' THEN regexp_replace(trim(pedido_num), '^0+(?=[0-9])', '') "
+                        "ELSE upper(trim(pedido_num)) END")
+_SQL_PEDIDO_NUM_FILTRO = "pedido_num IS NOT NULL AND trim(pedido_num) <> ''"
+_IDX_PEDIDO_NUM_UNICO = "pedidos_hotel_pedido_num_norm_uk"
+
 
 def _ahora_canarias_txt() -> str:
     """Fecha y hora actuales en Canarias, «dd/mm/aaaa hh:mm» (para la trazabilidad de lo automático)."""
@@ -537,6 +544,25 @@ def _auto_migrate():
                     cur.execute(f'ALTER TABLE IF EXISTS "{_tabla_rls}" ENABLE ROW LEVEL SECURITY')
                 except Exception as e:
                     log.warning(f"No se pudo activar RLS en {_tabla_rls}: {e}")
+
+            # ── (v12.33.07) Candado anti-duplicados de Nº de pedido ───────────────────────────────
+            # Índice ÚNICO (hotel, Nº de pedido normalizado). Solo se crea si NO hay duplicados reales (si los hubiera,
+            # se avisa en el log y se reintenta en el siguiente arranque, nunca se borra ni se toca ningún pedido).
+            try:
+                cur.execute("SELECT 1 FROM pg_indexes WHERE schemaname='public' AND indexname=%s", (_IDX_PEDIDO_NUM_UNICO,))
+                if not cur.fetchone():
+                    cur.execute(f"SELECT count(*) AS n FROM (SELECT 1 FROM pedidos WHERE {_SQL_PEDIDO_NUM_FILTRO} "
+                                f"GROUP BY hotel_id, {_SQL_PEDIDO_NUM_NORM} HAVING count(*) > 1) d")
+                    _n_dup_idx = cur.fetchone()["n"]
+                    if _n_dup_idx:
+                        log.warning("[ANTI-DUPLICADOS] No se crea el índice único de Nº de pedido: hay %s Nº duplicados. "
+                                    "Corrígelos y se creará en el próximo arranque.", _n_dup_idx)
+                    else:
+                        cur.execute(f"CREATE UNIQUE INDEX IF NOT EXISTS {_IDX_PEDIDO_NUM_UNICO} "
+                                    f"ON pedidos (hotel_id, ({_SQL_PEDIDO_NUM_NORM})) WHERE {_SQL_PEDIDO_NUM_FILTRO}")
+                        log.info("[ANTI-DUPLICADOS] Índice único de Nº de pedido creado.")
+            except Exception as e:
+                log.warning(f"No se pudo crear el índice único de Nº de pedido: {e}")
 
             # ── Corrección retroactiva: altas automáticas desde SAP con
             # estado mal calculado (bug de v12.32.11, corregido en v12.32.13)
@@ -11375,6 +11401,10 @@ def _normalizar_pedido_num(s):
     m = re.match(r'^0*(\d+)$', s)
     return m.group(1) if m else s
 
+def _es_duplicado_pedido_num(exc) -> bool:
+    """(v12.33.07) True si `exc` es el rechazo del índice único de Nº de pedido por hotel (error 23505 de Postgres)."""
+    return getattr(exc, "pgcode", None) == "23505" and _IDX_PEDIDO_NUM_UNICO in str(exc)
+
 def _detectar_pedido_num_duplicado(hotel_id, pedido_num, excluir_pedido_id=None):
     """
     (2026-09-06, v12.32.36) Comprueba si `pedido_num` ya está registrado en
@@ -11399,15 +11429,15 @@ def _detectar_pedido_num_duplicado(hotel_id, pedido_num, excluir_pedido_id=None)
     num_norm = _normalizar_pedido_num(pedido_num)
     if not num_norm or not hotel_id:
         return None
-    sql = "SELECT id, norden, estado, pedido_num FROM pedidos WHERE hotel_id=%s AND pedido_num IS NOT NULL AND pedido_num != ''"
-    params = [hotel_id]
+    # (v12.33.07) Comparación en SQL con la misma normalización del índice único (usa ese índice, sin cargar todos los pedidos).
+    sql = (f"SELECT id, norden, estado, pedido_num FROM pedidos WHERE hotel_id=%s AND {_SQL_PEDIDO_NUM_FILTRO} "
+           f"AND ({_SQL_PEDIDO_NUM_NORM}) = %s")
+    params = [hotel_id, num_norm]
     if excluir_pedido_id:
         sql += " AND id != %s"
         params.append(excluir_pedido_id)
-    for f in rows_to_list(query(sql, tuple(params))):
-        if _normalizar_pedido_num(f["pedido_num"]) == num_norm:
-            return f
-    return None
+    sql += " ORDER BY id LIMIT 1"
+    return row_to_dict(query(sql, tuple(params), one=True))
 
 def _normalizar_num_albaran(s):
     """
@@ -15251,6 +15281,15 @@ def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: di
             })
             continue
         try:
+            # (v12.33.07) Red de seguridad anti-duplicados: justo antes de insertar se vuelve a comprobar que ese Nº de
+            # pedido no exista ya en este hotel (otra carga, otra pestaña o un alta a mano pudieron crearlo mientras tanto).
+            _dup_sap = _detectar_pedido_num_duplicado(hotel_id, fila["pedido_num_sap"])
+            if _dup_sap:
+                omitidos.append({
+                    "pedido_num_sap": num,
+                    "motivo": f"Ya existe en la aplicación (Nº interno {_dup_sap['norden']}, estado «{_dup_sap['estado']}») — no se duplica",
+                })
+                continue
             norden = _next_norden(db)
             fecha_tramitacion        = _parsear_fecha_es_a_iso(fila.get("fecha_pedido"))
             fecha_entrega_especifica = _parsear_fecha_es_a_iso(fila.get("fecha_entrega"))
@@ -15331,6 +15370,14 @@ def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: di
                 "norden": norden, "estado": estado_inicial,
             })
         except Exception as exc:
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            if _es_duplicado_pedido_num(exc):   # (v12.33.07) lo frenó el índice único: otra carga lo creó a la vez
+                omitidos.append({"pedido_num_sap": num,
+                                 "motivo": "Ya existe en la aplicación (creado a la vez por otra carga) — no se duplica"})
+                continue
             log.exception("[CREAR-DESDE-SAP] Error creando pedido %s: %s", num, exc)
             errores.append({"pedido_num_sap": num, "error": str(exc)})
 
@@ -20199,6 +20246,7 @@ def reset_e_importar():
 
         errores = []
         filas_validas = []
+        _vistos_imp = set()   # (v12.33.07) (hotel, Nº pedido normalizado) ya importados en este archivo
 
         # Numeración correlativa desde 1 (reset completo)
         year = datetime.now().year
@@ -20221,6 +20269,15 @@ def reset_e_importar():
 
             estado_raw = col(row, "ESTADO")
             estado = estado_raw if estado_raw in ESTADOS_VALIDOS else "PENDIENTE FIRMA DIRECCION COMPRAS"
+
+            # (v12.33.07) Anti-duplicados: un Nº de pedido ya visto en este archivo no se importa dos veces.
+            _num_imp = _normalizar_pedido_num(col(row, "PEDIDO Nº"))
+            if _num_imp:
+                _clave_imp = (hotel_id, _num_imp)
+                if _clave_imp in _vistos_imp:
+                    errores.append(f"Fila {i}: pedido Nº {col(row, 'PEDIDO Nº')} repetido en este hotel del archivo — fila omitida")
+                    continue
+                _vistos_imp.add(_clave_imp)
 
             # norden siempre correlativo desde 1, independiente del Excel
             filas_validas.append({
@@ -20377,6 +20434,9 @@ def importar_excel():
 
         errores = []
         filas_validas = []
+        # (v12.33.07) Nºs de pedido que YA existen en la aplicación (por hotel, normalizados): no se vuelven a importar.
+        _vistos_imp = {(r["hotel_id"], r["n"]) for r in rows_to_list(query(
+            f"SELECT hotel_id, ({_SQL_PEDIDO_NUM_NORM}) AS n FROM pedidos WHERE {_SQL_PEDIDO_NUM_FILTRO}"))}
 
         # 1. Obtener norden base en UNA sola query
         year = datetime.now().year
@@ -20406,6 +20466,15 @@ def importar_excel():
 
             estado_raw = col(row, "ESTADO")
             estado = estado_raw if estado_raw in ESTADOS_VALIDOS else "PENDIENTE FIRMA DIRECCION COMPRAS"
+
+            # (v12.33.07) Anti-duplicados: un Nº de pedido ya visto en este archivo o ya registrado en la aplicación no se importa dos veces.
+            _num_imp = _normalizar_pedido_num(col(row, "PEDIDO Nº"))
+            if _num_imp:
+                _clave_imp = (hotel_id, _num_imp)
+                if _clave_imp in _vistos_imp:
+                    errores.append(f"Fila {i}: pedido Nº {col(row, 'PEDIDO Nº')} repetido en este hotel (ya existe en la aplicación o está repetido en el archivo) — fila omitida")
+                    continue
+                _vistos_imp.add(_clave_imp)
 
             filas_validas.append({
                 "norden": base_norden + len(filas_validas),
@@ -22624,6 +22693,13 @@ def server_error(e):
 @app.errorhandler(Exception)
 def unhandled_exception(e):
     import traceback
+    if _es_duplicado_pedido_num(e):   # (v12.33.07) el candado de la base de datos frenó un duplicado
+        try:
+            get_db().rollback()
+        except Exception:
+            pass
+        return jsonify({"ok": False, "error": "Ese Nº de pedido ya está registrado en otro pedido de este hotel. "
+                                              "No se ha guardado nada: revisa que no sea un pedido dado de alta dos veces."}), 409
     app.logger.error("Excepción no capturada:\n" + traceback.format_exc())
     if request.path.startswith("/api/"):
         return jsonify({"ok": False, "error": f"Error inesperado: {str(e)}"}), 500

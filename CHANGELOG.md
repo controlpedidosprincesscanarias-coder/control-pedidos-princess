@@ -1,3 +1,22 @@
+# v12.33.07 — 9 octubre 2026
+
+🏷️ Candado anti-duplicados de Nº de pedido en la base de datos, también en la creación automática y en la importación Excel
+
+**Petición de Víctor**: confirmar que la protección contra pedidos duplicados también cubre los pedidos automáticos, y verificar con SQL en Supabase que no hay duplicados (resultado: 0 duplicados en las tres consultas).
+
+**Hallazgo**: la protección era solo de aplicación (al enviar al proveedor y al subir el PDF oficial); no había índice único en la base de datos, la creación automática no volvía a comprobar justo antes de insertar (dos cargas simultáneas podían duplicar) y la importación Excel no comprobaba el Nº de pedido.
+
+**Cambios** (`app.py`):
+- Índice único `pedidos_hotel_pedido_num_norm_uk` sobre (hotel, Nº de pedido normalizado: sin ceros a la izquierda, sin espacios, mayúsculas), solo para pedidos con Nº. Se crea al arrancar únicamente si no hay duplicados (si los hubiera, aviso en el log y reintento en el siguiente arranque; nunca borra ni toca pedidos). Los pedidos sin Nº no se ven afectados.
+- `_detectar_pedido_num_duplicado` ahora compara en SQL con la misma normalización (usa el índice, sin cargar todos los pedidos del hotel).
+- Creación automática (`_crear_pedidos_sap_lote`): comprobación justo antes de insertar y, si aun así otra carga lo creó a la vez, el índice lo frena y el pedido se anota como «omitido: ya existe», sin error.
+- Importación Excel (`/api/importar` y `/api/importar/reset`): se omiten, con aviso por fila, los Nº repetidos en el archivo y (en la importación normal) los que ya existen en la aplicación.
+- Manejador global: si el índice frena un duplicado en cualquier otro camino (p. ej. dos subidas del mismo PDF a la vez), respuesta 409 con mensaje claro en vez de error interno.
+
+**Pruebas** (Postgres real): detección con ceros/espacios/minúsculas; la BD rechaza el duplicado; varios pedidos sin Nº conviven; lote automático omite el existente (con y sin precheck); Excel (existente, repetido, sin Nº); índice no se crea con duplicados y sí al limpiarlos; regresión de «Regularizar» (292/292).
+
+---
+
 # v12.33.06 — 9 octubre 2026
 
 🏷️ Pedidos automáticos: se completa el departamento desde SAP (también en los ya creados) y se avisa de los que no se pueden

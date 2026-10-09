@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Candado anti-duplicados de Nº de pedido en la base de datos (v12.33.07)
+
+Índice único (hotel, Nº de pedido normalizado) creado al arrancar si no hay duplicados; comprobación previa en la creación automática y en la importación Excel; manejador global 409. Detalle y pruebas en `CHANGELOG.md` (v12.33.07). Documentos revisados: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica (no cambia despliegue ni restauración; el índice se crea solo).
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Departamento de los pedidos automáticos desde SAP (v12.33.06)
 
 - **Corrección**: `_completar_departamentos_sap_hotel` asigna el departamento (código del listado o de las líneas del detallado) a los pedidos automáticos que lo tengan vacío; se llama en alta, carga, regularización y apertura; avisos de lo que quede sin departamento.
