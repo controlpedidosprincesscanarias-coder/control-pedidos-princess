@@ -1,3 +1,16 @@
+# v12.32.93 — 9 octubre 2026
+
+🎨 Ficha del pedido: la tabla de líneas ocupa todo el ancho del modal
+
+**Petición de Víctor**: aprovechar el espacio libre a la derecha de «Referencias DALI / SAP» y dedicarlo al contenido del pedido (referencias y cantidades).
+
+**Cambios** (`templates/index.html`, solo maquetación):
+- La tabla «📦 Líneas del pedido» deja de estar dentro de la columna izquierda de «Nº Pedido» y pasa a una fila propia **a todo el ancho** del modal (`#pedido-lineas-panel`, `grid-column:1/-1`). Las descripciones ya no se parten en 4-5 líneas.
+- «Nº Pedido» (con el botón del PDF) ocupa a la izquierda el alto de «Nº Presupuesto» + «Total Pedido», que van apilados a su derecha — desaparece el hueco vacío (`.fg-pedido-num`).
+- Altura máxima de la tabla 260 px → `min(420px, 48vh)` y filas más compactas.
+- Vista del rol **hotel** («Actualizar Nº Entrada DALI / SAP»): «Nº Pedido» pasa a ocupar la fila completa y la tabla también va a todo el ancho. El panel no es un `.form-group`, así que `_applyHotelRolePedidoModal()` no lo oculta.
+- Badge `V 12.32.92` → `V 12.32.93`; README: línea de versión. Sin cambios de backend ni migración.
+
 # v12.32.92 — 8 octubre 2026
 
 🔧 Líneas del PDF oficial: Cantidad y Precio pegados en una sola palabra (pedido 16756, Cube Root Cards)

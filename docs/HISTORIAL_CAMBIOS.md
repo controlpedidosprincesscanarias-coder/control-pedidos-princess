@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-09 — [Control Pedidos] Ficha del pedido: tabla de líneas a todo el ancho (v12.32.93)
+
+- **Origen**: Víctor: aprovechar el espacio libre a la derecha en la ficha y ocuparlo con el contenido del pedido.
+- **Hallazgo**: la tabla de líneas estaba dentro de la columna izquierda (media anchura) y la derecha quedaba vacía bajo «Total Pedido».
+- **Corrección**: tabla en fila propia a todo el ancho; «Nº Pedido» a la izquierda a doble altura con «Nº Presupuesto» y «Total Pedido» apilados a la derecha; rol hotel con «Nº Pedido» a fila completa (ver CHANGELOG v12.32.93).
+- **Ficheros editados en este repo**: `templates/index.html`, `README.md`, `CHANGELOG.md`, `docs/HISTORIAL_CAMBIOS.md`.
+- **Otros documentos (norma 5)**: sin variables ni SQL; resto: no aplica.
+- **Pendiente / ideas**: ensanchar el modal cuando el pedido tiene muchas líneas; comparar líneas del PDF con los listados SAP (ver conversación sobre automatización de entregas).
+
+---
+
 ## 2026-10-08 — [Control Pedidos] Líneas del PDF oficial: cantidad y precio pegados (v12.32.92)
 
 - **Origen**: Víctor: el PDF del pedido 16756 (Cube Root Cards) no leía las líneas (aviso de fiabilidad).

@@ -462,6 +462,10 @@ tbody tr:last-child{border-bottom:none}
 .form-grid.cols-3{grid-template-columns:1fr 1fr 1fr}
 .form-group{display:flex;flex-direction:column;gap:5px;min-width:0;overflow:visible}
 .form-group.full{grid-column:1/-1}
+/* (v12.32.93) «Nº Pedido» ocupa el alto de «Nº Presupuesto» + «Total Pedido», que van apilados a su derecha;
+   la tabla de líneas del pedido va debajo, a todo el ancho del modal. */
+.form-group.fg-pedido-num{grid-row:span 2}
+#pedido-lineas-panel td{padding:5px 6px;vertical-align:middle}
 .form-label{font-size:12px;font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:.05em}
 .form-control{
   padding:9px 12px;border:1px solid var(--border);border-radius:7px;
@@ -1425,7 +1429,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.32.92
+          V 12.32.93
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2529,7 +2533,7 @@ tbody tr:last-child{border-bottom:none}
 
         <!-- Referencias DALI / SAP -->
         <div class="form-section">Referencias DALI / SAP</div>
-        <div class="form-group">
+        <div class="form-group fg-pedido-num">
           <label class="form-label" title="Se rellena solo al adjuntar el PDF del pedido oficial PRINCESS (SAP/DALI) — no se puede escribir a mano.">
             Nº Pedido (DALI / SAP)
             <span style="font-size:10px;color:#888;font-weight:400"> (automático)</span>
@@ -2544,8 +2548,6 @@ tbody tr:last-child{border-bottom:none}
             Solo se admite el PDF de pedido oficial PRINCESS (el que genera SAP/DALI, con el mismo formato siempre) — al adjuntarlo, la app lee sola el Nº de Pedido, el Total Pedido y las líneas del pedido (códigos, referencias, cantidades y precios).
           </div>
           <div id="adj-pedido-list" class="adj-fecha-list"></div>
-          <!-- (v12.32.75) Líneas del pedido leídas del PDF oficial: código, referencia del proveedor, descripción, cantidad, precio e importe -->
-          <div id="pedido-lineas-panel" style="display:none;margin-top:8px"></div>
         </div>
         <div class="form-group" id="presupuesto-section">
           <label class="form-label">Nº Presupuesto</label>
@@ -2575,6 +2577,10 @@ tbody tr:last-child{border-bottom:none}
             Se rellena al adjuntar el PDF del pedido oficial (suma de las líneas de importe) y se corrige solo, si hiciera falta, al comparar el "Listado de Pedidos" PDF de SAP.
           </div>
         </div>
+        <!-- (v12.32.75 → v12.32.93) Líneas del pedido leídas del PDF oficial: código, referencia del proveedor, descripción, cantidad, precio e importe.
+             Fila propia a todo el ancho del modal (antes iba dentro de la columna izquierda de «Nº Pedido»).
+             No es un .form-group a propósito: así _applyHotelRolePedidoModal() no la oculta al rol hotel. -->
+        <div id="pedido-lineas-panel" style="display:none;grid-column:1/-1"></div>
 
         <!-- Nº Entrada DALI / SAP con checkboxes y lista dinámica -->
         <div class="form-group full" id="albaran-section">
@@ -5596,6 +5602,8 @@ function _applyHotelRolePedidoModal(isEdit) {
       const hasPedidoNum = el.querySelector('#p-pedido-num');
       if (!hasAlbaran && !hasEstado && !hasPedidoNum) el.style.display = 'none';
     });
+    // (v12.32.93) Sin Presupuesto/Total a su derecha, «Nº Pedido» pasa a ocupar la fila completa.
+    modal.querySelectorAll('.fg-pedido-num').forEach(el => { el.style.gridColumn = '1/-1'; el.style.gridRow = 'auto'; });
     // Ocultar form-section headers excepto el de Referencias DALI / SAP
     modal.querySelectorAll('.form-section').forEach(el => {
       if (el.textContent.trim() !== 'Referencias DALI / SAP') el.style.display = 'none';
@@ -5649,6 +5657,7 @@ function _applyHotelRolePedidoModal(isEdit) {
     // Restaurar visibilidad para otros roles
     const modal = document.getElementById('modal-pedido');
     modal.querySelectorAll('.form-group').forEach(el => el.style.display = '');
+    modal.querySelectorAll('.fg-pedido-num').forEach(el => { el.style.gridColumn = ''; el.style.gridRow = ''; });
     modal.querySelectorAll('.form-section').forEach(el => el.style.display = '');
     // (2026-08-28) p-pedido-num ya NO se restaura a editable aquí: se
     // queda siempre en solo lectura (atributo `readonly` puesto en el
@@ -7174,7 +7183,7 @@ async function cargarLineasPedido(forzar = false) {
     <summary style="cursor:pointer;padding:6px 8px;font-size:12px;font-weight:600;color:var(--navy2)">
       📦 Líneas del pedido (${n})${verPrecios && d.total_importe != null ? ` — ${num(d.total_importe, 2)} €` : ''}
     </summary>
-    <div style="max-height:260px;overflow:auto;padding:0 6px 6px">
+    <div style="max-height:min(420px,48vh);overflow:auto;padding:0 6px 6px">
       <table style="width:100%;border-collapse:collapse;font-size:11px">
         <thead><tr style="position:sticky;top:0;background:#eef2f9;text-align:left">
           <th style="padding:3px 4px">Código</th><th style="padding:3px 4px">Ref. Prov.</th><th style="padding:3px 4px">Descripción</th>
