@@ -1068,6 +1068,11 @@ def _auto_migrate():
                 cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS departamento_pdf_detectado TEXT")
             except Exception as e:
                 log.warning(f"No se pudieron añadir las columnas pedidos.proveedor_pdf_codigo/proveedor_pdf_nombre/departamento_pdf_detectado: {e}")
+            # (v12.33.08) Departamento que el usuario ha decidido mantener a pesar de no coincidir con el Almacén del PDF.
+            try:
+                cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS departamento_pdf_aceptado_id INTEGER")
+            except Exception as e:
+                log.warning(f"No se pudo añadir pedidos.departamento_pdf_aceptado_id: {e}")
             # ── HOTEL/CENTRO leído del PDF oficial — v12.32.38 (petición de
             # Víctor: "¿se verifica que el hotel es el correcto contra el PDF
             # subido? También evitaría registrar un pedido a un hotel
@@ -18635,11 +18640,15 @@ def _validar_pedido_envio_proveedor(pedido_actual, pid, departamento_id, hotel_i
             _norm_pdf = _normalizar_texto_generico(_almacen_pdf_val)
             _norm_dep = _normalizar_texto_generico(_depto_nombre_val or "")
             _coincide = bool(_norm_dep) and (_norm_pdf == _norm_dep or _norm_pdf in _norm_dep or _norm_dep in _norm_pdf)
+        # (v12.33.08) Si el usuario ya decidió mantener ESTE departamento aunque no coincida con el Almacén del PDF
+        # (pregunta «¿cuál dejo?»), no se vuelve a bloquear; si cambia de departamento, se vuelve a preguntar.
+        if not _coincide and departamento_id and str(pedido_actual.get("departamento_pdf_aceptado_id") or "") == str(departamento_id):
+            _coincide = True
         if not _coincide:
             errores_envio.append(
                 f"El Departamento seleccionado (« {_depto_nombre_val or 'ninguno'} ») no coincide con el "
-                f"Almacén indicado en el PDF del pedido oficial («{_almacen_pdf_val}»). Corrija el "
-                f"Departamento antes de pasar a ENVIADO AL PROVEEDOR."
+                f"Almacén indicado en el PDF del pedido oficial («{_almacen_pdf_val}»). Elija cuál dejar "
+                f"(el del PDF o el indicado a mano) antes de pasar a ENVIADO AL PROVEEDOR."
             )
 
     # 0d. Hotel vs. "HOTEL/CENTRO" leído del PDF oficial — (2026-09-06,
@@ -22067,6 +22076,44 @@ def leer_lineas_pendientes():
     return jsonify({"ok": True, "procesados": len(pend), "con_lineas": con, "sin_lineas": sin, "pendientes": int(restantes)})
 
 
+@app.route("/api/pedidos/<int:pid>/departamento-pdf", methods=["POST"])
+@login_required
+def decidir_departamento_pdf(pid):
+    """(v12.33.08) El Departamento indicado a mano no coincide con el Almacén del PDF oficial: el usuario decide cuál dejar.
+    accion='manual' → se mantiene el departamento indicado (queda registrado y ya no se bloquea mientras no lo cambie);
+    accion='pdf'    → se usa el del PDF (se guarda en el pedido) y se borra cualquier decisión anterior."""
+    if session.get("rol") == "hotel":
+        return jsonify({"ok": False, "error": "Sin permiso"}), 403
+    ped = query("SELECT id, hotel_id, departamento_id FROM pedidos WHERE id=%s", (pid,), one=True)
+    if not ped:
+        return jsonify({"ok": False, "error": "Pedido no encontrado"}), 404
+    if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(ped["hotel_id"]):
+        return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
+    data = request.get_json(silent=True) or {}
+    accion = data.get("accion")
+    try:
+        depto_id = int(data.get("departamento_id"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Falta el departamento"}), 400
+    if not query("SELECT 1 FROM departamentos WHERE id=%s", (depto_id,), one=True):
+        return jsonify({"ok": False, "error": "Departamento no encontrado"}), 404
+    uid = current_user_id()
+    nombre = session.get("nombre")
+    if accion == "manual":
+        execute("UPDATE pedidos SET departamento_pdf_aceptado_id=%s WHERE id=%s", (depto_id, pid))
+        nota = "Departamento no coincide con el Almacén del PDF: se mantiene el indicado manualmente"
+    elif accion == "pdf":
+        execute("UPDATE pedidos SET departamento_id=%s, departamento_pdf_aceptado_id=NULL, "
+                "modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW() WHERE id=%s",
+                (depto_id, uid, nombre, pid))
+        nota = "Departamento no coincide con el Almacén del PDF: se usa el del PDF"
+    else:
+        return jsonify({"ok": False, "error": "Acción no válida"}), 400
+    log.info("[DEPTO-PDF] Pedido %s: %s (usuario %s)", pid, nota, nombre)
+    get_db().commit()
+    return jsonify({"ok": True, "departamento_id": depto_id, "accion": accion})
+
+
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
 @login_required
 def get_adjuntos(pid):
@@ -22348,7 +22395,7 @@ def upload_adjunto(pid):
         execute(
             "UPDATE pedidos SET pedido_num=%s, total_pedido=%s, total_pedido_aproximado=FALSE, "
             "proveedor_id=%s, proveedor_pdf_codigo=%s, proveedor_pdf_nombre=%s, departamento_pdf_detectado=%s, "
-            "hotel_pdf_detectado=%s "
+            "hotel_pdf_detectado=%s, departamento_pdf_aceptado_id=NULL "
             "WHERE id=%s",
             (_datos_pedido_pdf["pedido_num"], _datos_pedido_pdf["total_pedido"],
              _prov_resuelto["id"] if _prov_resuelto else None, _prov_codigo_pdf, _prov_nombre_pdf, _almacen_pdf,

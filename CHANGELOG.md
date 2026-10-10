@@ -1,3 +1,20 @@
+# v12.33.08 — 10 octubre 2026
+
+🏷️ Departamento que no coincide con el PDF oficial: en vez de bloquear, se pregunta cuál dejar
+
+**Petición de Víctor**: al crear un pedido a mano y cargar el PDF, si el departamento indicado manualmente no coincide con el del PDF, la app no dejaba guardar. Debe preguntar al usuario si quiere dejar el del PDF o el indicado a mano (a menudo el manual es más útil para el archivo).
+
+**Cambios** (`app.py`, `templates/index.html`):
+- Al subir el PDF oficial, si el departamento seleccionado no coincide con el Almacén del PDF, aparece la pregunta «¿Cuál quieres dejar?» con tres opciones: el del PDF, el indicado a mano o decidir más tarde. Si no había departamento, se rellena solo con el del PDF.
+- Al pasar a ENVIADO AL PROVEEDOR, si sigue sin coincidir y no se ha decidido, se vuelve a preguntar en vez de bloquear con error; si se elige, continúa el guardado con el departamento elegido.
+- Aviso amarillo del formulario con botón «Elegir cuál dejar».
+- Nueva columna `pedidos.departamento_pdf_aceptado_id` y endpoint `POST /api/pedidos/<id>/departamento-pdf` (accion `pdf` o `manual`). Si se mantiene el manual, queda registrado y la validación del backend ya no bloquea ese departamento; si luego se cambia de departamento, se vuelve a preguntar. Un PDF nuevo anula la decisión anterior.
+- Lo de Hotel vs. HOTEL/CENTRO del PDF no cambia (sigue bloqueando).
+
+**Pruebas** (Postgres real + Playwright): pregunta tras la subida, opción manual (queda guardada y desaparece el aviso), cambio de departamento (el aviso vuelve), opción PDF (cambia el desplegable y la BD), «decidir más tarde», y validación del backend sin decisión / con decisión / con decisión de otro departamento.
+
+---
+
 # v12.33.07 — 9 octubre 2026
 
 🏷️ Candado anti-duplicados de Nº de pedido en la base de datos, también en la creación automática y en la importación Excel

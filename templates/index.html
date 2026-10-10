@@ -1438,7 +1438,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.07
+          V 12.33.08
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6071,6 +6071,11 @@ async function subirAdjuntos(input, tipo) {
             hotel_pdf: data.hotel_pdf,
             hotel_nombre_actual: _nombreHotelPorId(document.getElementById('p-hotel').value),
           });
+          if (G.currentPedidoData) {   // (v12.33.08) el PDF nuevo anula la decisión anterior sobre el departamento
+            G.currentPedidoData.departamento_pdf_detectado = data.departamento_pdf || null;
+            G.currentPedidoData.departamento_pdf_aceptado_id = null;
+          }
+          await _resolverDeptoPdfTrasSubida(data.departamento_pdf);
           if (data.proveedor_reconocido) {
             toast(`Proveedor reconocido — ${data.proveedor_nombre}`, 'success');
           } else if (data.proveedor_pdf_codigo) {
@@ -6375,6 +6380,84 @@ function _normalizarNombreHotelJs(s) {
 // justo después de subir el PDF (subirAdjuntos) como cada vez que se abre
 // un pedido ya existente (poblarFormulario más arriba) — el problema
 // persiste hasta que alguien lo resuelva, no solo en el momento de subir.
+// (v12.33.08) Departamento indicado a mano vs. Almacén del PDF oficial: en vez de bloquear, se pregunta cuál dejar.
+function _deptoCoincidePdfJs(almacenPdf, nombreActual, hotelId) {
+  const esperado = _resolverDepartamentoAlmacenPdfJs(almacenPdf, hotelId);
+  const normDep = _normalizarTextoGenericoJs(nombreActual || '');
+  if (esperado) return normDep === _normalizarTextoGenericoJs(esperado);
+  const normPdf = _normalizarTextoGenericoJs(almacenPdf || '');
+  return !!normDep && (normPdf === normDep || normPdf.includes(normDep) || normDep.includes(normPdf));
+}
+// ¿El usuario ya decidió mantener el departamento que hay ahora seleccionado aunque no coincida con el PDF?
+function _deptoPdfAceptadoVigente() {
+  const sel = document.getElementById('p-depto');
+  const aceptado = G.currentPedidoData && G.currentPedidoData.departamento_pdf_aceptado_id;
+  return !!(aceptado && sel && sel.value && String(aceptado) === String(sel.value));
+}
+// Opción del desplegable de Departamento que corresponde al Almacén del PDF (o null si no existe para este hotel).
+function _opcionDeptoDelPdf(almacenPdf) {
+  const sel = document.getElementById('p-depto');
+  if (!sel || !almacenPdf) return null;
+  const hotelId = document.getElementById('p-hotel') ? document.getElementById('p-hotel').value : '';
+  const esperado = _resolverDepartamentoAlmacenPdfJs(almacenPdf, hotelId);
+  const normPdf = _normalizarTextoGenericoJs(esperado || almacenPdf);
+  const opts = Array.from(sel.options).filter(o => o.value);
+  let o = opts.find(x => _normalizarTextoGenericoJs(x.textContent.trim()) === normPdf);
+  if (!o && !esperado) o = opts.find(x => { const n = _normalizarTextoGenericoJs(x.textContent.trim()); return n && (normPdf.includes(n) || n.includes(normPdf)); });
+  return o || null;
+}
+// Pregunta «¿cuál dejo?». Devuelve true si el usuario decidió (PDF o manual), false si lo deja para más tarde.
+function _preguntarDepartamentoPdf(almacenPdf) {
+  return new Promise(resolve => {
+    const sel = document.getElementById('p-depto');
+    const pedidoId = G.editingPedidoId;
+    if (!sel || !pedidoId || !almacenPdf) { resolve(true); return; }
+    const nombreManual = (sel.value && sel.selectedOptions.length) ? sel.selectedOptions[0].textContent.trim() : '';
+    const opcionPdf = _opcionDeptoDelPdf(almacenPdf);
+    const decidir = async (accion) => {
+      let deptoId;
+      if (accion === 'pdf') { sel.value = opcionPdf.value; }
+      deptoId = sel.value;
+      const r = await api(`/api/pedidos/${pedidoId}/departamento-pdf`, 'POST', { accion, departamento_id: deptoId });
+      if (!r || r.error || r.ok === false) { showFormAlert((r && r.error) || 'No se pudo guardar la decisión'); return false; }
+      if (G.currentPedidoData) G.currentPedidoData.departamento_pdf_aceptado_id = accion === 'manual' ? Number(deptoId) : null;
+      if (typeof _revisarDepartamentoTrasCambio === 'function') _revisarDepartamentoTrasCambio();
+      toast(accion === 'pdf' ? `Departamento: se usa el del PDF (${opcionPdf.textContent.trim()})`
+                              : `Departamento: se mantiene el indicado a mano (${nombreManual})`, 'success');
+      return true;
+    };
+    const ov = document.createElement('div');
+    ov.className = 'modal-overlay open'; ov.style.zIndex = 1200;
+    ov.innerHTML = `<div class="modal" style="width:min(560px,94vw)"><div class="modal-header"><div class="modal-title">🏷️ El departamento no coincide con el PDF</div></div>
+      <div class="modal-body" style="font-size:13px">El departamento indicado a mano es <strong>${esc(nombreManual || 'ninguno')}</strong> y el PDF del pedido oficial trae el almacén <strong>${esc(almacenPdf)}</strong>.<br><br>
+      ¿Cuál quieres dejar en el pedido?${opcionPdf ? '' : `<br><br><em style="color:#a94442">«${esc(almacenPdf)}» no existe como departamento en el desplegable de este hotel; solo puedes mantener el indicado a mano.</em>`}</div>
+      <div class="modal-footer" style="flex-wrap:wrap;gap:6px">
+        <button class="btn btn-ghost" id="dp-luego">Decidir más tarde</button>
+        <button class="btn btn-ghost" id="dp-pdf" ${opcionPdf ? '' : 'disabled'}>📄 El del PDF${opcionPdf ? ` (${esc(opcionPdf.textContent.trim())})` : ''}</button>
+        <button class="btn btn-gold" id="dp-manual" ${nombreManual ? '' : 'disabled'}>✍️ El indicado a mano${nombreManual ? ` (${esc(nombreManual)})` : ''}</button></div></div>`;
+    document.body.appendChild(ov);
+    const cerrar = async (accion) => { ov.querySelectorAll('button').forEach(b => b.disabled = true); const ok = await decidir(accion); ov.remove(); resolve(ok); };
+    ov.querySelector('#dp-pdf').onclick = () => cerrar('pdf');
+    ov.querySelector('#dp-manual').onclick = () => cerrar('manual');
+    ov.querySelector('#dp-luego').onclick = () => { ov.remove(); resolve(false); };
+  });
+}
+// Tras subir el PDF oficial: si el departamento a mano no coincide, pregunta; si no había ninguno, usa el del PDF.
+async function _resolverDeptoPdfTrasSubida(almacenPdf) {
+  if (!almacenPdf) return;
+  const sel = document.getElementById('p-depto');
+  if (!sel) return;
+  const hotelId = document.getElementById('p-hotel') ? document.getElementById('p-hotel').value : '';
+  const nombre = (sel.value && sel.selectedOptions.length) ? sel.selectedOptions[0].textContent.trim() : '';
+  if (nombre && _deptoCoincidePdfJs(almacenPdf, nombre, hotelId)) return;
+  if (!nombre) {
+    const o = _opcionDeptoDelPdf(almacenPdf);
+    if (o) { sel.value = o.value; _revisarDepartamentoTrasCambio(); toast(`Departamento rellenado con el del PDF (${o.textContent.trim()})`, 'success'); }
+    return;
+  }
+  await _preguntarDepartamentoPdf(almacenPdf);
+}
+
 function _mostrarAvisoProveedorPdf(info) {
   // Se guarda para poder recalcular solo la parte de Departamento/Hotel
   // cuando el usuario cambie el desplegable correspondiente (ver
@@ -6411,11 +6494,11 @@ function _mostrarAvisoProveedorPdf(info) {
       const normPdf = _normalizarTextoGenericoJs(info.departamento_pdf);
       coincide = !!normDep && (normPdf === normDep || normPdf.includes(normDep) || normDep.includes(normPdf));
     }
-    if (!coincide) {
+    if (!coincide && !_deptoPdfAceptadoVigente()) {
       avisos.push(
         `⚠️ El Departamento seleccionado («${esc(info.departamento_nombre_actual || 'ninguno')}») no coincide `
         + `con el Almacén indicado en el PDF del pedido oficial («${esc(info.departamento_pdf)}»). `
-        + `Corríjalo antes de pasar a ENVIADO AL PROVEEDOR.`
+        + `<button type="button" class="btn btn-ghost btn-sm" onclick="_preguntarDepartamentoPdf(G.avisoProveedorInfo && G.avisoProveedorInfo.departamento_pdf)">Elegir cuál dejar</button>`
       );
     }
   }
@@ -7811,7 +7894,7 @@ async function savePedido() {
   // ── Fin modo Hotel ────────────────────────────────────────────────────
 
   const hotel = document.getElementById('p-hotel').value;
-  const depto = document.getElementById('p-depto').value;
+  let depto = document.getElementById('p-depto').value;
   if (!hotel) { showFormAlert('Selecciona un hotel para poder guardar el pedido.'); return; }
 
   // Validar nota obligatoria si se cambia desde CANCELADO, o si el destino
@@ -7896,13 +7979,15 @@ async function savePedido() {
         const _normDep = _normalizarTextoGenericoJs(_deptoNombreActual);
         _coincideDepto = !!_normDep && (_normPdf === _normDep || _normPdf.includes(_normDep) || _normDep.includes(_normPdf));
       }
-      if (!_coincideDepto) {
-        showFormAlert(
-          `El Departamento seleccionado («${_deptoNombreActual || 'ninguno'}») no coincide con el Almacén `
-          + `indicado en el PDF del pedido oficial («${_almacenPdf}»). Corrija el Departamento antes de continuar.`,
-          { title: '⚠️ No se puede continuar', duracion: 9000 }
-        );
-        return;
+      if (!_coincideDepto && !_deptoPdfAceptadoVigente()) {
+        // (v12.33.08) En vez de bloquear: se pregunta cuál dejar (el del PDF o el indicado a mano).
+        const _decidido = await _preguntarDepartamentoPdf(_almacenPdf);
+        if (!_decidido) {
+          showFormAlert('Para pasar a ENVIADO AL PROVEEDOR elige qué departamento dejar: el del PDF («' + _almacenPdf
+            + '») o el indicado a mano.', { title: '⚠️ Falta decidir el departamento', duracion: 9000 });
+          return;
+        }
+        depto = document.getElementById('p-depto').value;
       }
     }
     // 0d. Hotel vs. "HOTEL/CENTRO" del PDF oficial — (2026-09-06,

@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-10 — [Control Pedidos] Departamento distinto al del PDF oficial: se pregunta cuál dejar (v12.33.08)
+
+Pregunta «PDF o indicado a mano» al subir el PDF y al enviar al proveedor; columna `departamento_pdf_aceptado_id` y endpoint `/api/pedidos/<id>/departamento-pdf`; la validación del backend respeta la decisión. Detalle y pruebas en `CHANGELOG.md` (v12.33.08). Documentos revisados: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica (la columna se crea sola al arrancar).
+
+---
+
 ## 2026-10-09 — [Control Pedidos] Candado anti-duplicados de Nº de pedido en la base de datos (v12.33.07)
 
 Índice único (hotel, Nº de pedido normalizado) creado al arrancar si no hay duplicados; comprobación previa en la creación automática y en la importación Excel; manejador global 409. Detalle y pruebas en `CHANGELOG.md` (v12.33.07). Documentos revisados: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica (no cambia despliegue ni restauración; el índice se crea solo).
