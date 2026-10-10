@@ -1,3 +1,16 @@
+# v12.33.10 — 10 octubre 2026
+
+↕️ Ordenar la ventana «Referencias de la entrada» pulsando el título de una columna
+
+**Petición de Víctor**: poder ordenar esa pantalla pulsando el título de cualquier columna; en texto de la A a la Z y, al pulsar otra vez, de la Z a la A; en números de mayor a menor y al revés.
+
+**Cambios** (`templates/index.html`):
+- Todas las columnas son pulsables: Código, Ref. Prov., Descripción y Ud. (A→Z / Z→A, con números dentro del texto en su orden natural: 2 antes que 10); Pedido, Ya entregado, Esta entrada y Quedan (mayor→menor / menor→mayor); y la casilla ☑ (marcadas primero / sin marcar primero).
+- Flecha ▲/▼ en la columna activa. Los valores vacíos («—») quedan siempre al final y, a igualdad, se respeta el orden original del pedido (también con códigos repetidos).
+- Solo reordena las filas ya dibujadas: no cambia cantidades, marcas, resumen ni lo que se guarda. «Esta entrada» y «Quedan» ordenan por el valor del momento. Al reabrir la ventana vuelve el orden original del pedido.
+
+**Pruebas** (Postgres real + Playwright, pedido de 62 referencias): código A→Z y Z→A, descripción A→Z y Z→A, pedido mayor→menor y menor→mayor, marcadas primero, quedan, resumen idéntico tras ordenar, reapertura con orden original y sin flechas; sin errores de JavaScript.
+
 # v12.33.09 — 10 octubre 2026
 
 🔇 Silencio total de avisos mientras se actualiza la base de datos

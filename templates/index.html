@@ -1440,7 +1440,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.09
+          V 12.33.10
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2488,14 +2488,17 @@ tbody tr:last-child{border-bottom:none}
       </div>
       <div style="max-height:46vh;overflow:auto;border:1px solid #e3e8f0;border-radius:8px">
         <table style="width:100%;border-collapse:collapse;font-size:12px">
-          <thead><tr style="position:sticky;top:0;background:#eef2f9;text-align:left">
-            <th style="padding:5px 6px;width:28px"></th>
-            <th style="padding:5px 6px">Código</th><th style="padding:5px 6px">Ref. Prov.</th><th style="padding:5px 6px">Descripción</th>
-            <th style="padding:5px 6px">Ud.</th>
-            <th style="padding:5px 6px;text-align:right">Pedido</th>
-            <th style="padding:5px 6px;text-align:right" title="Cantidad ya entregada en las OTRAS entradas">Ya entregado</th>
-            <th style="padding:5px 6px;text-align:right;width:110px">Esta entrada</th>
-            <th style="padding:5px 6px;text-align:right">Quedan</th>
+          <!-- (v12.33.10) Clic en el título de cualquier columna = ordenar (texto A→Z / Z→A; números de mayor a menor y al revés). -->
+          <thead id="mel-thead"><tr style="position:sticky;top:0;background:#eef2f9;text-align:left">
+            <th class="mel-th" data-col="chk" onclick="melOrdenar('chk')" title="Ordenar: marcadas primero / sin marcar primero" style="padding:5px 6px;width:28px">☑<span class="mel-flecha"></span></th>
+            <th class="mel-th" data-col="cod" onclick="melOrdenar('cod')" title="Ordenar por código (A→Z / Z→A)" style="padding:5px 6px">Código<span class="mel-flecha"></span></th>
+            <th class="mel-th" data-col="ref" onclick="melOrdenar('ref')" title="Ordenar por referencia del proveedor (A→Z / Z→A)" style="padding:5px 6px">Ref. Prov.<span class="mel-flecha"></span></th>
+            <th class="mel-th" data-col="desc" onclick="melOrdenar('desc')" title="Ordenar por descripción (A→Z / Z→A)" style="padding:5px 6px">Descripción<span class="mel-flecha"></span></th>
+            <th class="mel-th" data-col="ud" onclick="melOrdenar('ud')" title="Ordenar por unidad (A→Z / Z→A)" style="padding:5px 6px">Ud.<span class="mel-flecha"></span></th>
+            <th class="mel-th" data-col="pedido" onclick="melOrdenar('pedido')" title="Ordenar por cantidad pedida (mayor→menor / menor→mayor)" style="padding:5px 6px;text-align:right">Pedido<span class="mel-flecha"></span></th>
+            <th class="mel-th" data-col="ya" onclick="melOrdenar('ya')" title="Cantidad ya entregada en las OTRAS entradas — clic para ordenar" style="padding:5px 6px;text-align:right">Ya entregado<span class="mel-flecha"></span></th>
+            <th class="mel-th" data-col="esta" onclick="melOrdenar('esta')" title="Ordenar por la cantidad de esta entrada (mayor→menor / menor→mayor)" style="padding:5px 6px;text-align:right;width:110px">Esta entrada<span class="mel-flecha"></span></th>
+            <th class="mel-th" data-col="quedan" onclick="melOrdenar('quedan')" title="Ordenar por lo que queda por entregar (mayor→menor / menor→mayor)" style="padding:5px 6px;text-align:right">Quedan<span class="mel-flecha"></span></th>
           </tr></thead>
           <tbody id="mel-tbody"></tbody>
         </table>
@@ -7062,7 +7065,7 @@ function abrirEntregaLineas(row, modoDiferencia = false) {
     const pend = Math.max(0, Math.round((l.pedida - ya) * 10000) / 10000);
     const marcada = (actual[l.codigo] != null) || (sinDetalle && _melModoDif && pend > 0);
     const cant = actual[l.codigo] != null ? actual[l.codigo] : pend;
-    return `<tr data-cod="${esc(l.codigo)}" data-pedida="${l.pedida}" data-ya="${ya}" data-precio="${l.precio == null ? '' : l.precio}" style="border-top:1px solid #eef1f6">
+    return `<tr data-orden="${i}" data-cod="${esc(l.codigo)}" data-pedida="${l.pedida}" data-ya="${ya}" data-precio="${l.precio == null ? '' : l.precio}" style="border-top:1px solid #eef1f6">
       <td style="padding:4px 6px"><input type="checkbox" class="mel-chk" ${marcada ? 'checked' : ''} ${_melSoloLectura ? 'disabled' : ''} onchange="melCambio(this.closest('tr'), true)"></td>
       <td class="monospace" style="padding:4px 6px">${_htmlLinea(l.codigo_vista || l.codigo)}</td>
       <td class="monospace" style="padding:4px 6px">${_htmlLinea(l.ref_proveedor || '—')}</td>
@@ -7076,7 +7079,73 @@ function abrirEntregaLineas(row, modoDiferencia = false) {
   }).join('');
   tb.querySelectorAll('tr').forEach(tr => melCambio(tr, false));
   melResumen();
+  _melOrden = null; _melPintarFlechas();
   openModal('modal-entrega-lineas');
+}
+
+/* ── (v12.33.10) Ordenar la tabla de referencias al pulsar el título de una columna ──
+   Texto (código, ref. prov., descripción, ud.): A→Z y, al pulsar de nuevo, Z→A.
+   Números (pedido, ya entregado, esta entrada, quedan): de mayor a menor y, al pulsar de nuevo, al revés.
+   ☑ (marcadas): primero las marcadas / primero las sin marcar. Los valores vacíos («—») quedan siempre al final
+   y, a igualdad, se mantiene el orden original del pedido. Solo reordena las filas ya dibujadas: no toca
+   cantidades, marcas ni lo que se guarda; al reabrir la ventana vuelve el orden original del pedido. */
+let _melOrden = null;   // { col, dir }  dir: 1 = ascendente, -1 = descendente
+const _MEL_NUMERICAS = ['pedido', 'ya', 'esta', 'quedan'];
+
+function _melValor(tr, col) {
+  const celda = n => (tr.children[n] ? tr.children[n].textContent : '').trim();
+  switch (col) {
+    case 'chk': return tr.querySelector('.mel-chk').checked ? 1 : 0;
+    case 'cod': return celda(1);
+    case 'ref': return celda(2);
+    case 'desc': return celda(3);
+    case 'ud': return celda(4);
+    case 'pedido': return Number(tr.dataset.pedida);
+    case 'ya': return Number(tr.dataset.ya);
+    case 'esta': return parseFloat(tr.querySelector('.mel-cant').value) || 0;
+    case 'quedan': {
+      const esta = tr.querySelector('.mel-chk').checked ? (parseFloat(tr.querySelector('.mel-cant').value) || 0) : 0;
+      return Number(tr.dataset.pedida) - Number(tr.dataset.ya) - esta;
+    }
+  }
+  return '';
+}
+
+function _melPintarFlechas() {
+  document.querySelectorAll('#mel-thead .mel-th').forEach(th => {
+    const f = th.querySelector('.mel-flecha'); if (!f) return;
+    const activa = _melOrden && _melOrden.col === th.dataset.col;
+    f.textContent = activa ? (_melOrden.dir === 1 ? ' ▲' : ' ▼') : '';
+    th.style.cursor = 'pointer'; th.style.userSelect = 'none';
+    th.style.color = activa ? '#1a3a6b' : '';
+  });
+}
+
+function melOrdenar(col) {
+  const numerica = _MEL_NUMERICAS.includes(col) || col === 'chk';
+  // Primer clic: texto A→Z; números y marcadas de mayor a menor. Segundo clic: al revés.
+  if (_melOrden && _melOrden.col === col) _melOrden = { col, dir: -_melOrden.dir };
+  else _melOrden = { col, dir: numerica ? -1 : 1 };
+  const tb = document.getElementById('mel-tbody');
+  const filas = Array.from(tb.querySelectorAll('tr'));
+  const dir = _melOrden.dir;
+  const vacio = v => v === '' || v === '—' || v === '-';
+  filas.sort((a, b) => {
+    const va = _melValor(a, col), vb = _melValor(b, col);
+    if (typeof va === 'string') {
+      const ea = vacio(va), eb = vacio(vb);
+      if (ea !== eb) return ea ? 1 : -1;                       // vacíos siempre al final
+      if (!ea) {
+        const c = va.localeCompare(vb, 'es', { numeric: true, sensitivity: 'base' });
+        if (c) return c * dir;
+      }
+    } else if (va !== vb) {
+      return (va < vb ? -1 : 1) * dir;
+    }
+    return Number(a.dataset.orden) - Number(b.dataset.orden);   // a igualdad, orden original
+  });
+  filas.forEach(tr => tb.appendChild(tr));
+  _melPintarFlechas();
 }
 
 function _entregadoEnOtras(codigo, numActual) {

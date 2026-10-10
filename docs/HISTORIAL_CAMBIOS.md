@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-10 — [Control Pedidos] Ordenar «Referencias de la entrada» por columnas (v12.33.10)
+
+Petición de Víctor: al pulsar el título de una columna de la ventana de referencias de una entrada se ordena (texto A→Z / Z→A, números mayor→menor / menor→mayor, ☑ marcadas primero). Solo reordena las filas en pantalla, sin tocar cantidades ni lo guardado; vacíos («—») siempre al final y orden original a igualdad. Archivos: `templates/index.html`, `CHANGELOG.md`, este historial, `README.md`. Revisado: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica.
+
+---
+
 ## 2026-10-10 — [Control Pedidos] Silencio total de avisos durante la actualización de la base de datos (v12.33.09)
 
 Petición de Víctor: la pausa del job diario no frenaba los avisos de cambio de estado (correo/Telegram/popup), que salían al instante durante las cargas masivas. Nueva casilla «SILENCIO TOTAL» (`silencio_total_avisos`, Parámetros de Alertas) que corta todos los canales en sus puntos únicos de salida y en el despacho de la cola, detiene los jobs de alertas, descarta al activarla lo ya encolado y muestra un aviso rojo fijo a los administradores. Excepciones: solicitudes de acceso, resúmenes enviados a mano, códigos/restablecimiento de contraseña y alertas del propio sistema (consumo, salud). Archivos: `app.py`, `templates/index.html`, `CHANGELOG.md`, este historial, `README.md`. Revisado: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica.
