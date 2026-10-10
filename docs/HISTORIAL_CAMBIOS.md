@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-10 — [Control Pedidos] Los pedidos eliminados no se recrean con las altas automáticas (v12.33.11)
+
+Petición de Víctor: la carga automática de listados SAP volvía a dar de alta pedidos que ya se habían eliminado (ej. 00041455). Ahora `pedidos_eliminados` guarda también `hotel_id` (rellenado en los registros antiguos), el detector `_pedidos_sap_no_registrados()` excluye los eliminados del hotel, `_crear_pedidos_sap_lote()` los omite con el motivo y la carga unificada avisa de cuáles se han saltado. Alta manual e importación Excel sin cambios. Archivos: `app.py`, `templates/index.html` (solo insignia), `CHANGELOG.md`, este historial, `README.md`. Revisado: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica.
+
+---
+
 ## 2026-10-10 — [Control Pedidos] Ordenar «Referencias de la entrada» por columnas (v12.33.10)
 
 Petición de Víctor: al pulsar el título de una columna de la ventana de referencias de una entrada se ordena (texto A→Z / Z→A, números mayor→menor / menor→mayor, ☑ marcadas primero). Solo reordena las filas en pantalla, sin tocar cantidades ni lo guardado; vacíos («—») siempre al final y orden original a igualdad. Archivos: `templates/index.html`, `CHANGELOG.md`, este historial, `README.md`. Revisado: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica.

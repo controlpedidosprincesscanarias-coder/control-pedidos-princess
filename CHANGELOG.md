@@ -1,3 +1,18 @@
+# v12.33.11 — 10 octubre 2026
+
+🚫 Un pedido eliminado ya no se vuelve a dar de alta automáticamente
+
+**Petición de Víctor**: al cargar listados SAP, la alta automática de pedidos no tenía en cuenta los que se habían eliminado antes (p. ej. el 00041455, eliminado desde «Pedidos eliminados» y recreado como «Alta automática» en la carga siguiente). Un pedido eliminado no debe poder volver a generarse solo.
+
+**Cambios** (`app.py`):
+- `_pedidos_sap_no_registrados()` (el detector de «pedidos de SAP que faltan en la app») ya no incluye los pedidos eliminados de ese hotel: dejan de ser «pendientes de crear» en la carga unificada de listados, en «Crear pedidos desde SAP» y en las comparaciones.
+- `_crear_pedidos_sap_lote()` (único punto que da de alta pedidos desde SAP) los salta también por su cuenta, con el motivo visible: «Fue ELIMINADO el dd/mm/aaaa por X (motivo: …) — no se vuelve a crear automáticamente. Si hace falta, créalo a mano». Así lo frena aunque el navegador traiga una lista desactualizada.
+- La carga unificada de listados añade un aviso: «N pedido(s) de SAP NO se han dado de alta porque fueron eliminados antes (ver «Pedidos eliminados»): …».
+- El cruce se hace por **hotel + Nº de pedido normalizado** (ignora ceros a la izquierda). Para ello `pedidos_eliminados` gana la columna `hotel_id` (se rellena sola en los registros antiguos a partir del nombre del hotel y se guarda en las nuevas eliminaciones); los registros antiguos sin id se siguen respetando por el nombre del hotel.
+- No cambia: el alta **manual** («Nuevo pedido») y la importación desde Excel siguen pudiendo crear un Nº eliminado si un administrador lo hace a propósito.
+
+**Pruebas** (Postgres real): se elimina un pedido que SAP también trae → no vuelve a aparecer como pendiente de crear; el alta automática lo omite con el motivo; sin el registro de eliminado sí aparecería de nuevo (demuestra qué evita el candado); registro antiguo solo con nombre de hotel respetado; el aviso de la carga unificada lo lista.
+
 # v12.33.10 — 10 octubre 2026
 
 ↕️ Ordenar la ventana «Referencias de la entrada» pulsando el título de una columna

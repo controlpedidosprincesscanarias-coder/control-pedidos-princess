@@ -564,6 +564,17 @@ def _auto_migrate():
             except Exception as e:
                 log.warning(f"No se pudo crear el índice único de Nº de pedido: {e}")
 
+            # ── (v12.33.11) Un pedido ELIMINADO no se vuelve a dar de alta automáticamente ───────────
+            # El registro de eliminados guardaba solo el nombre del hotel; se añade el id para poder cruzarlo con las
+            # cargas de listados SAP (hotel + Nº de pedido normalizado) y se rellena en los registros anteriores.
+            try:
+                cur.execute("ALTER TABLE pedidos_eliminados ADD COLUMN IF NOT EXISTS hotel_id INTEGER")
+                cur.execute("UPDATE pedidos_eliminados e SET hotel_id = h.id FROM hoteles h "
+                            "WHERE e.hotel_id IS NULL AND h.nombre = e.hotel_nombre")
+                cur.execute("CREATE INDEX IF NOT EXISTS idx_eliminados_hotel_id ON pedidos_eliminados(hotel_id)")
+            except Exception as e:
+                log.warning(f"No se pudo preparar pedidos_eliminados.hotel_id: {e}")
+
             # ── Corrección retroactiva: altas automáticas desde SAP con
             # estado mal calculado (bug de v12.32.11, corregido en v12.32.13)
             # ────────────────────────────────────────────────────────────
@@ -14353,6 +14364,33 @@ def _info_listado_sap_guardado(hotel_id: int) -> dict:
 # presupuesto, adjuntos...) pendiente de completar a mano, tal como pidió
 # ("pendiente de subir el resto de documentación").
 
+def _pedidos_eliminados_hotel(hotel_id: int) -> dict:
+    """(v12.33.11) {Nº de pedido normalizado: {eliminado_en, eliminado_por, motivo}} de los pedidos de este hotel que
+    fueron ELIMINADOS a propósito (tabla pedidos_eliminados). Sirve para que las altas automáticas desde SAP no los
+    vuelvan a crear. Si un Nº se eliminó varias veces, queda la última eliminación."""
+    out = {}
+    try:
+        filas = rows_to_list(query(
+            """SELECT pedido_num, eliminado_en, eliminado_por_nombre, motivo_eliminacion
+                 FROM pedidos_eliminados
+                WHERE pedido_num IS NOT NULL AND trim(pedido_num) <> ''
+                  AND (hotel_id = %s OR (hotel_id IS NULL AND hotel_nombre = (SELECT nombre FROM hoteles WHERE id = %s)))
+                ORDER BY eliminado_en""", (hotel_id, hotel_id)))
+    except Exception as exc:
+        # Nunca debe impedir la carga; pero si falla, NO hay protección: se deja constancia en el log.
+        try:
+            get_db().rollback()
+        except Exception:
+            pass
+        log.error("[ELIMINADOS] No se pudo consultar pedidos_eliminados (hotel %s): %s", hotel_id, exc)
+        return out
+    for f in filas:
+        out[_normalizar_pedido_num(f["pedido_num"])] = {
+            "eliminado_en": f["eliminado_en"], "eliminado_por": f["eliminado_por_nombre"], "motivo": f["motivo_eliminacion"],
+        }
+    return out
+
+
 def _pedidos_sap_no_registrados(hotel_id: int) -> list:
     """
     Devuelve, a partir del Listado de Pedidos (SAP) ya guardado para este
@@ -14393,6 +14431,8 @@ def _pedidos_sap_no_registrados(hotel_id: int) -> list:
         (hotel_id,)
     ))
     nums_app = {_normalizar_pedido_num(p["pedido_num"]) for p in pedidos_app}
+    # (v12.33.11) Los pedidos ELIMINADOS a propósito no son «pendientes de crear»: no se vuelven a dar de alta solos.
+    nums_eliminados = set(_pedidos_eliminados_hotel(hotel_id))
 
     # (2026-09-04, v12.32.16) Departamentos, para resolver el código SAP de
     # cada pedido a un departamento de la app — ver _SAP_DEPARTAMENTO_MAP.
@@ -14428,6 +14468,8 @@ def _pedidos_sap_no_registrados(hotel_id: int) -> list:
         vistos.add(num_sap)
         if _normalizar_pedido_num(num_sap) in nums_app:
             continue  # ya está dado de alta — no es "no registrado"
+        if _normalizar_pedido_num(num_sap) in nums_eliminados:
+            continue  # (v12.33.11) eliminado a propósito — no se vuelve a crear automáticamente
 
         nombre_prov = proveedor_raw.strip()
         prov_match = _match_proveedor_catalogo(_normalizar_nombre_proveedor(nombre_prov), cat_por_nombre)
@@ -15357,7 +15399,18 @@ def _crear_pedidos_sap_lote(hotel_id: int, nums_pedidos: list, filas_por_num: di
 
     creados, omitidos, errores = [], [], []
     con_lineas = 0   # (v12.33.03) pedidos a los que se copiaron las líneas del listado detallado
+    _eliminados = _pedidos_eliminados_hotel(hotel_id)   # (v12.33.11)
     for num in nums_pedidos:
+        _elim = _eliminados.get(_normalizar_pedido_num(num))
+        if _elim:   # (v12.33.11) un pedido eliminado NO se vuelve a dar de alta automáticamente
+            _cuando = _elim["eliminado_en"].strftime("%d/%m/%Y") if hasattr(_elim["eliminado_en"], "strftime") else ""
+            omitidos.append({
+                "pedido_num_sap": num,
+                "motivo": f"Fue ELIMINADO el {_cuando} por {_elim['eliminado_por'] or '—'} (motivo: {_elim['motivo'] or '—'}) — "
+                          "no se vuelve a crear automáticamente. Si hace falta, créalo a mano.",
+            })
+            log.info("[CREAR-DESDE-SAP] Pedido %s omitido: eliminado previamente (hotel %s)", num, hotel_id)
+            continue
         fila = filas_por_num.get(_normalizar_pedido_num(num))
         if not fila:
             omitidos.append({
@@ -16065,6 +16118,19 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
             res["creados"].append({**c, "proveedor": f.get("proveedor_pdf")})
         for o in lote["omitidos"] + lote["errores"]:
             res["no_creados"].append({"pedido_num_sap": o.get("pedido_num_sap"), "motivo": o.get("motivo") or o.get("error")})
+    try:   # (v12.33.11) pedidos que SAP trae pero que fueron ELIMINADOS a propósito: no se recrean; se informa
+        _elim = _pedidos_eliminados_hotel(hotel_id)
+        if _elim:
+            _nums_app = {_normalizar_pedido_num(r["pedido_num"]) for r in rows_to_list(query(
+                "SELECT pedido_num FROM pedidos WHERE hotel_id=%s AND pedido_num IS NOT NULL AND pedido_num <> ''", (hotel_id,)))}
+            _bloq = sorted({str(f[0]) for f in _cargar_listado_sap_guardado(hotel_id)
+                            if _normalizar_pedido_num(f[0]) in _elim and _normalizar_pedido_num(f[0]) not in _nums_app})
+            if _bloq:
+                res["avisos"].append(f"{len(_bloq)} pedido(s) de SAP NO se han dado de alta porque fueron eliminados antes "
+                                     f"(ver «Pedidos eliminados»): " + ", ".join(_bloq[:10]) + ("…" if len(_bloq) > 10 else ""))
+    except Exception as exc:
+        get_db().rollback()
+        log.warning("[CARGA-LISTADOS-SAP] Aviso de pedidos eliminados omitido: %s", exc)
     if sin_ident:
         res["avisos"].append(f"{len(sin_ident)} pedido(s) de SAP no se pueden dar de alta porque su proveedor no está identificado "
                              f"en el catálogo (Admin → Proveedores): " + ", ".join(sorted({f['proveedor_pdf'] for f in sin_ident})[:8])
@@ -19355,8 +19421,8 @@ def delete_pedido(pid):
             proveedor_nombre, proveedor_email, estado,
             fecha_solicitud, pedido_num, presupuesto_num,
             entrada_albaran_num, observaciones, creado_por_nombre,
-            motivo_eliminacion, eliminado_por_id, eliminado_por_nombre
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            motivo_eliminacion, eliminado_por_id, eliminado_por_nombre, hotel_id
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, (
         pid,
         pedido.get("norden"),
@@ -19374,6 +19440,7 @@ def delete_pedido(pid):
         motivo,
         uid,
         admin_nombre,
+        pedido.get("hotel_id"),
     ))
 
     # ── 3. Eliminar el pedido (CASCADE borra adjuntos e historial) ───────────
