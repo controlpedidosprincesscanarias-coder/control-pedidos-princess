@@ -1936,6 +1936,22 @@ def _auto_migrate():
             """, ('pausa_avisos_automaticos', '0', 'bool',
                   '🚨 PAUSAR el job diario de alertas (Telegram + email a compradores y proveedores) — usar solo durante una actualización masiva de datos históricos, y recordar reactivarlo después',
                   'global', 0))
+            # ── v12.33.09 — SILENCIO TOTAL de avisos ───────────────────────────
+            # A petición de Víctor ("silenciar todo mientras estoy actualizando
+            # la base de datos, no es necesario molestar con avisos innecesarios
+            # a nadie"): la pausa de arriba solo corta el JOB DIARIO de alertas,
+            # pero los correos/Telegram/popups de CAMBIO DE ESTADO salen en el
+            # momento en que un pedido cambia (carga de listados, aplicar
+            # coincidencias de albaranes, edición manual...) y no pasaban por
+            # ese interruptor. Este corta TODOS los canales en sus puntos de
+            # salida (ver _silencio_total_activo y sus guardianes).
+            cur.execute("""
+                INSERT INTO config_alertas (clave, valor, tipo, label, grupo, orden)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (clave) DO NOTHING
+            """, ('silencio_total_avisos', '0', 'bool',
+                  '🔇 SILENCIO TOTAL: no enviar NINGÚN aviso (correos internos y a proveedores, Telegram ni popups) — usar mientras se actualiza la base de datos, y recordar desactivarlo después',
+                  'global', -1))
             # ── v12.5.0 — Repetición de popups en Agenda por tipo de alerta ────
             # Controla, para cada estado de pedido, si el popup en Organizador
             # Princess se repite mientras el pedido siga en alerta y cada
@@ -3732,6 +3748,51 @@ def admin_required(f):
 def current_user_id():
     return session.get("user_id")
 
+# ── v12.33.09 — SILENCIO TOTAL de avisos ─────────────────────────────────────
+# Interruptor global (Parámetros de Alertas → "SILENCIO TOTAL"). Con él activo
+# no sale NINGÚN aviso automático: ni correos de cambio de estado (internos y a
+# proveedor), ni reclamaciones, ni Telegram, ni popups de la Agenda. Se aplica
+# en los puntos únicos de salida de cada canal (_send_telegram,
+# _encolar_bridge_notificacion, _encolar_email_sistema,
+# _encolar_email_pedido_retrasado, enviar_emails_estado y el despacho de la cola
+# api_emails_sistema_pendientes), de modo que ningún flujo —actual o futuro—
+# pueda saltárselo. NO se silencian los avisos que no tienen que ver con el
+# movimiento de pedidos: solicitudes de acceso, resúmenes que un admin envía a
+# mano con su botón, códigos de verificación y restablecimiento de contraseña,
+# ni las alertas del propio sistema (consumo de datos, salud de la app).
+_PREFIJOS_NO_SILENCIABLES = ("solicitud_acceso", "resumen_")
+
+def _silencio_total_activo() -> bool:
+    try:
+        return bool(int(get_config().get("silencio_total_avisos", 0) or 0))
+    except Exception:
+        return False
+
+def _evento_silenciable(codigo) -> bool:
+    return not str(codigo or "").startswith(_PREFIJOS_NO_SILENCIABLES)
+
+def _descartar_avisos_pendientes_por_silencio() -> dict:
+    """Al activar el silencio: descarta lo que ya estaba en cola (correos sin
+    enviar y popups sin leer) para que no salga de golpe al desactivarlo.
+    Los correos quedan con descartado_en (reactivables 2 días desde el panel
+    de la cola de correo, igual que un descarte manual)."""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "UPDATE emails_sistema_pendientes SET descartado_en = NOW() "
+        "WHERE enviado = FALSE AND descartado_en IS NULL "
+        "AND evento_codigo !~ '^(solicitud_acceso|resumen_)'"
+    )
+    n_mail = cur.rowcount
+    cur.execute(
+        "UPDATE bridge_notificaciones SET leido = TRUE "
+        "WHERE leido = FALSE AND tipo !~ '^solicitud_acceso'"
+    )
+    n_pop = cur.rowcount
+    db.commit()
+    return {"correos": n_mail, "popups": n_pop}
+
+
 def _log_email(db, pedido_id, tipo, destinatario, asunto, enviado, error=None):
     with db.cursor() as cur:
         cur.execute(
@@ -3789,6 +3850,9 @@ def _encolar_email_pedido_retrasado(pedido_id: int, evento_codigo: str, destinat
     pero sin corregir todavía en este flujo. Si se omite, el
     comportamiento no cambia respecto a versiones anteriores.
     """
+    if _silencio_total_activo():
+        log.info("[SILENCIO-TOTAL] Correo NO encolado (%s, pedido %s)", evento_codigo, pedido_id)
+        return
     reply_to = _reply_to_seguro(reply_to, contexto=f"_encolar_email_pedido_retrasado evento={evento_codigo} pedido={pedido_id}")
     try:
         db = get_db()
@@ -3989,6 +4053,10 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
     _enviarEmailsSistemaPendientes).
     """
     pendientes = []
+
+    if _silencio_total_activo():
+        log.info("[SILENCIO-TOTAL] Correos de cambio de estado NO generados (pedido %s → %s)", pedido_id, estado_nuevo)
+        return pendientes
 
     # (2026-09-03) A petición de Víctor, tras detectar que los dos correos
     # internos de un cambio automático (hotel GY, "Comparar Pedidos +
@@ -4999,6 +5067,9 @@ def _encolar_email_sistema(evento_codigo: str, destinatarios_email: list,
     """
     if not destinatarios_email:
         return
+    if _evento_silenciable(evento_codigo) and _silencio_total_activo():
+        log.info("[SILENCIO-TOTAL] Correo de sistema NO encolado (%s, pedido %s)", evento_codigo, pedido_id)
+        return
     if not cuerpo_text and cuerpo_html:
         cuerpo_text = _html_a_texto_plano(cuerpo_html)
     cc_str = ",".join([e for e in (cc_emails or []) if e]) or None
@@ -5038,7 +5109,7 @@ def _notificar_evento(evento_codigo: str, texto_telegram: str,
         chat_id  = dest.get("telegram_chat_id")
         username = dest.get("username", "?")
         if chat_id:
-            res = _send_telegram(chat_id, texto_telegram)
+            res = _send_telegram(chat_id, texto_telegram, forzar=not _evento_silenciable(evento_codigo))
             log.info("[AVISO-%s] Telegram → %s (%s): %s",
                      evento_codigo, username, chat_id, "OK" if res.get("ok") else res.get("error"))
         else:
@@ -5252,7 +5323,7 @@ def _desbloquear_telegram_si_procede(chat_id: str) -> None:
         log.error("[TELEGRAM-BLOQUEO] No se pudo limpiar la marca de bloqueo del chat_id %s: %s", chat_id, exc)
 
 
-def _send_telegram(chat_id: str, text: str) -> dict:
+def _send_telegram(chat_id: str, text: str, forzar: bool = False) -> dict:
     """Envía un mensaje de Telegram al chat_id indicado. Devuelve {ok, error, permanente}.
 
     (2026-08-06) `permanente=True` cuando el error indica que NUNCA va a
@@ -5279,6 +5350,9 @@ def _send_telegram(chat_id: str, text: str) -> dict:
     (ver _desbloquear_telegram_si_procede) — no requiere que un admin lo
     resuelva a mano, solo que el usuario desbloquee el bot por su lado.
     """
+    if not forzar and _silencio_total_activo():
+        log.info("[SILENCIO-TOTAL] Telegram NO enviado a %s", chat_id)
+        return {"ok": False, "error": "Silencio total activo", "permanente": False, "silenciado": True}
     import urllib.request, urllib.error
 
     def _post(payload_dict):
@@ -5368,6 +5442,9 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
             retraso_segundos=0 (default) mantiene el comportamiento de
             siempre: visible de inmediato, un aviso por llamada.
     """
+    if _evento_silenciable(tipo) and _silencio_total_activo():
+        log.info("[SILENCIO-TOTAL] Popup NO encolado para %s (%s)", usuario, tipo)
+        return
     try:
         db = get_db()
         cur = db.cursor()
@@ -5880,6 +5957,7 @@ def get_config() -> dict:
         "plazo_parcial_urgente_ciclo": 2,
         "activar_reclamacion_proveedor_auto": 0,
         "pausa_avisos_automaticos": 0,
+        "silencio_total_avisos": 0,
         "techo_max_pedido": 3000, "techo_max_mes": 6000,
         "techo_max_pedidos": 2, "techo_max_pedidos_familia": 1, "techo_max_mes_familia": 0, "techo_pct_amarillo": 60,
         "enviado_popup_repetir": 1, "enviado_popup_horas_critico": 1, "enviado_popup_horas_normal": 24,
@@ -6343,6 +6421,9 @@ def _job_alertas_diarias_inner():
     # el job simplemente vuelve a evaluar el estado real de cada pedido en
     # ese momento, exactamente igual que si hubiera estado corriendo mientras
     # tanto pero sin que ningún pedido calificara para aviso.
+    if _silencio_total_activo():
+        log.info("[SCHEDULER] Job de alertas diarias detenido por SILENCIO TOTAL — no se evalúa ni se envía nada")
+        return
     if bool(int(get_config().get("pausa_avisos_automaticos", 0) or 0)):
         log.info("[SCHEDULER] Job de alertas diarias EN PAUSA (Config Alertas → pausa_avisos_automaticos) — no se evalúa ni se envía nada")
         return
@@ -6705,6 +6786,9 @@ def _job_familia_repetida() -> None:
 
 def _job_familia_repetida_inner() -> None:
     """Lógica interna del job de familia repetida."""
+    if _silencio_total_activo():
+        log.info("[FAMILIA-REP] SILENCIO TOTAL activo — job detenido")
+        return
     import pytz
     tz_canarias = pytz.timezone("Atlantic/Canary")
     ahora = datetime.now(tz_canarias)
@@ -7061,6 +7145,9 @@ def _job_techo_urgente_admins() -> None:
 
 def _job_techo_urgente_admins_inner() -> None:
     """Lógica interna del job de techo urgente a admins."""
+    if _silencio_total_activo():
+        log.info("[TECHO-URG] SILENCIO TOTAL activo — job detenido")
+        return
 
     if not _techo_urgente_es_horario_valido():
         log.debug("[TECHO-URG] Fuera de horario o día no laborable — saltando")
@@ -23122,7 +23209,7 @@ def _job_alerta_consumo_inner(force: bool = False):
         username = adm.get("username", "admin")
         chat_id  = adm.get("telegram_chat_id")
         if chat_id:
-            res = _send_telegram(chat_id, texto)
+            res = _send_telegram(chat_id, texto, forzar=True)  # alerta del propio sistema: no se silencia
             log.info("[CONSUMO] -> %s: %s", username, res)
         _encolar_bridge_notificacion(
             usuario=username,
@@ -23516,7 +23603,7 @@ def _job_health_check_inner(force: bool = False):
             username = adm.get("username", "admin")
             chat_id  = adm.get("telegram_chat_id")
             if chat_id:
-                res = _send_telegram(chat_id, texto_msg)
+                res = _send_telegram(chat_id, texto_msg, forzar=True)  # salud de la app: no se silencia
                 log.info("[HEALTH] Telegram → %s (%s): %s",
                          username, chat_id,
                          "OK" if res.get("ok") else res.get("error"))
@@ -24218,14 +24305,31 @@ def api_save_config_alertas():
     try:
         db  = get_db()
         cur = db.cursor()
+        _silencio_antes = _silencio_total_activo()
         for clave, valor in data.items():
             cur.execute("UPDATE config_alertas SET valor=%s WHERE clave=%s", (str(valor), clave))
         db.commit()
         log.info("[CONFIG] Configuración actualizada — claves: %s", list(data.keys()))
-        return jsonify({"ok": True, "actualizadas": len(data)})
+        descartados = None
+        _silencio_ahora = str(data.get("silencio_total_avisos", "1" if _silencio_antes else "0")) in ("1", "true", "True")
+        if _silencio_ahora and not _silencio_antes:
+            descartados = _descartar_avisos_pendientes_por_silencio()
+            log.warning("[SILENCIO-TOTAL] ACTIVADO — descartados %s correo(s) en cola y %s popup(s) sin leer",
+                        descartados["correos"], descartados["popups"])
+        elif _silencio_antes and not _silencio_ahora:
+            log.warning("[SILENCIO-TOTAL] DESACTIVADO — los avisos vuelven a enviarse con normalidad")
+        return jsonify({"ok": True, "actualizadas": len(data), "silencio_descartados": descartados})
     except Exception as exc:
         log.error("[CONFIG] Error guardando config: %s", exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/admin/silencio-total", methods=["GET"])
+@admin_required
+def api_get_silencio_total():
+    """(v12.33.09) Estado del SILENCIO TOTAL de avisos — lo consulta el aviso
+    rojo fijo que ve el administrador mientras está activo."""
+    return jsonify({"ok": True, "activo": _silencio_total_activo()})
 
 
 @app.route("/api/admin/config-avisos", methods=["GET"])
@@ -25012,6 +25116,14 @@ def api_emails_sistema_pendientes():
     GET /api/emails-sistema-pendientes
     """
     def _listar_y_reservar():
+        if _silencio_total_activo():
+            # Red de seguridad v12.33.09: nada silenciable sale mientras dure el silencio.
+            execute(
+                "UPDATE emails_sistema_pendientes SET descartado_en = NOW() "
+                "WHERE enviado = FALSE AND descartado_en IS NULL "
+                "AND evento_codigo !~ '^(solicitud_acceso|resumen_)'"
+            )
+            get_db().commit()
         cur = execute(
             """
             UPDATE emails_sistema_pendientes

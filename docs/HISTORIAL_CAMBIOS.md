@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-10 — [Control Pedidos] Silencio total de avisos durante la actualización de la base de datos (v12.33.09)
+
+Petición de Víctor: la pausa del job diario no frenaba los avisos de cambio de estado (correo/Telegram/popup), que salían al instante durante las cargas masivas. Nueva casilla «SILENCIO TOTAL» (`silencio_total_avisos`, Parámetros de Alertas) que corta todos los canales en sus puntos únicos de salida y en el despacho de la cola, detiene los jobs de alertas, descarta al activarla lo ya encolado y muestra un aviso rojo fijo a los administradores. Excepciones: solicitudes de acceso, resúmenes enviados a mano, códigos/restablecimiento de contraseña y alertas del propio sistema (consumo, salud). Archivos: `app.py`, `templates/index.html`, `CHANGELOG.md`, este historial, `README.md`. Revisado: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md` — no aplica.
+
+---
+
 ## 2026-10-10 — [Control Pedidos] Departamento distinto al del PDF oficial: se pregunta cuál dejar (v12.33.08)
 
 Pregunta «PDF o indicado a mano» al subir el PDF y al enviar al proveedor; columna `departamento_pdf_aceptado_id` y endpoint `/api/pedidos/<id>/departamento-pdf`; la validación del backend respeta la decisión. Detalle y pruebas en `CHANGELOG.md` (v12.33.08). Documentos revisados: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica (la columna se crea sola al arrancar).

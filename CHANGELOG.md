@@ -1,3 +1,19 @@
+# v12.33.09 — 10 octubre 2026
+
+🔇 Silencio total de avisos mientras se actualiza la base de datos
+
+**Petición de Víctor**: la casilla «PAUSAR el job diario de alertas» solo corta ese job; los correos, Telegram y popups de **cambio de estado** (p. ej. un CANCELADO al cargar listados) salen al momento y seguían llegando a él y al resto. Quiere «silenciar todo mientras estoy actualizando la base de datos».
+
+**Cambios** (`app.py`, `templates/index.html`):
+- Nueva casilla **«SILENCIO TOTAL»** en Parámetros de Alertas → Umbrales globales (primera de la lista; clave `silencio_total_avisos`, apagada por defecto).
+- Con ella activa **no sale ningún aviso**: correos de cambio de estado (internos y a proveedor), reclamaciones automáticas, avisos de firma/cotización, Telegram y popups de la Agenda. Los cambios de estado se guardan igual.
+- Se corta en los puntos únicos de salida de cada canal (`_send_telegram`, `_encolar_bridge_notificacion`, `_encolar_email_sistema`, `_encolar_email_pedido_retrasado`, `enviar_emails_estado`) y en el despacho de la cola (`/api/emails-sistema-pendientes`), así que ningún flujo puede saltárselo. Los jobs de alertas diarias, familia repetida y techo urgente se detienen.
+- Al **activarla** se descartan los correos que ya estaban en cola y los popups sin leer, para que no salgan de golpe al desactivarla (los correos quedan reactivables 2 días desde la cola de correo). Guardar de nuevo con ella ya activa no descarta nada más. Al desactivarla, todo vuelve a funcionar con normalidad y no se arrastra nada.
+- **Aviso rojo fijo** «🔇 SILENCIO TOTAL ACTIVO» arriba para los administradores mientras esté activo (pulsa para ir a Parámetros de Alertas); nuevo `GET /api/admin/silencio-total`.
+- **No se silencian** (no tienen que ver con la actualización): solicitudes de acceso, los resúmenes que un administrador envía a mano con su botón, código de verificación y restablecimiento de contraseña, y las alertas del propio sistema (consumo de datos y salud de la app).
+
+**Pruebas** (Postgres real + Playwright): con el silencio apagado se encolan correos/popups; al activarlo se descarta lo pendiente y ni cambios de estado, ni correos de sistema, ni Telegram, ni popups se generan, mientras `solicitud_acceso` y `resumen_` siguen pasando; el despacho de la cola no entrega nada silenciable; guardar con él ya activo no vuelve a descartar; casilla, mensaje de guardado y aviso rojo funcionan sin errores de JavaScript.
+
 # v12.33.08 — 10 octubre 2026
 
 🏷️ Departamento que no coincide con el PDF oficial: en vez de bloquear, se pregunta cuál dejar
