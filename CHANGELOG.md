@@ -1,3 +1,15 @@
+# v12.33.18 — 11 octubre 2026
+
+🖼️ Imagen de ejemplo del PDF que hay que subir (albarán y pedido) antes de elegir el archivo
+
+**Petición de Víctor**: que el usuario, aunque no haya visto el manual, sepa cuál es el documento exacto que espera la aplicación al subir un albarán para completar un pedido y al subir el PDF del pedido (comprador).
+
+**Cambios**:
+- `static/ejemplos/albaran_dali_ejemplo.jpg` y `static/ejemplos/pedido_pdf_ejemplo.jpg` (nuevos) — imágenes de ejemplo con los datos que lee la aplicación numerados; en el ejemplo se han tapado el usuario y los datos de contacto del proveedor.
+- `templates/index.html` — nueva ventana de ayuda `abrirAyudaPdf()`: al pulsar «📎 Subir albarán PDF» (pedido) o «📎 Adjuntar PDF del pedido oficial» se muestra primero el ejemplo con su leyenda (qué es cada dato y para qué se usa) y los botones «Elegir el PDF…» / «Cancelar», con la casilla «No volver a mostrar este aviso» (se recuerda en el navegador). Enlaces «Ver ejemplo» siempre disponibles junto al botón del albarán, bajo el adjuntar PDF del pedido y en «Confirmar albaranes sueltos» (admin).
+
+**Sin migraciones.** Hay que desplegar también los dos ficheros nuevos de `static/ejemplos/`.
+
 # v12.33.17 — 11 octubre 2026
 
 📎 Albaranes PDF: cantidades partidas en dos líneas dentro de la celda («1.008,» / «0000») se leían como 0 y se ignoraban

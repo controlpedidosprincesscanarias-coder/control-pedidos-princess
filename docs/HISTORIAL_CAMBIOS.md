@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-11 — [Control Pedidos] Imagen de ejemplo del PDF de albarán y de pedido antes de subirlo (v12.33.18)
+
+Petición de Víctor: que cualquier usuario vea cuál es el documento exacto que se espera al subir un albarán (DALI «Compras» → Imprimir → PDF) o el PDF oficial del pedido. Se añaden dos imágenes de ejemplo (`static/ejemplos/`, generadas a partir de PDF reales con usuario y datos de contacto del proveedor tapados y los datos clave numerados) y la ventana `abrirAyudaPdf()` que se muestra antes del selector de archivo, con «No volver a mostrar» (localStorage, en try/catch) y enlaces «Ver ejemplo». Probado con Playwright: ventana del albarán y del pedido (imagen cargada, abre el selector con «Elegir el PDF…», sin ayuda tras marcar «No volver a mostrar», enlace «Ver ejemplo» solo informativo) y la subida del albarán sigue funcionando. Sin migraciones. Documentos de mantenimiento: no aplica. Pendiente opcional: añadir la imagen al manual del rol Hotel / comprador.
+
+---
+
 ## 2026-10-11 — [Control Pedidos] Albaranes PDF: cantidades partidas en la celda leídas como 0 (v12.33.17)
 
 Problema reportado por Víctor (pedido 00042523, albarán 81988): llegaban 1.008 copas y no se registraba ninguna, seguía figurando que faltaban 1.002; había que registrar las 1.008 e indicar el sobrante. Causa: la cantidad salía en dos líneas dentro de la celda del PDF («1.008,» / «0000»), no se convertía en número, valía 0 y la línea se ignoraba. Corrección: se quitan espacios/saltos de línea de cantidad, precio e importe al leer el albarán, y una cantidad ilegible rechaza el albarán con mensaje en lugar de ignorarse. Probado con el PDF real 81988 y Postgres real + Playwright (1.008 registradas, +6 de sobrante, 10 saleros pendientes, ENTREGA PARCIAL, guardado con detalle en BD); regresión de las pruebas anteriores sin cambios. Sin migraciones. Documentos de mantenimiento: no aplica.

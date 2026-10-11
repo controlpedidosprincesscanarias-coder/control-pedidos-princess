@@ -1440,7 +1440,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.17
+          V 12.33.18
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2603,13 +2603,13 @@ tbody tr:last-child{border-bottom:none}
             <span style="font-size:10px;color:#888;font-weight:400"> (automático)</span>
           </label>
           <input class="form-control monospace" id="p-pedido-num" placeholder="Se rellena al adjuntar el PDF" readonly style="background:#f5f5f5;color:#555">
-          <label class="adj-fecha-btn" id="lbl-pedido-doc" title="Adjuntar el PDF del pedido oficial PRINCESS (SAP/DALI)" style="margin-top:6px">
+          <label class="adj-fecha-btn" id="lbl-pedido-doc" title="Adjuntar el PDF del pedido oficial PRINCESS (SAP/DALI)" style="margin-top:6px" onclick="return pedirPdfPedido(event)">
             <input type="file" accept=".pdf" style="display:none"
                    onchange="subirAdjuntos(this,'pedido_doc')">
             📎 Adjuntar PDF del pedido oficial
           </label>
           <div style="font-size:10.5px;color:#888;margin-top:4px">
-            Solo se admite el PDF de pedido oficial PRINCESS (el que genera SAP/DALI, con el mismo formato siempre) — al adjuntarlo, la app lee sola el Nº de Pedido, el Total Pedido y las líneas del pedido (códigos, referencias, cantidades y precios).
+            Solo se admite el PDF de pedido oficial PRINCESS (el que genera SAP/DALI, con el mismo formato siempre) — al adjuntarlo, la app lee sola el Nº de Pedido, el Total Pedido y las líneas del pedido (códigos, referencias, cantidades y precios). <a href="#" onclick="abrirAyudaPdf('pedido'); return false;" style="color:#1a56c4;text-decoration:underline;white-space:nowrap">Ver ejemplo</a>
           </div>
           <div id="adj-pedido-list" class="adj-fecha-list"></div>
           <div id="pedido-sap-nota" style="display:none;font-size:11px;color:#14532d;background:#ecfdf3;border:1px solid #a7e3bf;border-radius:6px;padding:6px 8px;margin-top:6px"></div>
@@ -2660,11 +2660,13 @@ tbody tr:last-child{border-bottom:none}
               <span style="margin-left:4px">CANCELADO</span>
             </label>
             <!-- (v12.33.12) Subir el PDF de un albarán: rellena solo la entrada (Nº, fecha, base imp., referencias) y el estado -->
-            <button type="button" id="btn-albaran-pdf" onclick="document.getElementById('albaran-pdf-file').click()"
+            <button type="button" id="btn-albaran-pdf" onclick="pedirPdfAlbaran()"
               title="Sube el PDF del albarán (volcado de pantalla del programa de almacén): se comprueba que es de este pedido y se rellenan solos el Nº de entrada, la fecha, la base imponible, las referencias y el estado. También puedes seguir rellenándolo a mano."
               style="display:none;margin-left:auto;padding:5px 12px;font-size:12px;font-weight:600;border:1.5px solid #5b3a99;border-radius:8px;background:#f3eefb;color:#4d2f8f;cursor:pointer">
               📎 Subir albarán PDF
             </button>
+            <a href="#" id="lnk-albaran-pdf-ayuda" onclick="abrirAyudaPdf('albaran'); return false;" title="Ver una imagen de ejemplo del PDF que hay que subir"
+               style="display:none;margin-left:8px;font-size:11.5px;color:#4d2f8f;text-decoration:underline;white-space:nowrap">Ver ejemplo</a>
             <input type="file" id="albaran-pdf-file" accept="application/pdf,.pdf" style="display:none" onchange="subirAlbaranPdf(this)">
           </div>
           <!-- Cabecera de columnas -->
@@ -3542,7 +3544,7 @@ tbody tr:last-child{border-bottom:none}
             <select class="form-control" id="conf-alb-hotel"><option value="">— Selecciona —</option></select>
           </div>
           <div class="form-group">
-            <label class="form-label">PDF de los albaranes <span style="color:#e74c3c">*</span> <span style="font-weight:400;color:#888">(puedes elegir varios a la vez)</span></label>
+            <label class="form-label">PDF de los albaranes <span style="color:#e74c3c">*</span> <span style="font-weight:400;color:#888">(puedes elegir varios a la vez)</span> <a href="#" onclick="abrirAyudaPdf('albaran'); return false;" style="font-weight:400;font-size:11.5px;color:#1a56c4;text-decoration:underline;white-space:nowrap">Ver ejemplo</a></label>
             <input class="form-control" type="file" id="conf-alb-file" accept="application/pdf" multiple>
           </div>
         </div>
@@ -7511,6 +7513,92 @@ function _actualizarBotonAlbaranPdf() {
   if (!b) return;
   const est = (document.getElementById('p-estado') || {}).value;
   b.style.display = (G.editingPedidoId && est !== 'CANCELADO' && est !== 'DENEGADO POR DIRECCION GENERAL') ? '' : 'none';
+  const lk = document.getElementById('lnk-albaran-pdf-ayuda'); if (lk) lk.style.display = b.style.display === 'none' ? 'none' : '';
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   (v12.33.18) Ayuda visual «¿qué PDF hay que subir?»: antes de elegir el archivo se enseña una imagen de ejemplo del
+   documento exacto que espera la aplicación (el albarán de DALI o el PDF oficial del pedido) con sus datos clave
+   numerados. Se puede marcar «No volver a mostrar» (preferencia de este navegador) y siempre se puede volver a ver
+   con el enlace «Ver ejemplo».
+═══════════════════════════════════════════════════════════════════════════ */
+const _AYUDA_PDF = {
+  albaran: {
+    clave: 'cp_ayuda_pdf_albaran',
+    titulo: '📎 Albarán que hay que subir',
+    img: '/static/ejemplos/albaran_dali_ejemplo.jpg',
+    intro: 'Es el <b>PDF del albarán que se imprime desde DALI</b> (pantalla «Compras» → <b>Imprimir</b>, menú superior → guardar como PDF). Un PDF por albarán. No sirve una foto, una captura ni el albarán del proveedor.',
+    leyenda: [
+      ['Código', 'es el <b>Nº de entrada</b> DALI / SAP.'],
+      ['Fecha Albarán', 'es la <b>fecha de la entrada</b>.'],
+      ['Pedido/s', 'el pedido al que corresponde: se comprueba que sea el que estás editando.'],
+      ['Código y Cantidad de cada línea', 'son las <b>referencias recibidas</b> y las unidades.'],
+      ['Total (con Dtos.)', 'es la <b>base imponible</b> de la entrada.'],
+    ],
+  },
+  pedido: {
+    clave: 'cp_ayuda_pdf_pedido',
+    titulo: '📎 PDF del pedido que hay que subir',
+    img: '/static/ejemplos/pedido_pdf_ejemplo.jpg',
+    intro: 'Es el <b>PDF oficial del pedido PRINCESS</b> que genera SAP/DALI (siempre con este mismo formato: cabecera con Sociedad, Hotel/Centro y Proveedor, el cuadro «PEDIDO» y la tabla de líneas). No sirve una foto, una captura, un presupuesto ni un documento del proveedor.',
+    leyenda: [
+      ['PEDIDO', 'es el <b>Nº de pedido</b> (y las fechas de pedido y entrega).'],
+      ['Proveedor', 'se comprueba con el proveedor del pedido.'],
+      ['Tabla de líneas', 'se leen <b>código, ref. proveedor, descripción, cantidad, precio e importe</b> de cada línea.'],
+      ['Total Pedido', 'es el <b>total</b> del pedido.'],
+    ],
+  },
+};
+function _ayudaPdfOculta(tipo) {
+  try { return localStorage.getItem(_AYUDA_PDF[tipo].clave) === '1'; } catch (e) { return false; }
+}
+function abrirAyudaPdf(tipo, onElegir) {
+  const a = _AYUDA_PDF[tipo]; if (!a) { if (onElegir) onElegir(); return; }
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay open'; ov.style.zIndex = 1250;
+  const ley = a.leyenda.map((x, i) => `<li style="margin:3px 0"><span style="display:inline-block;min-width:20px;height:20px;line-height:20px;text-align:center;border-radius:50%;background:#e11d48;color:#fff;font-weight:700;font-size:11px;margin-right:6px">${i + 1}</span><b>${x[0]}</b>: ${x[1]}</li>`).join('');
+  ov.innerHTML = `<div class="modal" style="width:min(1000px,96vw);max-height:94vh;display:flex;flex-direction:column">
+    <div class="modal-header"><div class="modal-title">${a.titulo}</div><button class="close-btn" id="ayuda-pdf-x">✕</button></div>
+    <div class="modal-body" style="font-size:13px;line-height:1.5;overflow:auto">
+      <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start">
+        <div style="flex:1 1 440px;min-width:300px">
+          <a href="${a.img}" target="_blank" rel="noopener" title="Ver en grande"><img src="${a.img}" alt="Ejemplo" style="width:100%;border:1px solid #cfd4e4;border-radius:6px;box-shadow:0 1px 6px rgba(0,0,0,.12)"></a>
+          <div style="font-size:11px;color:#888;margin-top:3px">Ejemplo (se han tapado datos de contacto). Pulsa la imagen para verla en grande.</div>
+        </div>
+        <div style="flex:1 1 300px;min-width:260px">
+          <div style="margin-bottom:10px">${a.intro}</div>
+          <div style="font-weight:600;margin-bottom:2px">Lo que lee la aplicación:</div>
+          <ul style="list-style:none;margin:0;padding:0">${ley}</ul>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      ${onElegir ? `<label style="margin-right:auto;font-size:12px;color:#555;display:flex;align-items:center;gap:5px;cursor:pointer"><input type="checkbox" id="ayuda-pdf-no"> No volver a mostrar este aviso</label>` : '<span style="margin-right:auto"></span>'}
+      <button class="btn btn-ghost" id="ayuda-pdf-cerrar">${onElegir ? 'Cancelar' : 'Cerrar'}</button>
+      ${onElegir ? '<button class="btn btn-gold" id="ayuda-pdf-ok">Elegir el PDF…</button>' : ''}
+    </div></div>`;
+  document.body.appendChild(ov);
+  const cerrar = () => ov.remove();
+  ov.querySelector('#ayuda-pdf-x').onclick = cerrar;
+  ov.querySelector('#ayuda-pdf-cerrar').onclick = cerrar;
+  if (onElegir) ov.querySelector('#ayuda-pdf-ok').onclick = () => {
+    if (ov.querySelector('#ayuda-pdf-no').checked) { try { localStorage.setItem(a.clave, '1'); } catch (e) {} }
+    cerrar(); onElegir();
+  };
+}
+// Botón «Subir albarán PDF»: enseña el ejemplo (salvo que se haya marcado «No volver a mostrar») y luego abre el selector.
+function pedirPdfAlbaran() {
+  const elegir = () => document.getElementById('albaran-pdf-file').click();
+  if (_ayudaPdfOculta('albaran')) elegir(); else abrirAyudaPdf('albaran', elegir);
+}
+// «Adjuntar PDF del pedido oficial» (es un <label> que contiene el <input type=file>).
+function pedirPdfPedido(ev) {
+  if (ev.target && ev.target.tagName === 'INPUT') return true;      // clic ya dirigido al selector
+  if (_ayudaPdfOculta('pedido')) return true;
+  ev.preventDefault();
+  const inp = document.querySelector('#lbl-pedido-doc input[type=file]');
+  abrirAyudaPdf('pedido', () => inp && inp.click());
+  return false;
 }
 
 function _resumenAlbaranPdf(titulo, bloquesHtml) {
