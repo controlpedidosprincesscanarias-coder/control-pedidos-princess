@@ -13737,9 +13737,11 @@ def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes, exigir_pedido: bo
                                 "codigo_articulo": (fila[1] or "").strip() or None,
                                 "descripcion":      (fila[2] or "").strip() or None,
                                 "unidad":           (fila[3] or "").strip() or None,
-                                "cantidad_txt":     (fila[4] or "").strip() or None,
-                                "precio_txt":       (fila[6] or "").strip() or None,
-                                "importe_txt":      (fila[9] or "").strip() or None,
+                                # (v12.33.17) Las cifras pueden partirse en dos líneas dentro de la celda («1.008,» + «0000»):
+                                # se quitan todos los espacios/saltos para que se lean enteras.
+                                "cantidad_txt":     re.sub(r'\s+', '', fila[4] or "") or None,
+                                "precio_txt":       re.sub(r'\s+', '', fila[6] or "") or None,
+                                "importe_txt":      re.sub(r'\s+', '', fila[9] or "") or None,
                             })
                         continue
                     # Tabla de metadatos: filas [clave, valor]
@@ -22031,6 +22033,9 @@ def _agrupar_lineas_albaran(datos: dict, es_hotel: bool = False) -> tuple:
         cod = (ln.get("codigo_articulo") or "").strip()
         if not cod:
             continue
+        _ct = (ln.get("cantidad_txt") or "").strip()
+        if _ct and not re.fullmatch(r'-?[\d.]*(,\d+)?', _ct):
+            raise RuntimeError(f"No se ha podido leer la cantidad «{_ct}» de la referencia {cod}: no se registra nada para no dejar el albarán a medias.")
         cant = _parse_importe_es(ln.get("cantidad_txt"))
         if cant <= 0:
             con_cantidad_cero += 1
@@ -22141,7 +22146,10 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
         return {"ok": False, "error": "El PDF no trae el campo «Código» (Nº de entrada del albarán): "
                                         "¿es el volcado de un albarán del programa de almacén?"}, 422
 
-    lineas_pdf, con_cantidad_cero = _agrupar_lineas_albaran(datos, es_hotel)
+    try:
+        lineas_pdf, con_cantidad_cero = _agrupar_lineas_albaran(datos, es_hotel)
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc)}, 422
     if not lineas_pdf:
         return {"ok": False, "error": "El albarán no trae ninguna referencia con cantidad mayor que 0."}, 422
 

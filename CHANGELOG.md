@@ -1,3 +1,15 @@
+# v12.33.17 — 11 octubre 2026
+
+📎 Albaranes PDF: cantidades partidas en dos líneas dentro de la celda («1.008,» / «0000») se leían como 0 y se ignoraban
+
+**Problema (pedido 00042523, albarán 81988)**: el albarán trae 1.008 copas (código 00028967) pero la aplicación no registraba esa referencia y seguía diciendo que faltaban las 1.002 del pedido; solo detallaba la otra línea (134 saleros). Causa: en el PDF la cantidad de esa línea salía partida en dos líneas dentro de la celda («1.008,» y «0000»); se leía «1.008,\n0000», no se convertía en número, valía 0 y la línea se descartaba como «cantidad 0».
+
+**Cambios**:
+- `app.py` — `_extraer_albaran_confirmacion_individual()`: se quitan espacios y saltos de línea de cantidad, precio e importe al leer cada línea (así también se guardan enteros en el cruce con SAP). `_agrupar_lineas_albaran()`: si una cantidad no se puede interpretar como número se rechaza el albarán con un mensaje claro (antes la línea se ignoraba en silencio) — en el botón del pedido y en la carga en lote.
+- Resultado con el 81988: se registran las 1.008 copas, se indica el sobrante (+6 sobre las 1.002 pedidas) y quedan pendientes 10 saleros; estado ENTREGA PARCIAL.
+
+**Sin migraciones.** Si el albarán 81988 ya estuviera guardado sin esa referencia, al volver a subir el PDF (v12.33.16) se completan las referencias.
+
 # v12.33.16 — 11 octubre 2026
 
 📎 Albaranes PDF: volver a subir un albarán ya registrado SIN referencias las completa (no dice «ya registrado»)

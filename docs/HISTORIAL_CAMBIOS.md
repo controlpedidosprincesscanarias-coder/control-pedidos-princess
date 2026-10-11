@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-11 — [Control Pedidos] Albaranes PDF: cantidades partidas en la celda leídas como 0 (v12.33.17)
+
+Problema reportado por Víctor (pedido 00042523, albarán 81988): llegaban 1.008 copas y no se registraba ninguna, seguía figurando que faltaban 1.002; había que registrar las 1.008 e indicar el sobrante. Causa: la cantidad salía en dos líneas dentro de la celda del PDF («1.008,» / «0000»), no se convertía en número, valía 0 y la línea se ignoraba. Corrección: se quitan espacios/saltos de línea de cantidad, precio e importe al leer el albarán, y una cantidad ilegible rechaza el albarán con mensaje en lugar de ignorarse. Probado con el PDF real 81988 y Postgres real + Playwright (1.008 registradas, +6 de sobrante, 10 saleros pendientes, ENTREGA PARCIAL, guardado con detalle en BD); regresión de las pruebas anteriores sin cambios. Sin migraciones. Documentos de mantenimiento: no aplica.
+
+---
+
 ## 2026-10-11 — [Control Pedidos] Completar las referencias de un albarán ya registrado sin ellas (v12.33.16)
 
 Problema reportado por Víctor: el albarán 86886 del pedido 00015173 ya estaba guardado sin referencias y al volver a subir el PDF solo decía «ya registrado», sin dejar recargarlo. Corrección: `_entrada_sin_referencias()`; si la entrada está en este pedido pero sin detalle de referencias, el botón del pedido y la carga en lote la completan (sin duplicar la entrada y recalculando el estado); si ya tiene referencias o está en otro pedido, se mantiene el aviso de ya registrado / conflicto. Probado con Postgres real (botón y lote simulado/aplicado, segunda subida → ya registrado) y con Playwright (una sola fila, «1 ref. ✔», guardado con detalle en BD). Sin migraciones. Documentos de mantenimiento: no aplica.
