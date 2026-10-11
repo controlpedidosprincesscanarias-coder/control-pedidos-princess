@@ -1,3 +1,9 @@
+# v12.33.19 — 11 octubre 2026
+
+🏨 Hotel: en la ficha del pedido ya no se muestran las instrucciones de «adjuntar PDF del pedido oficial»
+
+Un usuario con rol Hotel no puede adjuntar el PDF del pedido (el botón ya estaba oculto), pero seguía viendo el texto «Solo se admite el PDF de pedido oficial PRINCESS…» y su enlace «Ver ejemplo». `templates/index.html`: ese texto (`#nota-pedido-doc`) se oculta junto al botón para el rol Hotel; el resto de roles lo siguen viendo. Sin migraciones.
+
 # v12.33.18 — 11 octubre 2026
 
 🖼️ Imagen de ejemplo del PDF que hay que subir (albarán y pedido) antes de elegir el archivo

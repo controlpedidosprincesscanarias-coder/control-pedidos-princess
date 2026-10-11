@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-11 — [Control Pedidos] Rol Hotel: se oculta el texto de «adjuntar PDF del pedido oficial» (v12.33.19)
+
+Detectado al actualizar el manual del rol Hotel: el hotel no puede adjuntar el PDF del pedido pero veía sus instrucciones y el enlace «Ver ejemplo» (v12.33.18). Se oculta `#nota-pedido-doc` en la rama de rol Hotel, junto al botón. Comprobado con Playwright como usuario Hotel (el texto ya no aparece; el PDF adjunto sigue visible para consulta). Sin migraciones. Documentos de mantenimiento: no aplica. Manual del rol Hotel actualizado a esta versión.
+
+---
+
 ## 2026-10-11 — [Control Pedidos] Imagen de ejemplo del PDF de albarán y de pedido antes de subirlo (v12.33.18)
 
 Petición de Víctor: que cualquier usuario vea cuál es el documento exacto que se espera al subir un albarán (DALI «Compras» → Imprimir → PDF) o el PDF oficial del pedido. Se añaden dos imágenes de ejemplo (`static/ejemplos/`, generadas a partir de PDF reales con usuario y datos de contacto del proveedor tapados y los datos clave numerados) y la ventana `abrirAyudaPdf()` que se muestra antes del selector de archivo, con «No volver a mostrar» (localStorage, en try/catch) y enlaces «Ver ejemplo». Probado con Playwright: ventana del albarán y del pedido (imagen cargada, abre el selector con «Elegir el PDF…», sin ayuda tras marcar «No volver a mostrar», enlace «Ver ejemplo» solo informativo) y la subida del albarán sigue funcionando. Sin migraciones. Documentos de mantenimiento: no aplica. Pendiente opcional: añadir la imagen al manual del rol Hotel / comprador.

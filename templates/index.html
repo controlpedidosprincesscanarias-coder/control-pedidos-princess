@@ -1440,7 +1440,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.18
+          V 12.33.19
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2608,7 +2608,7 @@ tbody tr:last-child{border-bottom:none}
                    onchange="subirAdjuntos(this,'pedido_doc')">
             📎 Adjuntar PDF del pedido oficial
           </label>
-          <div style="font-size:10.5px;color:#888;margin-top:4px">
+          <div id="nota-pedido-doc" style="font-size:10.5px;color:#888;margin-top:4px">
             Solo se admite el PDF de pedido oficial PRINCESS (el que genera SAP/DALI, con el mismo formato siempre) — al adjuntarlo, la app lee sola el Nº de Pedido, el Total Pedido y las líneas del pedido (códigos, referencias, cantidades y precios). <a href="#" onclick="abrirAyudaPdf('pedido'); return false;" style="color:#1a56c4;text-decoration:underline;white-space:nowrap">Ver ejemplo</a>
           </div>
           <div id="adj-pedido-list" class="adj-fecha-list"></div>
@@ -5841,6 +5841,8 @@ function _applyHotelRolePedidoModal(isEdit) {
     // Ocultar el botón de subir adjunto del pedido DALI/SAP
     const lblPedidoDoc = document.getElementById('lbl-pedido-doc');
     if (lblPedidoDoc) lblPedidoDoc.style.display = 'none';
+    const notaPedidoDoc = document.getElementById('nota-pedido-doc');   // (v12.33.19) el hotel no adjunta el PDF: tampoco ve las instrucciones
+    if (notaPedidoDoc) notaPedidoDoc.style.display = 'none';
     // Ocultar techo-fields
     const tf = document.getElementById('techo-fields');
     if (tf) tf.style.display = 'none';
