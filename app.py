@@ -3,7 +3,7 @@ Control Pedidos Princess Canarias — Flask + PostgreSQL (Supabase)
 Despliegue: Render.com  |  BD: Supabase  |  Email: EmailJS (frontend)
 """
 
-import os, json, logging, secrets, atexit, hashlib, re, threading, base64, hmac, gzip, traceback
+import os, json, logging, secrets, atexit, hashlib, re, threading, base64, hmac, gzip, traceback, unicodedata, difflib
 from html import unescape as _html_unescape
 from html import escape as _html_escape
 from datetime import datetime, timedelta, timezone, date as _date
@@ -22039,7 +22039,8 @@ def _agrupar_lineas_albaran(datos: dict, es_hotel: bool = False) -> tuple:
         g = agrup.get(k)
         if g is None:
             g = agrup[k] = {"codigo": cod, "clave": k, "descripcion": " ".join((ln.get("descripcion") or "").split()),
-                            "cantidad": 0.0, "importe": 0.0, "precio": _parse_importe_es(ln.get("precio_txt"))}
+                            "cantidad": 0.0, "importe": 0.0, "precio": _parse_importe_es(ln.get("precio_txt")),
+                            "_precio": _parse_importe_es(ln.get("precio_txt"))}
             orden.append(k)
         g["cantidad"] = round(g["cantidad"] + cant, 4)
         g["importe"] = round(g["importe"] + _parse_importe_es(ln.get("importe_txt")), 2)
@@ -22049,6 +22050,70 @@ def _agrupar_lineas_albaran(datos: dict, es_hotel: bool = False) -> tuple:
             g["precio"] = None
             g["importe"] = None
     return lineas_pdf, con_cantidad_cero
+
+def _norm_desc(s) -> str:
+    """(v12.33.15) Descripción comparable: sin acentos, en mayúsculas y solo letras/números."""
+    s = unicodedata.normalize("NFD", str(s or "")).encode("ascii", "ignore").decode()
+    return re.sub(r'[^A-Z0-9]', '', s.upper())
+
+
+def _lineas_pedido_agrupadas(pid: int) -> list:
+    """(v12.33.15) Líneas del pedido agrupadas por clave (código; «COD#2» si se repite), con lo pedido, el precio y
+    la referencia del proveedor. Es la base común para emparejar las referencias de un albarán."""
+    _lin = rows_to_list(query(
+        "SELECT codigo, ref_proveedor, descripcion, cantidad, precio FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pid,)))
+    lineas, idx = [], {}
+    for l, cod in zip(_lin, _claves_lineas(_lin)):
+        if not cod:
+            continue
+        g = idx.get(cod)
+        if g is None:
+            g = idx[cod] = {"key": cod, "codigo_vista": l["codigo"], "ref": l["ref_proveedor"],
+                            "descripcion": l["descripcion"], "pedida": 0.0,
+                            "precio": float(l["precio"]) if l["precio"] is not None else None}
+            lineas.append(g)
+        g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
+    return lineas
+
+
+def _emparejar_linea_albaran(pl: dict, lineas: list) -> tuple:
+    """(v12.33.15) Líneas del pedido (de `_lineas_pedido_agrupadas`) a las que corresponde una referencia del albarán.
+    El albarán del almacén trae el código INTERNO del artículo, que no siempre es el que figura en el pedido (a veces
+    el pedido lleva la referencia del proveedor). Orden de búsqueda:
+      1. mismo código (o código = referencia del proveedor de la línea);
+      2. misma descripción (ignorando acentos, mayúsculas y signos);
+      3. descripción muy parecida (≥ 90 %) y mismo precio (±0,01) — el precio solo se exige si ambos lo traen.
+    Devuelve (lista de líneas, 'codigo' | 'descripcion' | 'similar') o ([], None)."""
+    por_codigo = [l for l in lineas
+                  if _clave_codigo_articulo(l["codigo_vista"]) == pl["clave"]
+                  or (l.get("ref") and _clave_codigo_articulo(l["ref"]) == pl["clave"])]
+    if por_codigo:
+        return por_codigo, "codigo"
+    nd = _norm_desc(pl.get("descripcion"))
+    if not nd:
+        return [], None
+    exactas = [l for l in lineas if _norm_desc(l["descripcion"]) == nd]
+    if exactas:
+        return exactas, "descripcion"
+    p_alb = pl.get("_precio")
+    mejor, mejor_r = None, 0.0
+    for l in lineas:
+        ld = _norm_desc(l["descripcion"])
+        if not ld:
+            continue
+        r = difflib.SequenceMatcher(None, nd, ld).ratio()
+        if r < 0.9:
+            continue
+        p_ped = l.get("precio")
+        if p_alb and p_ped and abs(p_alb - p_ped) > 0.011:
+            continue
+        if r > mejor_r:
+            mejor, mejor_r = l, r
+    return ([mejor], "similar") if mejor else ([], None)
+
+
+def _quitar_privados(lineas_pdf: list) -> list:
+    return [{k: v for k, v in g.items() if not k.startswith("_")} for g in lineas_pdf]
 
 
 def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool = False, comprobar_duplicado: bool = True) -> tuple:
@@ -22081,13 +22146,20 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
         return {"ok": False, "error": "El albarán no trae ninguna referencia con cantidad mayor que 0."}, 422
 
     # Referencias del pedido de la ficha.
-    cods_pedido = {_clave_codigo_articulo(r["codigo"]) for r in rows_to_list(query(
-        "SELECT codigo FROM pedido_lineas WHERE pedido_id=%s", (pid,))) if r["codigo"]}
+    lineas_ped = _lineas_pedido_agrupadas(pid)
+    cods_pedido = bool(lineas_ped)
 
     pedidos_pdf = list(dict.fromkeys(datos.get("pedidos_num_sap") or []))
     pedidos_pdf_norm = [_normalizar_pedido_num(x) for x in pedidos_pdf]
     pedido_app_norm = _normalizar_pedido_num(ped["pedido_num"]) if ped and ped.get("pedido_num") else ""
-    ref_no_incluidas = [g["codigo"] for g in lineas_pdf if g["clave"] not in cods_pedido]
+    ref_no_incluidas = []
+    for g in lineas_pdf:
+        cands, via = _emparejar_linea_albaran(g, lineas_ped)
+        g["claves_pedido"] = [l["key"] for l in cands]
+        g["emparejada_por"] = via
+        if not cands:
+            ref_no_incluidas.append(g["codigo"])
+    n_desc = sum(1 for g in lineas_pdf if g.get("emparejada_por") in ("descripcion", "similar"))
 
     modo, mensaje = None, None
     if pedidos_pdf and pedido_app_norm:
@@ -22110,6 +22182,8 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
         modo = "referencias"
         mensaje = ("El albarán no indica el pedido, pero todas sus referencias "
                    f"({len(lineas_pdf)}) están incluidas en este pedido: coinciden.")
+        if n_desc:
+            mensaje += f" ({n_desc} de ellas emparejadas por la descripción, porque su código no es el del pedido.)"
 
     # (v12.33.14) Un albarán ya registrado no se duplica: si está en este pedido se dice y no se cambia nada; si
     # además (o solo) está en otro pedido del hotel, se avisa para que el usuario decida y corrija.
@@ -22140,7 +22214,8 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
         "proveedor": datos.get("proveedor_nombre"),
         "hotel_pdf": datos.get("hotel_pdf"),
         "pedidos_pdf": pedidos_pdf,
-        "lineas": lineas_pdf,
+        "lineas": _quitar_privados(lineas_pdf),
+        "lineas_emparejadas_por_descripcion": n_desc,
         "lineas_cantidad_cero": con_cantidad_cero,
         "referencias_fuera_del_pedido": ref_no_incluidas,   # solo puede haber alguna si el PDF sí indicaba el pedido
     }, 200
@@ -22190,9 +22265,8 @@ def _albaran_coincide_con_pedido(pid: int, datos: dict, lineas_pdf: list) -> boo
     pdfs = [_normalizar_pedido_num(x) for x in (datos.get("pedidos_num_sap") or [])]
     if pdfs:
         return bool(ped.get("pedido_num")) and _normalizar_pedido_num(ped["pedido_num"]) in pdfs
-    cods = {_clave_codigo_articulo(r["codigo"]) for r in rows_to_list(query(
-        "SELECT codigo FROM pedido_lineas WHERE pedido_id=%s", (pid,))) if r["codigo"]}
-    return bool(cods) and all(g["clave"] in cods for g in lineas_pdf)
+    lineas_ped = _lineas_pedido_agrupadas(pid)
+    return bool(lineas_ped) and all(_emparejar_linea_albaran(g, lineas_ped)[0] for g in lineas_pdf)
 
 
 def _ctx_pedido_albaranes(pid: int, bloquear: bool = False):
@@ -22202,18 +22276,7 @@ def _ctx_pedido_albaranes(pid: int, bloquear: bool = False):
         "FROM pedidos WHERE id=%s" + (" FOR UPDATE" if bloquear else ""), (pid,), one=True))
     if not ped:
         return None
-    _lin = rows_to_list(query(
-        "SELECT codigo, ref_proveedor, descripcion, cantidad FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pid,)))
-    lineas, idx = [], {}
-    for l, cod in zip(_lin, _claves_lineas(_lin)):
-        if not cod:
-            continue
-        g = idx.get(cod)
-        if g is None:
-            g = idx[cod] = {"key": cod, "codigo_vista": l["codigo"], "ref": l["ref_proveedor"],
-                            "descripcion": l["descripcion"], "pedida": 0.0}
-            lineas.append(g)
-        g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
+    lineas = _lineas_pedido_agrupadas(pid)
     entregas = {}
     for r in rows_to_list(query("SELECT albaran_num, codigo, cantidad FROM pedido_lineas_entregas WHERE pedido_id=%s", (pid,))):
         entregas.setdefault(r["albaran_num"], {})[r["codigo"]] = float(r["cantidad"])
@@ -22251,6 +22314,19 @@ def _resolver_pedido_de_albaran(hotel_id: int, datos: dict, lineas_pdf: list) ->
                        WHERE l.pedido_id = p.id AND ({_SQL_CODIGO_NORM_L}) = ANY(%s)) = %s""",
             (hotel_id, list(estados), claves, len(claves))))
     cand = _buscar(_ESTADOS_ACEPTAN_ALBARAN)
+    if not cand:
+        # (v12.33.15) Por código no hay ninguno: puede que el pedido lleve otro código (p. ej. la referencia del proveedor).
+        # Se miran los pedidos abiertos del hotel del mismo proveedor y se empareja por descripción/precio.
+        prov_pdf = _normalizar_nombre_proveedor(datos.get("proveedor_nombre") or "")
+        for c in rows_to_list(query(
+                """SELECT p.id, p.pedido_num, p.entrada_albaran_num, pr.nombre AS prov
+                   FROM pedidos p LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
+                   WHERE p.hotel_id=%s AND p.estado = ANY(%s)""", (hotel_id, list(_ESTADOS_ACEPTAN_ALBARAN)))):
+            if prov_pdf and _normalizar_nombre_proveedor(c.get("prov") or "") != prov_pdf:
+                continue
+            lp = _lineas_pedido_agrupadas(c["id"])
+            if lp and all(_emparejar_linea_albaran(g, lp)[0] for g in lineas_pdf):
+                cand.append(c)
     if len(cand) > 1:
         prov_pdf = _normalizar_nombre_proveedor(datos.get("proveedor_nombre") or "")
         mismos = [c for c in cand if prov_pdf and _normalizar_nombre_proveedor(c.get("prov") or "") == prov_pdf]
@@ -22281,11 +22357,14 @@ def _repartir_albaran_en_lineas(ctx: dict, lineas_pdf: list, alb_clave: str) -> 
         for k, c in det.items():
             otras[k] = otras.get(k, 0.0) + c
     det, fuera = {}, []
+    ctx["n_por_descripcion"] = 0
     for pl in lineas_pdf:
-        cands = [l for l in ctx["lineas"] if _clave_codigo_articulo(l["codigo_vista"]) == pl["clave"]]
+        cands, via = _emparejar_linea_albaran(pl, ctx["lineas"])
         if not cands:
             fuera.append(pl)
             continue
+        if via in ("descripcion", "similar"):
+            ctx["n_por_descripcion"] += 1
         resto = pl["cantidad"]
         for i, l in enumerate(cands):
             pend = max(0.0, round(l["pedida"] - otras.get(l["key"], 0.0) - det.get(l["key"], 0.0), 4))
@@ -22359,6 +22438,8 @@ def _aplicar_albaran_a_ctx(ctx: dict, datos: dict, lineas_pdf: list) -> dict:
         avisos.append(f"Se sobrepasa lo pedido en {len(sobrepasa)} referencia(s).")
     if fuera:
         avisos.append(f"{len(fuera)} referencia(s) del albarán no están en las líneas del pedido (no se han detallado).")
+    if ctx.get("n_por_descripcion"):
+        avisos.append(f"{ctx['n_por_descripcion']} referencia(s) emparejadas por la descripción (su código no es el del pedido): revisa que sean las correctas.")
     if nuevo == "ENTREGADO" and ctx["total_pedido"] is not None:
         rec = round(sum(e["base_imponible"] or 0 for e in ctx["entradas"]), 2)
         if abs(rec - ctx["total_pedido"]) >= 0.01:

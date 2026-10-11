@@ -1,3 +1,15 @@
+# v12.33.15 — 11 octubre 2026
+
+📎 Albaranes PDF: las referencias se registran aunque el código del albarán no sea el del pedido
+
+**Problema (pedido 00015173, albarán 86886)**: al subir el PDF se rellenaban Nº de entrada, fecha y base imponible, pero **las referencias no quedaban registradas** como en una entrada hecha a mano. Causa: el albarán del almacén trae el código **interno** del artículo (00010049) y no tiene columna de referencia del proveedor, mientras que las líneas de ese pedido llevan como código la referencia del proveedor (1900658); solo se comparaba el código, así que nada coincidía y no se detallaba ninguna referencia (ni el estado se calculaba bien).
+
+**Cambios**:
+- `app.py` — nuevo `_emparejar_linea_albaran()`: cada referencia del albarán se busca en las líneas del pedido (1) por código (o referencia del proveedor de la línea), (2) por la **misma descripción** (sin acentos, mayúsculas ni signos) y (3) por descripción muy parecida (≥ 90 %) **con el mismo precio** (±0,01). Se usa en el botón del pedido (`_analizar_albaran_pdf_para_pedido`, que ahora devuelve `claves_pedido` y `emparejada_por` por línea), en la carga en lote (`_repartir_albaran_en_lineas`, `_albaran_coincide_con_pedido` y `_resolver_pedido_de_albaran`, que sin «Pedido/s» también localiza el pedido del mismo proveedor por descripción) y en la comprobación «sin pedido en el PDF». Las líneas emparejadas por descripción se avisan para que el usuario compruebe que son las correctas. Nuevos `_lineas_pedido_agrupadas()` y `_norm_desc()`.
+- `templates/index.html` — `subirAlbaranPdf()` usa las líneas que indica el servidor (con respaldo por código) y el resumen lista «Referencias emparejadas por la descripción».
+
+**Sin migraciones.** Lo ya cargado antes sin referencias (como el 86886 del pedido 00015173) se corrige volviendo a subir el PDF desde el pedido: si la entrada ya estaba guardada, quitar antes esa entrada o usar «Referencias» a mano.
+
 # v12.33.14 — 11 octubre 2026
 
 📎 Albaranes PDF: carga en lote para admin («Confirmar albaranes sueltos») y ciclo completo también desde el pedido

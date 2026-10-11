@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-11 — [Control Pedidos] Albaranes PDF: referencias emparejadas por descripción cuando el código no coincide (v12.33.15)
+
+Problema reportado por Víctor (pedido 00015173, albarán 86886): al subir el PDF se rellenaba la entrada pero las referencias no se registraban. Causa: el albarán trae el código interno de DALI (00010049) y el pedido lleva como código la referencia del proveedor (1900658); solo se comparaba el código. Corrección: `_emparejar_linea_albaran()` (código/ref. proveedor → misma descripción normalizada → descripción ≥ 90 % parecida con mismo precio ±0,01), usado en el botón del pedido, en la carga en lote y en la localización del pedido sin «Pedido/s»; las líneas emparejadas por descripción se avisan. Probado con el PDF real 86886 y Postgres real (descripción igual con otro caso/acentos, parecida con mismo precio, parecida con precio distinto → no empareja, sin coincidencia, lote simulado/aplicado, lote sin «Pedido/s» por proveedor) y con Playwright (botón «1 ref. ✔», ENTREGA PARCIAL, guardado y detalle en BD); regresión de las pruebas de v12.33.12–.14 sin cambios. Sin migraciones. Documentos de mantenimiento: no aplica.
+
+---
+
 ## 2026-10-11 — [Control Pedidos] Carga de albaranes PDF en lote y ciclo completo desde el pedido (v12.33.14)
 
 Petición de Víctor: desde «Confirmar albaranes sueltos» (admin) cargar varios albaranes a la vez, completando todo el ciclo (pedido, entrada, referencias, estado, historial, avisos, cruce con SAP); desde el pedido lo mismo para compras/hotel (admin en todos); un albarán ya registrado no se duplica y, si está en un pedido erróneo, se avisa para que el usuario decida. Nuevo `POST /api/albaranes/cargar-lote` (simula o aplica), `POST /api/pedidos/<id>/registrar-albaran-sap`, detección de albarán ya registrado (`_pedidos_con_albaran`) en el lote y en el botón del pedido, y nueva ventana de revisión/aplicación. Probado con el PDF real del albarán 87343 y Postgres real: simulación sin escribir, aplicación, re-subida (ya registrado), pedido completo (ENTREGADO), hotel equivocado, albarán en pedido erróneo, sin «Pedido/s» (único/ambiguo/conflicto), dos albaranes del mismo pedido en una carga y ficheros no PDF; y con Playwright (ventana de lote, botón del pedido, guardado y confirmación en el cruce con SAP). Sin migraciones. Documentos de mantenimiento: no aplica.

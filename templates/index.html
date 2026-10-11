@@ -1440,7 +1440,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.14
+          V 12.33.15
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -7599,11 +7599,16 @@ async function subirAlbaranPdf(inp) {
 
   // 3) Detalle de referencias (código del albarán → línea/s del pedido; si el código se repite, se reparte en orden)
   const lineasPed = G.lineasEntrega || [];
-  const det = {}, fuera = [];
+  const det = {}, fuera = [], porDesc = [];
   if (lineasPed.length) {
     (d.lineas || []).forEach(pl => {
-      const cands = lineasPed.filter(l => _claveCodJS(l.codigo_vista || l.codigo) === pl.clave);
+      // (v12.33.15) Líneas del pedido que el servidor empareja con esta referencia (por código o, si el código
+      // del albarán no es el del pedido, por descripción/precio). Respaldo: comparar el código.
+      const cl = pl.claves_pedido || [];
+      let cands = cl.length ? lineasPed.filter(l => cl.includes(l.codigo)) : [];
+      if (!cands.length) cands = lineasPed.filter(l => _claveCodJS(l.codigo_vista || l.codigo) === pl.clave);
       if (!cands.length) { fuera.push(pl); return; }
+      if (pl.emparejada_por === 'descripcion' || pl.emparejada_por === 'similar') porDesc.push({ pl, l: cands[0] });
       let resto = pl.cantidad;
       cands.forEach((l, i) => {
         const pend = Math.max(0, Math.round((l.pedida - _entregadoEnOtras(l.codigo, numKey)) * 10000) / 10000);
@@ -7662,6 +7667,10 @@ async function subirAlbaranPdf(inp) {
   if (fuera.length) {
     h += `<div style="margin-top:8px;color:#7a5b00"><b>Referencias del albarán que no están en las líneas del pedido</b> (no se han detallado):</div>`
       + lista(fuera, x => `<li><b>${_htmlLinea(x.codigo)}</b> ${_htmlLinea((x.descripcion || '').slice(0, 40))} — ${_fmtCant(x.cantidad)}</li>`);
+  }
+  if (porDesc.length) {
+    h += `<div style="margin-top:8px;color:#7a5b00"><b>Referencias emparejadas por la descripción</b> (el código del albarán no es el del pedido) — comprueba que son las correctas:</div>`
+      + lista(porDesc, x => `<li><b>${_htmlLinea(x.pl.codigo)}</b> ${_htmlLinea((x.pl.descripcion || '').slice(0, 40))} → ${nomLinea(x.l)}${x.pl.emparejada_por === 'similar' ? ' <i>(descripción parecida)</i>' : ''}</li>`);
   }
   if (d.lineas_cantidad_cero) h += `<div style="margin-top:8px;color:#666">${d.lineas_cantidad_cero} línea(s) del albarán con cantidad 0 se han ignorado.</div>`;
   h += `<div style="margin-top:10px;color:#555">Revisa los datos (puedes corregir lo que quieras, también a mano) y pulsa <b>Guardar</b>: se registra la entrada y el albarán queda confirmado en el cruce con SAP.</div>`;
