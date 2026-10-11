@@ -1440,7 +1440,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.15
+          V 12.33.16
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -7575,22 +7575,27 @@ async function subirAlbaranPdf(inp) {
     return;
   }
   const numKeyPdf = _numSinCeros(d.albaran_num);
-  // Ya está en el formulario (aunque aún sin guardar): tampoco se duplica.
-  if (Array.from(document.querySelectorAll('#albaran-list .albaran-row')).some(r => numKeyPdf && _numSinCeros(_numDeFila(r)) === numKeyPdf)) {
-    showFormAlert('Este albarán ya está en las entradas de este pedido (puede que aún sin guardar). No se ha cambiado nada.', { title: 'ℹ️ Albarán ya registrado' });
-    return;
+  // Ya está en el formulario (aunque aún sin guardar): no se duplica. Si esa entrada no tiene las referencias
+  // detalladas, se aprovecha la misma fila para completarlas (v12.33.15).
+  const filaMisma = Array.from(document.querySelectorAll('#albaran-list .albaran-row')).find(r => numKeyPdf && _numSinCeros(_numDeFila(r)) === numKeyPdf);
+  if (filaMisma) {
+    const detPrev = G.entregasPorAlbaran[_numDeFila(filaMisma)];
+    if (detPrev && Object.keys(detPrev).length) {
+      showFormAlert('Este albarán ya está en las entradas de este pedido y con sus referencias detalladas. No se ha cambiado nada.', { title: 'ℹ️ Albarán ya registrado' });
+      return;
+    }
   }
 
   // 1) Asegurar la lista de entradas editable (como al marcar ENTREGADO a mano)
   const chkEnt = document.getElementById('chk-entregado');
   if (!chkEnt.checked) { chkEnt.checked = true; onAlbaranCheckChange('entregado'); }
 
-  // 2) Fila: la última en blanco, o una nueva
+  // 2) Fila: la de ese mismo albarán (si ya estaba sin referencias), la última en blanco, o una nueva
   const filas = Array.from(document.querySelectorAll('#albaran-list .albaran-row'));
-  let row = filas.find(r => !_numDeFila(r));
+  let row = filaMisma || filas.find(r => !_numDeFila(r));
   if (!row) { addAlbaranInput(); const fs = document.querySelectorAll('#albaran-list .albaran-row'); row = fs[fs.length - 1]; }
   const inNum = row.querySelector('.albaran-input');
-  inNum.value = numKeyPdf;
+  if (!filaMisma) inNum.value = numKeyPdf;
   inNum.dataset.numPrevio = inNum.value.trim();
   (G.albaranesPdfPend = G.albaranesPdfPend || {})[numKeyPdf] = file;   // se confirma en el cruce con SAP al guardar
   if (d.fecha_iso) row.querySelector('.albaran-fecha').value = d.fecha_iso;

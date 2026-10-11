@@ -22187,6 +22187,7 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
 
     # (v12.33.14) Un albarán ya registrado no se duplica: si está en este pedido se dice y no se cambia nada; si
     # además (o solo) está en otro pedido del hotel, se avisa para que el usuario decida y corrija.
+    completa_refs = False
     if comprobar_duplicado:
         reg = _pedidos_con_albaran(ped["hotel_id"], _normalizar_num_albaran(num_albaran))
         en_este = any(x["id"] == pid for x in reg)
@@ -22199,7 +22200,10 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
                               + f", pero por su contenido corresponde a este pedido ({ped['pedido_num'] or 'sin Nº SAP'}). "
                               "No se ha cambiado nada: decide cuál es el correcto y, si hace falta, quita la entrada del "
                               "pedido erróneo antes de registrarlo aquí.")}, 422
-        if en_este:
+        if en_este and _entrada_sin_referencias(pid, _normalizar_num_albaran(num_albaran)):
+            # (v12.33.15) Ya está la entrada pero sin las referencias detalladas: no se duplica, se completan.
+            completa_refs = True
+        elif en_este:
             return {"ok": True, "ya_registrado": True, "albaran_num": num_albaran,
                     "mensaje": f"Este albarán ya está registrado y asignado correctamente a este pedido. No se ha cambiado nada."}, 200
 
@@ -22216,6 +22220,7 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
         "pedidos_pdf": pedidos_pdf,
         "lineas": _quitar_privados(lineas_pdf),
         "lineas_emparejadas_por_descripcion": n_desc,
+        "completa_referencias": completa_refs,
         "lineas_cantidad_cero": con_cantidad_cero,
         "referencias_fuera_del_pedido": ref_no_incluidas,   # solo puede haber alguna si el PDF sí indicaba el pedido
     }, 200
@@ -22250,6 +22255,17 @@ def _pedidos_con_albaran(hotel_id: int, num_norm: str) -> list:
     return [{"id": f["id"], "norden": f["norden"], "pedido_num": f["pedido_num"], "estado": f["estado"]}
             for f in filas
             if any(_normalizar_num_albaran(e["num"]) == num_norm for e in _parse_albaran_entries(f["entrada_albaran_num"]))]
+
+
+def _entrada_sin_referencias(pid: int, num_norm: str) -> bool:
+    """(v12.33.15) ¿La entrada `num_norm` del pedido está registrada SIN el detalle de referencias, y el pedido tiene
+    líneas donde detallarlas? (Entradas guardadas antes de poder emparejar por descripción, o sin marcar a mano.)"""
+    if not row_to_dict(query("SELECT 1 AS x FROM pedido_lineas WHERE pedido_id=%s LIMIT 1", (pid,), one=True)):
+        return False
+    for r in rows_to_list(query("SELECT DISTINCT albaran_num FROM pedido_lineas_entregas WHERE pedido_id=%s", (pid,))):
+        if _normalizar_num_albaran(r["albaran_num"]) == num_norm:
+            return False
+    return True
 
 
 def _desc_pedido(p: dict) -> str:
@@ -22497,6 +22513,15 @@ def _procesar_albaranes_lote(hotel_id: int, archivos: list, aplicar: bool, uid, 
             for pid_c, ctx_c in ctxs.items():
                 if ctx_c and pid_c not in existentes and any(_normalizar_num_albaran(e["num"]) == num_norm for e in ctx_c["entradas"]):
                     existentes[pid_c] = {"id": pid_c, "norden": ctx_c["norden"], "pedido_num": ctx_c["pedido_num"], "estado": ctx_c["estado"]}
+            pid_fijo = None
+            _uno = list(existentes.values())
+            if (len(_uno) == 1 and _uno[0]["id"] not in ctxs and _albaran_coincide_con_pedido(_uno[0]["id"], datos, lineas_pdf)
+                    and _entrada_sin_referencias(_uno[0]["id"], num_norm)):
+                # (v12.33.15) Entrada ya registrada en su pedido pero SIN las referencias detalladas: no se duplica,
+                # se completan las referencias (y se recalcula el estado).
+                pid_fijo = _uno[0]["id"]
+                r["completa_referencias"] = True
+                existentes = {}
             if existentes:
                 buenos = [x for x in existentes.values() if _albaran_coincide_con_pedido(x["id"], datos, lineas_pdf)]
                 malos = [x for x in existentes.values() if x not in buenos]
@@ -22523,7 +22548,10 @@ def _procesar_albaranes_lote(hotel_id: int, archivos: list, aplicar: bool, uid, 
                                     + ("También figura en el pedido correcto. " if buenos else "")
                                     + "No se ha cambiado nada: decide cuál es el correcto y, si hace falta, quita la entrada del pedido erróneo y vuelve a cargar el albarán.")
                 resultados.append(r); continue
-            pid, err, via = _resolver_pedido_de_albaran(hotel_id, datos, lineas_pdf)
+            if pid_fijo:
+                pid, err, via = pid_fijo, None, "referencias"
+            else:
+                pid, err, via = _resolver_pedido_de_albaran(hotel_id, datos, lineas_pdf)
             if err:
                 r["mensaje"] = err
                 resultados.append(r); continue

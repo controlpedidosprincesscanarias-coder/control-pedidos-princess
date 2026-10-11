@@ -1,3 +1,15 @@
+# v12.33.16 — 11 octubre 2026
+
+📎 Albaranes PDF: volver a subir un albarán ya registrado SIN referencias las completa (no dice «ya registrado»)
+
+**Problema (pedido 00015173, albarán 86886)**: tras la v12.33.15 el pedido seguía con la entrada 86886 guardada sin referencias y, al volver a subir el PDF, la aplicación respondía «Albarán ya registrado… No se ha cambiado nada», sin dejar completarlas.
+
+**Cambios**:
+- `app.py` — nuevo `_entrada_sin_referencias()`: si el albarán ya está en ESTE pedido pero sin detalle de referencias (y el pedido tiene líneas), `_analizar_albaran_pdf_para_pedido` devuelve `completa_referencias` en vez de `ya_registrado`, y la carga en lote (`_procesar_albaranes_lote`) lo aplica sobre ese pedido (acción «Entrada ya registrada: actualizada») recalculando el estado. No se duplica la entrada. Si ya tiene referencias, o está en otro pedido, todo sigue igual (ya registrado / conflicto).
+- `templates/index.html` — `subirAlbaranPdf()` reutiliza la fila de esa misma entrada (sin duplicarla) cuando no tiene referencias detalladas; si ya las tiene, avisa de que no se cambia nada.
+
+**Sin migraciones.** Tras subir el PDF hay que pulsar «Guardar» para que se guarden las referencias.
+
 # v12.33.15 — 11 octubre 2026
 
 📎 Albaranes PDF: las referencias se registran aunque el código del albarán no sea el del pedido
