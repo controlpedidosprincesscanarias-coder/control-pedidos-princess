@@ -13824,7 +13824,28 @@ def _importar_albaran_confirmacion(hotel_id: int, pdf_bytes: bytes) -> dict:
             albaran_id, datos["pedidos_num_sap"]
         )
     pedido_num_sap_confirmado = datos["pedidos_num_sap"][0]
+    _guardar_confirmacion_albaran(hotel_id, datos, pedido_num_sap_confirmado)
+    get_db().commit()
 
+    return {
+        "ok": True,
+        "albaran_id": albaran_id,
+        "albaran_ref": datos["albaran_ref"],
+        "proveedor_nombre": datos["proveedor_nombre"],
+        "pedido_num_sap_confirmado": pedido_num_sap_confirmado,
+        "otros_pedidos_en_el_pdf": datos["pedidos_num_sap"][1:],
+        "lineas_guardadas": len(datos["lineas"]),
+    }
+
+
+def _guardar_confirmacion_albaran(hotel_id: int, datos: dict, pedido_num_sap_confirmado: str) -> int:
+    """
+    (v12.33.14) Guarda (SIN commit) las líneas de un albarán leído con `_extraer_albaran_confirmacion_individual`
+    en `sap_albaranes_lineas`, marcadas con el pedido confirmado. Sustituye cualquier versión anterior del mismo
+    albarán. Lo comparten «Confirmar albaranes sueltos» (admin, en lote), el botón de albarán PDF del pedido y la
+    antigua confirmación de un solo PDF. Devuelve el nº de líneas guardadas.
+    """
+    albaran_id = datos["albaran_id"]
     execute("DELETE FROM sap_albaranes_lineas WHERE hotel_id=%s AND albaran_id=%s", (hotel_id, albaran_id))
     for ln in datos["lineas"]:
         execute(
@@ -13837,17 +13858,7 @@ def _importar_albaran_confirmacion(hotel_id: int, pdf_bytes: bytes) -> dict:
              ln.get("codigo_articulo"), ln.get("descripcion"), ln.get("unidad"), ln.get("cantidad_txt"),
              ln.get("precio_txt"), ln.get("importe_txt"), pedido_num_sap_confirmado)
         )
-    get_db().commit()
-
-    return {
-        "ok": True,
-        "albaran_id": albaran_id,
-        "albaran_ref": datos["albaran_ref"],
-        "proveedor_nombre": datos["proveedor_nombre"],
-        "pedido_num_sap_confirmado": pedido_num_sap_confirmado,
-        "otros_pedidos_en_el_pdf": datos["pedidos_num_sap"][1:],
-        "lineas_guardadas": len(datos["lineas"]),
-    }
+    return len(datos["lineas"])
 
 
 def _comparar_listado_pdf_logica(hotel_id: int, pdf_bytes: bytes, escribir_base_ultima_entrada: bool = True) -> dict:
@@ -22012,32 +22023,9 @@ def _fecha_es_a_iso(txt):
     return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}" if m else None
 
 
-def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool = False) -> tuple:
-    """
-    (v12.33.12) Lee el PDF de UN albarán (el volcado de pantalla del programa de almacén) y comprueba que
-    corresponde al pedido `pid`, para rellenar solos los datos de la entrada en la ficha del pedido.
-    NO escribe nada: devuelve lo leído y el resultado de la comprobación; el formulario es quien lo aplica
-    (y se guarda al pulsar «Guardar», como una entrada hecha a mano).
-
-    Comprobación del pedido:
-      · el PDF trae «Pedido/s» → debe incluir el Nº de pedido de este pedido (si no, se rechaza y se dice
-        de qué pedido es). Si este pedido aún no tiene Nº de pedido, se comprueban las referencias;
-      · el PDF no trae pedido → todas las referencias con cantidad deben estar en las líneas del pedido
-        (si alguna no está, se rechaza y se listan).
-    Devuelve (resultado: dict, http_status: int).
-    """
-    ped = row_to_dict(query("SELECT id, pedido_num FROM pedidos WHERE id=%s", (pid,), one=True))
-    try:
-        datos = _extraer_albaran_confirmacion_individual(pdf_bytes, exigir_pedido=False)
-    except RuntimeError as exc:
-        return {"ok": False, "error": str(exc)}, 422
-
-    num_albaran = (datos.get("albaran_id") or "").strip()
-    if not num_albaran:
-        return {"ok": False, "error": "El PDF no trae el campo «Código» (Nº de entrada del albarán): "
-                                        "¿es el volcado de un albarán del programa de almacén?"}, 422
-
-    # Referencias del albarán, agrupadas por código (el mismo código puede salir en varias líneas).
+def _agrupar_lineas_albaran(datos: dict, es_hotel: bool = False) -> tuple:
+    """(v12.33.14) Referencias del albarán agrupadas por código (el mismo código puede salir en varias líneas),
+    ignorando las de cantidad 0. Devuelve (lista, nº de líneas con cantidad 0)."""
     agrup, orden, con_cantidad_cero = {}, [], 0
     for ln in datos["lineas"]:
         cod = (ln.get("codigo_articulo") or "").strip()
@@ -22055,13 +22043,42 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
             orden.append(k)
         g["cantidad"] = round(g["cantidad"] + cant, 4)
         g["importe"] = round(g["importe"] + _parse_importe_es(ln.get("importe_txt")), 2)
-    if not orden:
-        return {"ok": False, "error": "El albarán no trae ninguna referencia con cantidad mayor que 0."}, 422
     lineas_pdf = [agrup[k] for k in orden]
     if es_hotel:
         for g in lineas_pdf:
             g["precio"] = None
             g["importe"] = None
+    return lineas_pdf, con_cantidad_cero
+
+
+def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool = False, comprobar_duplicado: bool = True) -> tuple:
+    """
+    (v12.33.12) Lee el PDF de UN albarán (el volcado de pantalla del programa de almacén) y comprueba que
+    corresponde al pedido `pid`, para rellenar solos los datos de la entrada en la ficha del pedido.
+    NO escribe nada: devuelve lo leído y el resultado de la comprobación; el formulario es quien lo aplica
+    (y se guarda al pulsar «Guardar», como una entrada hecha a mano).
+
+    Comprobación del pedido:
+      · el PDF trae «Pedido/s» → debe incluir el Nº de pedido de este pedido (si no, se rechaza y se dice
+        de qué pedido es). Si este pedido aún no tiene Nº de pedido, se comprueban las referencias;
+      · el PDF no trae pedido → todas las referencias con cantidad deben estar en las líneas del pedido
+        (si alguna no está, se rechaza y se listan).
+    Devuelve (resultado: dict, http_status: int).
+    """
+    ped = row_to_dict(query("SELECT id, pedido_num, hotel_id FROM pedidos WHERE id=%s", (pid,), one=True))
+    try:
+        datos = _extraer_albaran_confirmacion_individual(pdf_bytes, exigir_pedido=False)
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc)}, 422
+
+    num_albaran = (datos.get("albaran_id") or "").strip()
+    if not num_albaran:
+        return {"ok": False, "error": "El PDF no trae el campo «Código» (Nº de entrada del albarán): "
+                                        "¿es el volcado de un albarán del programa de almacén?"}, 422
+
+    lineas_pdf, con_cantidad_cero = _agrupar_lineas_albaran(datos, es_hotel)
+    if not lineas_pdf:
+        return {"ok": False, "error": "El albarán no trae ninguna referencia con cantidad mayor que 0."}, 422
 
     # Referencias del pedido de la ficha.
     cods_pedido = {_clave_codigo_articulo(r["codigo"]) for r in rows_to_list(query(
@@ -22094,6 +22111,24 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
         mensaje = ("El albarán no indica el pedido, pero todas sus referencias "
                    f"({len(lineas_pdf)}) están incluidas en este pedido: coinciden.")
 
+    # (v12.33.14) Un albarán ya registrado no se duplica: si está en este pedido se dice y no se cambia nada; si
+    # además (o solo) está en otro pedido del hotel, se avisa para que el usuario decida y corrija.
+    if comprobar_duplicado:
+        reg = _pedidos_con_albaran(ped["hotel_id"], _normalizar_num_albaran(num_albaran))
+        en_este = any(x["id"] == pid for x in reg)
+        otros = [x for x in reg if x["id"] != pid]
+        if otros:
+            donde = ", ".join(_desc_pedido(x) for x in otros)
+            return {"ok": False, "ya_registrado_en_otro": True,
+                    "error": (f"Este albarán ya está registrado en el pedido {donde}"
+                              + (", y también en este pedido" if en_este else "")
+                              + f", pero por su contenido corresponde a este pedido ({ped['pedido_num'] or 'sin Nº SAP'}). "
+                              "No se ha cambiado nada: decide cuál es el correcto y, si hace falta, quita la entrada del "
+                              "pedido erróneo antes de registrarlo aquí.")}, 422
+        if en_este:
+            return {"ok": True, "ya_registrado": True, "albaran_num": num_albaran,
+                    "mensaje": f"Este albarán ya está registrado y asignado correctamente a este pedido. No se ha cambiado nada."}, 200
+
     return {
         "ok": True,
         "modo_comprobacion": modo,
@@ -22109,6 +22144,428 @@ def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool
         "lineas_cantidad_cero": con_cantidad_cero,
         "referencias_fuera_del_pedido": ref_no_incluidas,   # solo puede haber alguna si el PDF sí indicaba el pedido
     }, 200
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# (v12.33.14) Carga de albaranes PDF en lote (admin) — ciclo completo
+# ═══════════════════════════════════════════════════════════════════════════
+# Por cada PDF: localiza el pedido (por «Pedido/s» o, si no lo trae, por las referencias), registra la entrada
+# (Nº, fecha, base imponible), detalla las referencias, fija el estado (ENTREGADO si completa el pedido, ENTREGA
+# PARCIAL si no), anota el historial, avisa del cambio de estado y deja el albarán confirmado en el cruce con SAP.
+# Se ejecuta en dos pasos: sin `aplicar` solo simula (nada se escribe) y con `aplicar` lo escribe todo.
+_ESTADOS_ACEPTAN_ALBARAN = ("ENVIADO AL PROVEEDOR", "ENTREGA PARCIAL")
+_SQL_CODIGO_NORM_L = ("CASE WHEN trim(l.codigo) ~ '^0*[0-9]+$' THEN regexp_replace(trim(l.codigo), '^0+(?=[0-9])', '') "
+                      "ELSE upper(trim(l.codigo)) END")
+
+
+def _num_albaran_visible(n) -> str:
+    """Nº de entrada tal y como se escribe a mano: sin ceros a la izquierda si es numérico ('00087343' → '87343')."""
+    n = str(n or "").strip()
+    return re.sub(r'^0+(?=\d)', '', n) if re.match(r'^0*\d+$', n) else n
+
+
+def _pedidos_con_albaran(hotel_id: int, num_norm: str) -> list:
+    """(v12.33.14) Pedidos del hotel que ya tienen registrada una entrada con ese Nº de albarán (compara sin ceros
+    a la izquierda). Devuelve [{id, norden, pedido_num, estado}]."""
+    if not num_norm:
+        return []
+    filas = rows_to_list(query(
+        "SELECT id, norden, pedido_num, estado, entrada_albaran_num FROM pedidos "
+        "WHERE hotel_id=%s AND entrada_albaran_num LIKE %s", (hotel_id, f"%{num_norm}%")))
+    return [{"id": f["id"], "norden": f["norden"], "pedido_num": f["pedido_num"], "estado": f["estado"]}
+            for f in filas
+            if any(_normalizar_num_albaran(e["num"]) == num_norm for e in _parse_albaran_entries(f["entrada_albaran_num"]))]
+
+
+def _desc_pedido(p: dict) -> str:
+    return f"{p.get('pedido_num') or 'sin Nº SAP'} (Nº {p.get('norden')})"
+
+
+def _albaran_coincide_con_pedido(pid: int, datos: dict, lineas_pdf: list) -> bool:
+    """¿Corresponde el albarán a ese pedido? Por «Pedido/s» si el PDF lo trae; si no, porque todas sus referencias
+    están en las líneas del pedido."""
+    ped = row_to_dict(query("SELECT pedido_num FROM pedidos WHERE id=%s", (pid,), one=True))
+    if not ped:
+        return False
+    pdfs = [_normalizar_pedido_num(x) for x in (datos.get("pedidos_num_sap") or [])]
+    if pdfs:
+        return bool(ped.get("pedido_num")) and _normalizar_pedido_num(ped["pedido_num"]) in pdfs
+    cods = {_clave_codigo_articulo(r["codigo"]) for r in rows_to_list(query(
+        "SELECT codigo FROM pedido_lineas WHERE pedido_id=%s", (pid,))) if r["codigo"]}
+    return bool(cods) and all(g["clave"] in cods for g in lineas_pdf)
+
+
+def _ctx_pedido_albaranes(pid: int, bloquear: bool = False):
+    """Estado del pedido en memoria para ir aplicándole albaranes (uno o varios) antes de escribir."""
+    ped = row_to_dict(query(
+        "SELECT id, norden, pedido_num, estado, hotel_id, entrada_albaran_num, total_pedido, proveedor_id "
+        "FROM pedidos WHERE id=%s" + (" FOR UPDATE" if bloquear else ""), (pid,), one=True))
+    if not ped:
+        return None
+    _lin = rows_to_list(query(
+        "SELECT codigo, ref_proveedor, descripcion, cantidad FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pid,)))
+    lineas, idx = [], {}
+    for l, cod in zip(_lin, _claves_lineas(_lin)):
+        if not cod:
+            continue
+        g = idx.get(cod)
+        if g is None:
+            g = idx[cod] = {"key": cod, "codigo_vista": l["codigo"], "ref": l["ref_proveedor"],
+                            "descripcion": l["descripcion"], "pedida": 0.0}
+            lineas.append(g)
+        g["pedida"] = round(g["pedida"] + float(l["cantidad"] or 0), 4)
+    entregas = {}
+    for r in rows_to_list(query("SELECT albaran_num, codigo, cantidad FROM pedido_lineas_entregas WHERE pedido_id=%s", (pid,))):
+        entregas.setdefault(r["albaran_num"], {})[r["codigo"]] = float(r["cantidad"])
+    return {
+        "pid": pid, "norden": ped["norden"], "pedido_num": ped["pedido_num"], "hotel_id": ped["hotel_id"],
+        "total_pedido": float(ped["total_pedido"]) if ped.get("total_pedido") is not None else None,
+        "estado_antes": ped["estado"], "estado": ped["estado"],
+        "entradas": _parse_albaran_entries(ped["entrada_albaran_num"]),
+        "lineas": lineas, "entregas": entregas, "tocadas": set(), "notas": [], "cambios": False,
+    }
+
+
+def _resolver_pedido_de_albaran(hotel_id: int, datos: dict, lineas_pdf: list) -> tuple:
+    """(pedido_id | None, mensaje_error | None, via). `via`: 'pedido' (por «Pedido/s») o 'referencias'."""
+    pedidos_pdf = list(dict.fromkeys(datos.get("pedidos_num_sap") or []))
+    norm = [_normalizar_pedido_num(x) for x in pedidos_pdf]
+    if pedidos_pdf:
+        filas = rows_to_list(query(
+            f"SELECT id FROM pedidos WHERE hotel_id=%s AND {_SQL_PEDIDO_NUM_FILTRO} AND ({_SQL_PEDIDO_NUM_NORM}) = ANY(%s)",
+            (hotel_id, norm)))
+        if len(filas) == 1:
+            return filas[0]["id"], None, "pedido"
+        if not filas:
+            return None, (f"El pedido {', '.join(pedidos_pdf)} que indica el albarán no existe en el hotel elegido "
+                          "(¿hotel equivocado, o el pedido aún no está dado de alta?)."), None
+        return None, f"El albarán indica varios pedidos del hotel ({', '.join(pedidos_pdf)}): no se puede elegir uno solo.", None
+    # Sin pedido en el PDF: pedidos del hotel cuyas líneas incluyan TODAS las referencias del albarán.
+    claves = [g["clave"] for g in lineas_pdf]
+    def _buscar(estados):
+        return rows_to_list(query(
+            f"""SELECT p.id, p.pedido_num, p.entrada_albaran_num, pr.nombre AS prov
+                FROM pedidos p LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
+                WHERE p.hotel_id=%s AND p.estado = ANY(%s)
+                  AND (SELECT COUNT(DISTINCT {_SQL_CODIGO_NORM_L}) FROM pedido_lineas l
+                       WHERE l.pedido_id = p.id AND ({_SQL_CODIGO_NORM_L}) = ANY(%s)) = %s""",
+            (hotel_id, list(estados), claves, len(claves))))
+    cand = _buscar(_ESTADOS_ACEPTAN_ALBARAN)
+    if len(cand) > 1:
+        prov_pdf = _normalizar_nombre_proveedor(datos.get("proveedor_nombre") or "")
+        mismos = [c for c in cand if prov_pdf and _normalizar_nombre_proveedor(c.get("prov") or "") == prov_pdf]
+        if len(mismos) == 1:
+            cand = mismos
+    if len(cand) == 1:
+        return cand[0]["id"], None, "referencias"
+    if len(cand) > 1:
+        nums = ", ".join(str(c["pedido_num"] or c["id"]) for c in cand[:6])
+        return None, (f"El albarán no indica el pedido y sus referencias están en {len(cand)} pedidos abiertos del hotel "
+                      f"({nums}): no se puede elegir uno solo. Regístralo desde el pedido."), None
+    # ¿Ya registrado en algún pedido (p. ej. ya ENTREGADO)? Se busca entre todos los estados.
+    num = _normalizar_num_albaran(datos.get("albaran_id"))
+    ya = [c for c in _buscar(("ENTREGADO",)) if any(_normalizar_num_albaran(e["num"]) == num for e in _parse_albaran_entries(c["entrada_albaran_num"]))]
+    if len(ya) == 1:
+        return ya[0]["id"], None, "referencias"
+    return None, ("El albarán no indica el pedido y no hay ningún pedido abierto de este hotel que incluya todas sus "
+                  "referencias. Regístralo desde el pedido."), None
+
+
+def _repartir_albaran_en_lineas(ctx: dict, lineas_pdf: list, alb_clave: str) -> tuple:
+    """Reparte las cantidades del albarán entre las líneas del pedido (un código repetido en el pedido se reparte en
+    orden, igual que en la ficha). Devuelve (detalle {clave_línea: cantidad}, referencias que no están en el pedido)."""
+    otras = {}
+    for alb, det in ctx["entregas"].items():
+        if alb == alb_clave:
+            continue
+        for k, c in det.items():
+            otras[k] = otras.get(k, 0.0) + c
+    det, fuera = {}, []
+    for pl in lineas_pdf:
+        cands = [l for l in ctx["lineas"] if _clave_codigo_articulo(l["codigo_vista"]) == pl["clave"]]
+        if not cands:
+            fuera.append(pl)
+            continue
+        resto = pl["cantidad"]
+        for i, l in enumerate(cands):
+            pend = max(0.0, round(l["pedida"] - otras.get(l["key"], 0.0) - det.get(l["key"], 0.0), 4))
+            toma = resto if i == len(cands) - 1 else min(resto, pend)
+            if toma > 0:
+                det[l["key"]] = round(det.get(l["key"], 0.0) + toma, 4)
+            resto = round(resto - toma, 4)
+    return det, fuera
+
+
+def _aplicar_albaran_a_ctx(ctx: dict, datos: dict, lineas_pdf: list) -> dict:
+    """Aplica un albarán al estado en memoria del pedido. Devuelve el resultado (con 'error' si no se puede)."""
+    estado0 = ctx["estado"]
+    num_vis = _num_albaran_visible(datos.get("albaran_id"))
+    num_norm = _normalizar_num_albaran(num_vis)
+    base = datos.get("base_imponible")
+    if estado0 in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL"):
+        return {"error": f"El pedido está {estado0}: no se registran entradas."}
+    pos = next((i for i, e in enumerate(ctx["entradas"]) if _normalizar_num_albaran(e["num"]) == num_norm), None)
+    if pos is None and estado0 not in _ESTADOS_ACEPTAN_ALBARAN:
+        return {"error": (f"El pedido ya está {estado0} (entrega cerrada): este albarán no estaba registrado. "
+                          "Si hay que añadirlo, pasa antes el pedido a ENTREGA PARCIAL.") if estado0 == "ENTREGADO"
+                else f"El pedido está en estado {estado0}: no se registran entradas hasta que esté ENVIADO AL PROVEEDOR."}
+    if not base or base <= 0:
+        return {"error": "El albarán no trae importe (Total): no se puede registrar la base imponible."}
+
+    avisos = []
+    fecha_iso = _fecha_es_a_iso(datos.get("fecha_albaran"))
+    if pos is None:
+        ctx["entradas"].append({"num": num_vis, "fecha_iso": fecha_iso, "base_imponible": round(float(base), 2)})
+        accion, alb_clave = "Entrada nueva", num_vis
+    else:
+        e = ctx["entradas"][pos]
+        e["fecha_iso"] = fecha_iso or e.get("fecha_iso")
+        e["base_imponible"] = round(float(base), 2)
+        accion, alb_clave = "Entrada ya registrada: actualizada", e["num"]
+    # clave con la que ya estuviera guardado su detalle (mismo albarán escrito con/sin ceros)
+    alb_clave = next((k for k in ctx["entregas"] if _normalizar_num_albaran(k) == num_norm), alb_clave)
+
+    det, fuera = ({}, [])
+    if ctx["lineas"]:
+        det, fuera = _repartir_albaran_en_lineas(ctx, lineas_pdf, alb_clave)
+        if det:
+            ctx["entregas"][alb_clave] = det
+        else:
+            ctx["entregas"].pop(alb_clave, None)
+        ctx["tocadas"].add(alb_clave)
+
+    pendientes, sobrepasa = [], []
+    for l in ctx["lineas"]:
+        total = round(sum(d.get(l["key"], 0.0) for d in ctx["entregas"].values()), 4)
+        dif = round(l["pedida"] - total, 4)
+        item = {"codigo": l["codigo_vista"], "ref": l["ref"], "descripcion": (l["descripcion"] or "")[:60]}
+        if dif > 0.0001:
+            pendientes.append({**item, "cantidad": dif})
+        elif dif < -0.0001:
+            sobrepasa.append({**item, "cantidad": -dif})
+    if not ctx["lineas"]:
+        nuevo = estado0 if estado0 == "ENTREGADO" else "ENTREGA PARCIAL"
+        avisos.append("El pedido no tiene líneas guardadas: no se han podido detallar las referencias ni saber si completa el pedido.")
+    elif not det:
+        nuevo = estado0 if estado0 == "ENTREGADO" else "ENTREGA PARCIAL"
+        avisos.append("Ninguna referencia del albarán está en las líneas del pedido: no se ha podido detallar.")
+    elif not pendientes:
+        nuevo = "ENTREGADO"
+    else:
+        nuevo = "ENTREGADO" if estado0 == "ENTREGADO" else "ENTREGA PARCIAL"
+        if estado0 == "ENTREGADO":
+            avisos.append("El pedido estaba ENTREGADO y con este albarán ya no queda completo: se mantiene ENTREGADO, revísalo.")
+    if sobrepasa:
+        avisos.append(f"Se sobrepasa lo pedido en {len(sobrepasa)} referencia(s).")
+    if fuera:
+        avisos.append(f"{len(fuera)} referencia(s) del albarán no están en las líneas del pedido (no se han detallado).")
+    if nuevo == "ENTREGADO" and ctx["total_pedido"] is not None:
+        rec = round(sum(e["base_imponible"] or 0 for e in ctx["entradas"]), 2)
+        if abs(rec - ctx["total_pedido"]) >= 0.01:
+            avisos.append(f"Importe recibido {_fmt_importe_es(rec)} € distinto del pedido {_fmt_importe_es(ctx['total_pedido'])} €.")
+    ctx["estado"] = nuevo
+    ctx["cambios"] = True
+    ctx["notas"].append(f"albarán {num_vis}")
+    return {"error": None, "accion": accion, "albaran_num": num_vis, "estado_antes": estado0, "estado_despues": nuevo,
+            "completo": bool(ctx["lineas"] and det and not pendientes), "pendientes": pendientes, "sobrepasa": sobrepasa,
+            "fuera_pedido": [{"codigo": g["codigo"], "descripcion": g["descripcion"][:60], "cantidad": g["cantidad"]} for g in fuera],
+            "referencias": len(det), "avisos": avisos}
+
+
+def _persistir_ctx_albaranes(ctx: dict, uid, uname) -> None:
+    """Escribe (sin commit) lo acumulado en el estado en memoria de un pedido."""
+    pid = ctx["pid"]
+    execute(
+        """UPDATE pedidos SET entrada_albaran_num=%s, estado=%s,
+                  modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
+           WHERE id=%s""",
+        (_construir_entrada_albaran_num(ctx["entradas"]), ctx["estado"], uid, uname, pid))
+    for alb in ctx["tocadas"]:
+        execute("DELETE FROM pedido_lineas_entregas WHERE pedido_id=%s AND albaran_num=%s", (pid, alb))
+        for k, c in (ctx["entregas"].get(alb) or {}).items():
+            execute("INSERT INTO pedido_lineas_entregas (pedido_id, albaran_num, codigo, cantidad, usuario_id, usuario_nombre) "
+                    "VALUES (%s,%s,%s,%s,%s,%s)", (pid, alb, k, c, uid, uname))
+    if ctx["estado"] != ctx["estado_antes"]:
+        execute("INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) "
+                "VALUES (%s,%s,%s,%s,%s,%s)",
+                (pid, ctx["estado_antes"], ctx["estado"], uid, uname,
+                 "Carga de albaranes PDF — " + ", ".join(ctx["notas"])))
+
+
+def _procesar_albaranes_lote(hotel_id: int, archivos: list, aplicar: bool, uid, uname) -> dict:
+    """
+    archivos: [(nombre, bytes)]. Procesa en orden (varios albaranes del MISMO pedido se acumulan, como si se
+    registraran uno tras otro). Sin `aplicar` nada se escribe; con `aplicar` se escribe todo y se avisa de los
+    cambios de estado.
+    """
+    ctxs, resultados, confirmaciones = {}, [], []
+    for nombre, pdf_bytes in archivos:
+        r = {"archivo": nombre, "estado": "error", "mensaje": "", "albaran_num": None, "pedido_num": None, "norden": None}
+        try:
+            datos = _extraer_albaran_confirmacion_individual(pdf_bytes, exigir_pedido=False)
+            if not (datos.get("albaran_id") or "").strip():
+                raise RuntimeError("El PDF no trae el campo «Código» (Nº de entrada): ¿es el volcado de un albarán del programa de almacén?")
+            r["albaran_num"] = _num_albaran_visible(datos["albaran_id"])
+            lineas_pdf, n_cero = _agrupar_lineas_albaran(datos)
+            if not lineas_pdf:
+                raise RuntimeError("El albarán no trae ninguna referencia con cantidad mayor que 0.")
+            # ¿Ya está registrado en algún pedido del hotel? (en la BD o en esta misma carga). No se duplica: si está
+            # donde corresponde, se dice; si está en un pedido que no corresponde, se avisa para que el usuario decida.
+            num_norm = _normalizar_num_albaran(r["albaran_num"])
+            existentes = {x["id"]: x for x in _pedidos_con_albaran(hotel_id, num_norm)}
+            for pid_c, ctx_c in ctxs.items():
+                if ctx_c and pid_c not in existentes and any(_normalizar_num_albaran(e["num"]) == num_norm for e in ctx_c["entradas"]):
+                    existentes[pid_c] = {"id": pid_c, "norden": ctx_c["norden"], "pedido_num": ctx_c["pedido_num"], "estado": ctx_c["estado"]}
+            if existentes:
+                buenos = [x for x in existentes.values() if _albaran_coincide_con_pedido(x["id"], datos, lineas_pdf)]
+                malos = [x for x in existentes.values() if x not in buenos]
+                r["registrado_en"] = [_desc_pedido(x) for x in existentes.values()]
+                if buenos:
+                    r.update({"pedido_id": buenos[0]["id"], "pedido_num": buenos[0]["pedido_num"], "norden": buenos[0]["norden"]})
+                if buenos and not malos:
+                    r["estado"] = "ya"
+                    r["mensaje"] = (f"Este albarán ya está registrado y asignado correctamente al pedido {_desc_pedido(buenos[0])}. "
+                                    "No se ha cambiado nada.")
+                else:
+                    destino = None
+                    try:
+                        pid_d, _e, _v = _resolver_pedido_de_albaran(hotel_id, datos, lineas_pdf)
+                        if pid_d:
+                            destino = row_to_dict(query("SELECT norden, pedido_num FROM pedidos WHERE id=%s", (pid_d,), one=True))
+                    except Exception:
+                        destino = None
+                    donde = ", ".join(_desc_pedido(x) for x in malos)
+                    r["estado"] = "conflicto"
+                    r["mensaje"] = (f"Este albarán ya está registrado en el pedido {donde}, pero "
+                                    + (f"por su contenido corresponde al pedido {_desc_pedido(destino)}. " if destino
+                                       else "no coincide con ese pedido (ni por el «Pedido/s» del albarán ni por sus referencias). ")
+                                    + ("También figura en el pedido correcto. " if buenos else "")
+                                    + "No se ha cambiado nada: decide cuál es el correcto y, si hace falta, quita la entrada del pedido erróneo y vuelve a cargar el albarán.")
+                resultados.append(r); continue
+            pid, err, via = _resolver_pedido_de_albaran(hotel_id, datos, lineas_pdf)
+            if err:
+                r["mensaje"] = err
+                resultados.append(r); continue
+            if pid not in ctxs:
+                ctxs[pid] = _ctx_pedido_albaranes(pid, bloquear=aplicar)
+            ctx = ctxs[pid]
+            res = _aplicar_albaran_a_ctx(ctx, datos, lineas_pdf)
+            r.update({"pedido_id": pid, "pedido_num": ctx["pedido_num"], "norden": ctx["norden"], "via": via})
+            if res["error"]:
+                r["mensaje"] = res["error"]
+                resultados.append(r); continue
+            r.update(res)
+            r["estado"] = "aviso" if res["avisos"] else "ok"
+            r["mensaje"] = " ".join(res["avisos"])
+            r["lineas_cantidad_cero"] = n_cero
+            confirmaciones.append((datos, ctx["pedido_num"] if via == "referencias" or not datos.get("pedidos_num_sap") else datos["pedidos_num_sap"][0]))
+        except RuntimeError as exc:
+            r["mensaje"] = str(exc)
+        except Exception as exc:
+            log.exception("[ALBARANES-LOTE] Error con %s: %s", nombre, exc)
+            r["mensaje"] = f"No se pudo leer el PDF: {exc}"
+        resultados.append(r)
+
+    if aplicar:
+        for ctx in ctxs.values():
+            if ctx and ctx["cambios"]:
+                _persistir_ctx_albaranes(ctx, uid, uname)
+        for datos, pedido_sap in confirmaciones:
+            _guardar_confirmacion_albaran(hotel_id, datos, pedido_sap or "")
+        get_db().commit()
+        for ctx in ctxs.values():
+            if ctx and ctx["cambios"] and ctx["estado"] != ctx["estado_antes"]:
+                try:
+                    # es_automatico=True: igual que «Aplicar» de la comparación de pedidos + albaranes (un lote no
+                    # tiene navegador que envíe los correos al momento): los internos se encolan y salen solos.
+                    _notificar_cambio_estado(get_db(), ctx["pid"], ctx["estado"], ctx["estado_antes"],
+                                             usuario_nombre=uname or "", usuario_id=uid, es_automatico=True)
+                except Exception as exc:
+                    log.exception("[ALBARANES-LOTE] Aviso de cambio de estado del pedido %s: %s", ctx["pid"], exc)
+    n_ok = sum(1 for r in resultados if r["estado"] in ("ok", "aviso"))
+    return {"ok": True, "aplicado": bool(aplicar), "resultados": resultados,
+            "resumen": {"total": len(resultados), "aplicables": n_ok,
+                        "ya_registrados": sum(1 for r in resultados if r["estado"] == "ya"),
+                        "conflictos": sum(1 for r in resultados if r["estado"] == "conflicto"),
+                        "con_error": sum(1 for r in resultados if r["estado"] == "error"),
+                        "entregados": sum(1 for c in ctxs.values() if c and c["cambios"] and c["estado"] == "ENTREGADO" and c["estado_antes"] != "ENTREGADO"),
+                        "parciales": sum(1 for c in ctxs.values() if c and c["cambios"] and c["estado"] == "ENTREGA PARCIAL")}}
+
+
+@app.route("/api/albaranes/cargar-lote", methods=["POST"])
+@login_required
+def cargar_albaranes_lote():
+    """
+    (v12.33.14) «Confirmar albaranes sueltos» (solo admin): sube uno o varios PDF de albaranes del hotel elegido y
+    completa el ciclo de cada uno (ver _procesar_albaranes_lote). form-data: hotel_id, files (varios), aplicar ('1'
+    para escribir; sin él solo simula y devuelve lo que pasaría).
+    """
+    if session.get("rol") != "admin":
+        return jsonify({"error": "Acceso restringido a administradores"}), 403
+    try:
+        hotel_id = int(request.form.get("hotel_id") or 0)
+    except ValueError:
+        hotel_id = 0
+    if not hotel_id:
+        return jsonify({"error": "Falta indicar el hotel"}), 400
+    ficheros = [f for f in request.files.getlist("files") if f and f.filename]
+    if not ficheros:
+        return jsonify({"error": "No se ha adjuntado ningún PDF"}), 400
+    if len(ficheros) > 60:
+        return jsonify({"error": "Máximo 60 albaranes por carga"}), 400
+    archivos = []
+    for f in ficheros:
+        b = f.read()
+        if not f.filename.lower().endswith(".pdf"):
+            archivos.append((f.filename, b"")); continue
+        archivos.append((f.filename, b))
+    # los que no son PDF o vienen vacíos se devuelven como error sin pararlo todo
+    validos = [(n, b) for n, b in archivos if b]
+    invalidos = [{"archivo": n, "estado": "error", "mensaje": "No es un PDF válido o está vacío.", "albaran_num": None,
+                  "pedido_num": None, "norden": None} for n, b in archivos if not b]
+    try:
+        out = _procesar_albaranes_lote(hotel_id, validos, request.form.get("aplicar") == "1",
+                                       current_user_id(), session.get("nombre"))
+    except Exception as exc:
+        get_db().rollback()
+        log.exception("[ALBARANES-LOTE] Error general: %s", exc)
+        return jsonify({"error": f"No se pudo procesar la carga: {exc}"}), 500
+    if invalidos:
+        out["resultados"] = out["resultados"] + invalidos
+        out["resumen"]["total"] += len(invalidos)
+        out["resumen"]["con_error"] += len(invalidos)
+    if not out["aplicado"]:
+        get_db().rollback()
+    return jsonify(out)
+
+
+@app.route("/api/pedidos/<int:pid>/registrar-albaran-sap", methods=["POST"])
+@login_required
+def registrar_albaran_sap_pedido(pid):
+    """
+    (v12.33.14) Tras guardar un pedido con la entrada rellenada desde el PDF del albarán (botón «📎 Subir albarán
+    PDF»), deja ese albarán confirmado en el cruce con SAP — igual que «Confirmar albaranes sueltos». Comprueba de
+    nuevo que el PDF es de este pedido. form-data: file.
+    """
+    ped = query("SELECT id, hotel_id, pedido_num FROM pedidos WHERE id=%s", (pid,), one=True)
+    if not ped:
+        return jsonify({"ok": False, "error": "Pedido no encontrado"}), 404
+    if session.get("rol") == "hotel" and ped["hotel_id"] not in session.get("hoteles_ids", []):
+        return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
+    if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(ped["hotel_id"]):
+        return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
+    archivo = request.files.get("file")
+    pdf_bytes = archivo.read() if archivo else b""
+    if not pdf_bytes:
+        return jsonify({"ok": False, "error": "Falta el PDF del albarán"}), 400
+    resultado, status = _analizar_albaran_pdf_para_pedido(pid, pdf_bytes, es_hotel=False, comprobar_duplicado=False)
+    if status != 200:
+        return jsonify(resultado), status
+    datos = _extraer_albaran_confirmacion_individual(pdf_bytes, exigir_pedido=False)
+    pedido_sap = (datos.get("pedidos_num_sap") or [None])[0] or ped["pedido_num"] or ""
+    n = _guardar_confirmacion_albaran(ped["hotel_id"], datos, pedido_sap)
+    get_db().commit()
+    return jsonify({"ok": True, "albaran_id": datos["albaran_id"], "lineas_guardadas": n})
 
 
 @app.route("/api/pedidos/<int:pid>/leer-albaran-pdf", methods=["POST"])

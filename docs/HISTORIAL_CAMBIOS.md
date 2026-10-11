@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-11 — [Control Pedidos] Carga de albaranes PDF en lote y ciclo completo desde el pedido (v12.33.14)
+
+Petición de Víctor: desde «Confirmar albaranes sueltos» (admin) cargar varios albaranes a la vez, completando todo el ciclo (pedido, entrada, referencias, estado, historial, avisos, cruce con SAP); desde el pedido lo mismo para compras/hotel (admin en todos); un albarán ya registrado no se duplica y, si está en un pedido erróneo, se avisa para que el usuario decida. Nuevo `POST /api/albaranes/cargar-lote` (simula o aplica), `POST /api/pedidos/<id>/registrar-albaran-sap`, detección de albarán ya registrado (`_pedidos_con_albaran`) en el lote y en el botón del pedido, y nueva ventana de revisión/aplicación. Probado con el PDF real del albarán 87343 y Postgres real: simulación sin escribir, aplicación, re-subida (ya registrado), pedido completo (ENTREGADO), hotel equivocado, albarán en pedido erróneo, sin «Pedido/s» (único/ambiguo/conflicto), dos albaranes del mismo pedido en una carga y ficheros no PDF; y con Playwright (ventana de lote, botón del pedido, guardado y confirmación en el cruce con SAP). Sin migraciones. Documentos de mantenimiento: no aplica.
+
+---
+
 ## 2026-10-11 — [Control Pedidos] Hoteles duplicados en el filtro de Pedidos (v12.33.13)
 
 Hallazgo de Víctor: cada hotel salía dos veces en el desplegable de filtro de Pedidos. `loadMaestros()` añadía opciones a `f-hotel`/`f-estado`/`f-depto` sin vaciarlos, y se ejecuta de nuevo al volver a entrar sin recargar la página. Ahora se vacían antes de rellenarlos. Probado con Playwright (3 cargas seguidas, mismo número de opciones). Solo frontend; sin migraciones. Documentos de mantenimiento: no aplica.

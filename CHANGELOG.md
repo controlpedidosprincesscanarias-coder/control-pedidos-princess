@@ -1,3 +1,16 @@
+# v12.33.14 — 11 octubre 2026
+
+📎 Albaranes PDF: carga en lote para admin («Confirmar albaranes sueltos») y ciclo completo también desde el pedido
+
+**Petición de Víctor**: que desde ambos sitios se complete totalmente el ciclo del albarán; que el administrador pueda cargar **varios albaranes juntos** sin buscar y entrar en cada pedido (opción exclusiva de admin), y que desde el pedido lo pueda hacer también un comprador o un hotel. Un albarán **ya registrado no se duplica**: se indica que ya está registrado y bien asignado, y si estuviera en un pedido erróneo se avisa para que el usuario decida y corrija.
+
+**Cambios**:
+- `app.py` — nuevo `POST /api/albaranes/cargar-lote` (solo admin; hotel + varios PDF; hasta 60), `_procesar_albaranes_lote()`: por cada PDF localiza el pedido (por «Pedido/s» o, si no lo trae, por las referencias: único pedido abierto del hotel que las incluya todas; si hay varios, desempata por proveedor y, si aun así no es único, no lo aplica y lo dice), registra la entrada (Nº sin ceros, fecha, base imponible), detalla las referencias, fija el estado (ENTREGADO si no queda nada pendiente, ENTREGA PARCIAL si no; nunca retrocede de ENTREGADO), anota el historial, avisa del cambio de estado (como la comparación de pedidos + albaranes) y deja el albarán confirmado en el cruce con SAP (`sap_albaranes_lineas`). Varios albaranes del mismo pedido en una carga se acumulan en orden. Solo acepta pedidos ENVIADO AL PROVEEDOR / ENTREGA PARCIAL.
+- **Dos pasos**: sin `aplicar` solo simula y devuelve qué pasaría (no escribe nada); con `aplicar` lo escribe todo en una transacción.
+- **No se duplica**: si el Nº de albarán ya consta en un pedido del hotel (o antes en la misma carga) y ese pedido es el que le corresponde → «ya registrado y asignado correctamente», sin cambios. Si consta en un pedido que NO le corresponde (por «Pedido/s» o por referencias) → «revisar: pedido distinto», sin cambios, indicando en qué pedido está y cuál le correspondería. Lo mismo desde el botón del pedido.
+- `POST /api/pedidos/<id>/registrar-albaran-sap`: tras Guardar un pedido con la entrada rellenada desde «📎 Subir albarán PDF» (disponible para admin, compras y hotel), el albarán queda también confirmado en el cruce con SAP. `_guardar_confirmacion_albaran()` es ahora común a todos los caminos.
+- `templates/index.html` — la ventana «Confirmar un albarán suelto» pasa a «Confirmar albaranes sueltos»: hotel + varios PDF → «Revisar albaranes» (tabla con el resultado de cada uno) → «Aplicar N albarán(es)». El botón del pedido ya no actualiza una entrada existente: avisa de que ya está registrada.
+
 # v12.33.13 — 11 octubre 2026
 
 🐛 Hoteles (y estados/departamentos) duplicados en los filtros de «Pedidos»

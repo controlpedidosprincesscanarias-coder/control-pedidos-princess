@@ -1440,7 +1440,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.13
+          V 12.33.14
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1684,7 +1684,7 @@ tbody tr:last-child{border-bottom:none}
           <button class="btn btn-ghost btn-sm" onclick="clearFilters()">✕ Limpiar</button>
           <button class="btn btn-sm" id="btn-imprimir-pedidos" style="background:#1a3a6b;color:#fff;border:none;margin-left:6px" onclick="abrirModalImpresionPedidos()">🖨️ Imprimir</button>
           <button class="btn btn-sm" id="btn-cruce-sap" style="background:#0d6efd;color:#fff;border:none" onclick="abrirModalCruceSap()">📥 Cargar listados SAP</button>
-          <button class="btn btn-sm" id="btn-confirmar-albaran" style="background:#5b3a99;color:#fff;border:none" onclick="abrirModalConfirmarAlbaran()">📎 Confirmar un albarán suelto</button>
+          <button class="btn btn-sm" id="btn-confirmar-albaran" style="background:#5b3a99;color:#fff;border:none" onclick="abrirModalConfirmarAlbaran()">📎 Confirmar albaranes sueltos</button>
         </div>
         <div class="search-chips" id="pedidos-chips">
           <span class="search-chips-label">Busca por:</span>
@@ -3520,39 +3520,40 @@ tbody tr:last-child{border-bottom:none}
    "Sugerencias de Albarán" para el pedido correspondiente.
 -->
 <div class="modal-overlay" id="modal-confirmar-albaran">
-  <div class="modal" style="max-width:560px">
+  <div class="modal" style="max-width:940px;width:96vw">
     <div class="modal-header">
-      <div class="modal-title">📎 Confirmar un albarán suelto</div>
+      <div class="modal-title">📎 Confirmar albaranes sueltos</div>
       <button class="close-btn" onclick="closeModal('modal-confirmar-albaran')">✕</button>
     </div>
     <div class="modal-body">
       <div id="conf-alb-form">
         <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:14px">
-          Para el caso puntual en que un albarán dé dudas: sube el PDF de confirmación de
-          <strong>ese único albarán</strong> (el volcado de pantalla del programa de almacén, con el
-          campo "Pedido/s") — el programa de almacén no deja imprimir este documento por meses o
-          proveedores, solo de uno en uno. Al guardarlo, queda marcado como <strong>confirmado</strong>
-          (no una simple sugerencia) para el pedido que indique el PDF, y sustituye a cualquier
-          versión anterior guardada de ese mismo albarán.
+          Sube <strong>uno o varios</strong> PDF de albaranes (el volcado de pantalla del programa de almacén, uno por albarán).
+          Por cada uno, la aplicación localiza el pedido (por el campo "Pedido/s" o, si no lo trae, por sus referencias),
+          registra la <strong>entrada</strong> (Nº, fecha y base imponible), marca las <strong>referencias</strong> recibidas, fija el
+          <strong>estado</strong> (ENTREGADO si completa el pedido, ENTREGA PARCIAL si no), anota el historial, avisa del cambio de
+          estado y deja el albarán <strong>confirmado</strong> en el cruce con SAP. Antes de escribir nada verás qué pasaría con cada
+          uno. Un albarán que ya está registrado <strong>no se duplica</strong>: se te indica dónde está y, si estuviera en un pedido
+          que no corresponde, se te avisa para que decidas.
         </div>
-        <div class="form-grid" style="grid-template-columns:1fr 1fr;gap:14px;align-items:end">
+        <div class="form-grid" style="grid-template-columns:1fr 2fr;gap:14px;align-items:end">
           <div class="form-group">
             <label class="form-label">Hotel <span style="color:#e74c3c">*</span></label>
             <select class="form-control" id="conf-alb-hotel"><option value="">— Selecciona —</option></select>
           </div>
           <div class="form-group">
-            <label class="form-label">PDF del albarán <span style="color:#e74c3c">*</span></label>
-            <input class="form-control" type="file" id="conf-alb-file" accept="application/pdf">
+            <label class="form-label">PDF de los albaranes <span style="color:#e74c3c">*</span> <span style="font-weight:400;color:#888">(puedes elegir varios a la vez)</span></label>
+            <input class="form-control" type="file" id="conf-alb-file" accept="application/pdf" multiple>
           </div>
         </div>
         <div style="margin-top:16px;text-align:right">
-          <button class="btn btn-gold" id="btn-conf-alb-importar" onclick="confirmarAlbaranSuelto()">Confirmar albarán</button>
+          <button class="btn btn-gold" id="btn-conf-alb-importar" onclick="analizarAlbaranesLote()">Revisar albaranes</button>
         </div>
       </div>
 
-      <div id="conf-alb-loading" class="loading" style="display:none">Leyendo el PDF del albarán…</div>
+      <div id="conf-alb-loading" class="loading" style="display:none">Leyendo los albaranes…</div>
 
-      <div id="conf-alb-resultado" style="display:none;margin-top:10px"></div>
+      <div id="conf-alb-resultado" style="display:none;margin-top:6px"></div>
     </div>
     <div class="modal-footer">
       <button class="btn btn-ghost" onclick="closeModal('modal-confirmar-albaran')">Cerrar</button>
@@ -7522,6 +7523,23 @@ function _resumenAlbaranPdf(titulo, bloquesHtml) {
   ov.querySelector('#alb-pdf-ok').onclick = () => ov.remove();
 }
 
+async function _registrarAlbaranesPdfPendientes(pid) {
+  const pend = G.albaranesPdfPend || {};
+  G.albaranesPdfPend = {};
+  const enForm = new Set(getAlbaranValues().map(v => _numSinCeros(_parseAlbaranEntry(v).num)));
+  for (const [num, file] of Object.entries(pend)) {
+    if (!enForm.has(_numSinCeros(num))) continue;      // la entrada se quitó antes de guardar
+    try {
+      const fd = new FormData(); fd.append('file', file);
+      const r = await fetch(`/api/pedidos/${pid}/registrar-albaran-sap`, { method: 'POST', body: fd, credentials: 'same-origin' });
+      const d = await r.json();
+      if (!d.ok) toast(`Albarán ${num} guardado en el pedido, pero no se pudo confirmar en el cruce con SAP: ${d.error || ''}`, 'warning', 7000);
+    } catch (e) {
+      toast(`Albarán ${num} guardado en el pedido, pero no se pudo confirmar en el cruce con SAP.`, 'warning', 7000);
+    }
+  }
+}
+
 async function subirAlbaranPdf(inp) {
   const file = inp.files && inp.files[0];
   inp.value = '';
@@ -7551,20 +7569,30 @@ async function subirAlbaranPdf(inp) {
     return;
   }
 
+  // Ya registrado en este pedido (guardado): no se duplica, solo se informa.
+  if (d.ya_registrado) {
+    showFormAlert(d.mensaje || 'Este albarán ya está registrado y asignado correctamente a este pedido.', { title: 'ℹ️ Albarán ya registrado' });
+    return;
+  }
+  const numKeyPdf = _numSinCeros(d.albaran_num);
+  // Ya está en el formulario (aunque aún sin guardar): tampoco se duplica.
+  if (Array.from(document.querySelectorAll('#albaran-list .albaran-row')).some(r => numKeyPdf && _numSinCeros(_numDeFila(r)) === numKeyPdf)) {
+    showFormAlert('Este albarán ya está en las entradas de este pedido (puede que aún sin guardar). No se ha cambiado nada.', { title: 'ℹ️ Albarán ya registrado' });
+    return;
+  }
+
   // 1) Asegurar la lista de entradas editable (como al marcar ENTREGADO a mano)
   const chkEnt = document.getElementById('chk-entregado');
   if (!chkEnt.checked) { chkEnt.checked = true; onAlbaranCheckChange('entregado'); }
-  const numKeyPdf = _numSinCeros(d.albaran_num);
 
-  // 2) Fila: la misma entrada si ya existía, o la última en blanco, o una nueva
+  // 2) Fila: la última en blanco, o una nueva
   const filas = Array.from(document.querySelectorAll('#albaran-list .albaran-row'));
-  let row = filas.find(r => _numSinCeros(_numDeFila(r)) === numKeyPdf && numKeyPdf);
-  const yaExistia = !!row;
-  if (!row) row = filas.find(r => !_numDeFila(r));
+  let row = filas.find(r => !_numDeFila(r));
   if (!row) { addAlbaranInput(); const fs = document.querySelectorAll('#albaran-list .albaran-row'); row = fs[fs.length - 1]; }
   const inNum = row.querySelector('.albaran-input');
-  if (!yaExistia) { inNum.value = numKeyPdf; }
+  inNum.value = numKeyPdf;
   inNum.dataset.numPrevio = inNum.value.trim();
+  (G.albaranesPdfPend = G.albaranesPdfPend || {})[numKeyPdf] = file;   // se confirma en el cruce con SAP al guardar
   if (d.fecha_iso) row.querySelector('.albaran-fecha').value = d.fecha_iso;
   if (d.base_imponible != null) row.querySelector('.albaran-base-imponible').value = Number(d.base_imponible).toFixed(2);
   const numKey = _numDeFila(row);
@@ -7615,7 +7643,7 @@ async function subirAlbaranPdf(inp) {
   const nRefs = Object.keys(det).length;
   const uds = Object.values(det).reduce((a, b) => a + b, 0);
   let h = `<div style="background:#ecfdf3;border:1px solid #a7e3bf;border-radius:8px;padding:7px 10px;margin-bottom:8px">✔ ${_htmlLinea(d.mensaje || '')}</div>`;
-  h += `<div>${yaExistia ? 'Entrada <b>ya existente</b> actualizada' : 'Entrada rellenada'}: <b>${_htmlLinea(numKey)}</b>`
+  h += `<div>Entrada rellenada: <b>${_htmlLinea(numKey)}</b>`
     + (d.fecha_iso ? ` · fecha <b>${d.fecha_iso.split('-').reverse().join('/')}</b>` : '')
     + (d.base_imponible != null ? ` · base imponible <b>${_fmtEur(d.base_imponible)}</b>` : '')
     + (nRefs ? ` · <b>${nRefs}</b> referencia(s), <b>${_fmtCant(uds)}</b> uds` : '') + '.</div>';
@@ -7636,7 +7664,7 @@ async function subirAlbaranPdf(inp) {
       + lista(fuera, x => `<li><b>${_htmlLinea(x.codigo)}</b> ${_htmlLinea((x.descripcion || '').slice(0, 40))} — ${_fmtCant(x.cantidad)}</li>`);
   }
   if (d.lineas_cantidad_cero) h += `<div style="margin-top:8px;color:#666">${d.lineas_cantidad_cero} línea(s) del albarán con cantidad 0 se han ignorado.</div>`;
-  h += `<div style="margin-top:10px;color:#555">Revisa los datos (puedes corregir lo que quieras, también a mano) y pulsa <b>Guardar</b> para registrarlo.</div>`;
+  h += `<div style="margin-top:10px;color:#555">Revisa los datos (puedes corregir lo que quieras, también a mano) y pulsa <b>Guardar</b>: se registra la entrada y el albarán queda confirmado en el cruce con SAP.</div>`;
   _resumenAlbaranPdf('📎 Albarán ' + _htmlLinea(numKey) + ' leído', h);
 }
 
@@ -7980,7 +8008,7 @@ function clearPedidoForm() {
   document.getElementById('p-total-pedido-aprox-badge').hidden = true;
   document.getElementById('p-total-pedido-real-badge').hidden = true;
   _lineasPedidoReq++;   // descarta cualquier carga de líneas en curso
-  G.entregasPorAlbaran = {}; G.lineasEntrega = []; G.entregasCargadas = false; G.avisoDiferenciaOmitido = false;
+  G.entregasPorAlbaran = {}; G.lineasEntrega = []; G.entregasCargadas = false; G.avisoDiferenciaOmitido = false; G.albaranesPdfPend = {};
   const _lp = document.getElementById('pedido-lineas-panel');
   if (_lp) { _lp.style.display = 'none'; _lp.innerHTML = ''; }
   // Sin hotel seleccionado: el desplegable de Departamento vuelve a mostrar
@@ -8124,6 +8152,7 @@ async function savePedido() {
     btn.disabled = false;
     if (r && r.error) { showFormAlert(r.error); return; }
     await _enviarEmailsPendientesEstado(r.emails_pendientes);
+    await _registrarAlbaranesPdfPendientes(id);
     toast('Código DALI / SAP actualizado', 'success');
     closeModal('modal-pedido');
     loadPedidos();
@@ -8393,6 +8422,7 @@ async function savePedido() {
       toast('⚠️ Pedido guardado, pero supera el techo de gastos — queda pendiente de Vº Bº de Dirección General.', 'warning', 7000);
     }
     await _enviarEmailsPendientesEstado(r.emails_pendientes);
+    if (G.editingPedidoId) await _registrarAlbaranesPdfPendientes(G.editingPedidoId);
     // Invalidar ambas cachés: el pedido puede haber cambiado estado, importe o familia
     _invalidarStats();
     _invalidarTecho();
@@ -10243,47 +10273,117 @@ function abrirModalConfirmarAlbaran() {
   openModal('modal-confirmar-albaran');
 }
 
-async function confirmarAlbaranSuelto() {
-  const hotelId = val('conf-alb-hotel');
-  const file = document.getElementById('conf-alb-file').files[0];
-  if (!hotelId) { toast('Selecciona un hotel', 'error'); return; }
-  if (!file) { toast('Selecciona el PDF del albarán', 'error'); return; }
-
-  document.getElementById('conf-alb-form').style.display = 'none';
-  document.getElementById('conf-alb-loading').style.display = '';
-  document.getElementById('conf-alb-resultado').style.display = 'none';
-
+/* (v12.33.14) Carga de albaranes en lote — dos pasos: «Revisar» (simula, no escribe) y «Aplicar» (escribe).
+   Ver _procesar_albaranes_lote() en app.py. */
+async function _enviarLoteAlbaranes(aplicar) {
   const fd = new FormData();
-  fd.append('hotel_id', hotelId);
-  fd.append('file', file);
+  fd.append('hotel_id', val('conf-alb-hotel'));
+  fd.append('aplicar', aplicar ? '1' : '0');
+  Array.from(document.getElementById('conf-alb-file').files).forEach(f => fd.append('files', f, f.name));
+  const r = await fetch('/api/albaranes/cargar-lote', { method: 'POST', body: fd, credentials: 'same-origin' });
+  return await r.json();
+}
 
+async function analizarAlbaranesLote() {
+  if (!val('conf-alb-hotel')) { toast('Selecciona un hotel', 'error'); return; }
+  const n = document.getElementById('conf-alb-file').files.length;
+  if (!n) { toast('Selecciona al menos un PDF de albarán', 'error'); return; }
+  document.getElementById('conf-alb-form').style.display = 'none';
+  document.getElementById('conf-alb-resultado').style.display = 'none';
+  document.getElementById('conf-alb-loading').style.display = '';
+  document.getElementById('conf-alb-loading').textContent = `Leyendo ${n} albarán(es)…`;
   try {
-    const r = await fetch('/api/albaranes/importar-confirmacion', { method: 'POST', body: fd, credentials: 'same-origin' });
-    const d = await r.json();
+    const d = await _enviarLoteAlbaranes(false);
     document.getElementById('conf-alb-loading').style.display = 'none';
-    if (!r.ok || d.error) {
-      toast(d.error || 'Error confirmando el albarán', 'error');
-      document.getElementById('conf-alb-form').style.display = '';
-      return;
-    }
-    document.getElementById('conf-alb-resultado').style.display = '';
-    const pill = (txt, bg, color) => `<span style="background:${bg};color:${color};font-weight:700;
-      padding:4px 10px;border-radius:6px;font-size:.82rem">${txt}</span>`;
-    let html = `<div style="display:flex;gap:10px;flex-wrap:wrap">
-      ${pill(`✅ Albarán ${d.albaran_id}${d.albaran_ref ? ' (' + d.albaran_ref + ')' : ''} confirmado`, '#d4edda', '#155724')}
-      ${pill(`Pedido SAP: ${d.pedido_num_sap_confirmado}`, '#e7e0f7', '#4d2f8f')}
-      ${pill(`${d.lineas_guardadas ?? 0} línea(s) guardada(s)`, '#eef1f7', '#1a3a6b')}
-    </div>`;
-    if (d.otros_pedidos_en_el_pdf && d.otros_pedidos_en_el_pdf.length) {
-      html += `<p style="margin-top:10px;color:#856404">⚠️ El PDF menciona otro(s) pedido(s) además del usado (${d.otros_pedidos_en_el_pdf.join(', ')}) — este caso no se ha visto todavía con datos reales; revisa a mano si corresponde también a este albarán.</p>`;
-    }
-    html += `<p style="margin-top:10px;font-size:.82rem;color:var(--text-secondary)">Ya puedes consultar este pedido en "🔄 Cruce con SAP" → "📋 Revisar entregas pendientes" (busca el pedido en concreto si no aparece en la tabla) — este albarán saldrá marcado como confirmado.</p>`;
-    document.getElementById('conf-alb-resultado').innerHTML = html;
+    if (d.error) { toast(d.error, 'error'); document.getElementById('conf-alb-form').style.display = ''; return; }
+    _pintarAlbaranesLote(d, false);
   } catch (e) {
     document.getElementById('conf-alb-loading').style.display = 'none';
     document.getElementById('conf-alb-form').style.display = '';
-    toast('Error confirmando el albarán: ' + e.message, 'error');
+    toast('Error leyendo los albaranes: ' + e.message, 'error');
   }
+}
+
+async function aplicarAlbaranesLote() {
+  document.getElementById('conf-alb-resultado').style.display = 'none';
+  document.getElementById('conf-alb-loading').style.display = '';
+  document.getElementById('conf-alb-loading').textContent = 'Registrando los albaranes…';
+  try {
+    const d = await _enviarLoteAlbaranes(true);
+    document.getElementById('conf-alb-loading').style.display = 'none';
+    if (d.error) { toast(d.error, 'error'); document.getElementById('conf-alb-resultado').style.display = ''; return; }
+    _pintarAlbaranesLote(d, true);
+    _invalidarStats(); try { loadPedidos(); } catch (e) {}
+    toast(`${d.resumen.aplicables} albarán(es) registrado(s)`, 'success');
+  } catch (e) {
+    document.getElementById('conf-alb-loading').style.display = 'none';
+    document.getElementById('conf-alb-resultado').style.display = '';
+    toast('Error registrando los albaranes: ' + e.message, 'error');
+  }
+}
+
+function _volverACargarAlbaranes() {
+  document.getElementById('conf-alb-resultado').style.display = 'none';
+  document.getElementById('conf-alb-file').value = '';
+  document.getElementById('conf-alb-form').style.display = '';
+}
+
+function _pintarAlbaranesLote(d, aplicado) {
+  const h = _htmlLinea, rs = d.resumen;
+  const pill = (txt, bg, color) => `<span style="background:${bg};color:${color};font-weight:700;padding:4px 10px;border-radius:20px;font-size:.8rem">${txt}</span>`;
+  const est = {
+    ok:        ['✅', aplicado ? 'Registrado' : 'Se registrará', '#d4edda', '#155724'],
+    aviso:     ['⚠️', aplicado ? 'Registrado con avisos' : 'Se registrará con avisos', '#fff3cd', '#856404'],
+    ya:        ['ℹ️', 'Ya registrado', '#e2e8f5', '#1a3a6b'],
+    conflicto: ['⛔', 'Revisar: pedido distinto', '#f8d7da', '#721c24'],
+    error:     ['✕', 'No aplicable', '#f8d7da', '#721c24'],
+  };
+  const lista = (arr, f) => arr.slice(0, 6).map(f).join('; ') + (arr.length > 6 ? ` … y ${arr.length - 6} más` : '');
+  const filas = d.resultados.map(r => {
+    const e = est[r.estado] || est.error;
+    let det = '';
+    if (r.estado === 'ok' || r.estado === 'aviso') {
+      det += `<div><b>${h(r.accion || '')}</b> · ${h(r.estado_antes)} → <b>${h(r.estado_despues)}</b>${r.completo ? ' (completa el pedido)' : ''} · ${r.referencias || 0} ref.</div>`;
+      if (r.pendientes && r.pendientes.length) det += `<div style="color:#b45309">Faltan: ${lista(r.pendientes, x => `${h(x.codigo)} (${_fmtCant(x.cantidad)})`)}</div>`;
+      if (r.sobrepasa && r.sobrepasa.length) det += `<div style="color:#b91c1c">Se sobrepasa: ${lista(r.sobrepasa, x => `${h(x.codigo)} (+${_fmtCant(x.cantidad)})`)}</div>`;
+      if (r.fuera_pedido && r.fuera_pedido.length) det += `<div style="color:#7a5b00">No están en el pedido: ${lista(r.fuera_pedido, x => h(x.codigo))}</div>`;
+      if (r.avisos && r.avisos.length) det += r.avisos.filter(a => !/^Se sobrepasa|^\d+ referencia/.test(a)).map(a => `<div style="color:#7a5b00">${h(a)}</div>`).join('');
+    } else {
+      det = `<div>${h(r.mensaje || '')}</div>`;
+    }
+    const ped = r.pedido_num ? `<b>${h(r.pedido_num)}</b>${r.norden ? `<br><span style="color:#888">Nº ${h(r.norden)}</span>` : ''}` : '—';
+    return `<tr style="border-top:1px solid #eef1f6;vertical-align:top">
+      <td style="padding:6px 8px;word-break:break-all;max-width:150px">${h(r.archivo)}</td>
+      <td style="padding:6px 8px" class="monospace">${h(r.albaran_num || '—')}</td>
+      <td style="padding:6px 8px">${ped}</td>
+      <td style="padding:6px 8px;white-space:nowrap">${pill(e[0] + ' ' + e[1], e[2], e[3])}</td>
+      <td style="padding:6px 8px;font-size:.82rem">${det}</td></tr>`;
+  }).join('');
+  const pills = [pill(`📄 ${rs.total} albarán(es)`, '#e9ecef', '#495057'),
+    pill(`✅ ${rs.aplicables} ${aplicado ? 'registrados' : 'a registrar'}`, '#d4edda', '#155724')];
+  if (rs.ya_registrados) pills.push(pill(`ℹ️ ${rs.ya_registrados} ya registrados`, '#e2e8f5', '#1a3a6b'));
+  if (rs.conflictos) pills.push(pill(`⛔ ${rs.conflictos} para revisar`, '#f8d7da', '#721c24'));
+  if (rs.con_error) pills.push(pill(`✕ ${rs.con_error} no aplicables`, '#f8d7da', '#721c24'));
+  if (rs.entregados) pills.push(pill(`📦 ${rs.entregados} pedido(s) → ENTREGADO`, '#d4edda', '#155724'));
+  if (rs.parciales) pills.push(pill(`🚚 ${rs.parciales} pedido(s) en ENTREGA PARCIAL`, '#fff3cd', '#856404'));
+  const botones = aplicado
+    ? `<button class="btn btn-ghost" onclick="_volverACargarAlbaranes()">Cargar más albaranes</button>`
+    : `<button class="btn btn-ghost" onclick="_volverACargarAlbaranes()">← Cambiar la selección</button>
+       <button class="btn btn-gold" ${rs.aplicables ? '' : 'disabled'} onclick="aplicarAlbaranesLote()">Aplicar ${rs.aplicables} albarán(es)</button>`;
+  const nota = aplicado
+    ? '<div style="margin-top:10px;font-size:.82rem;color:#155724">Hecho: entradas, referencias y estados registrados, historial anotado, avisos enviados y albaranes confirmados en el cruce con SAP.</div>'
+    : '<div style="margin-top:10px;font-size:.82rem;color:#555">Esto es una revisión: <b>todavía no se ha escrito nada</b>. Solo se aplican los albaranes marcados como «Se registrará»; los demás se quedan como están.</div>';
+  const el = document.getElementById('conf-alb-resultado');
+  el.innerHTML = `<div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:10px">${pills.join('')}</div>
+    <div style="max-height:52vh;overflow:auto;border:1px solid #e3e8f0;border-radius:8px">
+      <table style="width:100%;border-collapse:collapse;font-size:.85rem">
+        <thead><tr style="position:sticky;top:0;background:#eef2f9;text-align:left">
+          <th style="padding:6px 8px">Archivo</th><th style="padding:6px 8px">Albarán</th><th style="padding:6px 8px">Pedido</th>
+          <th style="padding:6px 8px">Resultado</th><th style="padding:6px 8px">Detalle</th></tr></thead>
+        <tbody>${filas}</tbody></table></div>
+    ${nota}
+    <div style="margin-top:12px;display:flex;gap:10px;justify-content:flex-end">${botones}</div>`;
+  el.style.display = '';
 }
 
 function _renderCompararPdfResultado() {
