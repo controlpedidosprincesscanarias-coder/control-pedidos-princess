@@ -1440,7 +1440,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.12
+          V 12.33.13
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -4976,7 +4976,12 @@ async function loadMaestros() {
   const d = await api('/api/maestros');
   G.maestros = d;
 
-  // Poblar filtros de pedidos
+  // Poblar filtros de pedidos. (v12.33.13) Se vacían antes (dejando solo «Todos…»): loadMaestros() se
+  // ejecuta otra vez al volver a entrar sin recargar la página y las opciones se añadían de nuevo (hoteles duplicados).
+  ['f-hotel', 'f-estado', 'f-depto'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el) while (el.options.length > 1) el.remove(1);
+  });
   const fh = document.getElementById('f-hotel');
   d.hoteles.forEach(h => fh.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
 

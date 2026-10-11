@@ -1,3 +1,9 @@
+# v12.33.13 — 11 octubre 2026
+
+🐛 Hoteles (y estados/departamentos) duplicados en los filtros de «Pedidos»
+
+**Hallazgo (Víctor)**: en el desplegable de hoteles del filtro de Pedidos cada hotel salía dos veces. **Causa**: `loadMaestros()` añadía las opciones a los filtros `f-hotel`, `f-estado` y `f-depto` sin vaciarlos antes, y se ejecuta una vez por cada inicio de sesión / restauración de sesión sin recargar la página (p. ej. salir y volver a entrar), así que las opciones se acumulaban. **Corrección** (`templates/index.html`): antes de rellenarlos se vacían dejando solo la opción «Todos…». Comprobado cargando los maestros tres veces seguidas: el número de opciones no cambia. El resto de desplegables de hoteles (modales, filtro de Alertas) ya se vaciaban o se rellenaban una sola vez.
+
 # v12.33.12 — 11 octubre 2026
 
 📎 Botón «Subir albarán PDF» en la ficha del pedido: lee el albarán y rellena la entrada

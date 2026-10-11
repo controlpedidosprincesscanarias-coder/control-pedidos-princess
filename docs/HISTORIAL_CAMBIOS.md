@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-11 — [Control Pedidos] Hoteles duplicados en el filtro de Pedidos (v12.33.13)
+
+Hallazgo de Víctor: cada hotel salía dos veces en el desplegable de filtro de Pedidos. `loadMaestros()` añadía opciones a `f-hotel`/`f-estado`/`f-depto` sin vaciarlos, y se ejecuta de nuevo al volver a entrar sin recargar la página. Ahora se vacían antes de rellenarlos. Probado con Playwright (3 cargas seguidas, mismo número de opciones). Solo frontend; sin migraciones. Documentos de mantenimiento: no aplica.
+
+---
+
 ## 2026-10-11 — [Control Pedidos] Subir el PDF de un albarán y rellenar la entrada solo (v12.33.12)
 
 Petición de Víctor: botón para subir el PDF del albarán que la aplicación interprete y rellene Nº de entrada, fecha, base imponible y referencias; que verifique que corresponde al pedido (por «Pedido/s» o, si no lo trae, por las referencias) y marque ENTREGADO si completa el pedido o ENTREGA PARCIAL si no, manteniendo el modo manual. Nuevo endpoint de solo lectura `POST /api/pedidos/<id>/leer-albaran-pdf` (reutiliza el lector de «Confirmar un albarán suelto») y botón «📎 Subir albarán PDF» en la ficha: aplica el resultado sobre el formulario con el mismo tratamiento que una entrada manual (detalle de referencias, «Entrada final», avisos de faltantes/sobrantes y de diferencia de importe); no guarda hasta «Guardar». Probado con el PDF real del albarán 87343 y con Postgres real (pedido coincidente, pedido distinto, sin pedido en el PDF con y sin referencias incluidas, pedido completo y parcial). Documentos revisados (`GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`): no aplica; sin migraciones.
