@@ -1440,7 +1440,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.11
+          V 12.33.12
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2659,6 +2659,13 @@ tbody tr:last-child{border-bottom:none}
               <input type="checkbox" id="chk-cancelado" onchange="onAlbaranCheckChange('cancelado')">
               <span style="margin-left:4px">CANCELADO</span>
             </label>
+            <!-- (v12.33.12) Subir el PDF de un albarán: rellena solo la entrada (Nº, fecha, base imp., referencias) y el estado -->
+            <button type="button" id="btn-albaran-pdf" onclick="document.getElementById('albaran-pdf-file').click()"
+              title="Sube el PDF del albarán (volcado de pantalla del programa de almacén): se comprueba que es de este pedido y se rellenan solos el Nº de entrada, la fecha, la base imponible, las referencias y el estado. También puedes seguir rellenándolo a mano."
+              style="display:none;margin-left:auto;padding:5px 12px;font-size:12px;font-weight:600;border:1.5px solid #5b3a99;border-radius:8px;background:#f3eefb;color:#4d2f8f;cursor:pointer">
+              📎 Subir albarán PDF
+            </button>
+            <input type="file" id="albaran-pdf-file" accept="application/pdf,.pdf" style="display:none" onchange="subirAlbaranPdf(this)">
           </div>
           <!-- Cabecera de columnas -->
           <div id="albaran-col-headers" style="display:none;padding:0 4px 4px 26px;display:flex;gap:6px;align-items:center">
@@ -7365,6 +7372,7 @@ function initAlbaranSection(albaranStr, estado) {
   } else {
     renderAlbaranList(valores, false);
   }
+  _actualizarBotonAlbaranPdf();
 }
 
 // Controla obligatoriedad de la nota según el estado actual
@@ -7423,6 +7431,7 @@ function onEstadoChange() {
 
   // Guardar el estado actual como "previo" para el próximo cambio
   _estadoSelectorPrevio = estadoNuevo;
+  _actualizarBotonAlbaranPdf();
 }
 
 // Versión silenciosa de setFormCancelado que NO llama a onEstadoChange (evita bucle)
@@ -7472,6 +7481,159 @@ function _setFormCanceladoSilent(bloqueado) {
   }
 }
 
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   (v12.33.12) 📎 Subir albarán PDF — rellena la entrada a partir del PDF del albarán
+   El servidor lee el PDF y comprueba que es de este pedido (por el «Pedido/s» del albarán o, si no lo
+   trae, porque todas sus referencias están en el pedido). Aquí se aplica sobre el formulario con el
+   mismo tratamiento que una entrada hecha a mano: se rellenan Nº, fecha, base imponible y el detalle de
+   referencias; si con él no queda nada pendiente se marca «Entrada final» (ENTREGADO), y si no, queda
+   ENTREGA PARCIAL. Los sobrantes/faltantes y la diferencia de importe se avisan igual que a mano. Nada se
+   guarda hasta pulsar «Guardar».
+═══════════════════════════════════════════════════════════════════════════ */
+function _claveCodJS(c) {
+  c = String(c == null ? '' : c).trim().toUpperCase();
+  const m = c.match(/^0*(\d+)$/);
+  return m ? m[1] : c;
+}
+function _numSinCeros(n) {
+  n = String(n == null ? '' : n).trim();
+  return /^0*\d+$/.test(n) ? (n.replace(/^0+(?=\d)/, '')) : n;
+}
+function _actualizarBotonAlbaranPdf() {
+  const b = document.getElementById('btn-albaran-pdf');
+  if (!b) return;
+  const est = (document.getElementById('p-estado') || {}).value;
+  b.style.display = (G.editingPedidoId && est !== 'CANCELADO' && est !== 'DENEGADO POR DIRECCION GENERAL') ? '' : 'none';
+}
+
+function _resumenAlbaranPdf(titulo, bloquesHtml) {
+  const ov = document.createElement('div');
+  ov.className = 'modal-overlay open'; ov.style.zIndex = 1200;
+  ov.innerHTML = `<div class="modal" style="width:min(560px,94vw)"><div class="modal-header"><div class="modal-title">${titulo}</div></div>
+    <div class="modal-body" style="font-size:13px;line-height:1.5">${bloquesHtml}</div>
+    <div class="modal-footer"><button class="btn btn-gold" id="alb-pdf-ok">Entendido</button></div></div>`;
+  document.body.appendChild(ov);
+  ov.querySelector('#alb-pdf-ok').onclick = () => ov.remove();
+}
+
+async function subirAlbaranPdf(inp) {
+  const file = inp.files && inp.files[0];
+  inp.value = '';
+  if (!file) return;
+  const id = G.editingPedidoId;
+  if (!id) { toast('Guarda primero el pedido para poder subir un albarán.', 'error'); return; }
+  const est = val('p-estado');
+  if (est === 'CANCELADO' || est === 'DENEGADO POR DIRECCION GENERAL') {
+    showFormAlert(`El pedido está ${est}: no se pueden registrar entradas.`, { title: '⚠️ Pedido no editable' }); return;
+  }
+  const primerNum = document.querySelector('#albaran-list .albaran-input');
+  if (primerNum && primerNum.readOnly) {
+    showFormAlert('La entrega de este pedido ya está cerrada (ENTREGADO). Si hay que añadir otro albarán, cambia antes el estado a ENTREGA PARCIAL.',
+      { title: '⚠️ Entrega cerrada' });
+    return;
+  }
+  toast('Leyendo el albarán…', '', 2500);
+  const fd = new FormData(); fd.append('file', file);
+  let d;
+  try {
+    const r = await fetch(`/api/pedidos/${id}/leer-albaran-pdf`, { method: 'POST', body: fd, credentials: 'same-origin' });
+    d = await r.json();
+  } catch (e) { d = { ok: false, error: 'Error de conexión: ' + e.message }; }
+  if (G.editingPedidoId !== id) return;
+  if (!d || !d.ok) {
+    showFormAlert(d && d.error ? d.error : 'No se pudo leer el albarán.', { title: '⚠️ Albarán no aplicado' });
+    return;
+  }
+
+  // 1) Asegurar la lista de entradas editable (como al marcar ENTREGADO a mano)
+  const chkEnt = document.getElementById('chk-entregado');
+  if (!chkEnt.checked) { chkEnt.checked = true; onAlbaranCheckChange('entregado'); }
+  const numKeyPdf = _numSinCeros(d.albaran_num);
+
+  // 2) Fila: la misma entrada si ya existía, o la última en blanco, o una nueva
+  const filas = Array.from(document.querySelectorAll('#albaran-list .albaran-row'));
+  let row = filas.find(r => _numSinCeros(_numDeFila(r)) === numKeyPdf && numKeyPdf);
+  const yaExistia = !!row;
+  if (!row) row = filas.find(r => !_numDeFila(r));
+  if (!row) { addAlbaranInput(); const fs = document.querySelectorAll('#albaran-list .albaran-row'); row = fs[fs.length - 1]; }
+  const inNum = row.querySelector('.albaran-input');
+  if (!yaExistia) { inNum.value = numKeyPdf; }
+  inNum.dataset.numPrevio = inNum.value.trim();
+  if (d.fecha_iso) row.querySelector('.albaran-fecha').value = d.fecha_iso;
+  if (d.base_imponible != null) row.querySelector('.albaran-base-imponible').value = Number(d.base_imponible).toFixed(2);
+  const numKey = _numDeFila(row);
+
+  // 3) Detalle de referencias (código del albarán → línea/s del pedido; si el código se repite, se reparte en orden)
+  const lineasPed = G.lineasEntrega || [];
+  const det = {}, fuera = [];
+  if (lineasPed.length) {
+    (d.lineas || []).forEach(pl => {
+      const cands = lineasPed.filter(l => _claveCodJS(l.codigo_vista || l.codigo) === pl.clave);
+      if (!cands.length) { fuera.push(pl); return; }
+      let resto = pl.cantidad;
+      cands.forEach((l, i) => {
+        const pend = Math.max(0, Math.round((l.pedida - _entregadoEnOtras(l.codigo, numKey)) * 10000) / 10000);
+        const esUltima = i === cands.length - 1;
+        const toma = esUltima ? resto : Math.min(resto, pend);
+        if (toma > 0) det[l.codigo] = Math.round(((det[l.codigo] || 0) + toma) * 10000) / 10000;
+        resto = Math.round((resto - toma) * 10000) / 10000;
+      });
+    });
+    if (Object.keys(det).length) G.entregasPorAlbaran[numKey] = det; else delete G.entregasPorAlbaran[numKey];
+  }
+
+  // 4) ¿Completa el pedido? (con lo ya detallado en otras entradas + este albarán)
+  const pendientes = [], sobrepasa = [];
+  lineasPed.forEach(l => {
+    const total = Math.round((_entregadoEnOtras(l.codigo, numKey) + (det[l.codigo] || 0)) * 10000) / 10000;
+    const dif = Math.round((l.pedida - total) * 10000) / 10000;
+    if (dif > 0.0001) pendientes.push({ l, dif });
+    else if (dif < -0.0001) sobrepasa.push({ l, dif: -dif });
+  });
+  const sePuedeJuzgar = lineasPed.length > 0 && Object.keys(det).length > 0;
+  const completa = sePuedeJuzgar && !pendientes.length;
+  const chkFinal = row.querySelector('.albaran-chk-final');
+  if (completa && chkFinal && !chkFinal.checked) { chkFinal.checked = true; _onAlbaranFinalChange(chkFinal, row); }
+  else if (!completa) {
+    if (chkFinal && chkFinal.checked) { chkFinal.checked = false; _onAlbaranFinalChange(chkFinal, row); }
+    else if (!_filaFinal()) { document.getElementById('p-estado').value = 'ENTREGA PARCIAL'; onEstadoChange(); }
+  }
+  _refrescarTodosBotonesRef();
+  actualizarAvisoDiferenciaEntrega();
+  row.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  row.style.outline = '2px solid #5b3a99'; setTimeout(() => { row.style.outline = ''; }, 3500);
+
+  // 5) Resumen para el usuario
+  const nomLinea = l => `<b>${_htmlLinea(l.codigo_vista || l.codigo)}</b>${l.ref_proveedor ? ' · ' + _htmlLinea(l.ref_proveedor) : ''} ${_htmlLinea((l.descripcion || '').slice(0, 40))}`;
+  const lista = (arr, f) => `<ul style="margin:4px 0 0 18px;padding:0">${arr.slice(0, 8).map(f).join('')}${arr.length > 8 ? `<li>… y ${arr.length - 8} más</li>` : ''}</ul>`;
+  const nRefs = Object.keys(det).length;
+  const uds = Object.values(det).reduce((a, b) => a + b, 0);
+  let h = `<div style="background:#ecfdf3;border:1px solid #a7e3bf;border-radius:8px;padding:7px 10px;margin-bottom:8px">✔ ${_htmlLinea(d.mensaje || '')}</div>`;
+  h += `<div>${yaExistia ? 'Entrada <b>ya existente</b> actualizada' : 'Entrada rellenada'}: <b>${_htmlLinea(numKey)}</b>`
+    + (d.fecha_iso ? ` · fecha <b>${d.fecha_iso.split('-').reverse().join('/')}</b>` : '')
+    + (d.base_imponible != null ? ` · base imponible <b>${_fmtEur(d.base_imponible)}</b>` : '')
+    + (nRefs ? ` · <b>${nRefs}</b> referencia(s), <b>${_fmtCant(uds)}</b> uds` : '') + '.</div>';
+  if (!lineasPed.length) {
+    h += `<div style="margin-top:8px;color:#7a5b00">Este pedido no tiene líneas guardadas, así que no se ha podido detallar las referencias ni saber si queda algo pendiente: el estado queda en ENTREGA PARCIAL. Revísalo a mano.</div>`;
+  } else if (completa) {
+    h += `<div style="margin-top:8px;color:#1a7a1a"><b>✅ El albarán completa el pedido</b> → marcada «Entrada final» y estado <b>ENTREGADO</b>.</div>`;
+  } else if (pendientes.length) {
+    h += `<div style="margin-top:8px;color:#b45309"><b>🚚 Entrega parcial</b> — quedan por recibir ${pendientes.length} referencia(s):</div>`
+      + lista(pendientes, x => `<li>${nomLinea(x.l)} — faltan <b>${_fmtCant(x.dif)}</b></li>`);
+  }
+  if (sobrepasa.length) {
+    h += `<div style="margin-top:8px;color:#b91c1c"><b>⚠️ Se sobrepasa lo pedido</b> en ${sobrepasa.length} referencia(s):</div>`
+      + lista(sobrepasa, x => `<li>${nomLinea(x.l)} — <b>+${_fmtCant(x.dif)}</b> de más</li>`);
+  }
+  if (fuera.length) {
+    h += `<div style="margin-top:8px;color:#7a5b00"><b>Referencias del albarán que no están en las líneas del pedido</b> (no se han detallado):</div>`
+      + lista(fuera, x => `<li><b>${_htmlLinea(x.codigo)}</b> ${_htmlLinea((x.descripcion || '').slice(0, 40))} — ${_fmtCant(x.cantidad)}</li>`);
+  }
+  if (d.lineas_cantidad_cero) h += `<div style="margin-top:8px;color:#666">${d.lineas_cantidad_cero} línea(s) del albarán con cantidad 0 se han ignorado.</div>`;
+  h += `<div style="margin-top:10px;color:#555">Revisa los datos (puedes corregir lo que quieras, también a mano) y pulsa <b>Guardar</b> para registrarlo.</div>`;
+  _resumenAlbaranPdf('📎 Albarán ' + _htmlLinea(numKey) + ' leído', h);
+}
 
 /* (v12.32.75) Líneas del pedido leídas del PDF oficial PRINCESS — referencias,
    cantidades y precios. Se piden al abrir el pedido y tras subir/borrar el PDF. */

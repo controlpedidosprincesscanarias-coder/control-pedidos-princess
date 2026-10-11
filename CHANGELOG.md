@@ -1,3 +1,15 @@
+# v12.33.12 — 11 octubre 2026
+
+📎 Botón «Subir albarán PDF» en la ficha del pedido: lee el albarán y rellena la entrada
+
+**Petición de Víctor**: poder subir el PDF de un albarán (volcado de pantalla del programa de almacén) y que la aplicación lo interprete y rellene los apartados — Nº de entrada, fecha, base imponible, referencias —, compruebe que es del pedido que se está cumplimentando y fije el estado (ENTREGADO si completa el pedido, ENTREGA PARCIAL si no), dejando siempre disponible el modo manual.
+
+**Cambios**:
+- `app.py`: nuevo `POST /api/pedidos/<id>/leer-albaran-pdf` (`_analizar_albaran_pdf_para_pedido()`), que **no escribe nada**: lee el PDF con el lector ya existente de «Confirmar un albarán suelto» (`_extraer_albaran_confirmacion_individual`, ahora con `exigir_pedido=False` y que además devuelve la base imponible —«Total (con Dtos.)»— y el hotel de la cabecera) y devuelve Nº de entrada (sin ceros a la izquierda), fecha, base imponible y referencias agrupadas por código (las de cantidad 0 se ignoran).
+- **Comprobación del pedido**: si el albarán trae «Pedido/s», debe coincidir con el Nº de este pedido (si es de otro, se rechaza diciendo de cuál). Si no trae pedido (o este pedido aún no tiene Nº), todas sus referencias deben estar en las líneas del pedido; si alguna no está, se rechaza y se listan; si todas están, se informa de que coinciden.
+- `templates/index.html`: botón «📎 Subir albarán PDF» junto a ENTREGADO/CANCELADO (visible al editar un pedido no cancelado). Rellena la entrada (o actualiza la misma si ya estaba), el detalle de «Referencias de la entrada» y el estado: si con lo recibido (esta entrada + las anteriores detalladas) no queda nada pendiente marca «Entrada final» → ENTREGADO; si no, ENTREGA PARCIAL. Un código repetido en el pedido se reparte en orden. Muestra un resumen con lo que falta, lo que se sobrepasa y las referencias que no están en el pedido; la diferencia de importe se avisa igual que a mano. **Nada se guarda hasta pulsar «Guardar»** y todo sigue editable; la entrada a mano no cambia.
+- Si la entrega ya está cerrada (ENTREGADO, solo lectura) avisa de que hay que pasar antes a ENTREGA PARCIAL.
+
 # v12.33.11 — 10 octubre 2026
 
 🚫 Un pedido eliminado ya no se vuelve a dar de alta automáticamente

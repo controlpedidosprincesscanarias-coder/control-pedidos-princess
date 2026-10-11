@@ -13687,7 +13687,7 @@ _PATRON_PEDIDO_EN_CONFIRMACION_ALBARAN = re.compile(
     r'(\d{6,})\s*-\s*Pedido\s+\d{2}/\d{2}/\d{4}\s+\d{1,2}:\d{2}:\d{2}'
 )
 
-def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes) -> dict:
+def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes, exigir_pedido: bool = True) -> dict:
     """
     (2026-09-04, v12.32.20) Lee el PDF de confirmación de UN albarán suelto
     (a petición de Víctor, para resolver a mano un caso puntual donde el
@@ -13710,10 +13710,15 @@ def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes) -> dict:
 
     metadatos = {}
     lineas = []
+    texto_total = ""   # (v12.33.12) texto plano, para leer «Total (con Dtos.)» y la cabecera del hotel
 
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             for i_pagina, pagina in enumerate(pdf.pages):
+                try:
+                    texto_total += (pagina.extract_text() or "") + "\n"
+                except Exception:
+                    pass
                 try:
                     tablas = pagina.extract_tables()
                 except Exception:
@@ -13759,7 +13764,7 @@ def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes) -> dict:
 
     pedido_raw = metadatos.get("Pedido/s") or ""
     pedidos_num_sap = _PATRON_PEDIDO_EN_CONFIRMACION_ALBARAN.findall(pedido_raw)
-    if not pedidos_num_sap:
+    if not pedidos_num_sap and exigir_pedido:
         raise RuntimeError(
             "No se ha reconocido ningún pedido asociado en el campo \"Pedido/s\" del PDF — "
             "¿es el volcado de un albarán suelto del programa de almacén, con ese campo?"
@@ -13772,6 +13777,17 @@ def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes) -> dict:
     proveedor_codigo = prov_partes[0].strip() if prov_partes and prov_partes[0].strip() else None
     proveedor_nombre = prov_partes[1].strip() if len(prov_partes) > 1 else (prov_raw or None)
 
+    # (v12.33.12) Total del albarán: «Total (con Dtos.)» (= base imponible, ya con descuentos) y, si no
+    # estuviera, «Total:»; como último recurso, la suma de los importes de las líneas.
+    def _num_tras(etiqueta_re):
+        m = re.search(etiqueta_re + r'\s*(-?[\d.]+,\d+)', texto_total)
+        return _parse_importe_es(m.group(1)) if m else None
+    total_dtos = _num_tras(r'Total\s*\(con\s*Dtos\.?\)\s*:')
+    total_bruto = _num_tras(r'Total\s*:')
+    suma_lineas = round(sum(_parse_importe_es(l.get("importe_txt")) for l in lineas), 2)
+    base_imponible = total_dtos if total_dtos is not None else (total_bruto if total_bruto is not None else suma_lineas)
+    m_hotel = re.search(r'^\s*(HOTEL[^\n]*|[^\n]*PRINCESS[^\n]*)$', texto_total, re.M)
+
     return {
         "albaran_id": metadatos.get("Código"),
         "albaran_ref": metadatos.get("Albarán Proveedor"),
@@ -13779,6 +13795,8 @@ def _extraer_albaran_confirmacion_individual(pdf_bytes: bytes) -> dict:
         "proveedor_nombre": proveedor_nombre,
         "pedidos_num_sap": pedidos_num_sap,
         "fecha_albaran": metadatos.get("Fecha Albarán"),
+        "base_imponible": round(base_imponible, 2) if base_imponible is not None else None,
+        "hotel_pdf": m_hotel.group(1).strip() if m_hotel else None,
         "lineas": lineas,
     }
 
@@ -21978,6 +21996,153 @@ def get_entregas_lineas(pid):
         "ok": True, "lineas": lineas, "hay_detalle": bool(ent),
         "total_pedido": None if (es_hotel or ped["total_pedido"] is None) else float(ped["total_pedido"]),
     })
+
+
+def _clave_codigo_articulo(c) -> str:
+    """(v12.33.12) Código de artículo comparable: sin espacios, en mayúsculas y sin ceros a la izquierda
+    si es numérico ('00028967' y '28967' son el mismo)."""
+    c = str(c or "").strip().upper()
+    m = re.match(r'^0*(\d+)$', c)
+    return m.group(1) if m else c
+
+
+def _fecha_es_a_iso(txt):
+    """'21/09/2026 14:50:00' → '2026-09-21' (None si no se reconoce)."""
+    m = re.match(r'\s*(\d{1,2})/(\d{1,2})/(\d{4})', txt or "")
+    return f"{m.group(3)}-{int(m.group(2)):02d}-{int(m.group(1)):02d}" if m else None
+
+
+def _analizar_albaran_pdf_para_pedido(pid: int, pdf_bytes: bytes, es_hotel: bool = False) -> tuple:
+    """
+    (v12.33.12) Lee el PDF de UN albarán (el volcado de pantalla del programa de almacén) y comprueba que
+    corresponde al pedido `pid`, para rellenar solos los datos de la entrada en la ficha del pedido.
+    NO escribe nada: devuelve lo leído y el resultado de la comprobación; el formulario es quien lo aplica
+    (y se guarda al pulsar «Guardar», como una entrada hecha a mano).
+
+    Comprobación del pedido:
+      · el PDF trae «Pedido/s» → debe incluir el Nº de pedido de este pedido (si no, se rechaza y se dice
+        de qué pedido es). Si este pedido aún no tiene Nº de pedido, se comprueban las referencias;
+      · el PDF no trae pedido → todas las referencias con cantidad deben estar en las líneas del pedido
+        (si alguna no está, se rechaza y se listan).
+    Devuelve (resultado: dict, http_status: int).
+    """
+    ped = row_to_dict(query("SELECT id, pedido_num FROM pedidos WHERE id=%s", (pid,), one=True))
+    try:
+        datos = _extraer_albaran_confirmacion_individual(pdf_bytes, exigir_pedido=False)
+    except RuntimeError as exc:
+        return {"ok": False, "error": str(exc)}, 422
+
+    num_albaran = (datos.get("albaran_id") or "").strip()
+    if not num_albaran:
+        return {"ok": False, "error": "El PDF no trae el campo «Código» (Nº de entrada del albarán): "
+                                        "¿es el volcado de un albarán del programa de almacén?"}, 422
+
+    # Referencias del albarán, agrupadas por código (el mismo código puede salir en varias líneas).
+    agrup, orden, con_cantidad_cero = {}, [], 0
+    for ln in datos["lineas"]:
+        cod = (ln.get("codigo_articulo") or "").strip()
+        if not cod:
+            continue
+        cant = _parse_importe_es(ln.get("cantidad_txt"))
+        if cant <= 0:
+            con_cantidad_cero += 1
+            continue
+        k = _clave_codigo_articulo(cod)
+        g = agrup.get(k)
+        if g is None:
+            g = agrup[k] = {"codigo": cod, "clave": k, "descripcion": " ".join((ln.get("descripcion") or "").split()),
+                            "cantidad": 0.0, "importe": 0.0, "precio": _parse_importe_es(ln.get("precio_txt"))}
+            orden.append(k)
+        g["cantidad"] = round(g["cantidad"] + cant, 4)
+        g["importe"] = round(g["importe"] + _parse_importe_es(ln.get("importe_txt")), 2)
+    if not orden:
+        return {"ok": False, "error": "El albarán no trae ninguna referencia con cantidad mayor que 0."}, 422
+    lineas_pdf = [agrup[k] for k in orden]
+    if es_hotel:
+        for g in lineas_pdf:
+            g["precio"] = None
+            g["importe"] = None
+
+    # Referencias del pedido de la ficha.
+    cods_pedido = {_clave_codigo_articulo(r["codigo"]) for r in rows_to_list(query(
+        "SELECT codigo FROM pedido_lineas WHERE pedido_id=%s", (pid,))) if r["codigo"]}
+
+    pedidos_pdf = list(dict.fromkeys(datos.get("pedidos_num_sap") or []))
+    pedidos_pdf_norm = [_normalizar_pedido_num(x) for x in pedidos_pdf]
+    pedido_app_norm = _normalizar_pedido_num(ped["pedido_num"]) if ped and ped.get("pedido_num") else ""
+    ref_no_incluidas = [g["codigo"] for g in lineas_pdf if g["clave"] not in cods_pedido]
+
+    modo, mensaje = None, None
+    if pedidos_pdf and pedido_app_norm:
+        if pedido_app_norm in pedidos_pdf_norm:
+            modo = "pedido"
+            mensaje = f"El albarán indica el pedido {pedidos_pdf[pedidos_pdf_norm.index(pedido_app_norm)]}, que coincide con este pedido."
+        else:
+            return {"ok": False, "error": f"Este albarán es del pedido {', '.join(pedidos_pdf)}, pero el pedido que estás "
+                                           f"editando es el {ped['pedido_num']}. No se ha rellenado nada."}, 422
+    else:
+        # Sin Nº de pedido en el PDF (o en la ficha): se comprueba por referencias.
+        if not cods_pedido:
+            return {"ok": False, "error": "El albarán no indica el pedido y este pedido no tiene líneas guardadas "
+                                           "(adjunta el PDF del pedido o cárgalo desde SAP) — no se puede comprobar que corresponda. "
+                                           "Puedes registrar la entrada a mano."}, 422
+        if ref_no_incluidas:
+            lista = ", ".join(ref_no_incluidas[:8]) + (f" y {len(ref_no_incluidas) - 8} más" if len(ref_no_incluidas) > 8 else "")
+            return {"ok": False, "error": ("El albarán no indica el pedido y estas referencias no están en este pedido: "
+                                           f"{lista}. No se ha rellenado nada.")}, 422
+        modo = "referencias"
+        mensaje = ("El albarán no indica el pedido, pero todas sus referencias "
+                   f"({len(lineas_pdf)}) están incluidas en este pedido: coinciden.")
+
+    return {
+        "ok": True,
+        "modo_comprobacion": modo,
+        "mensaje": mensaje,
+        "albaran_num": num_albaran,
+        "albaran_ref": datos.get("albaran_ref"),
+        "fecha_iso": _fecha_es_a_iso(datos.get("fecha_albaran")),
+        "base_imponible": datos.get("base_imponible"),
+        "proveedor": datos.get("proveedor_nombre"),
+        "hotel_pdf": datos.get("hotel_pdf"),
+        "pedidos_pdf": pedidos_pdf,
+        "lineas": lineas_pdf,
+        "lineas_cantidad_cero": con_cantidad_cero,
+        "referencias_fuera_del_pedido": ref_no_incluidas,   # solo puede haber alguna si el PDF sí indicaba el pedido
+    }, 200
+
+
+@app.route("/api/pedidos/<int:pid>/leer-albaran-pdf", methods=["POST"])
+@login_required
+def leer_albaran_pdf_pedido(pid):
+    """
+    (v12.33.12) Botón «📎 Subir albarán PDF» de la ficha del pedido: lee el PDF de un albarán y devuelve los datos
+    de la entrada (Nº, fecha, base imponible, referencias y cantidades) tras comprobar que es de este pedido.
+    No guarda nada.
+
+    POST /api/pedidos/<id>/leer-albaran-pdf   form-data: file (PDF)
+    """
+    ped = query("SELECT id, hotel_id FROM pedidos WHERE id=%s", (pid,), one=True)
+    if not ped:
+        return jsonify({"ok": False, "error": "Pedido no encontrado"}), 404
+    es_hotel = session.get("rol") == "hotel"
+    if es_hotel and ped["hotel_id"] not in session.get("hoteles_ids", []):
+        return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
+    if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(ped["hotel_id"]):
+        return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
+    archivo = request.files.get("file")
+    if not archivo or not archivo.filename or not archivo.filename.lower().endswith(".pdf"):
+        return jsonify({"ok": False, "error": "Selecciona el PDF del albarán."}), 400
+    pdf_bytes = archivo.read()
+    if not pdf_bytes:
+        return jsonify({"ok": False, "error": "El archivo está vacío"}), 400
+    if len(pdf_bytes) > 15 * 1024 * 1024:
+        return jsonify({"ok": False, "error": "El PDF es demasiado grande (máximo 15 MB)."}), 400
+    try:
+        resultado, status = _analizar_albaran_pdf_para_pedido(pid, pdf_bytes, es_hotel=es_hotel)
+    except Exception as exc:
+        log.exception("[ALBARAN-PDF] Error leyendo el albarán del pedido %s: %s", pid, exc)
+        return jsonify({"ok": False, "error": f"No se pudo leer el PDF: {exc}"}), 500
+    return jsonify(resultado), status
 
 
 def _filtro_hoteles_visibles_sql(alias="p"):
