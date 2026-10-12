@@ -23409,6 +23409,269 @@ def upload_adjunto(pid):
     return jsonify(respuesta), 201
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# (2026-10-12, v12.33.20) PEDIDO SIMPLIFICADO — Fase 1
+# A petición de Víctor: al pulsar «Nuevo pedido», el comprador/admin puede elegir
+# «Simplificado»: sube de una vez todos los archivos del pedido y la aplicación los
+# reconoce y propone dónde colocarlos. Estos dos endpoints SOLO analizan/consultan:
+# no escriben nada en la base de datos. El alta real sigue siendo POST /api/pedidos
+# + POST /api/pedidos/<id>/adjuntos (mismas validaciones que el modo paso a paso).
+# ══════════════════════════════════════════════════════════════════════════
+_SIMPL_MAX_ARCHIVOS = 12
+_SIMPL_OCR_MAX = 2   # como mucho 2 PDF escaneados se intentan leer por OCR en un análisis (coste de CPU)
+_SIMPL_ETIQUETAS_TIPO = {
+    "pedido_doc":      "PDF del pedido oficial",
+    "presupuesto_doc": "Presupuesto",
+    "solicitud_doc":   "Solicitud del hotel",
+    "vb_eml":          "Envío para Vº Bº / firma",
+    "tramit_eml":      "Correo de tramitación al proveedor",
+    "firma_techo_doc": "Apoyo firma techo de gasto",
+    "imagen_articulo": "Imagen de artículo",
+}
+_SIMPL_EXT_IMAGEN = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+_SIMPL_EXT_WORD   = {".doc", ".docx"}
+_SIMPL_EXT_EXCEL  = {".xls", ".xlsx"}
+_SIMPL_KW_PRESUPUESTO = ("presupuesto", "ppto", "oferta", "proforma", "cotizacion", "propuesta economica", "quotation")
+_SIMPL_KW_VB = ("visto bueno", "vo bo", "v bo", "v.b", "vobo", "vb ", "firma", "autoriz", "aprobacion", "aprobar")  # (el texto se normaliza antes: «Vº Bº» → «vo bo»)
+
+
+def _simpl_clase(nombre: str, mime: str) -> str:
+    ext = os.path.splitext((nombre or "").lower())[1]
+    if ext in EXT_CORREO or mime == "message/rfc822" or mime == "application/vnd.ms-outlook":
+        return "correo"
+    if ext == ".pdf" or mime == "application/pdf":
+        return "pdf"
+    if ext in _SIMPL_EXT_IMAGEN or (mime or "").startswith("image/"):
+        return "imagen"
+    if ext in _SIMPL_EXT_WORD:
+        return "word"
+    if ext in _SIMPL_EXT_EXCEL:
+        return "excel"
+    return "otro"
+
+
+def _simpl_permitidos(clase: str) -> list:
+    return {
+        "pdf":    ["pedido_doc", "presupuesto_doc", "solicitud_doc", "vb_eml", "firma_techo_doc"],
+        "correo": ["presupuesto_doc", "solicitud_doc", "vb_eml", "tramit_eml", "firma_techo_doc"],
+        "word":   ["presupuesto_doc", "solicitud_doc", "firma_techo_doc"],
+        "excel":  ["presupuesto_doc", "solicitud_doc", "firma_techo_doc"],
+        "imagen": ["imagen_articulo"],
+        "otro":   [],
+    }[clase]
+
+
+def _simpl_limite_bytes(clase: str, tipo=None) -> int:
+    if clase == "correo":
+        return MAX_BYTES_CORREO
+    if clase == "imagen":
+        return MAX_BYTES_IMAGEN
+    return MAX_BYTES_DOCUMENTO
+
+
+def _simpl_texto_pdf_sin_ocr(datos: bytes) -> str:
+    try:
+        from pypdf import PdfReader
+        import io
+        reader = PdfReader(io.BytesIO(datos))
+        return "\n".join((pg.extract_text() or "") for pg in list(reader.pages)[:4])
+    except Exception:
+        return ""
+
+
+def _simpl_leer_correo(datos: bytes, ext: str) -> dict:
+    """Asunto/remitente/fecha de un .eml (los .msg no se leen: se clasifica por nombre)."""
+    if ext != ".eml":
+        return {}
+    try:
+        from email import policy
+        from email.parser import BytesParser
+        msg = BytesParser(policy=policy.default).parsebytes(datos, headersonly=True)
+        return {"asunto": str(msg.get("subject") or ""), "de": str(msg.get("from") or ""), "fecha": str(msg.get("date") or "")}
+    except Exception:
+        return {}
+
+
+def _simpl_resolver_hotel(nombre_pdf):
+    if not nombre_pdf:
+        return None
+    n_pdf = _normalizar_nombre_hotel(nombre_pdf)
+    if not n_pdf:
+        return None
+    cands = []
+    for h in rows_to_list(query("SELECT id, codigo, nombre FROM hoteles WHERE activo=1")):
+        if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(h["id"]):
+            continue
+        n_h = _normalizar_nombre_hotel(h["nombre"])
+        if n_pdf == n_h:
+            return h
+        if n_h and (n_pdf in n_h or n_h in n_pdf):
+            cands.append(h)
+    return cands[0] if len(cands) == 1 else None
+
+
+def _simpl_resolver_departamento(almacen_pdf, hotel_codigo):
+    if not almacen_pdf:
+        return None
+    deptos = rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1"))
+    esperado = _resolver_departamento_almacen_pdf(almacen_pdf, hotel_codigo)
+    if esperado:
+        n_esp = _normalizar_texto_generico(esperado)
+        for d in deptos:
+            if _normalizar_texto_generico(d["nombre"]) == n_esp:
+                return d
+    n_pdf = _normalizar_texto_generico(almacen_pdf)
+    for d in deptos:
+        if _normalizar_texto_generico(d["nombre"]) == n_pdf:
+            return d
+    cands = [d for d in deptos if n_pdf and (n_pdf in _normalizar_texto_generico(d["nombre"]) or _normalizar_texto_generico(d["nombre"]) in n_pdf)]
+    return cands[0] if len(cands) == 1 else None
+
+
+def _simpl_analizar_un_archivo(idx: int, nombre: str, mime: str, datos: bytes, ocr_restante: list) -> dict:
+    ext = os.path.splitext((nombre or "").lower())[1]
+    clase = _simpl_clase(nombre, mime)
+    n_norm = _normalizar_texto_generico(nombre or "").lower()
+    res = {"idx": idx, "nombre": nombre, "tamano": len(datos), "clase": clase,
+           "permitidos": _simpl_permitidos(clase), "tipo": None, "confianza": "baja",
+           "motivo": "", "rellena": [], "pedido": None, "error": None}
+
+    if not res["permitidos"]:
+        res["error"] = "Formato no admitido (use PDF, Word, Excel, correo .eml/.msg o imagen)."
+        return res
+    limite = _simpl_limite_bytes(clase)
+    if len(datos) > limite:
+        res["error"] = f"Supera el límite de {limite // (1024*1024)} MB para este tipo de archivo."
+        return res
+
+    if clase == "imagen":
+        res.update(tipo="imagen_articulo", confianza="alta", motivo="Imagen: se coloca como imagen de artículo.")
+        return res
+
+    if clase == "pdf":
+        texto = _simpl_texto_pdf_sin_ocr(datos)
+        vacio = len(texto.strip()) < _UMBRAL_TEXTO_VACIO_PDF
+        intentar = (not vacio) or ocr_restante[0] > 0
+        if vacio and intentar:
+            ocr_restante[0] -= 1
+        if intentar:
+            try:
+                d = _parsear_pdf_pedido_oficial(datos)
+            except ValueError:
+                d = None
+            if d:
+                hotel = _simpl_resolver_hotel(d.get("hotel_nombre_pdf"))
+                depto = _simpl_resolver_departamento(d.get("almacen_pdf"), hotel["codigo"] if hotel else None)
+                prov = _resolver_proveedor_pdf_oficial(d.get("proveedor_codigo"), d.get("proveedor_nombre_pdf"))
+                existente = _detectar_pedido_num_duplicado(hotel["id"], d["pedido_num"]) if hotel else None
+                lineas = d.get("lineas") or []
+                res["pedido"] = {
+                    "pedido_num": d["pedido_num"], "total_pedido": d["total_pedido"],
+                    "fecha_pedido_iso": d.get("fecha_pedido_iso"), "fecha_entrega_iso": d.get("fecha_entrega_iso"),
+                    "hotel_pdf": d.get("hotel_nombre_pdf"), "almacen_pdf": d.get("almacen_pdf"),
+                    "hotel": {"id": hotel["id"], "nombre": hotel["nombre"]} if hotel else None,
+                    "departamento": {"id": depto["id"], "nombre": depto["nombre"]} if depto else None,
+                    "proveedor": {"id": prov["id"], "nombre": prov["nombre"]} if prov else None,
+                    "proveedor_pdf_nombre": d.get("proveedor_nombre_pdf"), "proveedor_pdf_codigo": d.get("proveedor_codigo"),
+                    "n_lineas": len(lineas), "leido_via_ocr": bool(d.get("leido_via_ocr")),
+                    "existente": ({"id": existente["id"], "norden": existente["norden"], "estado": existente["estado"]} if existente else None),
+                }
+                res.update(tipo="pedido_doc", confianza="alta", motivo="PDF del pedido oficial PRINCESS" + (" (escaneado, leído por OCR)" if d.get("leido_via_ocr") else "") + ".")
+                res["rellena"] = ["Nº pedido " + d["pedido_num"], "Total %.2f €" % d["total_pedido"]]
+                if hotel: res["rellena"].append("Hotel: " + hotel["nombre"])
+                if depto: res["rellena"].append("Departamento: " + depto["nombre"])
+                if prov: res["rellena"].append("Proveedor: " + prov["nombre"])
+                if d.get("fecha_pedido_iso"): res["rellena"].append("Fecha tramitación " + d["fecha_pedido_iso"])
+                if lineas: res["rellena"].append(f"{len(lineas)} líneas")
+                return res
+        t = _normalizar_texto_generico(texto[:3000]).lower()
+        if any(k in t for k in _SIMPL_KW_PRESUPUESTO) or any(k in n_norm for k in _SIMPL_KW_PRESUPUESTO):
+            res.update(tipo="presupuesto_doc", confianza="media", motivo="Parece un presupuesto (contiene la palabra «presupuesto/oferta/proforma»).")
+        elif "albaran" in t or "albaran" in n_norm:
+            res["motivo"] = "Parece un albarán: se carga desde la ficha del pedido (botón «Albarán PDF»), no aquí. Elija otro destino o «No subir»."
+        elif vacio:
+            res["motivo"] = "PDF escaneado (sin texto): no se puede reconocer automáticamente."
+        else:
+            res["motivo"] = "No se reconoce el tipo de documento."
+        return res
+
+    if clase == "correo":
+        info = _simpl_leer_correo(datos, ext)
+        asunto = _normalizar_texto_generico(info.get("asunto", "") + " " + (nombre or "")).lower()
+        if info.get("asunto"):
+            res["rellena"].append("Asunto: " + info["asunto"][:80])
+        if any(k in asunto for k in _SIMPL_KW_VB):
+            res.update(tipo="vb_eml", confianza="media", motivo="Correo cuyo asunto/nombre habla de visto bueno, firma o autorización.")
+        elif any(k in asunto for k in _SIMPL_KW_PRESUPUESTO):
+            res.update(tipo="presupuesto_doc", confianza="media", motivo="Correo cuyo asunto/nombre habla de presupuesto u oferta.")
+        else:
+            res["motivo"] = "Correo: no se sabe si es la petición de presupuesto, el visto bueno o el envío al proveedor."
+        return res
+
+    # Word / Excel / otros documentos
+    if any(k in n_norm for k in _SIMPL_KW_PRESUPUESTO):
+        res.update(tipo="presupuesto_doc", confianza="media", motivo="El nombre del archivo indica presupuesto u oferta.")
+    elif "solicitud" in n_norm:
+        res.update(tipo="solicitud_doc", confianza="media", motivo="El nombre del archivo indica solicitud.")
+    else:
+        res["motivo"] = "Documento: no se reconoce su tipo por el nombre."
+    return res
+
+
+@app.route("/api/pedidos/simplificado/analizar", methods=["POST"])
+@login_required
+def simplificado_analizar():
+    """Analiza (sin escribir en BD) los archivos subidos de una vez y propone dónde colocarlos."""
+    if session.get("rol") == "hotel":
+        return jsonify({"ok": False, "error": "Sin permiso"}), 403
+    archivos = request.files.getlist("archivos")
+    if not archivos:
+        return jsonify({"ok": False, "error": "No se recibió ningún archivo"}), 400
+    if len(archivos) > _SIMPL_MAX_ARCHIVOS:
+        return jsonify({"ok": False, "error": f"Máximo {_SIMPL_MAX_ARCHIVOS} archivos de una vez."}), 400
+    ocr_restante = [_SIMPL_OCR_MAX]
+    resultados = []
+    for i, a in enumerate(archivos):
+        datos = a.read()
+        if len(datos) > MAX_ADJUNTO_BYTES:
+            resultados.append({"idx": i, "nombre": a.filename, "tamano": len(datos), "clase": "otro", "permitidos": [],
+                               "tipo": None, "confianza": "baja", "motivo": "", "rellena": [], "pedido": None,
+                               "error": "Supera el límite de 20 MB."})
+            continue
+        try:
+            resultados.append(_simpl_analizar_un_archivo(i, a.filename or f"archivo{i}", a.mimetype or "", datos, ocr_restante))
+        except Exception as exc:
+            log.warning("[SIMPLIFICADO] Error analizando %s: %s", a.filename, exc)
+            resultados.append({"idx": i, "nombre": a.filename, "tamano": len(datos), "clase": "otro", "permitidos": [],
+                               "tipo": None, "confianza": "baja", "motivo": "", "rellena": [], "pedido": None,
+                               "error": "No se pudo analizar este archivo."})
+    # Solo un PDF de pedido oficial: si hay varios, el primero manda y los demás pasan a dudosos.
+    vistos = False
+    for r in resultados:
+        if r.get("tipo") == "pedido_doc":
+            if vistos:
+                r.update(tipo=None, confianza="baja", motivo="Hay más de un PDF de pedido oficial: solo se admite uno por pedido.")
+            vistos = True
+    return jsonify({"ok": True, "archivos": resultados, "etiquetas": _SIMPL_ETIQUETAS_TIPO})
+
+
+@app.route("/api/pedidos/simplificado/techo", methods=["POST"])
+@login_required
+def simplificado_techo():
+    """Consulta (sin escribir) si un importe computaría fuera de los límites del techo de gasto."""
+    if session.get("rol") == "hotel":
+        return jsonify({"ok": False, "error": "Sin permiso"}), 403
+    d = request.get_json(silent=True) or {}
+    try:
+        hotel_id = int(d.get("hotel_id"))
+        importe = float(d.get("importe"))
+    except (TypeError, ValueError):
+        return jsonify({"ok": False, "error": "Faltan hotel o importe"}), 400
+    familia_id = d.get("familia_id") or None
+    motivos = _check_techo(hotel_id, familia_id, importe, _date.today().strftime("%Y-%m"))
+    return jsonify({"ok": True, "motivos": motivos, "supera": bool(motivos)})
+
+
 def _servir_adjunto_response(aid: int):
     """
     Construye la respuesta Flask que sirve el contenido de un adjunto de

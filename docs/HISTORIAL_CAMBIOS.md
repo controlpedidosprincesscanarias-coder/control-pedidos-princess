@@ -49,6 +49,16 @@
 
 ---
 
+## 2026-10-12 — [Control Pedidos] Pedido simplificado, Fase 1: alta de pedido subiendo todos los archivos de una vez (v12.33.20)
+
+Petición de Víctor: simplificar la creación manual de pedidos para no subir los archivos paso a paso. «Nuevo pedido» (solo comprador/admin) ofrece **Simplificado** o **Paso a paso** (sin cambios). Acordado con Víctor: fechas de solicitud y Vº Bº al inicio; todos los archivos de una vez; análisis sin escribir en BD; tabla editable de destino con «¿Dónde lo coloco?» solo para lo dudoso; con PDF oficial se dan por buenos hotel, departamento, proveedor y fecha de tramitación (= Fecha Pedido) y se pregunta la fecha de entrega, y el estado se elige en la ventana «Pedido cargado correctamente»; sin PDF se pregunta hotel → departamento y se propone estado según la documentación (cotización / firma de Dirección / Vº Bº DG si supera techo). Defaults de Fase 1: presupuesto sin Vº Bº → se pide fecha y documento de envío en la propia pantalla; techo con importe tecleado a mano.
+
+Implementación: `app.py` — `simplificado_analizar` (clasifica PDF oficial reutilizando `_parsear_pdf_pedido_oficial`, presupuestos por palabras clave, correos por asunto, imágenes; máx. 12 archivos; OCR limitado a 2 PDF escaneados por análisis; detecta el pedido existente con `_detectar_pedido_num_duplicado`) y `simplificado_techo` (`_check_techo`, solo consulta). El alta es `POST /api/pedidos` + subida de cada archivo con su tipo por `/api/pedidos/<id>/adjuntos` (mismas validaciones del paso a paso); con PDF oficial el pedido nace en PENDIENTE COTIZACIÓN y se abre la ficha con la ventana de estado. `templates/index.html` — `nuevoPedido()`, asistente `_sp*`, estilos `.sp-*`. Sin migraciones.
+
+Fase 2 (necesita presupuestos de ejemplo de los proveedores más frecuentes): nº de presupuesto y nueva fecha de presupuesto (columna + migración), importe → techo, comparación con el total del pedido. Fase 3: aprendizaje del formato por proveedor, fechas desde correos.
+
+---
+
 ## 2026-10-11 — [Control Pedidos] Rol Hotel: se oculta el texto de «adjuntar PDF del pedido oficial» (v12.33.19)
 
 Detectado al actualizar el manual del rol Hotel: el hotel no puede adjuntar el PDF del pedido pero veía sus instrucciones y el enlace «Ver ejemplo» (v12.33.18). Se oculta `#nota-pedido-doc` en la rama de rol Hotel, junto al botón. Comprobado con Playwright como usuario Hotel (el texto ya no aparece; el PDF adjunto sigue visible para consulta). Sin migraciones. Documentos de mantenimiento: no aplica. Manual del rol Hotel actualizado a esta versión.

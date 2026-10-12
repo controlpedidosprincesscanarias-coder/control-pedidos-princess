@@ -1,3 +1,13 @@
+# v12.33.20 — 12 octubre 2026
+
+⚡ Pedido simplificado (Fase 1): crear un pedido subiendo todos los archivos de una vez
+
+**Petición de Víctor**: no tener que subir cada archivo en su paso. Al pulsar «Nuevo pedido» (solo comprador y admin) se elige **Simplificado** o **Paso a paso** (el de siempre, sin cambios).
+
+Simplificado: (1) fecha de solicitud y fecha de envío para Vº Bº (opcional); (2) se sueltan todos los archivos juntos; (3) la aplicación los analiza **sin guardar nada** y muestra una tabla (archivo · detectado como y confianza · «se colocará en» editable · datos que rellena). Reconoce el PDF del pedido oficial (con OCR si viene escaneado), presupuestos por palabras clave, correos (.eml por asunto), imágenes de artículo; lo dudoso pregunta «¿Dónde lo coloco?». (4) Con PDF oficial: hotel, departamento, proveedor, nº, total y líneas salen del PDF, la fecha de tramitación es la «Fecha Pedido» del PDF y se pregunta si se mantiene o se modifica la fecha de entrega; después se abre la ventana «Pedido cargado correctamente» para elegir estado. Sin PDF: se pide hotel y departamento (en ese orden), proveedor opcional y se propone estado (sin presupuesto → PENDIENTE COTIZACIÓN; con presupuesto → PENDIENTE FIRMA DIRECCION COMPRAS, cambiable; si computa para el techo y lo supera → PENDIENTE Vº Bº DIRECCIÓN GENERAL), pidiendo fecha y documento de envío para los estados de firma. Si el nº de pedido del PDF ya existe en ese hotel (p. ej. alta automática desde SAP) no se duplica: se ofrece abrir el existente.
+
+`app.py`: `POST /api/pedidos/simplificado/analizar` y `POST /api/pedidos/simplificado/techo` (solo lectura, bloqueados para el rol hotel). El alta real reutiliza `POST /api/pedidos` y `POST /api/pedidos/<id>/adjuntos` (mismas validaciones). `templates/index.html`: `nuevoPedido()` + asistente. Sin migraciones. Pendiente Fase 2 (nº y fecha de presupuesto, importe → techo) y Fase 3.
+
 # v12.33.19 — 11 octubre 2026
 
 🏨 Hotel: en la ficha del pedido ya no se muestran las instrucciones de «adjuntar PDF del pedido oficial»

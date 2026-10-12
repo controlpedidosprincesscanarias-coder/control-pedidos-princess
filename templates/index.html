@@ -796,6 +796,26 @@ tbody tr:last-child{border-bottom:none}
 .cp-bloq-op small{display:block;color:#64748b;font-size:12px;margin-top:2px}
 .cp-bloq-aviso{background:#fff7e0;border:1px solid #f1d58a;color:#7a5600;border-radius:8px;padding:8px 10px;font-size:12.5px;margin:8px 0}
 .cp-bloq-acc{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
+.sp-box{max-width:900px!important;position:relative}
+.sp-box .form-group{margin-bottom:12px}
+.sp-x{position:absolute;top:10px;right:12px;border:0;background:none;font-size:18px;cursor:pointer;color:#64748b}
+.sp-pasos{display:flex;gap:8px;margin:6px 0 14px;font-size:12.5px}
+.sp-pasos span{padding:3px 10px;border-radius:99px;background:#eef2f8;color:#64748b}
+.sp-pasos span.on{background:#0f2044;color:#fff}.sp-pasos span.ok{background:#dcfce7;color:#166534}
+.sp-drop{border:2px dashed #94a3b8;border-radius:12px;padding:26px;text-align:center;cursor:pointer;color:#475569;background:#f8fafc}
+.sp-drop.over,.sp-drop:hover{border-color:#2563eb;background:#eff6ff}
+.sp-file{display:flex;justify-content:space-between;align-items:center;padding:4px 8px;border-bottom:1px solid #eef2f8;font-size:13px}
+.sp-tabla{width:100%;border-collapse:collapse;font-size:12.5px;margin-bottom:12px}
+.sp-tabla th{text-align:left;background:#f1f5fb;padding:6px 8px;font-size:12px}
+.sp-tabla td{padding:6px 8px;border-bottom:1px solid #eef2f8;vertical-align:top}
+.sp-tabla ul{margin:0;padding-left:16px}.sp-tabla small{color:#64748b}
+.sp-dud{background:#fffbeb}.sp-q{font-weight:700;color:#b45309;font-size:12px;margin-bottom:3px}
+.sp-conf{font-size:10.5px;padding:1px 7px;border-radius:99px;background:#e2e8f0}
+.sp-conf-alta{background:#dcfce7;color:#166534}.sp-conf-media{background:#fef3c7;color:#92400e}.sp-conf-baja{background:#fee2e2;color:#991b1b}
+.sp-bad{color:#b91c1c}.sp-nota{background:#eff6ff;border-radius:8px;padding:8px 10px;font-size:12.5px;color:#1e3a8a;margin:8px 0}
+.sp-radio{display:block;margin:4px 0;font-size:13.5px}
+.sp-dd{position:absolute;left:0;right:0;top:100%;z-index:60;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.12);max-height:220px;overflow:auto}
+.sp-dd-i{padding:8px 12px;cursor:pointer;font-size:13px}.sp-dd-i:hover{background:#f1f5fb}
 
 #form-alert-toast {
   position: fixed;
@@ -1440,7 +1460,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.19
+          V 12.33.20
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -1464,7 +1484,7 @@ tbody tr:last-child{border-bottom:none}
 
         <!-- Acciones contextuales: Pedidos -->
         <div id="tb-actions-pedidos" style="display:flex;gap:8px;align-items:center">
-          <button class="btn btn-gold" onclick="openPedidoModal()" id="btn-nuevo-pedido">
+          <button class="btn btn-gold" onclick="nuevoPedido()" id="btn-nuevo-pedido">
             + Nuevo pedido
           </button>
           <button class="btn btn-ghost btn-sm" id="btn-exportar-pedidos" onclick="exportarExcel()" title="Exportar a Excel">⬇ Exportar</button>
@@ -5460,7 +5480,7 @@ function renderAccesosRapidos() {
   const rol = G.rol;
   const links = [];
   if (rol !== 'hotel') {
-    links.push({ icon: '➕', label: 'Nuevo pedido', fn: `openPedidoModal()` });
+    links.push({ icon: '➕', label: 'Nuevo pedido', fn: `nuevoPedido()` });
     links.push({ icon: '👥', label: 'Nuevo proveedor', fn: `openNuevoProveedorModal()` });
     links.push({ icon: '📄', label: 'Importar Excel', fn: `openImportModal()` });
   }
@@ -11126,6 +11146,378 @@ async function enviarResumenComparacionAlbaranes() {
   } finally {
     btn.disabled = false;
     btn.textContent = textoOriginal;
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   (2026-10-12, v12.33.20) PEDIDO SIMPLIFICADO — Fase 1 (solo comprador/admin)
+   «Nuevo pedido» → elegir Simplificado o Paso a paso (el flujo de siempre).
+   Simplificado: fechas → todos los archivos de una vez → la app los reconoce
+   (sin guardar nada) → revisión → Crear. Al crear se da de alta el pedido con
+   POST /api/pedidos y se suben los archivos con el mismo endpoint de adjuntos
+   del modo paso a paso (mismas validaciones).
+═══════════════════════════════════════════════════════════════════════════ */
+const _SP_ETQ = {
+  pedido_doc: 'PDF del pedido oficial', presupuesto_doc: 'Presupuesto', solicitud_doc: 'Solicitud del hotel',
+  vb_eml: 'Envío para Vº Bº / firma', tramit_eml: 'Correo de tramitación al proveedor',
+  firma_techo_doc: 'Apoyo firma techo de gasto', imagen_articulo: 'Imagen de artículo',
+};
+const _SP_ESTADOS_SIN_PDF = [
+  'PENDIENTE COTIZACIÓN', 'PENDIENTE FIRMA DIRECCION COMPRAS', 'PENDIENTE DE FIRMA DIRECCION HOTEL', 'PENDIENTE Vº Bº DIRECCIÓN GENERAL',
+];
+let _sp = null;   // estado del asistente
+
+function nuevoPedido() {
+  if (G.rol === 'hotel') { openPedidoModal(); return; }
+  const ov = _abrirDialogoBloqueante(`
+    <h3>➕ Nuevo pedido</h3>
+    <div style="font-size:13.5px;color:#334155;margin-bottom:12px">¿Cómo quiere crearlo?</div>
+    <label class="cp-bloq-op" id="sp-op-simple"><input type="radio" name="sp-modo" value="simple" checked><span><b>Simplificado</b>
+      <small>Sube todos los archivos de una vez (PDF del pedido, presupuesto, correos…) y la aplicación los reconoce y los coloca por usted.</small></span></label>
+    <label class="cp-bloq-op" id="sp-op-paso"><input type="radio" name="sp-modo" value="paso"><span><b>Paso a paso</b>
+      <small>El formulario de siempre, subiendo cada archivo en su apartado.</small></span></label>
+    <div class="cp-bloq-acc">
+      <button class="btn btn-secondary" id="sp-modo-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="sp-modo-ok">Continuar</button>
+    </div>`, () => ov._cerrar());
+  let pref = null; try { pref = localStorage.getItem('cp_modo_nuevo_pedido'); } catch(e) {}
+  if (pref === 'paso') ov.querySelector('input[value="paso"]').checked = true;
+  ov.querySelector('#sp-modo-cancel').onclick = () => ov._cerrar();
+  ov.querySelector('#sp-modo-ok').onclick = () => {
+    const modo = ov.querySelector('input[name="sp-modo"]:checked').value;
+    try { localStorage.setItem('cp_modo_nuevo_pedido', modo); } catch(e) {}
+    ov._cerrar();
+    if (modo === 'paso') openPedidoModal(); else _spIniciar();
+  };
+}
+
+function _spHoy() {
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function _spFmt(iso) { if (!iso) return '—'; const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso); return m ? `${m[3]}/${m[2]}/${m[1]}` : iso; }
+
+function _spIniciar() {
+  _sp = { paso: 1, fsol: _spHoy(), fvb: '', files: [], an: null, asign: {}, hotel: '', depto: '', prov: null, provTxt: '',
+          fentModo: 'pdf', fent: '', estado: '', techo: false, familia: '', importe: '', techoMotivos: null, vbFile: null,
+          ocupado: false, error: '' };
+  const ov = document.createElement('div');
+  ov.className = 'cp-bloq'; ov.id = 'sp-overlay';
+  ov.innerHTML = '<div class="cp-bloq-box sp-box" role="dialog" aria-modal="true"></div>';
+  document.body.appendChild(ov);
+  _sp.ov = ov;
+  _spRender();
+}
+
+function _spCerrar() { if (_sp && _sp.ov) _sp.ov.remove(); _sp = null; }
+
+function _spTienePdf() { return !!(_sp.an && _sp.an.some(a => _spTipoDe(a) === 'pedido_doc')); }
+function _spPdfData() { const a = (_sp.an || []).find(x => _spTipoDe(x) === 'pedido_doc'); return a ? a.pedido : null; }
+function _spTipoDe(a) { const v = _sp.asign[a.idx]; return v === undefined ? (a.confianza !== 'baja' ? a.tipo : null) : (v === '__no__' ? null : v); }
+function _spHayTipo(t) { return !!(_sp.an && _sp.an.some(a => !a.error && _spTipoDe(a) === t)); }
+
+function _spRender() {
+  const box = _sp.ov.querySelector('.sp-box');
+  const pasos = ['Fechas', 'Archivos', 'Revisión'];
+  const cab = `<button class="sp-x" id="sp-x" title="Cerrar">✕</button><h3>⚡ Pedido simplificado</h3><div class="sp-pasos">${pasos.map((t,i) => `<span class="${_sp.paso===i+1?'on':(_sp.paso>i+1?'ok':'')}">${i+1}. ${t}</span>`).join('')}</div>`;
+  let cuerpo = '';
+  if (_sp.paso === 1) cuerpo = _spHtmlFechas();
+  else if (_sp.paso === 2) cuerpo = _spHtmlArchivos();
+  else cuerpo = _spHtmlRevision();
+  box.innerHTML = cab + cuerpo;
+  _spEnlazar(box);
+}
+
+function _spHtmlFechas() {
+  return `
+    <div style="font-size:13.5px;color:#334155;margin-bottom:10px">Indique las fechas de partida. El resto se completa con los archivos.</div>
+    <div class="form-group"><label class="form-label">Fecha de solicitud</label>
+      <input type="date" class="form-control" id="sp-fsol" value="${_escHtmlCp(_sp.fsol)}"></div>
+    <div class="form-group"><label class="form-label">Fecha de envío para Vº Bº <small style="color:#64748b">(puede dejarse vacía)</small></label>
+      <input type="date" class="form-control" id="sp-fvb" value="${_escHtmlCp(_sp.fvb)}"></div>
+    <div class="cp-bloq-acc"><button class="btn btn-secondary" id="sp-cancel">Cancelar</button>
+      <button class="btn btn-primary" id="sp-sig">Siguiente</button></div>`;
+}
+
+function _spHtmlArchivos() {
+  const lista = _sp.files.map((f, i) => `<div class="sp-file"><span>📎 ${_escHtmlCp(f.name)} <small>(${Math.round(f.size/1024)} KB)</small></span>
+      <button class="btn btn-ghost btn-sm" data-quitar="${i}" title="Quitar">✕</button></div>`).join('');
+  return `
+    <div style="font-size:13.5px;color:#334155;margin-bottom:10px">Suelte aquí <b>todos</b> los archivos del pedido: PDF del pedido oficial, presupuesto, correos (.eml/.msg), Word/Excel, imágenes…
+      La aplicación los analiza <b>sin guardar nada</b> y le propone dónde colocarlos.</div>
+    <div class="sp-drop" id="sp-drop"><div style="font-size:30px">📂</div><div>Arrastre los archivos aquí o <u>pulse para elegirlos</u></div>
+      <input type="file" id="sp-input" multiple style="display:none" accept=".pdf,.eml,.msg,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.webp,.gif"></div>
+    <div id="sp-lista" style="margin-top:10px">${lista}</div>
+    ${_sp.error ? `<div class="cp-bloq-aviso">${_escHtmlCp(_sp.error)}</div>` : ''}
+    <div class="cp-bloq-acc"><button class="btn btn-secondary" id="sp-atras">Atrás</button>
+      <button class="btn btn-primary" id="sp-analizar" ${_sp.files.length && !_sp.ocupado ? '' : 'disabled'}>${_sp.ocupado ? 'Analizando…' : 'Analizar archivos'}</button></div>`;
+}
+
+function _spOpcionesTipo(a) {
+  const permitidos = (a.permitidos || []).filter(t => t !== 'pedido_doc' || a.pedido);
+  const actual = _spTipoDe(a);
+  const sinElegir = (actual == null && _sp.asign[a.idx] !== '__no__');
+  return (sinElegir ? '<option value="">— elegir —</option>' : '')
+    + permitidos.map(t => `<option value="${t}"${actual===t?' selected':''}>${_escHtmlCp(_SP_ETQ[t])}</option>`).join('')
+    + `<option value="__no__"${_sp.asign[a.idx]==='__no__'?' selected':''}>No subir este archivo</option>`;
+}
+
+function _spHtmlTabla() {
+  const filas = _sp.an.map(a => {
+    const dudoso = !a.error && _spTipoDe(a) == null && _sp.asign[a.idx] !== '__no__';
+    const det = a.error ? `<span class="sp-bad">${_escHtmlCp(a.error)}</span>`
+      : (a.tipo ? `<b>${_escHtmlCp(_SP_ETQ[a.tipo])}</b> <span class="sp-conf sp-conf-${a.confianza}">${a.confianza}</span><br><small>${_escHtmlCp(a.motivo)}</small>`
+                : `<b>No reconocido</b><br><small>${_escHtmlCp(a.motivo)}</small>`);
+    const dest = a.error ? '—' : `${dudoso ? '<div class="sp-q">¿Dónde lo coloco?</div>' : ''}<select class="form-control" data-tipo="${a.idx}">${_spOpcionesTipo(a)}</select>`;
+    const rell = (a.rellena || []).length ? '<ul>' + a.rellena.map(r => `<li>${_escHtmlCp(r)}</li>`).join('') + '</ul>' : '<small style="color:#94a3b8">—</small>';
+    return `<tr class="${dudoso ? 'sp-dud' : ''}"><td>${_escHtmlCp(a.nombre)}</td><td>${det}</td><td>${dest}</td><td>${rell}</td></tr>`;
+  }).join('');
+  return `<table class="sp-tabla"><thead><tr><th>Archivo</th><th>Detectado como</th><th>Se colocará en</th><th>Datos que rellena</th></tr></thead><tbody>${filas}</tbody></table>`;
+}
+
+function _spSelHoteles() {
+  return '<option value="">— Selecciona —</option>' + (G.maestros.hoteles || []).map(h => `<option value="${h.id}"${String(_sp.hotel)===String(h.id)?' selected':''}>${_escHtmlCp(h.codigo)} – ${_escHtmlCp(h.nombre)}</option>`).join('');
+}
+function _spSelDeptos() {
+  if (!_sp.hotel) return '<option value="">— Elige primero un hotel —</option>';
+  const exc = _departamentosExcluidosParaHotel(_sp.hotel);
+  return '<option value="">— Selecciona —</option>' + (G.maestros.departamentos || [])
+    .filter(d => !exc.has((d.nombre || '').toUpperCase()))
+    .map(d => `<option value="${d.id}"${String(_sp.depto)===String(d.id)?' selected':''}>${_escHtmlCp(d.nombre)}</option>`).join('');
+}
+
+function _spEstadoPropuesto() {
+  if (_sp.estado) return _sp.estado;
+  if (_sp.techo && _sp.techoMotivos && _sp.techoMotivos.length) return 'PENDIENTE Vº Bº DIRECCIÓN GENERAL';
+  if (_spHayTipo('presupuesto_doc')) return 'PENDIENTE FIRMA DIRECCION COMPRAS';
+  return 'PENDIENTE COTIZACIÓN';
+}
+
+function _spHtmlRevision() {
+  const pdf = _spPdfData();
+  let datos = '';
+  if (pdf) {
+    const ex = pdf.existente;
+    const tot = pdf.total_pedido != null ? Number(pdf.total_pedido).toLocaleString('es-ES', {minimumFractionDigits:2, maximumFractionDigits:2}) + ' €' : '—';
+    datos += `<div class="cp-bloq-resumen"><b>Del PDF del pedido oficial:</b><br>
+      <b>Nº Pedido:</b> ${_escHtmlCp(pdf.pedido_num)} · <b>Total (sin IGIC):</b> ${_escHtmlCp(tot)}${pdf.n_lineas ? ' · <b>Líneas:</b> ' + pdf.n_lineas : ''}<br>
+      <b>Hotel:</b> ${pdf.hotel ? _escHtmlCp(pdf.hotel.nombre) : '<span class="sp-bad">no reconocido («' + _escHtmlCp(pdf.hotel_pdf || '—') + '»)</span>'}
+       · <b>Departamento:</b> ${pdf.departamento ? _escHtmlCp(pdf.departamento.nombre) : '<span class="sp-bad">no reconocido («' + _escHtmlCp(pdf.almacen_pdf || '—') + '»)</span>'}<br>
+      <b>Proveedor:</b> ${pdf.proveedor ? _escHtmlCp(pdf.proveedor.nombre) : '<span class="sp-bad">no reconocido en el catálogo (' + _escHtmlCp(pdf.proveedor_pdf_nombre || pdf.proveedor_pdf_codigo || '—') + ')</span>'}<br>
+      <b>Fecha de tramitación:</b> ${_spFmt(pdf.fecha_pedido_iso)} (Fecha Pedido del PDF)</div>`;
+    if (ex) datos += `<div class="cp-bloq-aviso">⚠️ Este pedido <b>ya existe</b> en la aplicación (Nº interno ${_escHtmlCp(ex.norden)}, estado «${_escHtmlCp(ex.estado)}»), probablemente creado desde SAP.
+      No se crea otro igual. <button class="btn btn-sm btn-primary" id="sp-abrir-ex" data-id="${ex.id}" style="margin-left:6px">Abrir el pedido existente</button></div>`;
+    if (!pdf.hotel) datos += `<div class="form-group"><label class="form-label">Hotel *</label><select class="form-control" id="sp-hotel">${_spSelHoteles()}</select></div>`;
+    if (!pdf.departamento) datos += `<div class="form-group"><label class="form-label">Departamento *</label><select class="form-control" id="sp-depto" ${(pdf.hotel || _sp.hotel) ? '' : 'disabled'}>${_spSelDeptos()}</select></div>`;
+    if (pdf.fecha_entrega_iso) {
+      datos += `<div class="form-group"><label class="form-label">Fecha de entrega</label>
+        <label class="sp-radio"><input type="radio" name="sp-fent" value="pdf" ${_sp.fentModo==='pdf'?'checked':''}> Mantener la del PDF (${_spFmt(pdf.fecha_entrega_iso)})</label>
+        <label class="sp-radio"><input type="radio" name="sp-fent" value="otra" ${_sp.fentModo==='otra'?'checked':''}> Modificarla:
+          <input type="date" id="sp-fent" class="form-control" style="display:inline-block;width:170px;margin-left:6px" value="${_escHtmlCp(_sp.fent || pdf.fecha_entrega_iso)}" ${_sp.fentModo==='otra'?'':'disabled'}></label></div>`;
+    }
+    datos += `<div class="sp-nota">Al crear, se abrirá la ficha y le preguntaremos a qué estado desea pasar el pedido (ventana «Pedido cargado correctamente»).</div>`;
+  } else {
+    datos += `<div class="sp-nota">No se ha subido el PDF del pedido oficial: indique hotel y departamento (en este orden) y la aplicación propone el estado según la documentación.</div>
+      <div class="form-group"><label class="form-label">Hotel *</label><select class="form-control" id="sp-hotel">${_spSelHoteles()}</select></div>
+      <div class="form-group"><label class="form-label">Departamento *</label><select class="form-control" id="sp-depto" ${_sp.hotel ? '' : 'disabled'}>${_spSelDeptos()}</select></div>
+      <div class="form-group"><label class="form-label">Proveedor <small style="color:#64748b">(opcional, provisional hasta el PDF oficial)</small></label>
+        <div style="position:relative"><input class="form-control" id="sp-prov" autocomplete="off" placeholder="Escriba al menos 2 letras…" value="${_escHtmlCp(_sp.provTxt)}">
+        <div id="sp-prov-dd" class="sp-dd" style="display:none"></div></div></div>
+      <div class="form-group"><label class="form-label"><input type="checkbox" id="sp-techo" ${_sp.techo?'checked':''}> ¿Computa para el techo de gasto?</label>
+        <div id="sp-techo-f" style="${_sp.techo?'':'display:none'};margin-top:6px">
+          <div style="display:flex;gap:8px"><select class="form-control" id="sp-fam"><option value="">— Familia —</option>${(G.maestros.familias||[]).map(f => `<option value="${f.id}"${String(_sp.familia)===String(f.id)?' selected':''}>${_escHtmlCp(f.nombre)}</option>`).join('')}</select>
+          <input type="number" step="0.01" min="0" class="form-control" id="sp-imp" placeholder="Importe sin IGIC (€)" value="${_escHtmlCp(_sp.importe)}"></div>
+          <div id="sp-techo-msg" style="font-size:12.5px;margin-top:5px">${_sp.techoMotivos ? (_sp.techoMotivos.length ? '<span class="sp-bad">' + _sp.techoMotivos.map(_escHtmlCp).join('<br>') + '</span>' : '<span style="color:#15803d">✓ Dentro de los límites del techo.</span>') : ''}</div>
+        </div></div>`;
+    const est = _spEstadoPropuesto();
+    datos += `<div class="form-group"><label class="form-label">Estado propuesto</label>
+      <select class="form-control" id="sp-estado">${_SP_ESTADOS_SIN_PDF.map(e => `<option${e===est?' selected':''}>${_escHtmlCp(e)}</option>`).join('')}</select>
+      <small style="color:#64748b">${_spHayTipo('presupuesto_doc') ? 'Hay presupuesto: pasa a firma de Dirección.' : 'No hay presupuesto: queda pendiente de cotización.'}${(_sp.techo && _sp.techoMotivos && _sp.techoMotivos.length) ? ' Supera el techo: requiere Vº Bº de Dirección General.' : ''}</small></div>`;
+    if (_SP_ESTADOS_SIN_PDF.slice(1).includes(est)) {
+      const hayVbArchivo = _spHayTipo('vb_eml') || _sp.vbFile;
+      datos += `<div class="cp-bloq-aviso">Para este estado hace falta la <b>fecha de envío para Vº Bº</b> y el <b>documento de envío</b> (correo o PDF).
+        <div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">
+        <input type="date" class="form-control" id="sp-fvb2" style="width:170px" value="${_escHtmlCp(_sp.fvb || _spHoy())}">
+        ${_spHayTipo('vb_eml') ? '<span style="color:#15803d">✓ documento de envío ya colocado</span>' : `<input type="file" id="sp-vbfile" class="form-control" style="flex:1;min-width:200px" accept=".eml,.msg,.pdf">${_sp.vbFile ? '<span style="color:#15803d">✓ ' + _escHtmlCp(_sp.vbFile.name) + '</span>' : ''}`}</div></div>`;
+    }
+  }
+  return `<div style="font-size:13.5px;color:#334155;margin-bottom:8px">Revise cómo se colocará cada archivo (cambie el destino si hace falta).</div>
+    ${_spHtmlTabla()}${datos}
+    ${_sp.error ? `<div class="cp-bloq-aviso" style="background:#fdecea;border-color:#f5b5ae;color:#8a1f11">${_escHtmlCp(_sp.error)}</div>` : ''}
+    <div class="cp-bloq-acc"><button class="btn btn-secondary" id="sp-atras">Atrás</button>
+      <button class="btn btn-primary" id="sp-crear" ${_sp.ocupado ? 'disabled' : ''}>${_sp.ocupado ? 'Creando…' : 'Crear pedido'}</button></div>`;
+}
+
+function _spEnlazar(box) {
+  const $ = (s) => box.querySelector(s);
+  const on = (s, ev, fn) => { const e = $(s); if (e) e.addEventListener(ev, fn); };
+  on('#sp-cancel', 'click', _spCerrar);
+  on('#sp-x', 'click', () => { if (!_sp.files.length || confirm('¿Cerrar el asistente? No se ha guardado nada todavía.')) _spCerrar(); });
+  on('#sp-atras', 'click', () => { _sp.error = ''; _sp.paso = Math.max(1, _sp.paso - 1); _spRender(); });
+  on('#sp-sig', 'click', () => { _sp.fsol = $('#sp-fsol').value; _sp.fvb = $('#sp-fvb').value; _sp.paso = 2; _spRender(); });
+  if (_sp.paso === 2) {
+    const drop = $('#sp-drop'), inp = $('#sp-input');
+    drop.addEventListener('click', () => inp.click());
+    drop.addEventListener('dragover', e => { e.preventDefault(); drop.classList.add('over'); });
+    drop.addEventListener('dragleave', () => drop.classList.remove('over'));
+    drop.addEventListener('drop', e => { e.preventDefault(); drop.classList.remove('over'); _spAnadir(e.dataTransfer.files); });
+    inp.addEventListener('change', () => { _spAnadir(inp.files); inp.value = ''; });
+    box.querySelectorAll('[data-quitar]').forEach(b => b.addEventListener('click', () => { _sp.files.splice(+b.dataset.quitar, 1); _sp.an = null; _spRender(); }));
+    on('#sp-analizar', 'click', _spAnalizar);
+  }
+  if (_sp.paso === 3) {
+    box.querySelectorAll('select[data-tipo]').forEach(s => s.addEventListener('change', () => {
+      _sp.asign[+s.dataset.tipo] = s.value === '' ? undefined : s.value; _sp.estado = ''; _spRender();
+    }));
+    on('#sp-abrir-ex', 'click', (e) => { const id = +e.target.dataset.id; _spCerrar(); openPedidoModal(id); });
+    on('#sp-hotel', 'change', (e) => { _sp.hotel = e.target.value; _sp.depto = ''; _spRender(); });
+    on('#sp-depto', 'change', (e) => { _sp.depto = e.target.value; });
+    box.querySelectorAll('input[name="sp-fent"]').forEach(r => r.addEventListener('change', () => { _sp.fentModo = r.value; const f = $('#sp-fent'); f.disabled = r.value !== 'otra'; }));
+    on('#sp-fent', 'change', (e) => { _sp.fent = e.target.value; });
+    on('#sp-estado', 'change', (e) => { _sp.estado = e.target.value; _spRender(); });
+    on('#sp-fvb2', 'change', (e) => { _sp.fvb = e.target.value; });
+    on('#sp-vbfile', 'change', (e) => { _sp.vbFile = e.target.files[0] || null; _spRender(); });
+    on('#sp-techo', 'change', (e) => { _sp.techo = e.target.checked; _sp.estado = ''; if (!_sp.techo) _sp.techoMotivos = null; _spRender(); });
+    on('#sp-fam', 'change', (e) => { _sp.familia = e.target.value; _spComprobarTecho(); });
+    on('#sp-imp', 'change', (e) => { _sp.importe = e.target.value; _spComprobarTecho(); });
+    on('#sp-prov', 'input', (e) => _spBuscarProv(e.target.value));
+    on('#sp-crear', 'click', _spCrear);
+  }
+}
+
+function _spAnadir(fl) {
+  Array.from(fl).forEach(f => { if (!_sp.files.some(x => x.name === f.name && x.size === f.size)) _sp.files.push(f); });
+  _sp.an = null; _sp.error = '';
+  if (_sp.files.length > 12) { _sp.files = _sp.files.slice(0, 12); _sp.error = 'Máximo 12 archivos de una vez.'; }
+  _spRender();
+}
+
+async function _spAnalizar() {
+  _sp.ocupado = true; _sp.error = ''; _spRender();
+  try {
+    const fd = new FormData();
+    _sp.files.forEach(f => fd.append('archivos', f, f.name));
+    const r = await fetch('/api/pedidos/simplificado/analizar', { method: 'POST', body: fd, credentials: 'same-origin' });
+    const d = await r.json();
+    if (!d.ok) throw new Error(d.error || 'No se pudo analizar');
+    _sp.an = d.archivos; _sp.asign = {}; _sp.estado = '';
+    const pdf = _spPdfData();
+    if (pdf) { _sp.hotel = pdf.hotel ? String(pdf.hotel.id) : ''; _sp.depto = pdf.departamento ? String(pdf.departamento.id) : ''; _sp.fentModo = 'pdf'; _sp.fent = ''; }
+    _sp.paso = 3;
+  } catch (e) { _sp.error = 'Error analizando los archivos: ' + (e.message || e); }
+  _sp.ocupado = false; _spRender();
+}
+
+let _spProvTimer = null;
+function _spBuscarProv(q) {
+  _sp.provTxt = q; _sp.prov = null;
+  const dd = document.getElementById('sp-prov-dd');
+  clearTimeout(_spProvTimer);
+  if (!q || q.length < 2) { dd.style.display = 'none'; return; }
+  _spProvTimer = setTimeout(async () => {
+    try {
+      const d = await api(`/api/proveedores?q=${encodeURIComponent(q)}&page_size=8`);
+      const res = d.proveedores || [];
+      dd.innerHTML = res.length ? res.map(p => `<div class="sp-dd-i" data-id="${p.id}" data-n="${_escHtmlCp(p.nombre)}">${_escHtmlCp(p.nombre)}</div>`).join('')
+        : '<div class="sp-dd-i" style="color:#94a3b8;font-style:italic">Sin resultados</div>';
+      dd.style.display = '';
+      dd.querySelectorAll('[data-id]').forEach(el => el.addEventListener('mousedown', () => {
+        _sp.prov = +el.dataset.id; _sp.provTxt = el.dataset.n; document.getElementById('sp-prov').value = el.dataset.n; dd.style.display = 'none';
+      }));
+    } catch (e) {}
+  }, 250);
+}
+
+async function _spComprobarTecho() {
+  const msg = document.getElementById('sp-techo-msg');
+  if (!_sp.hotel || !_sp.importe) { _sp.techoMotivos = null; if (msg) msg.innerHTML = ''; return; }
+  try {
+    const d = await api('/api/pedidos/simplificado/techo', 'POST', { hotel_id: _sp.hotel, familia_id: _sp.familia || null, importe: _sp.importe });
+    _sp.techoMotivos = d.ok ? (d.motivos || []) : null;
+  } catch (e) { _sp.techoMotivos = null; }
+  _sp.estado = '';
+  _spRender();
+}
+
+function _spValidar() {
+  const pdf = _spPdfData();
+  const sinElegir = _sp.an.filter(a => !a.error && _spTipoDe(a) == null && _sp.asign[a.idx] !== '__no__');
+  if (sinElegir.length) return 'Falta decidir dónde colocar: ' + sinElegir.map(a => '«' + a.nombre + '»').join(', ') + ' (o elija «No subir este archivo»).';
+  const cuenta = {}; _sp.an.forEach(a => { const t = a.error ? null : _spTipoDe(a); if (t) cuenta[t] = (cuenta[t] || 0) + 1; });
+  if (cuenta.pedido_doc > 1) return 'Solo puede haber un PDF de pedido oficial.';
+  if (cuenta.presupuesto_doc > 1) return 'El presupuesto solo admite un archivo (PDF, Word o correo). Marque «No subir» en los demás.';
+  if (cuenta.tramit_eml > 1) return 'Solo se admite un correo de tramitación.';
+  for (const t of ['solicitud_doc', 'vb_eml', 'firma_techo_doc']) {
+    const correos = _sp.an.filter(a => !a.error && _spTipoDe(a) === t && a.clase === 'correo').length;
+    if (correos > 1) return 'En «' + _SP_ETQ[t] + '» solo se admite un correo.';
+    if ((cuenta[t] || 0) - correos > 3) return 'En «' + _SP_ETQ[t] + '» se admiten como máximo 3 documentos.';
+  }
+  const hotel = pdf && pdf.hotel ? String(pdf.hotel.id) : _sp.hotel;
+  const depto = pdf && pdf.departamento ? String(pdf.departamento.id) : _sp.depto;
+  if (!hotel) return 'Elija el hotel.';
+  if (!depto) return 'Elija el departamento.';
+  if (pdf && pdf.existente) return 'Este pedido ya existe: ábralo con el botón «Abrir el pedido existente».';
+  if (pdf && pdf.fecha_entrega_iso && _sp.fentModo === 'otra' && !_sp.fent) return 'Indique la nueva fecha de entrega.';
+  if (!pdf) {
+    const est = _spEstadoPropuesto();
+    if (_SP_ESTADOS_SIN_PDF.slice(1).includes(est)) {
+      if (!_sp.fvb) return 'Indique la fecha de envío para Vº Bº.';
+      if (!_spHayTipo('vb_eml') && !_sp.vbFile) return 'Adjunte el correo o PDF de envío para firma.';
+    }
+    if (_sp.techo && (!_sp.importe || Number(_sp.importe) <= 0)) return 'Indique el importe para el techo de gasto.';
+  }
+  return '';
+}
+
+async function _spCrear() {
+  const box = _sp.ov.querySelector('.sp-box');
+  const f2 = box.querySelector('#sp-fvb2'); if (f2) _sp.fvb = f2.value;
+  const pdf = _spPdfData();
+  if (!pdf) { const e = box.querySelector('#sp-estado'); if (e) _sp.estado = e.value; }
+  _sp.error = _spValidar();
+  if (_sp.error) { _spRender(); return; }
+  _sp.ocupado = true; _spRender();
+  const hotel = pdf && pdf.hotel ? pdf.hotel.id : +_sp.hotel;
+  const depto = pdf && pdf.departamento ? pdf.departamento.id : +_sp.depto;
+  const estado = pdf ? 'PENDIENTE COTIZACIÓN' : _spEstadoPropuesto();
+  const body = { hotel_id: hotel, departamento_id: depto, estado,
+    fecha_solicitud: _sp.fsol || null, fecha_envio_visto_bueno: _sp.fvb || null,
+    fecha_tramitacion: pdf ? (pdf.fecha_pedido_iso || null) : null };
+  if (pdf && pdf.fecha_entrega_iso) body.fecha_entrega_especifica = _sp.fentModo === 'otra' ? _sp.fent : pdf.fecha_entrega_iso;
+  if (!pdf && _sp.prov) body.proveedor_id = _sp.prov;
+  if (!pdf && _sp.techo) { body.sujeto_techo = true; body.familia_id = _sp.familia || null; body.importe = _sp.importe; }
+  let nuevo = null;
+  try {
+    const r = await api('/api/pedidos', 'POST', body);
+    if (!r.ok) throw new Error(r.error || 'No se pudo crear el pedido');
+    nuevo = r;
+  } catch (e) {
+    _sp.ocupado = false; _sp.error = 'No se pudo crear el pedido: ' + (e.message || e).toString().replace(/^\[\d+\]\s*/, ''); _spRender(); return;
+  }
+  // Subida de archivos con sus tipos (mismas validaciones que el modo paso a paso)
+  const aSubir = _sp.an.filter(a => !a.error && _spTipoDe(a)).map(a => ({ f: _sp.files[a.idx], tipo: _spTipoDe(a) }));
+  if (_sp.vbFile && !_spHayTipo('vb_eml')) aSubir.push({ f: _sp.vbFile, tipo: 'vb_eml' });
+  aSubir.sort((a, b) => (a.tipo === 'pedido_doc' ? -1 : 0) - (b.tipo === 'pedido_doc' ? -1 : 0));
+  const fallos = []; let pdfResp = null;
+  for (const it of aSubir) {
+    try {
+      const fd = new FormData(); fd.append('tipo', it.tipo); fd.append('archivo', it.f, it.f.name);
+      const resp = await fetch(`/api/pedidos/${nuevo.id}/adjuntos`, { method: 'POST', body: fd, credentials: 'same-origin' });
+      const d = await resp.json();
+      if (d.ok) { if (it.tipo === 'pedido_doc') pdfResp = d; }
+      else fallos.push(`«${it.f.name}»: ${d.error}`);
+    } catch (e) { fallos.push(`«${it.f.name}»: error de conexión`); }
+  }
+  _spCerrar();
+  _invalidarStats();
+  try { await _enviarEmailsPendientesEstado(nuevo.emails_pendientes); } catch (e) {}
+  try { if (G.currentView === 'pedidos') loadPedidos(); } catch (e) {}
+  toast(`Pedido Nº ${nuevo.norden} creado` + (fallos.length ? ' — algunos archivos no se subieron' : ''), fallos.length ? 'error' : 'success', 5000);
+  if (fallos.length) showFormAlert(fallos.join('\n'), { title: '⚠️ Archivos que no se pudieron subir', detail: 'El pedido está creado: súbalos desde su ficha, en el apartado correspondiente.', duracion: 12000 });
+  await openPedidoModal(nuevo.id);
+  if (pdfResp && G.rol !== 'hotel') {
+    G.estadoPendienteRevision = true; G.pdfOficialUltimo = pdfResp;
+    await _revisarEstadoTrasPdf(pdfResp);
   }
 }
 
