@@ -368,6 +368,25 @@ SQL_STATEMENTS = [
         bytes  BIGINT NOT NULL DEFAULT 0
     )
     """,
+    # ── Lecturas de presupuestos (v12.33.22) ─────────────────────────────────
+    # Pedido simplificado, Fase 3: lo que la aplicación propuso leer de cada
+    # presupuesto frente a lo que el usuario dejó finalmente. Sirve para
+    # detectar proveedores/formatos que se leen mal y mejorar el lector.
+    """
+    CREATE TABLE IF NOT EXISTS presupuesto_lecturas (
+        id            SERIAL PRIMARY KEY,
+        creado_en     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        usuario_id    INTEGER,
+        pedido_id     INTEGER,
+        archivo       TEXT,
+        origen        TEXT,
+        via_ocr       BOOLEAN NOT NULL DEFAULT FALSE,
+        proveedor_id  INTEGER,
+        prop_numero   TEXT, prop_fecha TEXT, prop_importe NUMERIC(12,2),
+        fin_numero    TEXT, fin_fecha  TEXT, fin_importe  NUMERIC(12,2),
+        confianza     TEXT
+    )
+    """,
 ]
 # Los usuarios se crean y gestionan exclusivamente desde el panel de administración.
 # No hay usuarios predefinidos en el código. Para el primer arranque usa seed_admin.py.

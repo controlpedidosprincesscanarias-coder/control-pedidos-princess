@@ -1461,7 +1461,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.21
+          V 12.33.22
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -6637,6 +6637,7 @@ function _aplicarPropuestaPresupuesto(pr) {
   if (pr.importe != null && techoOn && !val('p-importe')) { setVal('p-importe', Number(pr.importe).toFixed(2)); rell.push('importe ' + Number(pr.importe).toFixed(2) + ' €'); }
   const dudoso = pr.via_ocr || ['numero', 'fecha', 'importe'].some(k => pr.confianza && pr.confianza[k] && pr.confianza[k] !== 'alta');
   if (rell.length) toast('Presupuesto leído: ' + rell.join(', ') + (dudoso ? ' — compruebe los datos' + (pr.via_ocr ? ' (documento escaneado)' : '') : ''), dudoso ? '' : 'success', 6000);
+  if (pr.proveedor) toast('Proveedor probable según el presupuesto: ' + pr.proveedor.nombre, '', 5000);
   if (pr.importe != null && !techoOn) toast('Importe del presupuesto (sin IGIC): ' + Number(pr.importe).toLocaleString('es-ES', {minimumFractionDigits: 2}) + ' €', '', 5000);
 }
 
@@ -11326,6 +11327,8 @@ function _spSyncPres() {
       _sp.pres.num = p.numero || ''; _sp.pres.fecha = p.fecha_iso || '';
       _sp.pres.importe = p.importe != null ? Number(p.importe).toFixed(2) : '';
       if (_sp.techo && _sp.pres.importe && !_sp.importe) _sp.importe = _sp.pres.importe;
+      // Proveedor probable del presupuesto: se propone si todavía no hay ninguno (sin PDF del pedido)
+      if (p.proveedor && !_spPdfData() && !_sp.prov && !_sp.provTxt) { _sp.prov = p.proveedor.id; _sp.provTxt = p.proveedor.nombre; _sp.provSug = true; }
     }
   }
 }
@@ -11339,7 +11342,12 @@ function _spHtmlPresupuesto() {
     const f = (n) => Number(n).toLocaleString('es-ES', {minimumFractionDigits: 2}) + ' €';
     cmp = `<div class="cp-bloq-aviso">⚠️ El importe del presupuesto (${f(_sp.pres.importe)}) <b>no coincide</b> con el total del pedido (${f(pdf.total_pedido)}). Compruebe que el PDF del pedido corresponde a este presupuesto.</div>`;
   }
-  return `<div class="form-group sp-bloque"><label class="form-label">Presupuesto ${p ? '<span class="sp-conf ' + (dudoso ? 'sp-conf-media' : 'sp-conf-alta') + '">' + (dudoso ? 'leído: compruebe' + (p.via_ocr ? ' (escaneado)' : '') : 'leído del PDF') + '</span>' : '<small style="color:#64748b">(no se ha podido leer: indíquelo a mano o déjelo vacío)</small>'}</label>
+  const ORIG = { word: 'Word', excel: 'Excel', correo: 'correo', 'correo+adjunto': 'correo con adjunto' };
+  if (p && p.proveedor && pdf && pdf.proveedor && p.proveedor.id !== pdf.proveedor.id)
+    cmp += `<div class="cp-bloq-aviso">⚠️ El presupuesto parece de <b>${_escHtmlCp(p.proveedor.nombre)}</b> y el pedido es de <b>${_escHtmlCp(pdf.proveedor.nombre)}</b>. Compruebe que corresponden.</div>`;
+  if (p && p.proveedor && !pdf && _sp.provSug && _sp.prov === p.proveedor.id)
+    cmp += `<div class="sp-nota">Proveedor propuesto a partir del presupuesto: <b>${_escHtmlCp(p.proveedor.nombre)}</b> (puede cambiarlo arriba).</div>`;
+  return `<div class="form-group sp-bloque"><label class="form-label">Presupuesto ${p && ORIG[p.origen] ? '<span class="sp-conf">' + ORIG[p.origen] + '</span> ' : ''}${p ? '<span class="sp-conf ' + (dudoso ? 'sp-conf-media' : 'sp-conf-alta') + '">' + (dudoso ? 'leído: compruebe' + (p.via_ocr ? ' (escaneado)' : '') : 'leído del PDF') + '</span>' : '<small style="color:#64748b">(no se ha podido leer: indíquelo a mano o déjelo vacío)</small>'}</label>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <input class="form-control monospace" id="sp-pnum" placeholder="Nº presupuesto" style="flex:1;min-width:170px" value="${_escHtmlCp(_sp.pres.num)}">
         <input type="date" class="form-control" id="sp-pfecha" title="Fecha del presupuesto" style="width:170px" value="${_escHtmlCp(_sp.pres.fecha)}">
@@ -11573,6 +11581,14 @@ async function _spCrear() {
       if (d.ok) { if (it.tipo === 'pedido_doc') pdfResp = d; }
       else fallos.push(`«${it.f.name}»: ${d.error}`);
     } catch (e) { fallos.push(`«${it.f.name}»: error de conexión`); }
+  }
+  const presAn = _spPresAn();
+  if (presAn) {
+    const pp = presAn.presupuesto;
+    api('/api/pedidos/simplificado/lectura', 'POST', { pedido_id: nuevo.id, archivo: presAn.nombre, origen: pp.origen, via_ocr: !!pp.via_ocr,
+      proveedor_id: pp.proveedor ? pp.proveedor.id : null, confianza: pp.confianza,
+      propuesto: { numero: pp.numero, fecha: pp.fecha_iso, importe: pp.importe },
+      final: { numero: (_sp.pres.num || '').trim(), fecha: _sp.pres.fecha, importe: _sp.pres.importe } }).catch(() => {});
   }
   _spCerrar();
   _invalidarStats();

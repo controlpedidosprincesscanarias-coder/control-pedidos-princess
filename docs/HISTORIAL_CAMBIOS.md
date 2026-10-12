@@ -49,6 +49,16 @@
 
 ---
 
+## 2026-10-12 — [Control Pedidos] Pedido simplificado, Fase 3 y trazabilidad fuera de los correos al proveedor (v12.33.22)
+
+Problema reportado por Víctor (captura de un correo de reclamación, pedido 16080 de La Palma Princess): en los pedidos creados automáticamente desde SAP, el campo Observaciones lleva una línea de trazabilidad interna («Alta automática · Carga automática SAP · fecha · Nº SAP … · Datos y artículos tomados de los listados de SAP…») y las plantillas de correo la mostraban al proveedor. Corrección en `app.py`: `_obs_para_proveedor` elimina las líneas que empiezan por «Alta automática ·» y `_pedido_para_proveedor` entrega una copia depurada; se aplica en `_email_template_enviado_proveedor`, `_email_template_entrega_parcial`, `_email_template_pendiente_cotizacion` y en el «motivo» de cancelación de `enviar_emails_estado`. Las observaciones escritas a mano se conservan; los correos internos (comprador/directores) mantienen la trazabilidad.
+
+Fase 3 del pedido simplificado: `_extraer_datos_presupuesto_archivo` lee PDF, .docx (zip/XML, sin dependencias nuevas), .xlsx (openpyxl, ya en requirements) y .eml (asunto, cuerpo y adjuntos; fecha de cabecera como respaldo con confianza baja). `_pres_proveedor_sugerido` busca en el texto el nombre de un proveedor del catálogo (el más largo, solo si es único) o el dominio del remitente entre los correos de contacto. `simplificado_analizar` clasifica correos con presupuesto adjunto y Word/Excel por contenido. Nueva tabla `presupuesto_lecturas` (creada en `_auto_migrate` y en models.py) y endpoints `POST /api/pedidos/simplificado/lectura` y `GET /api/presupuestos/lecturas` (admin). `templates/index.html`: origen del documento, proveedor propuesto, aviso de proveedor distinto, registro de la lectura al crear y aviso de proveedor probable en el paso a paso.
+
+Pruebas: Word, Excel, .eml con PDF adjunto y .eml con presupuesto en el cuerpo correctos; plantillas de correo comprobadas con una observación automática (no aparece) y con una manual añadida (se conserva).
+
+---
+
 ## 2026-10-12 — [Control Pedidos] Pedido simplificado, Fase 2: lectura de presupuestos y fecha del presupuesto (v12.33.21)
 
 Víctor envió 13 presupuestos reales (Casa Delfín, Pilsa, Mabecan, Ditenerife, Crisol, Dihova, Servicios Electrónicos, Lormacan, Vamac Sport —uno con texto y otro escaneado y girado—, TM Leader, Reverón y Aliseo —escaneado y firmado—). Formatos muy dispares: números sin etiqueta (justo antes de la fecha, o pegados a «Nº PROFORMA»), importes «1.234,56» y «1,234.56», cifras de totales pegadas («0,9713,89») y un proveedor con IVA mixto y sin base impresa.

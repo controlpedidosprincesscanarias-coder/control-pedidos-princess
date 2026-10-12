@@ -45,6 +45,20 @@ def _obs_alta_automatica_sap(num_sap) -> str:
     return (f"Alta automática · {_AUTOR_SAP_AUTO} · {_ahora_canarias_txt()} · Nº SAP {num_sap} · "
             "Datos y artículos tomados de los listados de SAP (el PDF oficial es opcional)")
 
+_MARCA_OBS_AUTOMATICA = "Alta automática ·"
+
+
+def _obs_para_proveedor(obs) -> str:
+    """(v12.33.22) Observaciones sin las líneas de trazabilidad de las altas automáticas («Alta automática · Carga
+    automática SAP · …»): son información interna y no deben llegar al proveedor en ningún correo."""
+    lineas = [l for l in str(obs or "").splitlines() if not l.strip().startswith(_MARCA_OBS_AUTOMATICA)]
+    return "\n".join(lineas).strip()
+
+
+def _pedido_para_proveedor(pedido: dict) -> dict:
+    """Copia del pedido con las observaciones depuradas (ver _obs_para_proveedor)."""
+    return dict(pedido, observaciones=_obs_para_proveedor(pedido.get("observaciones")))
+
 # ── Configuración ──────────────────────────────────────────────────────────────
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "")          # Supabase → Settings → Database → URI
@@ -1111,6 +1125,24 @@ def _auto_migrate():
                 cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS fecha_presupuesto TEXT")
             except Exception as e:
                 log.warning(f"No se pudo añadir la columna pedidos.fecha_presupuesto: {e}")
+            # ── Lecturas de presupuestos (v12.33.22) — ver models.py ───────────
+            try:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS presupuesto_lecturas (
+                        id            SERIAL PRIMARY KEY,
+                        creado_en     TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        usuario_id    INTEGER,
+                        pedido_id     INTEGER,
+                        archivo       TEXT,
+                        origen        TEXT,
+                        via_ocr       BOOLEAN NOT NULL DEFAULT FALSE,
+                        proveedor_id  INTEGER,
+                        prop_numero   TEXT, prop_fecha TEXT, prop_importe NUMERIC(12,2),
+                        fin_numero    TEXT, fin_fecha  TEXT, fin_importe  NUMERIC(12,2),
+                        confianza     TEXT
+                    )""")
+            except Exception as e:
+                log.warning(f"No se pudo crear la tabla presupuesto_lecturas: {e}")
             # ── Código DALI del proveedor (2026-08-31) ────────────────────────
             # Víctor: "en la ficha de proveedores, necesito junto a la casilla
             # CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos
@@ -4148,7 +4180,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         ))
         _motivo_estado = ((_fila_hist or {}).get("nota") or "").strip() or None
         if not _motivo_estado:
-            _motivo_estado = (pedido.get("observaciones") or "").strip() or None
+            _motivo_estado = _obs_para_proveedor(pedido.get("observaciones")) or None
 
     _proveedor_emails = _get_proveedor_emails_principales(pedido.get("proveedor_id"), pedido.get("hotel_id"))
     _usuarios_hotel   = _get_todos_usuarios_hotel(pedido.get("hotel_codigo",""))
@@ -7928,6 +7960,7 @@ def _email_html_simple(nombre: str, parrafos: list, boton: dict = None,
 def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, comprador_email: str = "",
                                        comprador_nombre: str = "", comprador_movil: str = "") -> tuple:
     """Pedido enviado al proveedor sin acuse de recibo tras varios días."""
+    pedido = _pedido_para_proveedor(pedido)   # sin trazabilidad interna de las altas automáticas
     nivel = "URGENTE" if urgente else "Recordatorio"
     _firma_contacto = _firma_comprador_html(comprador_nombre, comprador_email, comprador_movil)
     subject = f"[{nivel}] Seguimiento pedido Nº {pedido.get('pedido_num','—')} — Princess Hotels & Resorts"
@@ -8043,6 +8076,7 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
 def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: str = "",
                                      comprador_nombre: str = "", comprador_movil: str = "") -> tuple:
     """Pedido con entrega parcial sin cierre."""
+    pedido = _pedido_para_proveedor(pedido)   # sin trazabilidad interna de las altas automáticas
     subject = f"[Seguimiento] Pedido Nº {pedido.get('pedido_num','—')} — Entrega parcial pendiente de completar"
     _firma_contacto = _firma_comprador_html(comprador_nombre, comprador_email, comprador_movil)
     # (2026-08-27) A petición de Víctor: incluir Total Pedido y el detalle de
@@ -8089,6 +8123,7 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
 def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool, comprador_email: str = "",
                                           comprador_nombre: str = "", comprador_movil: str = "") -> tuple:
     """Pedido pendiente de cotización del proveedor."""
+    pedido = _pedido_para_proveedor(pedido)   # sin trazabilidad interna de las altas automáticas
     nivel = "URGENTE" if urgente else "Solicitud de cotización"
     subject = f"[{nivel}] Cotización solicitada — {pedido.get('hotel_nombre','Princess Hotels')} — Princess Hotels & Resorts"
     _firma_contacto = _firma_comprador_html(comprador_nombre, comprador_email, comprador_movil)
@@ -23420,11 +23455,11 @@ def upload_adjunto(pid):
         # subirAdjuntos() en templates/index.html (rama 'pedido_doc').
         respuesta["fecha_pedido_iso"] = _datos_pedido_pdf.get("fecha_pedido_iso")
         respuesta["fecha_entrega_iso"] = _datos_pedido_pdf.get("fecha_entrega_iso")
-    elif tipo == "presupuesto_doc" and (mime == "application/pdf" or ext == ".pdf"):
+    elif tipo == "presupuesto_doc" and ext in (".pdf", ".docx", ".xlsx", ".eml"):
         # (v12.33.21) Propuesta de Nº, fecha e importe leídos del PDF del presupuesto — NO se guarda nada aquí:
         # el formulario rellena solo los campos vacíos y el usuario confirma al guardar.
         try:
-            respuesta["presupuesto"] = _extraer_datos_presupuesto(datos)
+            respuesta["presupuesto"] = _extraer_datos_presupuesto_archivo(archivo.filename, mime, datos)
         except Exception as exc:
             log.warning("[PRESUPUESTO] No se pudo leer el presupuesto adjunto %s: %s", adjunto_id, exc)
     return jsonify(respuesta), 201
@@ -23527,7 +23562,8 @@ _PRES_MESES = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "jun
 _PRES_RE_DINERO = re.compile(r'(?<![\d.,])(\d{1,3}(?:[.,]\d{3})+[.,]\d{1,2}|\d+[.,]\d{1,2})(?![\d])')
 _PRES_RE_FECHA = re.compile(
     r'(?<!\d)(\d{1,2})\s*[/\-.]\s*(\d{1,2})\s*[/\-.]\s*(\d{4}|\d{2})(?!\d)'
-    r'|(?<!\d)(\d{1,2})\s+de\s+([A-Za-zÁÉÍÓÚáéíóú]+)\s+de\s+(\d{4})', re.I)
+    r'|(?<!\d)(\d{1,2})\s+de\s+([A-Za-zÁÉÍÓÚáéíóú]+)\s+de\s+(\d{4})'
+    r'|(?<!\d)(\d{4})-(\d{2})-(\d{2})(?!\d)', re.I)
 _PRES_TOKEN = r'((?:[A-Z]{1,3}\s?)?(?=[A-Z0-9/\-.]*\d)[A-Z0-9][A-Z0-9/\-.]{2,24})'
 
 
@@ -23546,6 +23582,8 @@ def _pres_fecha(m):
         if m.group(1):
             d, mes, a = int(m.group(1)), int(m.group(2)), m.group(3)
             a = int(a) + (2000 if len(a) == 2 else 0)
+        elif m.group(7):
+            a, mes, d = int(m.group(7)), int(m.group(8)), int(m.group(9))
         else:
             d, a = int(m.group(4)), int(m.group(6))
             mes = _PRES_MESES.get(_normalizar_texto_generico(m.group(5)).lower())
@@ -23726,13 +23764,206 @@ def _extraer_datos_presupuesto(pdf_bytes: bytes, permitir_ocr: bool = True, text
             res["via_ocr"] = True
     if len(texto.strip()) < 30:
         return res
+    return _pres_desde_texto(texto, res)
+
+
+# ── (v12.33.22) Fase 3: presupuestos en Word, Excel y correo; proveedor sugerido ─────────────
+_PRES_DOMINIOS_GENERICOS = {"gmail.com", "hotmail.com", "hotmail.es", "outlook.com", "outlook.es", "yahoo.es", "yahoo.com",
+                            "telefonica.net", "icloud.com", "live.com", "msn.com", "movistar.es", "tuta.io", "protonmail.com"}
+
+
+def _pres_texto_docx(datos: bytes) -> str:
+    """Texto de un .docx (sin librerías extra: es un zip con word/document.xml)."""
+    import zipfile, io, html
+    try:
+        with zipfile.ZipFile(io.BytesIO(datos)) as z:
+            xml = z.read("word/document.xml").decode("utf-8", "ignore")
+    except Exception:
+        return ""
+    xml = re.sub(r'</w:p>|<w:br[^>]*/>', "\n", xml)
+    xml = re.sub(r'</w:tc>', "  ", xml)
+    return html.unescape(re.sub(r'<[^>]+>', "", xml))
+
+
+def _pres_texto_xlsx(datos: bytes) -> str:
+    """Texto de las primeras hojas de un .xlsx: una línea por fila; los decimales con 2 cifras."""
+    try:
+        import openpyxl, io
+        wb = openpyxl.load_workbook(io.BytesIO(datos), read_only=True, data_only=True)
+        out = []
+        for ws in wb.worksheets[:3]:
+            for i, fila in enumerate(ws.iter_rows(values_only=True)):
+                if i > 400:
+                    break
+                celdas = []
+                es_totales = any(isinstance(v, str) and re.search(r'base|total|importe|neto|igic|iva', v, re.I) for v in fila)
+                for v in fila:
+                    if v is None or v == "":
+                        continue
+                    if isinstance(v, float) or (es_totales and isinstance(v, int) and not isinstance(v, bool)):
+                        celdas.append(f"{v:.2f}")
+                    elif hasattr(v, "strftime"):
+                        celdas.append(v.strftime("%d/%m/%Y"))
+                    else:
+                        celdas.append(str(v))
+                if celdas:
+                    out.append(" ".join(celdas))
+        return "\n".join(out)
+    except Exception:
+        return ""
+
+
+def _pres_html_a_texto(h: str) -> str:
+    import html
+    h = re.sub(r'(?is)<(script|style).*?</\1>', " ", h)
+    h = re.sub(r'(?i)</(p|div|tr|li|h\d)>|<br\s*/?>', "\n", h)
+    h = re.sub(r'(?i)</t[dh]>', "  ", h)
+    return html.unescape(re.sub(r'<[^>]+>', "", h))
+
+
+def _pres_leer_eml(datos: bytes) -> dict:
+    """Asunto, remitente, fecha, cuerpo y adjuntos (pdf/docx/xlsx) de un .eml."""
+    try:
+        from email import policy
+        from email.parser import BytesParser
+        from email.utils import parsedate_to_datetime, parseaddr
+        msg = BytesParser(policy=policy.default).parsebytes(datos)
+    except Exception:
+        return {}
+    cuerpo = ""
+    try:
+        parte = msg.get_body(preferencelist=("plain", "html"))
+        if parte is not None:
+            cuerpo = parte.get_content()
+            if parte.get_content_type() == "text/html":
+                cuerpo = _pres_html_a_texto(cuerpo)
+    except Exception:
+        pass
+    fecha = None
+    try:
+        fecha = parsedate_to_datetime(str(msg.get("date"))).date().isoformat()
+    except Exception:
+        pass
+    adjuntos = []
+    try:
+        for p in msg.iter_attachments():
+            nombre = p.get_filename() or ""
+            ext = os.path.splitext(nombre.lower())[1]
+            if ext in (".pdf", ".docx", ".xlsx"):
+                carga = p.get_payload(decode=True) or b""
+                if 0 < len(carga) <= MAX_BYTES_DOCUMENTO:
+                    adjuntos.append((nombre, carga))
+    except Exception:
+        pass
+    return {"asunto": str(msg.get("subject") or ""), "de": parseaddr(str(msg.get("from") or ""))[1].lower(),
+            "fecha_iso": fecha, "cuerpo": cuerpo, "adjuntos": adjuntos}
+
+
+def _pres_proveedor_sugerido(texto: str, remitente: str = ""):
+    """Proveedor del catálogo cuyo nombre aparece en el presupuesto (el más largo si hay varios), o cuyo
+    dominio de correo coincide con el remitente. Solo devuelve algo si es inequívoco."""
+    try:
+        def norm(x):
+            return " " + re.sub(r'\s+', ' ', re.sub(r'[^A-Z0-9]+', ' ', _normalizar_texto_generico(x))).strip() + " "
+        corpus = norm(texto[:30000])
+        cands = {}
+        for pr in rows_to_list(query("SELECT id, nombre FROM proveedores WHERE activo=1")):
+            n = norm(_normalizar_nombre_proveedor(pr["nombre"]))
+            if len(n.strip()) < 6 or "PRINCESS" in n or "PROMOTORA HOTELERA" in n:
+                continue
+            if n in corpus:
+                cands[pr["id"]] = (len(n.strip()), pr["nombre"])
+        if cands:
+            mejor = max(v[0] for v in cands.values())
+            top = [(i, v[1]) for i, v in cands.items() if v[0] == mejor]
+            if len(top) == 1:
+                return {"id": top[0][0], "nombre": top[0][1], "via": "nombre"}
+        dom = remitente.split("@")[-1] if "@" in remitente else ""
+        if dom and dom not in _PRES_DOMINIOS_GENERICOS:
+            ids = {r["proveedor_id"] for r in rows_to_list(query(
+                "SELECT DISTINCT proveedor_id FROM proveedor_contactos WHERE lower(email) LIKE %s", ("%@" + dom,)))}
+            if len(ids) == 1:
+                pid = ids.pop()
+                row = query("SELECT id, nombre FROM proveedores WHERE id=%s AND activo=1", (pid,), one=True)
+                if row:
+                    return {"id": row["id"], "nombre": row["nombre"], "via": "correo"}
+    except Exception as exc:
+        log.warning("[PRESUPUESTO] proveedor sugerido: %s", exc)
+    return None
+
+
+def _pres_desde_texto(texto: str, res: dict) -> dict:
     res["leido"] = True
+    res["texto"] = texto[:30000]
     num, c1 = _pres_extraer_numero(texto)
     fec, c2 = _pres_extraer_fecha(texto)
     imp, tot, tasa, c3 = _pres_extraer_importe(texto)
     res.update(numero=num, fecha_iso=fec, importe=imp, total=tot, tasa=tasa,
                confianza={"numero": c1, "fecha": c2, "importe": c3})
     return res
+
+
+def _pres_finalizar(res: dict, conservar_texto: bool = False) -> dict:
+    """Añade el proveedor sugerido y retira el texto interno antes de devolver el resultado."""
+    if res.get("leido") and res.get("proveedor") is None:
+        res["proveedor"] = _pres_proveedor_sugerido(res.get("texto", ""), res.get("remitente", ""))
+    if not conservar_texto:
+        res.pop("texto", None)
+    return res
+
+
+def _pres_campos(res) -> int:
+    return sum(1 for k in ("numero", "fecha_iso", "importe") if res.get(k) not in (None, ""))
+
+
+def _extraer_datos_presupuesto_archivo(nombre: str, mime: str, datos: bytes, permitir_ocr: bool = True, _anidado: bool = False, conservar_texto: bool = False) -> dict:
+    """Propone Nº, fecha, importe (sin IGIC) y proveedor de un presupuesto en PDF, Word, Excel o correo .eml.
+    Nunca lanza excepción ni escribe nada."""
+    ext = os.path.splitext((nombre or "").lower())[1]
+    base = {"numero": None, "fecha_iso": None, "importe": None, "total": None, "tasa": None,
+            "confianza": {}, "via_ocr": False, "leido": False, "origen": None, "proveedor": None, "texto": ""}
+    try:
+        if ext == ".pdf" or mime == "application/pdf":
+            res = _extraer_datos_presupuesto(datos, permitir_ocr=permitir_ocr)
+            res["origen"] = "pdf"
+        elif ext == ".docx":
+            texto = _pres_texto_docx(datos)
+            res = dict(base, origen="word", texto=texto[:30000])
+            if len(texto.strip()) >= 30:
+                _pres_desde_texto(texto, res)
+        elif ext == ".xlsx":
+            texto = _pres_texto_xlsx(datos)
+            res = dict(base, origen="excel", texto=texto[:30000])
+            if len(texto.strip()) >= 30:
+                _pres_desde_texto(texto, res)
+        elif ext == ".eml" and not _anidado:
+            eml = _pres_leer_eml(datos)
+            if not eml:
+                return base
+            mejor = None
+            for nom, carga in eml.get("adjuntos", []):
+                r = _extraer_datos_presupuesto_archivo(nom, "", carga, permitir_ocr=permitir_ocr, _anidado=True)
+                if r.get("leido") and (mejor is None or _pres_campos(r) > _pres_campos(mejor)):
+                    mejor = r
+            texto_cuerpo = (eml.get("asunto", "") + "\n" + eml.get("cuerpo", ""))
+            res = dict(base, origen="correo", texto=texto_cuerpo[:30000])
+            if mejor and _pres_campos(mejor) >= 2:
+                res = dict(mejor, origen="correo+adjunto", texto=(mejor.get("texto", "") + "\n" + texto_cuerpo)[:30000])
+            elif len(texto_cuerpo.strip()) >= 30:
+                _pres_desde_texto(texto_cuerpo, res)
+            # La fecha del propio correo sirve de respaldo (se marca como dudosa)
+            if res.get("leido") and not res.get("fecha_iso") and eml.get("fecha_iso"):
+                res["fecha_iso"] = eml["fecha_iso"]
+                res["confianza"] = dict(res.get("confianza") or {}, fecha="baja")
+            res["remitente"] = eml.get("de", "")
+        else:
+            return base
+        if not _anidado:
+            _pres_finalizar(res, conservar_texto)
+        return res
+    except Exception as exc:
+        log.warning("[PRESUPUESTO] %s: %s: %s", nombre, type(exc).__name__, exc)
+        return base
 
 
 def _simpl_resolver_hotel(nombre_pdf):
@@ -23769,6 +24000,13 @@ def _simpl_resolver_departamento(almacen_pdf, hotel_codigo):
             return d
     cands = [d for d in deptos if n_pdf and (n_pdf in _normalizar_texto_generico(d["nombre"]) or _normalizar_texto_generico(d["nombre"]) in n_pdf)]
     return cands[0] if len(cands) == 1 else None
+
+
+def _simpl_rellena_presupuesto(res: dict, p: dict):
+    if p.get("numero"): res["rellena"].append("Nº presupuesto " + p["numero"])
+    if p.get("fecha_iso"): res["rellena"].append("Fecha presupuesto " + p["fecha_iso"])
+    if p.get("importe") is not None: res["rellena"].append("Importe %.2f € (sin IGIC)" % p["importe"])
+    if p.get("proveedor"): res["rellena"].append("Proveedor: " + p["proveedor"]["nombre"])
 
 
 def _simpl_analizar_un_archivo(idx: int, nombre: str, mime: str, datos: bytes, ocr_restante: list) -> dict:
@@ -23839,18 +24077,16 @@ def _simpl_analizar_un_archivo(idx: int, nombre: str, mime: str, datos: bytes, o
         es_presu = any(k in t for k in _SIMPL_KW_PRESUPUESTO) or any(k in n_norm for k in _SIMPL_KW_PRESUPUESTO)
         if not (vacio and not texto_ocr):
             try:
-                pres = _extraer_datos_presupuesto(datos, permitir_ocr=False, texto_ocr=texto_ocr)
+                pres = _pres_finalizar(_extraer_datos_presupuesto(datos, permitir_ocr=False, texto_ocr=texto_ocr))
+                pres["origen"] = "pdf"
             except Exception:
                 pres = None
             if pres and pres.get("leido"):
                 res["presupuesto"] = pres
         if es_presu:
             res.update(tipo="presupuesto_doc", confianza="media", motivo="Parece un presupuesto (contiene la palabra «presupuesto/oferta/proforma»)" + (" — escaneado, leído por OCR: compruebe los datos." if texto_ocr else "."))
-            p = res.get("presupuesto")
-            if p:
-                if p.get("numero"): res["rellena"].append("Nº presupuesto " + p["numero"])
-                if p.get("fecha_iso"): res["rellena"].append("Fecha presupuesto " + p["fecha_iso"])
-                if p.get("importe") is not None: res["rellena"].append("Importe %.2f € (sin IGIC)" % p["importe"])
+            if res.get("presupuesto"):
+                _simpl_rellena_presupuesto(res, res["presupuesto"])
         elif "albaran" in t or "albaran" in n_norm:
             res["motivo"] = "Parece un albarán: se carga desde la ficha del pedido (botón «Albarán PDF»), no aquí. Elija otro destino o «No subir»."
         elif vacio and not texto_ocr:
@@ -23866,15 +24102,31 @@ def _simpl_analizar_un_archivo(idx: int, nombre: str, mime: str, datos: bytes, o
             res["rellena"].append("Asunto: " + info["asunto"][:80])
         if any(k in asunto for k in _SIMPL_KW_VB):
             res.update(tipo="vb_eml", confianza="media", motivo="Correo cuyo asunto/nombre habla de visto bueno, firma o autorización.")
-        elif any(k in asunto for k in _SIMPL_KW_PRESUPUESTO):
-            res.update(tipo="presupuesto_doc", confianza="media", motivo="Correo cuyo asunto/nombre habla de presupuesto u oferta.")
         else:
-            res["motivo"] = "Correo: no se sabe si es la petición de presupuesto, el visto bueno o el envío al proveedor."
+            pres = _extraer_datos_presupuesto_archivo(nombre, mime, datos, permitir_ocr=False)
+            con_adjunto = bool(pres.get("leido")) and pres.get("origen") == "correo+adjunto"
+            if any(k in asunto for k in _SIMPL_KW_PRESUPUESTO) or con_adjunto:
+                res.update(tipo="presupuesto_doc", confianza="media",
+                           motivo="Correo con presupuesto adjunto: se leen sus datos." if con_adjunto else "Correo cuyo asunto/nombre habla de presupuesto u oferta.")
+                if pres.get("leido") and _pres_campos(pres):
+                    res["presupuesto"] = pres
+                    _simpl_rellena_presupuesto(res, pres)
+            else:
+                res["motivo"] = "Correo: no se sabe si es la petición de presupuesto, el visto bueno o el envío al proveedor."
         return res
 
     # Word / Excel / otros documentos
-    if any(k in n_norm for k in _SIMPL_KW_PRESUPUESTO):
-        res.update(tipo="presupuesto_doc", confianza="media", motivo="El nombre del archivo indica presupuesto u oferta.")
+    pres = None
+    if ext in (".docx", ".xlsx"):
+        pres = _extraer_datos_presupuesto_archivo(nombre, mime, datos, permitir_ocr=False, conservar_texto=True)
+    t_doc = _normalizar_texto_generico((pres or {}).get("texto", "")[:3000]).lower()
+    if pres is not None:
+        pres.pop("texto", None)
+    if any(k in n_norm for k in _SIMPL_KW_PRESUPUESTO) or any(k in t_doc for k in _SIMPL_KW_PRESUPUESTO):
+        res.update(tipo="presupuesto_doc", confianza="media", motivo="Parece un presupuesto (nombre o contenido)" + (": se leen sus datos." if pres and pres.get("leido") else "."))
+        if pres and pres.get("leido") and _pres_campos(pres):
+            res["presupuesto"] = pres
+            _simpl_rellena_presupuesto(res, pres)
     elif "solicitud" in n_norm:
         res.update(tipo="solicitud_doc", confianza="media", motivo="El nombre del archivo indica solicitud.")
     else:
@@ -23917,6 +24169,50 @@ def simplificado_analizar():
                 r.update(tipo=None, confianza="baja", motivo="Hay más de un PDF de pedido oficial: solo se admite uno por pedido.")
             vistos = True
     return jsonify({"ok": True, "archivos": resultados, "etiquetas": _SIMPL_ETIQUETAS_TIPO})
+
+
+@app.route("/api/pedidos/simplificado/lectura", methods=["POST"])
+@login_required
+def simplificado_registrar_lectura():
+    """Registra lo que se propuso leer de un presupuesto y lo que el usuario dejó (para mejorar el lector)."""
+    if session.get("rol") == "hotel":
+        return jsonify({"ok": False, "error": "Sin permiso"}), 403
+    d = request.get_json(silent=True) or {}
+    prop, fin = d.get("propuesto") or {}, d.get("final") or {}
+    def _n(v):
+        try:
+            return round(float(v), 2) if v not in (None, "") else None
+        except (TypeError, ValueError):
+            return None
+    try:
+        execute(
+            "INSERT INTO presupuesto_lecturas (usuario_id, pedido_id, archivo, origen, via_ocr, proveedor_id, "
+            "prop_numero, prop_fecha, prop_importe, fin_numero, fin_fecha, fin_importe, confianza) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (current_user_id(), d.get("pedido_id"), (d.get("archivo") or "")[:200], (d.get("origen") or "")[:30], bool(d.get("via_ocr")),
+             d.get("proveedor_id") or None, prop.get("numero"), prop.get("fecha"), _n(prop.get("importe")),
+             fin.get("numero") or None, fin.get("fecha") or None, _n(fin.get("importe")), json.dumps(d.get("confianza") or {})))
+        get_db().commit()
+    except Exception as exc:
+        get_db().rollback()
+        log.warning("[PRESUPUESTO] no se pudo registrar la lectura: %s", exc)
+    return jsonify({"ok": True})
+
+
+@app.route("/api/presupuestos/lecturas", methods=["GET"])
+@admin_required
+def listar_lecturas_presupuesto():
+    """Lecturas de presupuestos registradas (?solo_diferencias=1: solo donde el usuario corrigió algo)."""
+    sql = ("SELECT l.*, pr.nombre AS proveedor_nombre FROM presupuesto_lecturas l "
+           "LEFT JOIN proveedores pr ON pr.id = l.proveedor_id")
+    if request.args.get("solo_diferencias") == "1":
+        sql += (" WHERE COALESCE(l.prop_numero,'') <> COALESCE(l.fin_numero,'') OR COALESCE(l.prop_fecha,'') <> COALESCE(l.fin_fecha,'')"
+                " OR COALESCE(l.prop_importe,-1) <> COALESCE(l.fin_importe,-1)")
+    rows = rows_to_list(query(sql + " ORDER BY l.id DESC LIMIT 500"))
+    for r in rows:
+        for k in ("prop_importe", "fin_importe"):
+            if r.get(k) is not None: r[k] = float(r[k])
+    return jsonify({"ok": True, "lecturas": rows})
 
 
 @app.route("/api/pedidos/simplificado/techo", methods=["POST"])

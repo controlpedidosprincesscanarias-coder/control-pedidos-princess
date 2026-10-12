@@ -1,3 +1,15 @@
+# v12.33.22 — 12 octubre 2026
+
+📎 Pedido simplificado (Fase 3): presupuestos en Word, Excel y correo + proveedor propuesto · 🔒 sin trazabilidad interna en los correos al proveedor
+
+**Corrección (petición de Víctor)**: en los pedidos dados de alta automáticamente, la observación de trazabilidad («Alta automática · Carga automática SAP · … Nº SAP …») llegaba al proveedor dentro de los correos de reclamación. `app.py`: nuevo `_obs_para_proveedor`/`_pedido_para_proveedor`; se aplican en las plantillas dirigidas al proveedor (pedido enviado sin confirmar, entrega parcial, solicitud de cotización) y en el «motivo» de cancelación. Si el pedido tiene además una observación escrita a mano, esa se conserva. Los correos internos no cambian.
+
+**Fase 3**: el lector de presupuestos (v12.33.21) ahora también lee **Word (.docx), Excel (.xlsx) y correos .eml** (cuerpo y adjuntos PDF/Word/Excel; la fecha del correo sirve de respaldo, marcada como dudosa). Propone además el **proveedor** del catálogo (por el nombre que aparece en el presupuesto o por el dominio del correo remitente): en el asistente se rellena si no hay PDF del pedido, y se avisa si el presupuesto parece de otro proveedor que el del PDF del pedido. Admite fechas ISO (2026-09-30) y cifras enteras en filas de totales de Excel.
+
+**Registro de lecturas**: tabla nueva `presupuesto_lecturas` (se crea sola) con lo que se propuso frente a lo que el usuario dejó; admin puede consultarla en `/api/presupuestos/lecturas?solo_diferencias=1` para detectar proveedores que se leen mal. No aprende por sí sola: sirve para mejorar el lector con casos reales.
+
+Límites: .msg, .doc y .xls no se leen; los PDF escaneados siguen usando OCR (compruebe los datos).
+
 # v12.33.21 — 12 octubre 2026
 
 📄 Pedido simplificado (Fase 2): lectura de presupuestos y nueva «Fecha del presupuesto»
