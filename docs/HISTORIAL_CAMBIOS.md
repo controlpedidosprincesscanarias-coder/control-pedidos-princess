@@ -49,6 +49,18 @@
 
 ---
 
+## 2026-10-12 — [Control Pedidos] Pedido simplificado, Fase 2: lectura de presupuestos y fecha del presupuesto (v12.33.21)
+
+Víctor envió 13 presupuestos reales (Casa Delfín, Pilsa, Mabecan, Ditenerife, Crisol, Dihova, Servicios Electrónicos, Lormacan, Vamac Sport —uno con texto y otro escaneado y girado—, TM Leader, Reverón y Aliseo —escaneado y firmado—). Formatos muy dispares: números sin etiqueta (justo antes de la fecha, o pegados a «Nº PROFORMA»), importes «1.234,56» y «1,234.56», cifras de totales pegadas («0,9713,89») y un proveedor con IVA mixto y sin base impresa.
+
+Corrección/implementación (`app.py`): `_extraer_datos_presupuesto` (+ `_pres_*`): Nº por etiquetas habituales con respaldo «código antes de la fecha»; fecha tras «Fecha» ignorando validez/vencimiento/entrega; importe sin IGIC por **triple coherente base + impuesto = total** del propio documento (descartado si no cuadra con la cifra etiquetada como base) y, si no, por etiquetas (Base imponible, Importe neto, Subtotal…). Escaneados: OCR con Tesseract a 150 ppp con corrección de orientación (OSD), una sola pasada. Resultado: 13/13 correctos. Columna nueva `pedidos.fecha_presupuesto` (TEXT 'YYYY-MM-DD', como el resto de fechas; la primera prueba con DATE reproducía el problema de JSON de `_normalizar_fecha_entrega_especifica`). `create_pedido`/`update_pedido` la guardan; `upload_adjunto` (presupuesto_doc PDF) devuelve la propuesta sin escribirla; `simplificado_analizar` reutiliza una única lectura OCR para clasificar y leer.
+
+`templates/index.html`: campo «Fecha del presupuesto» (ficha), autorrelleno de campos vacíos al adjuntar el presupuesto, y en el asistente simplificado bloque Presupuesto (Nº, fecha, importe editables, marca «compruebe»), techo de gasto con importe del presupuesto y aviso si no coincide con el total del PDF del pedido.
+
+Limitaciones conocidas: presupuestos en Word/Excel/correo no se leen aún (Fase 3); el OCR puede equivocar una cifra (se avisa «compruebe»); la fecha del presupuesto aún no se incluye en exportaciones ni correos.
+
+---
+
 ## 2026-10-12 — [Control Pedidos] Pedido simplificado, Fase 1: alta de pedido subiendo todos los archivos de una vez (v12.33.20)
 
 Petición de Víctor: simplificar la creación manual de pedidos para no subir los archivos paso a paso. «Nuevo pedido» (solo comprador/admin) ofrece **Simplificado** o **Paso a paso** (sin cambios). Acordado con Víctor: fechas de solicitud y Vº Bº al inicio; todos los archivos de una vez; análisis sin escribir en BD; tabla editable de destino con «¿Dónde lo coloco?» solo para lo dudoso; con PDF oficial se dan por buenos hotel, departamento, proveedor y fecha de tramitación (= Fecha Pedido) y se pregunta la fecha de entrega, y el estado se elige en la ventana «Pedido cargado correctamente»; sin PDF se pregunta hotel → departamento y se propone estado según la documentación (cotización / firma de Dirección / Vº Bº DG si supera techo). Defaults de Fase 1: presupuesto sin Vº Bº → se pide fecha y documento de envío en la propia pantalla; techo con importe tecleado a mano.

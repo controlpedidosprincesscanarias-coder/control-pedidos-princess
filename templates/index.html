@@ -798,6 +798,7 @@ tbody tr:last-child{border-bottom:none}
 .cp-bloq-acc{display:flex;justify-content:flex-end;gap:10px;margin-top:16px}
 .sp-box{max-width:900px!important;position:relative}
 .sp-box .form-group{margin-bottom:12px}
+.sp-bloque{background:#f8fafc;border:1px solid #e2e8f0;border-radius:9px;padding:9px 11px}
 .sp-x{position:absolute;top:10px;right:12px;border:0;background:none;font-size:18px;cursor:pointer;color:#64748b}
 .sp-pasos{display:flex;gap:8px;margin:6px 0 14px;font-size:12.5px}
 .sp-pasos span{padding:3px 10px;border-radius:99px;background:#eef2f8;color:#64748b}
@@ -1460,7 +1461,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.20
+          V 12.33.21
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2642,6 +2643,8 @@ tbody tr:last-child{border-bottom:none}
           </label>
           <div id="presupuesto-fields-wrap">
             <input class="form-control monospace" id="p-presup">
+            <label class="form-label" style="font-size:11.5px;margin:8px 0 3px">Fecha del presupuesto</label>
+            <input type="date" class="form-control" id="p-presup-fecha" style="max-width:190px">
             <label class="adj-fecha-btn" id="lbl-presup-doc" title="Adjuntar documento o correo al presupuesto — solo se admite uno (PDF, Word o correo)" style="margin-top:6px">
               <input type="file" accept=".pdf,.doc,.docx,.eml,.msg" style="display:none"
                      onchange="subirAdjuntos(this,'presupuesto_doc')">
@@ -5722,6 +5725,7 @@ async function openPedidoModal(id=null) {
     actualizarFechaEntregaPrevista();
     setVal('p-pedido-num', p.pedido_num);
     setVal('p-presup', p.presupuesto_num);
+    setVal('p-presup-fecha', p.fecha_presupuesto || '');
     setVal('p-total-pedido', p.total_pedido != null ? Number(p.total_pedido).toFixed(2) : '');
     document.getElementById('p-total-pedido-aprox-badge').hidden = !p.total_pedido_aproximado;
     document.getElementById('p-total-pedido-real-badge').hidden = true;   // se muestra al leer las líneas del PDF (cargarLineasPedido)
@@ -5808,7 +5812,7 @@ function _applyHotelRolePedidoModal(isEdit) {
   const hideIds = [
     'p-hotel','p-depto',                          // hotel y departamento
     'p-f-solicitud','p-f-vb','p-f-tramit','p-plazo-entrega','p-fecha-entrega-especifica',  // fechas
-    'p-pedido-num','p-presup','chk-tarifa-acordada',  // números SAP/presupuesto
+    'p-pedido-num','p-presup','p-presup-fecha','chk-tarifa-acordada',  // números SAP/presupuesto
     'p-proveedor-input',                          // proveedor
     'p-observaciones',                            // observaciones
     'p-ab','p-jefe','p-rotura','p-ampliacion',    // checkboxes comunicados
@@ -6049,6 +6053,8 @@ async function subirAdjuntos(input, tipo) {
       const data = await resp.json();
       if (data.ok) {
         subidos++;
+        // (v12.33.21) PDF de presupuesto: se proponen Nº, fecha e importe leídos — solo en campos vacíos
+        if (tipo === 'presupuesto_doc' && data.presupuesto && data.presupuesto.leido) _aplicarPropuestaPresupuesto(data.presupuesto);
         // (2026-08-28) Al subir el PDF de pedido oficial, el backend lee y
         // devuelve el Nº de Pedido y el Total Pedido — se reflejan aquí
         // mismo al momento, sin esperar a recargar el pedido entero (ver
@@ -6621,6 +6627,17 @@ function _revisarHotelTrasCambio() {
   if (!G.avisoProveedorInfo) return;
   const hotelId = document.getElementById('p-hotel').value;
   _mostrarAvisoProveedorPdf({ ...G.avisoProveedorInfo, hotel_nombre_actual: _nombreHotelPorId(hotelId) });
+}
+
+function _aplicarPropuestaPresupuesto(pr) {
+  const rell = [];
+  if (pr.numero && !val('p-presup')) { setVal('p-presup', pr.numero); rell.push('Nº ' + pr.numero); }
+  if (pr.fecha_iso && !val('p-presup-fecha')) { setVal('p-presup-fecha', pr.fecha_iso); rell.push('fecha ' + _spFmt(pr.fecha_iso)); }
+  const techoOn = document.getElementById('p-sujeto-techo') && document.getElementById('p-sujeto-techo').checked;
+  if (pr.importe != null && techoOn && !val('p-importe')) { setVal('p-importe', Number(pr.importe).toFixed(2)); rell.push('importe ' + Number(pr.importe).toFixed(2) + ' €'); }
+  const dudoso = pr.via_ocr || ['numero', 'fecha', 'importe'].some(k => pr.confianza && pr.confianza[k] && pr.confianza[k] !== 'alta');
+  if (rell.length) toast('Presupuesto leído: ' + rell.join(', ') + (dudoso ? ' — compruebe los datos' + (pr.via_ocr ? ' (documento escaneado)' : '') : ''), dudoso ? '' : 'success', 6000);
+  if (pr.importe != null && !techoOn) toast('Importe del presupuesto (sin IGIC): ' + Number(pr.importe).toLocaleString('es-ES', {minimumFractionDigits: 2}) + ' €', '', 5000);
 }
 
 function _procesarFechasPdfPedidoOficial(data) {
@@ -7476,7 +7493,7 @@ function _setFormCanceladoSilent(bloqueado) {
   // con bloqueado=false) en cuanto el pedido dejaba de estar cancelado.
   const CAMPOS_EDIT = [
     'p-hotel','p-depto','p-f-solicitud','p-f-vb','p-f-tramit',
-    'p-pedido-num','p-presup','p-observaciones','p-proveedor-input',
+    'p-pedido-num','p-presup','p-presup-fecha','p-observaciones','p-proveedor-input',
     'p-rotura','p-ampliacion'
   ];
   CAMPOS_EDIT.forEach(id => {
@@ -8128,7 +8145,7 @@ async function leerLineasPendientes(btn) {
 }
 
 function clearPedidoForm() {
-  ['p-hotel','p-depto','p-pedido-num','p-presup','p-total-pedido','p-observaciones','p-nota','p-plazo-entrega','p-fecha-entrega-especifica'].forEach(id=>setVal(id,''));
+  ['p-hotel','p-depto','p-pedido-num','p-presup','p-presup-fecha','p-total-pedido','p-observaciones','p-nota','p-plazo-entrega','p-fecha-entrega-especifica'].forEach(id=>setVal(id,''));
   document.getElementById('p-total-pedido-aprox-badge').hidden = true;
   document.getElementById('p-total-pedido-real-badge').hidden = true;
   _lineasPedidoReq++;   // descarta cualquier carga de líneas en curso
@@ -8222,6 +8239,7 @@ function onTarifaAcordadaChange() {
   const lblAdjunto    = document.getElementById('lbl-presup-doc');
   wrap.classList.toggle('presup-sombreado', marcado);
   inputPresup.disabled = marcado;          // deshabilita SIN borrar el valor
+  const fPres = document.getElementById('p-presup-fecha'); if (fPres) fPres.disabled = marcado;
   inputPresup.style.borderColor = '';
   lblAdjunto.style.pointerEvents = marcado ? 'none' : '';  // bloquea nuevas subidas, sin tocar las existentes
 }
@@ -8472,6 +8490,7 @@ async function savePedido() {
     fecha_tramitacion:    val('p-f-tramit'),
     pedido_num:           val('p-pedido-num'),
     presupuesto_num:      val('p-presup'),
+    fecha_presupuesto:    val('p-presup-fecha') || null,
     total_pedido:         val('p-total-pedido') ? parseFloat(val('p-total-pedido')) : null,
     tarifa_acordada:      document.getElementById('chk-tarifa-acordada').checked,
     entrada_albaran_num:  getAlbaranCombined(),
@@ -11200,7 +11219,7 @@ function _spFmt(iso) { if (!iso) return '—'; const m = /^(\d{4})-(\d{2})-(\d{2
 function _spIniciar() {
   _sp = { paso: 1, fsol: _spHoy(), fvb: '', files: [], an: null, asign: {}, hotel: '', depto: '', prov: null, provTxt: '',
           fentModo: 'pdf', fent: '', estado: '', techo: false, familia: '', importe: '', techoMotivos: null, vbFile: null,
-          ocupado: false, error: '' };
+          ocupado: false, error: '', pres: { num: '', fecha: '', importe: '', origen: null } };
   const ov = document.createElement('div');
   ov.className = 'cp-bloq'; ov.id = 'sp-overlay';
   ov.innerHTML = '<div class="cp-bloq-box sp-box" role="dialog" aria-modal="true"></div>';
@@ -11286,6 +11305,8 @@ function _spSelDeptos() {
     .map(d => `<option value="${d.id}"${String(_sp.depto)===String(d.id)?' selected':''}>${_escHtmlCp(d.nombre)}</option>`).join('');
 }
 
+function _spHotelActual() { const pdf = _spPdfData(); return pdf && pdf.hotel ? String(pdf.hotel.id) : _sp.hotel; }
+
 function _spEstadoPropuesto() {
   if (_sp.estado) return _sp.estado;
   if (_sp.techo && _sp.techoMotivos && _sp.techoMotivos.length) return 'PENDIENTE Vº Bº DIRECCIÓN GENERAL';
@@ -11293,7 +11314,48 @@ function _spEstadoPropuesto() {
   return 'PENDIENTE COTIZACIÓN';
 }
 
+// (Fase 2) Datos del presupuesto: se proponen al leer el PDF colocado como «Presupuesto»; siempre editables.
+function _spPresAn() { return (_sp.an || []).find(a => !a.error && _spTipoDe(a) === 'presupuesto_doc' && a.presupuesto) || null; }
+function _spSyncPres() {
+  const a = _spPresAn();
+  const origen = a ? a.idx : null;
+  if (origen !== _sp.pres.origen) {
+    _sp.pres.origen = origen;
+    if (a) {
+      const p = a.presupuesto;
+      _sp.pres.num = p.numero || ''; _sp.pres.fecha = p.fecha_iso || '';
+      _sp.pres.importe = p.importe != null ? Number(p.importe).toFixed(2) : '';
+      if (_sp.techo && _sp.pres.importe && !_sp.importe) _sp.importe = _sp.pres.importe;
+    }
+  }
+}
+function _spHtmlPresupuesto() {
+  if (!_spHayTipo('presupuesto_doc')) return '';
+  const a = _spPresAn(); const p = a ? a.presupuesto : null;
+  const dudoso = p && (p.via_ocr || ['numero', 'fecha', 'importe'].some(k => p.confianza && p.confianza[k] && p.confianza[k] !== 'alta'));
+  const pdf = _spPdfData();
+  let cmp = '';
+  if (pdf && pdf.total_pedido != null && _sp.pres.importe !== '' && Math.abs(Number(_sp.pres.importe) - Number(pdf.total_pedido)) > Math.max(0.02, Number(pdf.total_pedido) * 0.005)) {
+    const f = (n) => Number(n).toLocaleString('es-ES', {minimumFractionDigits: 2}) + ' €';
+    cmp = `<div class="cp-bloq-aviso">⚠️ El importe del presupuesto (${f(_sp.pres.importe)}) <b>no coincide</b> con el total del pedido (${f(pdf.total_pedido)}). Compruebe que el PDF del pedido corresponde a este presupuesto.</div>`;
+  }
+  return `<div class="form-group sp-bloque"><label class="form-label">Presupuesto ${p ? '<span class="sp-conf ' + (dudoso ? 'sp-conf-media' : 'sp-conf-alta') + '">' + (dudoso ? 'leído: compruebe' + (p.via_ocr ? ' (escaneado)' : '') : 'leído del PDF') + '</span>' : '<small style="color:#64748b">(no se ha podido leer: indíquelo a mano o déjelo vacío)</small>'}</label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <input class="form-control monospace" id="sp-pnum" placeholder="Nº presupuesto" style="flex:1;min-width:170px" value="${_escHtmlCp(_sp.pres.num)}">
+        <input type="date" class="form-control" id="sp-pfecha" title="Fecha del presupuesto" style="width:170px" value="${_escHtmlCp(_sp.pres.fecha)}">
+        <input type="number" step="0.01" min="0" class="form-control" id="sp-pimp" placeholder="Importe sin IGIC (€)" style="width:190px" value="${_escHtmlCp(_sp.pres.importe)}"></div>${cmp}</div>`;
+}
+function _spHtmlTecho() {
+  return `<div class="form-group sp-bloque"><label class="form-label"><input type="checkbox" id="sp-techo" ${_sp.techo?'checked':''}> ¿Computa para el techo de gasto?</label>
+    <div id="sp-techo-f" style="${_sp.techo?'':'display:none'};margin-top:6px">
+      <div style="display:flex;gap:8px"><select class="form-control" id="sp-fam"><option value="">— Familia —</option>${(G.maestros.familias||[]).map(f => `<option value="${f.id}"${String(_sp.familia)===String(f.id)?' selected':''}>${_escHtmlCp(f.nombre)}</option>`).join('')}</select>
+      <input type="number" step="0.01" min="0" class="form-control" id="sp-imp" placeholder="Importe sin IGIC (€)" value="${_escHtmlCp(_sp.importe)}"></div>
+      <div id="sp-techo-msg" style="font-size:12.5px;margin-top:5px">${_sp.techoMotivos ? (_sp.techoMotivos.length ? '<span class="sp-bad">' + _sp.techoMotivos.map(_escHtmlCp).join('<br>') + '</span>' : '<span style="color:#15803d">✓ Dentro de los límites del techo.</span>') : ''}</div>
+    </div></div>`;
+}
+
 function _spHtmlRevision() {
+  _spSyncPres();
   const pdf = _spPdfData();
   let datos = '';
   if (pdf) {
@@ -11315,6 +11377,7 @@ function _spHtmlRevision() {
         <label class="sp-radio"><input type="radio" name="sp-fent" value="otra" ${_sp.fentModo==='otra'?'checked':''}> Modificarla:
           <input type="date" id="sp-fent" class="form-control" style="display:inline-block;width:170px;margin-left:6px" value="${_escHtmlCp(_sp.fent || pdf.fecha_entrega_iso)}" ${_sp.fentModo==='otra'?'':'disabled'}></label></div>`;
     }
+    datos += _spHtmlPresupuesto() + _spHtmlTecho();
     datos += `<div class="sp-nota">Al crear, se abrirá la ficha y le preguntaremos a qué estado desea pasar el pedido (ventana «Pedido cargado correctamente»).</div>`;
   } else {
     datos += `<div class="sp-nota">No se ha subido el PDF del pedido oficial: indique hotel y departamento (en este orden) y la aplicación propone el estado según la documentación.</div>
@@ -11322,13 +11385,8 @@ function _spHtmlRevision() {
       <div class="form-group"><label class="form-label">Departamento *</label><select class="form-control" id="sp-depto" ${_sp.hotel ? '' : 'disabled'}>${_spSelDeptos()}</select></div>
       <div class="form-group"><label class="form-label">Proveedor <small style="color:#64748b">(opcional, provisional hasta el PDF oficial)</small></label>
         <div style="position:relative"><input class="form-control" id="sp-prov" autocomplete="off" placeholder="Escriba al menos 2 letras…" value="${_escHtmlCp(_sp.provTxt)}">
-        <div id="sp-prov-dd" class="sp-dd" style="display:none"></div></div></div>
-      <div class="form-group"><label class="form-label"><input type="checkbox" id="sp-techo" ${_sp.techo?'checked':''}> ¿Computa para el techo de gasto?</label>
-        <div id="sp-techo-f" style="${_sp.techo?'':'display:none'};margin-top:6px">
-          <div style="display:flex;gap:8px"><select class="form-control" id="sp-fam"><option value="">— Familia —</option>${(G.maestros.familias||[]).map(f => `<option value="${f.id}"${String(_sp.familia)===String(f.id)?' selected':''}>${_escHtmlCp(f.nombre)}</option>`).join('')}</select>
-          <input type="number" step="0.01" min="0" class="form-control" id="sp-imp" placeholder="Importe sin IGIC (€)" value="${_escHtmlCp(_sp.importe)}"></div>
-          <div id="sp-techo-msg" style="font-size:12.5px;margin-top:5px">${_sp.techoMotivos ? (_sp.techoMotivos.length ? '<span class="sp-bad">' + _sp.techoMotivos.map(_escHtmlCp).join('<br>') + '</span>' : '<span style="color:#15803d">✓ Dentro de los límites del techo.</span>') : ''}</div>
-        </div></div>`;
+        <div id="sp-prov-dd" class="sp-dd" style="display:none"></div></div></div>`;
+    datos += _spHtmlPresupuesto() + _spHtmlTecho();
     const est = _spEstadoPropuesto();
     datos += `<div class="form-group"><label class="form-label">Estado propuesto</label>
       <select class="form-control" id="sp-estado">${_SP_ESTADOS_SIN_PDF.map(e => `<option${e===est?' selected':''}>${_escHtmlCp(e)}</option>`).join('')}</select>
@@ -11377,7 +11435,14 @@ function _spEnlazar(box) {
     on('#sp-estado', 'change', (e) => { _sp.estado = e.target.value; _spRender(); });
     on('#sp-fvb2', 'change', (e) => { _sp.fvb = e.target.value; });
     on('#sp-vbfile', 'change', (e) => { _sp.vbFile = e.target.files[0] || null; _spRender(); });
-    on('#sp-techo', 'change', (e) => { _sp.techo = e.target.checked; _sp.estado = ''; if (!_sp.techo) _sp.techoMotivos = null; _spRender(); });
+    on('#sp-pnum', 'input', (e) => { _sp.pres.num = e.target.value; });
+    on('#sp-pfecha', 'change', (e) => { _sp.pres.fecha = e.target.value; });
+    on('#sp-pimp', 'change', (e) => { _sp.pres.importe = e.target.value; if (_sp.techo) { _sp.importe = e.target.value; _spComprobarTecho(); } else _spRender(); });
+    on('#sp-techo', 'change', (e) => {
+      _sp.techo = e.target.checked; _sp.estado = ''; if (!_sp.techo) _sp.techoMotivos = null;
+      if (_sp.techo && !_sp.importe) { const pdf = _spPdfData(); _sp.importe = _sp.pres.importe || (pdf && pdf.total_pedido != null ? Number(pdf.total_pedido).toFixed(2) : ''); }
+      if (_sp.techo && _sp.importe && _spHotelActual()) { _spComprobarTecho(); } else _spRender();
+    });
     on('#sp-fam', 'change', (e) => { _sp.familia = e.target.value; _spComprobarTecho(); });
     on('#sp-imp', 'change', (e) => { _sp.importe = e.target.value; _spComprobarTecho(); });
     on('#sp-prov', 'input', (e) => _spBuscarProv(e.target.value));
@@ -11430,9 +11495,9 @@ function _spBuscarProv(q) {
 
 async function _spComprobarTecho() {
   const msg = document.getElementById('sp-techo-msg');
-  if (!_sp.hotel || !_sp.importe) { _sp.techoMotivos = null; if (msg) msg.innerHTML = ''; return; }
+  if (!_spHotelActual() || !_sp.importe) { _sp.techoMotivos = null; if (msg) msg.innerHTML = ''; return; }
   try {
-    const d = await api('/api/pedidos/simplificado/techo', 'POST', { hotel_id: _sp.hotel, familia_id: _sp.familia || null, importe: _sp.importe });
+    const d = await api('/api/pedidos/simplificado/techo', 'POST', { hotel_id: _spHotelActual(), familia_id: _sp.familia || null, importe: _sp.importe });
     _sp.techoMotivos = d.ok ? (d.motivos || []) : null;
   } catch (e) { _sp.techoMotivos = null; }
   _sp.estado = '';
@@ -11464,8 +11529,8 @@ function _spValidar() {
       if (!_sp.fvb) return 'Indique la fecha de envío para Vº Bº.';
       if (!_spHayTipo('vb_eml') && !_sp.vbFile) return 'Adjunte el correo o PDF de envío para firma.';
     }
-    if (_sp.techo && (!_sp.importe || Number(_sp.importe) <= 0)) return 'Indique el importe para el techo de gasto.';
   }
+  if (_sp.techo && (!_sp.importe || Number(_sp.importe) <= 0)) return 'Indique el importe para el techo de gasto.';
   return '';
 }
 
@@ -11485,7 +11550,8 @@ async function _spCrear() {
     fecha_tramitacion: pdf ? (pdf.fecha_pedido_iso || null) : null };
   if (pdf && pdf.fecha_entrega_iso) body.fecha_entrega_especifica = _sp.fentModo === 'otra' ? _sp.fent : pdf.fecha_entrega_iso;
   if (!pdf && _sp.prov) body.proveedor_id = _sp.prov;
-  if (!pdf && _sp.techo) { body.sujeto_techo = true; body.familia_id = _sp.familia || null; body.importe = _sp.importe; }
+  if (_spHayTipo('presupuesto_doc')) { body.presupuesto_num = (_sp.pres.num || '').trim() || null; body.fecha_presupuesto = _sp.pres.fecha || null; }
+  if (_sp.techo) { body.sujeto_techo = true; body.familia_id = _sp.familia || null; body.importe = _sp.importe; }
   let nuevo = null;
   try {
     const r = await api('/api/pedidos', 'POST', body);

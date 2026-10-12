@@ -1,3 +1,16 @@
+# v12.33.21 — 12 octubre 2026
+
+📄 Pedido simplificado (Fase 2): lectura de presupuestos y nueva «Fecha del presupuesto»
+
+**Petición de Víctor**: que el presupuesto rellene solo su número y su fecha, y que su importe sirva para el techo de gasto.
+
+Nuevo lector de presupuestos en PDF (con texto o escaneados, incluso girados): propone **Nº de presupuesto, fecha e importe sin IGIC**. Comprobado con 13 presupuestos reales de 11 proveedores (importes con coma o con punto, IGIC 0/3/7 %, cifras pegadas, números sin etiqueta): 13 de 13 correctos. Nunca guarda nada solo: rellena campos editables y marca «compruebe» cuando el dato no es seguro o viene de OCR.
+
+- **Pedido simplificado**: al colocar un archivo como Presupuesto aparecen Nº, fecha e importe (editables); el importe pasa al techo de gasto (se activa «¿Computa para el techo?» en ambos casos, con o sin PDF del pedido) y si el importe del presupuesto no cuadra con el total del PDF del pedido se avisa. Los PDF escaneados se leen por OCR una sola vez (para reconocerlos y leerlos).
+- **Paso a paso**: nueva casilla «Fecha del presupuesto» junto al Nº; al adjuntar el PDF del presupuesto se rellenan solos Nº y fecha (si estaban vacíos).
+- `app.py`: columna nueva `pedidos.fecha_presupuesto` (TEXT, migración automática al arrancar), `_extraer_datos_presupuesto`, create/update_pedido la guardan, `upload_adjunto` devuelve la propuesta. `templates/index.html`: campo y asistente.
+- Pendiente (Fase 3): presupuestos en Word/Excel/correo, aprendizaje por proveedor, reconocer el proveedor.
+
 # v12.33.20 — 12 octubre 2026
 
 ⚡ Pedido simplificado (Fase 1): crear un pedido subiendo todos los archivos de una vez

@@ -1102,6 +1102,15 @@ def _auto_migrate():
                 cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS hotel_pdf_detectado TEXT")
             except Exception as e:
                 log.warning(f"No se pudo añadir la columna pedidos.hotel_pdf_detectado: {e}")
+            # ── Fecha del presupuesto (2026-10-12, v12.33.21) ───────────────────
+            # Pedido simplificado, Fase 2: junto al Nº de presupuesto se guarda
+            # su fecha (se propone al leer el PDF del presupuesto; editable). TEXT 'YYYY-MM-DD',
+            # igual que el resto de fechas de pedidos (la única DATE real da problemas de JSON, ver
+            # _normalizar_fecha_entrega_especifica).
+            try:
+                cur.execute("ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS fecha_presupuesto TEXT")
+            except Exception as e:
+                log.warning(f"No se pudo añadir la columna pedidos.fecha_presupuesto: {e}")
             # ── Código DALI del proveedor (2026-08-31) ────────────────────────
             # Víctor: "en la ficha de proveedores, necesito junto a la casilla
             # CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos
@@ -18656,8 +18665,9 @@ def create_pedido():
             plazo_entrega_dias, fecha_entrega_especifica,
             total_pedido,
             creado_por_id, modificado_por_id,
-            creado_por_nombre, modificado_por_nombre
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            creado_por_nombre, modificado_por_nombre,
+            fecha_presupuesto
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
         RETURNING id
     """, (
         norden,
@@ -18690,6 +18700,7 @@ def create_pedido():
         None,
         uid, uid,
         session.get("nombre"), session.get("nombre"),
+        data.get("fecha_presupuesto") or None,
     ))
     pedido_id = cur.fetchone()["id"]
 
@@ -19214,7 +19225,8 @@ def update_pedido(pid):
             familia_id=%s, importe=%s, sujeto_techo=%s, mes_consumo_techo=%s,
             plazo_entrega_dias=%s, fecha_entrega_especifica=%s,
             total_pedido=%s,
-            modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW()
+            modificado_por_id=%s, modificado_por_nombre=%s, modificado_en=NOW(),
+            fecha_presupuesto=%s
         WHERE id=%s
     """, (
         data.get("hotel_id",            pedido_actual["hotel_id"]),
@@ -19248,7 +19260,9 @@ def update_pedido(pid):
         # (SAP)" lo actualice después por su propia vía (_comparar_listado_
         # pdf_logica), que sigue funcionando igual.
         pedido_actual.get("total_pedido"),
-        uid, session.get("nombre"), pid,
+        uid, session.get("nombre"),
+        data.get("fecha_presupuesto", pedido_actual.get("fecha_presupuesto")) or None,
+        pid,
     ))
 
     if estado_nuevo != estado_antes:
@@ -23406,6 +23420,13 @@ def upload_adjunto(pid):
         # subirAdjuntos() en templates/index.html (rama 'pedido_doc').
         respuesta["fecha_pedido_iso"] = _datos_pedido_pdf.get("fecha_pedido_iso")
         respuesta["fecha_entrega_iso"] = _datos_pedido_pdf.get("fecha_entrega_iso")
+    elif tipo == "presupuesto_doc" and (mime == "application/pdf" or ext == ".pdf"):
+        # (v12.33.21) Propuesta de Nº, fecha e importe leídos del PDF del presupuesto — NO se guarda nada aquí:
+        # el formulario rellena solo los campos vacíos y el usuario confirma al guardar.
+        try:
+            respuesta["presupuesto"] = _extraer_datos_presupuesto(datos)
+        except Exception as exc:
+            log.warning("[PRESUPUESTO] No se pudo leer el presupuesto adjunto %s: %s", adjunto_id, exc)
     return jsonify(respuesta), 201
 
 
@@ -23492,6 +23513,228 @@ def _simpl_leer_correo(datos: bytes, ext: str) -> dict:
         return {}
 
 
+# ══════════════════════════════════════════════════════════════════════════
+# (2026-10-12, v12.33.21) PEDIDO SIMPLIFICADO — Fase 2: lectura de presupuestos
+# Lee Nº de presupuesto, fecha e importe sin IGIC de un PDF de presupuesto de
+# cualquier proveedor (con texto o escaneado). Nunca escribe nada: devuelve
+# propuestas que el usuario confirma/edita en pantalla. Verificado contra 13
+# presupuestos reales de 11 proveedores (ver docs/HISTORIAL_CAMBIOS.md v12.33.21).
+# ══════════════════════════════════════════════════════════════════════════
+_PRES_CIF_CLIENTE = ("A58245457",)
+_PRES_TASAS = (0.03, 0.07, 0.065, 0.095, 0.15, 0.20, 0.21, 0.10, 0.04)
+_PRES_MESES = {"enero": 1, "febrero": 2, "marzo": 3, "abril": 4, "mayo": 5, "junio": 6, "julio": 7,
+               "agosto": 8, "septiembre": 9, "setiembre": 9, "octubre": 10, "noviembre": 11, "diciembre": 12}
+_PRES_RE_DINERO = re.compile(r'(?<![\d.,])(\d{1,3}(?:[.,]\d{3})+[.,]\d{1,2}|\d+[.,]\d{1,2})(?![\d])')
+_PRES_RE_FECHA = re.compile(
+    r'(?<!\d)(\d{1,2})\s*[/\-.]\s*(\d{1,2})\s*[/\-.]\s*(\d{4}|\d{2})(?!\d)'
+    r'|(?<!\d)(\d{1,2})\s+de\s+([A-Za-zÁÉÍÓÚáéíóú]+)\s+de\s+(\d{4})', re.I)
+_PRES_TOKEN = r'((?:[A-Z]{1,3}\s?)?(?=[A-Z0-9/\-.]*\d)[A-Z0-9][A-Z0-9/\-.]{2,24})'
+
+
+def _pres_num(s):
+    """'1.234,56' · '1,234.56' · '2129,8' · '2544.00' → float (el último separador es el decimal)."""
+    s = s.strip().replace(" ", "")
+    ult = max(s.rfind(","), s.rfind("."))
+    if ult < 0:
+        return float(s)
+    ent = re.sub(r'[.,]', '', s[:ult])
+    return float(f"{ent}.{s[ult+1:]}")
+
+
+def _pres_fecha(m):
+    try:
+        if m.group(1):
+            d, mes, a = int(m.group(1)), int(m.group(2)), m.group(3)
+            a = int(a) + (2000 if len(a) == 2 else 0)
+        else:
+            d, a = int(m.group(4)), int(m.group(6))
+            mes = _PRES_MESES.get(_normalizar_texto_generico(m.group(5)).lower())
+            if not mes:
+                return None
+        if not (1 <= mes <= 12 and 1 <= d <= 31 and 2000 <= a <= 2100):
+            return None
+        return _date(a, mes, d).isoformat()
+    except Exception:
+        return None
+
+
+def _pres_extraer_fecha(texto):
+    """Fecha del presupuesto: la primera fecha tras una etiqueta «Fecha» (no validez/vencimiento/entrega);
+    si no hay etiqueta, la primera fecha del documento que no esté junto a esas palabras."""
+    malas = re.compile(r'valid|vencim|entrega|caduc|pago', re.I)
+    def _ok(m):
+        previo = texto[max(0, m.start() - 25):m.start()]
+        return not malas.search(previo)
+    for et in re.finditer(r'fecha(?:\s+entrada)?(?!\s+(?:de\s+)?(?:entrega|vencim|valid))', texto, re.I):
+        for m in _PRES_RE_FECHA.finditer(texto, et.end(), et.end() + 220):
+            iso = _pres_fecha(m)
+            if iso and _ok(m):
+                return iso, "alta"
+    for m in _PRES_RE_FECHA.finditer(texto):
+        iso = _pres_fecha(m)
+        if iso and _ok(m):
+            return iso, "media"
+    return None, None
+
+
+def _pres_token_valido(t):
+    t = t.strip()
+    if not re.search(r'\d', t) or len(re.sub(r'\W', '', t)) < 3:
+        return False
+    if re.fullmatch(r'[A-Z]-?\d{8}|[A-Z]-?\d{7}[A-Z]|ES[A-Z]\d{8}', t.replace(" ", "")):   # CIF/NIF
+        return False
+    if _PRES_RE_FECHA.fullmatch(t):
+        return False
+    return True
+
+
+def _pres_extraer_numero(texto):
+    patrones = (
+        (r'\bN[º°o\.\*\'’eE]{0,2}\s*(?:de\s*)?(?:presupuesto|oferta|proforma)\s*[:\-]?\s*', "alta"),
+        (r'presupuesto\s*(?:N[º°o\.\*\'’eE]{1,2}|-)\s*:?\s*', "alta"),
+        (r'N[úu]mero\s*:\s*', "media"),
+        (r'(?:presupuesto|proforma|oferta)\s*\n\s*', "media"),
+        (r'proforma\s+', "media"),
+    )
+    tok = re.compile(_PRES_TOKEN.replace(r'\s?', r'\s{0,4}'), re.I)
+    for pat, conf in patrones:
+        for m in re.finditer(pat, texto, re.I):
+            t = tok.match(texto[m.end():m.end() + 40])
+            if t and _pres_token_valido(re.sub(r'\s+', ' ', t.group(1).upper())):
+                return re.sub(r'\s+', ' ', t.group(1).strip().upper()), conf
+    # Código pegado justo ANTES de la etiqueta («1091Nº PROFORMA»)
+    m = re.search(r'(?<![\w/\-.])(\d{3,12})\s*N[º°o\.]{0,2}\s*(?:presupuesto|oferta|proforma)', texto, re.I)
+    if m and _pres_token_valido(m.group(1)):
+        return m.group(1), "media"
+    # Sin etiqueta: el código inmediatamente anterior a la primera fecha («1051 09-02-26», «2600347 \n 09/09/26»)
+    m = _PRES_RE_FECHA.search(texto)
+    if m:
+        t = re.search(r'([A-Z0-9][A-Z0-9/\-.]{2,24})\s*$', texto[max(0, m.start() - 30):m.start()], re.I)
+        if t and _pres_token_valido(t.group(1).upper()):
+            return t.group(1).upper(), "baja"
+    return None, None
+
+
+_PRES_ETIQ_BASE = (r'base\s+imponible', r'b\.\s*imponible', r'importe\s+neto', r'total\s+importes?', r't\.\s*importe',
+                   r'sub-?total', r'tot(?:al)?\.?\s+bruto')
+_PRES_ETIQ_TOTAL = (r'total\s+presupuesto', r'total\s+neto', r'importe\s+total', r'total')
+
+
+def _pres_valor_tras_etiqueta(texto, etiquetas):
+    for et in etiquetas:
+        for m in re.finditer(et, texto, re.I):
+            n = _PRES_RE_DINERO.search(texto, m.end(), m.end() + 60)
+            if n:
+                try:
+                    v = _pres_num(n.group(1))
+                except ValueError:
+                    continue
+                if v > 0:
+                    return v
+    return None
+
+
+def _pres_extraer_importe(texto):
+    """Importe SIN IGIC/IVA (base imponible). Devuelve (base, total, tasa, confianza)."""
+    vals = []
+    for m in _PRES_RE_DINERO.finditer(texto):
+        try:
+            vals.append(_pres_num(m.group(1)))
+        except ValueError:
+            pass
+    # Algún proveedor imprime pegadas las cifras de la fila de totales («0,9713,89»): se añaden también partidas
+    for m in re.finditer(r'(?<![\d.,])(\d{1,2}[.,]\d{2})(\d{1,3}[.,]\d{2})(?!\d)', texto):
+        vals += [_pres_num(m.group(1)), _pres_num(m.group(2))]
+    cents = {round(v * 100) for v in vals}
+    triple = None
+    for c_base in sorted(cents, reverse=True):
+        if c_base <= 0:
+            continue
+        for tasa in _PRES_TASAS:
+            c_imp = round(c_base * tasa)
+            for dif in (0, -1, 1):
+                if c_imp + dif in cents:
+                    c_tot = c_base + c_imp + dif
+                    for d2 in (0, -1, 1, -2, 2):
+                        if c_tot + d2 in cents:
+                            triple = (c_base / 100, (c_tot + d2) / 100, tasa)
+                            break
+                if triple:
+                    break
+            if triple:
+                break
+        if triple:
+            break
+    etiq = _pres_valor_tras_etiqueta(texto, _PRES_ETIQ_BASE)
+    # El triple solo manda si es coherente con la cifra etiquetada como base (descarta coincidencias con líneas pequeñas)
+    if triple and (etiq is None or triple[0] >= 0.8 * etiq):
+        return triple[0], triple[1], triple[2], "alta"
+    if etiq is not None:
+        return etiq, None, None, "media"
+    tot = _pres_valor_tras_etiqueta(texto, _PRES_ETIQ_TOTAL)
+    if tot is not None:
+        return tot, None, None, "baja"
+    return None, None, None, None
+
+
+def _pres_ocr_texto(pdf_bytes: bytes) -> str:
+    """OCR de un presupuesto escaneado (hasta 2 páginas, 150 ppp), corrigiendo la orientación (los hay girados)."""
+    try:
+        import pdfplumber, io, pytesseract
+    except Exception:
+        return ""
+    texto = ""
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for pagina in pdf.pages[:2]:
+                try:
+                    img = pagina.to_image(resolution=150).original.convert("L")
+                finally:
+                    pagina.flush_cache()
+                giro = 0
+                try:
+                    osd = pytesseract.image_to_osd(img, config="--psm 0")
+                    giro = int(re.search(r'Rotate:\s*(\d+)', osd).group(1))
+                except Exception:
+                    pass
+                im = img.rotate(-giro, expand=True) if giro else img
+                texto += pytesseract.image_to_string(im, lang="spa", config="--psm 6").replace("|", " ") + "\n"
+    except Exception as exc:
+        log.warning(f"[PRESUPUESTO-OCR] {type(exc).__name__}: {exc}")
+    return texto
+
+
+def _extraer_datos_presupuesto(pdf_bytes: bytes, permitir_ocr: bool = True, texto_ocr: str = None) -> dict:
+    """Propone Nº, fecha e importe (sin IGIC) de un PDF de presupuesto. Nunca lanza excepción.
+    `texto_ocr`: texto ya obtenido por OCR (evita repetirlo)."""
+    res = {"numero": None, "fecha_iso": None, "importe": None, "total": None, "tasa": None,
+           "confianza": {}, "via_ocr": False, "leido": False}
+    if texto_ocr is not None:
+        texto = texto_ocr
+        res["via_ocr"] = True
+    else:
+        try:
+            from pypdf import PdfReader
+            import io
+            texto = "\n".join((p.extract_text() or "") for p in PdfReader(io.BytesIO(pdf_bytes)).pages)
+        except Exception:
+            texto = ""
+        if len(texto.strip()) < _UMBRAL_TEXTO_VACIO_PDF:
+            if not permitir_ocr:
+                return res
+            texto = _pres_ocr_texto(pdf_bytes)
+            res["via_ocr"] = True
+    if len(texto.strip()) < 30:
+        return res
+    res["leido"] = True
+    num, c1 = _pres_extraer_numero(texto)
+    fec, c2 = _pres_extraer_fecha(texto)
+    imp, tot, tasa, c3 = _pres_extraer_importe(texto)
+    res.update(numero=num, fecha_iso=fec, importe=imp, total=tot, tasa=tasa,
+               confianza={"numero": c1, "fecha": c2, "importe": c3})
+    return res
+
+
 def _simpl_resolver_hotel(nombre_pdf):
     if not nombre_pdf:
         return None
@@ -23551,10 +23794,18 @@ def _simpl_analizar_un_archivo(idx: int, nombre: str, mime: str, datos: bytes, o
     if clase == "pdf":
         texto = _simpl_texto_pdf_sin_ocr(datos)
         vacio = len(texto.strip()) < _UMBRAL_TEXTO_VACIO_PDF
-        intentar = (not vacio) or ocr_restante[0] > 0
-        if vacio and intentar:
+        texto_ocr = None
+        intentar_pedido = not vacio
+        if vacio:
+            if ocr_restante[0] <= 0:
+                res["motivo"] = "PDF escaneado: no se analiza automáticamente (límite de lecturas por OCR en un mismo análisis)."
+                return res
             ocr_restante[0] -= 1
-        if intentar:
+            texto_ocr = _pres_ocr_texto(datos)   # una sola pasada rápida: sirve para clasificar y para leer el presupuesto
+            texto = texto_ocr
+            t_ocr = _normalizar_texto_generico(texto_ocr[:3000]).lower()
+            intentar_pedido = bool(re.search(r'\bpedido\s+\d{3,}', t_ocr)) and not any(k in t_ocr for k in _SIMPL_KW_PRESUPUESTO)
+        if intentar_pedido:
             try:
                 d = _parsear_pdf_pedido_oficial(datos)
             except ValueError:
@@ -23585,11 +23836,24 @@ def _simpl_analizar_un_archivo(idx: int, nombre: str, mime: str, datos: bytes, o
                 if lineas: res["rellena"].append(f"{len(lineas)} líneas")
                 return res
         t = _normalizar_texto_generico(texto[:3000]).lower()
-        if any(k in t for k in _SIMPL_KW_PRESUPUESTO) or any(k in n_norm for k in _SIMPL_KW_PRESUPUESTO):
-            res.update(tipo="presupuesto_doc", confianza="media", motivo="Parece un presupuesto (contiene la palabra «presupuesto/oferta/proforma»).")
+        es_presu = any(k in t for k in _SIMPL_KW_PRESUPUESTO) or any(k in n_norm for k in _SIMPL_KW_PRESUPUESTO)
+        if not (vacio and not texto_ocr):
+            try:
+                pres = _extraer_datos_presupuesto(datos, permitir_ocr=False, texto_ocr=texto_ocr)
+            except Exception:
+                pres = None
+            if pres and pres.get("leido"):
+                res["presupuesto"] = pres
+        if es_presu:
+            res.update(tipo="presupuesto_doc", confianza="media", motivo="Parece un presupuesto (contiene la palabra «presupuesto/oferta/proforma»)" + (" — escaneado, leído por OCR: compruebe los datos." if texto_ocr else "."))
+            p = res.get("presupuesto")
+            if p:
+                if p.get("numero"): res["rellena"].append("Nº presupuesto " + p["numero"])
+                if p.get("fecha_iso"): res["rellena"].append("Fecha presupuesto " + p["fecha_iso"])
+                if p.get("importe") is not None: res["rellena"].append("Importe %.2f € (sin IGIC)" % p["importe"])
         elif "albaran" in t or "albaran" in n_norm:
             res["motivo"] = "Parece un albarán: se carga desde la ficha del pedido (botón «Albarán PDF»), no aquí. Elija otro destino o «No subir»."
-        elif vacio:
+        elif vacio and not texto_ocr:
             res["motivo"] = "PDF escaneado (sin texto): no se puede reconocer automáticamente."
         else:
             res["motivo"] = "No se reconoce el tipo de documento."
