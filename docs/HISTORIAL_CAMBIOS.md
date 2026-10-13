@@ -49,6 +49,13 @@
 
 ---
 
+## 2026-10-13 — [Control Pedidos] Administrador con hoteles asignados (v12.33.24)
+
+Petición de Víctor: que un admin pueda tener hoteles asignados, sin obligación. Decisión (confirmada con él): el admin con hoteles actúa como comprador de ellos. `app.py`: las consultas que resuelven el comprador de un hotel (`_get_compradores_hotel`, `_get_todos_usuarios_hotel`, `/api/compradores-por-hotel`, comprobaciones de Integridad «hotel sin comprador» y duplicados, protecciones de huérfanos al reasignar/desactivar/eliminar) pasan de `rol='compras'` a `rol IN ('compras','admin')` — seguro porque un admin solo aparece en `usuario_comprador_hoteles` si se le han asignado hoteles; `_validar_cambio_activo` y `delete_usuario` aplican la protección también a admins; `/api/admin/config-avisos` devuelve `es_comprador`. `templates/index.html`: bloque de hoteles de compras visible para admin (opcional, con nota), guardado y columna Hoteles de la tabla, y pestaña «Compradores y Hoteles» de Config. Avisos con los admins que tengan hoteles. Sin hoteles asignados, el comportamiento del admin no cambia (sigue viendo todo; no se cuenta como «comprador sin hoteles»). Probado con Postgres real, API y Playwright. Documentos de norma 5 revisados: no aplica.
+
+
+---
+
 ## 2026-10-13 — [Control Pedidos] Usuarios: trazabilidad de conexiones y activar/desactivar (v12.33.23)
 
 Petición de Víctor: saber cuándo se conectó cada usuario por última vez y desde dónde, y que el admin pueda siempre activar/desactivar un usuario (ya existía algo equivalente en DALI: `conexiones_usuarios`, `TrazabilidadUsuarioModal`). Cambios: tabla `usuarios_trazabilidad` (en `_auto_migrate` y `models.py`) alimentada desde `_completar_login` (métodos `login`, `login_verificado`, `bridge`) con IP (`X-Forwarded-For`), país (`CF-IPCountry`) y dispositivo derivado del User-Agent; endpoint `GET /api/usuarios/<id>/trazabilidad`; `GET /api/usuarios` devuelve `ultimo_login` y último IP/dispositivo; `PUT /api/usuarios/<id>/activo` y la validación común `_validar_cambio_activo` (se elimina el bloqueo duro por hoteles huérfanos, que pasa a aviso con `forzar`; no autodesactivarse; debe quedar un admin activo); eventos «activado/desactivado» con el admin autor. `login_required`, `admin_required` y `/api/me` cortan la sesión de una cuenta desactivada (cache de 20 s, 1 worker); mensaje específico al intentar entrar con contraseña correcta. Interfaz: columna «Último acceso», botones 🔍 y Desactivar/Activar, modal de trazabilidad. Probado con Postgres real, API y Playwright. Documentos revisados (`GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md`): no aplica, salvo que la tabla nueva se crea sola en el arranque.

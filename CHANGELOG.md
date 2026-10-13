@@ -1,3 +1,11 @@
+# v12.33.24 — 13 octubre 2026
+
+🛒 Un administrador puede tener hoteles asignados (opcional)
+
+**Petición de Víctor**: que un admin también pueda tener hoteles asignados, sin ser obligatorio.
+
+En Usuarios → Editar, el bloque «Hoteles asignados (Compras)» aparece también para el rol Administrador, marcado como opcional; la tabla muestra sus hoteles en la columna Hoteles. Un admin con hoteles actúa como **comprador** de ellos (mismo modelo: 1 hotel → 1 comprador, con la confirmación de reasignación de siempre): firma y destinatarios de los correos internos (`_get_compradores_hotel`, `_get_todos_usuarios_hotel`), listado de compradores por hotel, y las comprobaciones de «hotel sin comprador»/duplicados de Integridad lo cuentan. Sigue viendo y gestionando **todos** los hoteles y sin hoteles asignados todo funciona como antes (no cuenta como «comprador sin hoteles»). Las protecciones de desactivar/eliminar por hoteles huérfanos se aplican también a los admins con hoteles. En Config. Avisos, la pestaña «Compradores y Hoteles» incluye a los admins con hoteles asignados para poder configurar sus avisos por hotel.
+
 # v12.33.23 — 13 octubre 2026
 
 👥 Usuarios: trazabilidad de conexiones (cuándo y desde dónde) y activar/desactivar con un clic

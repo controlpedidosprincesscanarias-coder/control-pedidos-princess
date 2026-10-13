@@ -1461,7 +1461,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.23
+          V 12.33.24
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2452,11 +2452,11 @@ tbody tr:last-child{border-bottom:none}
 
       <!-- Sección hoteles compras (solo visible para rol Compras) -->
       <div id="usr-comprador-hoteles-section" style="display:none">
-        <label class="form-label" style="color:#7a5c00;font-weight:600">🛒 Hoteles asignados (Compras)</label>
+        <label class="form-label" style="color:#7a5c00;font-weight:600">🛒 Hoteles asignados (Compras)<span id="usr-comprador-opcional" style="display:none;font-weight:400;color:#888"> — opcional para administradores</span></label>
         <div id="usr-comprador-hoteles-checkboxes" style="display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:6px;max-height:180px;overflow-y:auto;border:1px solid #e0e0e0;border-radius:8px;padding:10px">
           <span style="color:#999;font-size:12px">Cargando…</span>
         </div>
-        <div style="font-size:11px;color:#888;margin-top:4px">Hoteles que atendera este comprador. Cada hotel solo puede tener <strong>un comprador</strong> asignado.</div>
+        <div style="font-size:11px;color:#888;margin-top:4px">Hoteles que atenderá este comprador. Cada hotel solo puede tener <strong>un comprador</strong> asignado.<span id="usr-comprador-admin-nota" style="display:none"> Un administrador con hoteles asignados actúa como su comprador (correos internos, firma y comprobaciones) y sigue viendo todos los hoteles; sin ninguno, todo queda como hasta ahora.</span></div>
       </div>
     </div>
     <div class="modal-footer">
@@ -13539,7 +13539,7 @@ function renderConfigAvisos() {
   // y Hoteles" sin ningún motivo (esa pestaña es para quien gestiona el
   // día a día de un hotel, no para supervisión general).
   const usuariosAdmin = d.usuarios.filter(u => u.rol === 'admin');
-  const usuariosHotel = d.usuarios.filter(u => u.rol === 'compras' || u.rol === 'hotel');
+  const usuariosHotel = d.usuarios.filter(u => u.rol === 'compras' || u.rol === 'hotel' || (u.rol === 'admin' && u.es_comprador));  // admin con hoteles asignados (v12.33.24)
 
   if (_configAvisosTab === 'admin' && !usuariosAdmin.length) {
     body.innerHTML = `<div style="padding:24px;color:var(--text-secondary)">No hay usuarios con rol admin activos para configurar.</div>`;
@@ -14308,7 +14308,7 @@ async function loadUsuarios() {
     asignMap[u.id] = ((asignaciones.hoteles && asignaciones.hoteles[u.id]) || []).map(id => hotelMap[id] || id);
   });
   const compradorMap = {};
-  rows.filter(u => u.rol === 'compras' || u.rol === 'user').forEach(u => {
+  rows.filter(u => u.rol === 'compras' || u.rol === 'user' || u.rol === 'admin').forEach(u => {
     compradorMap[u.id] = ((asignaciones.compras && asignaciones.compras[u.id]) || []).map(id => hotelMap[id] || id);
   });
 
@@ -14335,6 +14335,8 @@ async function loadUsuarios() {
       ? (compradorMap[u.id] && compradorMap[u.id].length
           ? `<span style="font-size:12px;color:#7a5c00;font-weight:600">${compradorMap[u.id].join(', ')}</span>`
           : '<span style="color:#ccc;font-size:12px">Sin asignar</span>')
+      : (u.rol === 'admin' && compradorMap[u.id] && compradorMap[u.id].length)
+      ? `<span style="font-size:12px;color:#7a5c00;font-weight:600" title="Administrador con hoteles asignados como comprador">${compradorMap[u.id].join(', ')}</span>`
       : '<span style="color:#ddd;font-size:12px">—</span>';
     const tgCell = (u.telegram_chat_id || '').trim()
       ? `<span title="Chat ID: ${u.telegram_chat_id}" style="font-size:13px;cursor:default">✅ <span style="font-family:monospace;font-size:11px;color:#555">${u.telegram_chat_id}</span></span>`
@@ -14485,8 +14487,9 @@ function openModalUsuario(id=null) {
       document.getElementById('usr-activo').checked = !!u.activo;
       if (u.rol === 'hotel') {
         document.getElementById('usr-hoteles-section').style.display = '';
-      } else if (u.rol === 'compras' || u.rol === 'user') {
+      } else if (u.rol === 'compras' || u.rol === 'user' || u.rol === 'admin') {
         document.getElementById('usr-comprador-hoteles-section').style.display = '';
+        _marcarCompradorOpcional(u.rol === 'admin');
       }
     });
   } else {
@@ -14498,12 +14501,19 @@ function openModalUsuario(id=null) {
   openModal('modal-usuario');
 }
 
+function _marcarCompradorOpcional(esAdmin) {
+  const a = document.getElementById('usr-comprador-opcional'), b = document.getElementById('usr-comprador-admin-nota');
+  if (a) a.style.display = esAdmin ? '' : 'none';
+  if (b) b.style.display = esAdmin ? '' : 'none';
+}
+
 function onUsrRolChange() {
   const rol = document.getElementById('usr-rol').value;
   document.getElementById('usr-hoteles-section').style.display = rol === 'hotel' ? '' : 'none';
-  document.getElementById('usr-comprador-hoteles-section').style.display = rol === 'compras' ? '' : 'none';
+  document.getElementById('usr-comprador-hoteles-section').style.display = (rol === 'compras' || rol === 'admin') ? '' : 'none';
+  _marcarCompradorOpcional(rol === 'admin');
   // Cargar checkboxes compras al cambiar al rol compras (usuario nuevo o cambio de rol)
-  if (rol === 'compras') {
+  if (rol === 'compras' || rol === 'admin') {
     const uid = document.getElementById('usr-edit-id').value || null;
     _loadCompradorHotelesCheckboxes(uid ? parseInt(uid) : null);
   }
@@ -14591,7 +14601,7 @@ async function saveUsuario() {
   }
 
   // Si es rol compras, guardar hoteles comprador asignados (con manejo de 409)
-  if (rol === 'compras' && uid) {
+  if ((rol === 'compras' || rol === 'admin') && uid) {
     const checks = document.querySelectorAll('#usr-comprador-hoteles-checkboxes input[type=checkbox]');
     const hotel_ids = [...checks].filter(c => c.checked).map(c => parseInt(c.dataset.compradorHotelId));
     const rc = await api(`/api/usuarios/${uid}/hoteles-compras`, 'PUT', { hotel_ids });

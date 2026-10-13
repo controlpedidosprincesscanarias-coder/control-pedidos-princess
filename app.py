@@ -5374,7 +5374,7 @@ def _get_compradores_hotel(hotel_codigo: str) -> list:
         """SELECT u.id, u.username, u.nombre, u.email, u.email2, u.movil, u.telegram_chat_id
            FROM usuarios u
            JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
-           WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'
+           WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol IN ('compras','admin')
            ORDER BY u.nombre""",
         (hotel_id,)
     ))
@@ -7919,7 +7919,7 @@ def _get_todos_usuarios_hotel(hotel_codigo: str) -> dict:
         """SELECT u.id, u.username, u.nombre, u.email, u.email2, u.movil
            FROM usuarios u
            JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
-           WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'
+           WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol IN ('compras','admin')
              AND u.email IS NOT NULL AND TRIM(u.email) != ''
            ORDER BY u.nombre""",
         (hotel_id,)
@@ -10795,7 +10795,7 @@ def _validar_cambio_activo(uid, fila, nuevo_activo, forzar):
                       (uid,), one=True)
         if not otros or not otros["n"]:
             return jsonify({"error": "Debe quedar al menos un administrador activo."}), 400
-    if fila["rol"] == "compras" and not forzar:
+    if fila["rol"] in ("compras", "admin") and not forzar:
         huerfanos = rows_to_list(query("""
             SELECT h.codigo FROM hoteles h
             JOIN usuario_comprador_hoteles uch ON uch.hotel_id = h.id
@@ -10804,7 +10804,7 @@ def _validar_cambio_activo(uid, fila, nuevo_activo, forzar):
                   SELECT 1 FROM usuario_comprador_hoteles uch2
                   JOIN usuarios u2 ON u2.id = uch2.usuario_id
                   WHERE uch2.hotel_id = h.id AND uch2.usuario_id != %s
-                    AND u2.activo = 1 AND u2.rol = 'compras')
+                    AND u2.activo = 1 AND u2.rol IN ('compras','admin'))
         """, (uid, uid)))
         if huerfanos:
             codigos = ", ".join(r["codigo"] for r in huerfanos)
@@ -10989,7 +10989,7 @@ def set_usuario_comprador_hoteles(uid):
             """SELECT u.id FROM usuario_comprador_hoteles uch
                JOIN usuarios u ON u.id = uch.usuario_id
                WHERE uch.hotel_id = %s AND uch.usuario_id != %s
-                 AND u.activo = 1 AND u.rol = 'compras'
+                 AND u.activo = 1 AND u.rol IN ('compras','admin')
                LIMIT 1""",
             (hid, uid), one=True
         )
@@ -11109,7 +11109,7 @@ def get_compradores_por_hotel():
             """SELECT u.id, u.username, u.nombre, u.email, u.movil, u.telegram_chat_id
                FROM usuarios u
                JOIN usuario_comprador_hoteles uch ON uch.usuario_id = u.id
-               WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol = 'compras'
+               WHERE uch.hotel_id = %s AND u.activo = 1 AND u.rol IN ('compras','admin')
                ORDER BY u.nombre""",
             (hotel["id"],)
         ))
@@ -11147,7 +11147,7 @@ def delete_usuario(uid):
     db = get_db()
     # ── Protección: no eliminar comprador si deja hoteles huérfanos ──────────
     if user_row := query("SELECT rol FROM usuarios WHERE id=%s", (uid,), one=True):
-        if user_row["rol"] == "compras":
+        if user_row["rol"] in ("compras", "admin"):
             huerfanos = rows_to_list(query("""
                 SELECT h.codigo FROM hoteles h
                 JOIN usuario_comprador_hoteles uch ON uch.hotel_id = h.id
@@ -11159,7 +11159,7 @@ def delete_usuario(uid):
                       WHERE uch2.hotel_id = h.id
                         AND uch2.usuario_id != %s
                         AND u2.activo = 1
-                        AND u2.rol = 'compras'
+                        AND u2.rol IN ('compras','admin')
                   )
             """, (uid, uid)))
             if huerfanos:
@@ -24762,7 +24762,7 @@ def _validar_integridad_operativa() -> dict:
                  AND NOT EXISTS (
                      SELECT 1 FROM usuario_comprador_hoteles uch
                      JOIN usuarios u ON u.id = uch.usuario_id
-                     WHERE uch.hotel_id = h.id AND u.activo = 1 AND u.rol = 'compras'
+                     WHERE uch.hotel_id = h.id AND u.activo = 1 AND u.rol IN ('compras','admin')
                  )
                ORDER BY h.codigo"""
         ))
@@ -24855,7 +24855,7 @@ def _validar_integridad_operativa() -> dict:
                       COUNT(uch.usuario_id) AS n_compradores
                FROM hoteles h
                JOIN usuario_comprador_hoteles uch ON uch.hotel_id = h.id
-               JOIN usuarios u ON u.id = uch.usuario_id AND u.activo = 1 AND u.rol = 'compras'
+               JOIN usuarios u ON u.id = uch.usuario_id AND u.activo = 1 AND u.rol IN ('compras','admin')
                WHERE h.activo = 1
                GROUP BY h.id, h.codigo, h.nombre
                HAVING COUNT(uch.usuario_id) > 1
@@ -26205,7 +26205,9 @@ def api_get_config_avisos():
             "SELECT id, codigo, nombre FROM hoteles WHERE activo=1 ORDER BY codigo"
         )) or []
         usuarios = rows_to_list(query(
-            "SELECT id, username, nombre, email, telegram_chat_id, rol FROM usuarios "
+            "SELECT id, username, nombre, email, telegram_chat_id, rol, "
+            "EXISTS(SELECT 1 FROM usuario_comprador_hoteles uch WHERE uch.usuario_id = usuarios.id) AS es_comprador "
+            "FROM usuarios "
             "WHERE rol IN ('admin','compras','hotel') AND activo=1 "
             "ORDER BY CASE rol WHEN 'admin' THEN 0 WHEN 'compras' THEN 1 ELSE 2 END, nombre"
         )) or []
