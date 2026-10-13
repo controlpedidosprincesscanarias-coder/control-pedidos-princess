@@ -1461,7 +1461,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.22
+          V 12.33.23
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2293,8 +2293,9 @@ tbody tr:last-child{border-bottom:none}
                   <th>✈️ Telegram</th>
                   <th>Rol</th>
                   <th>Hoteles</th>
+                  <th>Último acceso</th>
                   <th>Estado</th>
-                  <th style="width:160px">Acciones</th>
+                  <th style="width:230px">Acciones</th>
                 </tr>
               </thead>
               <tbody id="usuarios-tbody"></tbody>
@@ -2335,6 +2336,17 @@ tbody tr:last-child{border-bottom:none}
     </div><!-- /content -->
   </div><!-- /main -->
 </div><!-- /app -->
+
+<!-- ── MODAL TRAZABILIDAD DE USUARIO (v12.33.23) ─────────────────────────── -->
+<div class="modal-overlay" id="modal-trazabilidad">
+  <div class="modal" style="max-width:860px;width:96%">
+    <div class="modal-header">
+      <h3 class="modal-title" id="traza-titulo">Trazabilidad</h3>
+      <button class="close-btn" onclick="closeModal('modal-trazabilidad')">✕</button>
+    </div>
+    <div class="modal-body" id="traza-contenido" style="padding:0"></div>
+  </div>
+</div>
 
 <!-- ── MODAL USUARIO ─────────────────────────────────────────────────────── -->
 <div class="modal-overlay" id="modal-usuario">
@@ -4014,13 +4026,19 @@ async function api(url, method='GET', body=null) {
   // otro 409 de la app (que siguen lanzando excepción como siempre).
   const esValidacionDeNegocio =
     (r.status === 422 && (data.techo_errores || data.errores || data.error)) ||
-    (r.status === 409 && data && data.ok === false && (data.conflictos || data.huerfanos));
+    (r.status === 409 && data && data.ok === false && (data.conflictos || data.huerfanos)) ||
+    (r.status === 409 && data && data.requiere_confirmacion) ||
+    (r.status === 403 && data && data.cuenta_desactivada);
   // Sesión caducada (cambio de día): forzar vuelta a la pantalla de login
   // con un aviso claro, en vez del genérico "Error de conexión" — evita
   // que el usuario piense que la app se ha roto.
   if (!r.ok && data && data.sesion_caducada) {
     _forzarVueltaALogin('Tu sesión ha caducado, vuelve a iniciar sesión');
     throw new Error('Sesión caducada');
+  }
+  if (!r.ok && data && data.cuenta_desactivada && r.status === 401) {
+    _forzarVueltaALogin(data.error || 'Tu cuenta ha sido desactivada.');
+    throw new Error('Cuenta desactivada');
   }
   if (!r.ok && !esValidacionDeNegocio) {
     const detalle = data.error || data.message || (typeof data === 'string' ? data : JSON.stringify(data));
@@ -4084,6 +4102,8 @@ window.fetch = async function (...args) {
       const datos = await respuesta.clone().json();
       if (datos && datos.sesion_caducada) {
         _forzarVueltaALogin('Tu sesión ha caducado, vuelve a iniciar sesión');
+      } else if (datos && datos.cuenta_desactivada) {
+        _forzarVueltaALogin(datos.error || 'Tu cuenta ha sido desactivada.');
       }
     } catch (_) {
       // Cuerpo no era JSON o ya se había consumido — se ignora.
@@ -14262,10 +14282,10 @@ async function testEgressAlerta() {
 
 async function loadUsuarios() {
   const tbody = document.getElementById('usuarios-tbody');
-  tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;padding:20px">Cargando…</td></tr>';
+  tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#999;padding:20px">Cargando…</td></tr>';
   const rows = await api('/api/usuarios');
   if (!rows || !rows.length) {
-    tbody.innerHTML = '<tr><td colspan="9" style="text-align:center;color:#999;padding:20px">No hay usuarios</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="10" style="text-align:center;color:#999;padding:20px">No hay usuarios</td></tr>';
     return;
   }
   // (2026-09-01, repaso "agilizar y limpiar", Etapa 4) Antes: una llamada
@@ -14319,7 +14339,8 @@ async function loadUsuarios() {
     const tgCell = (u.telegram_chat_id || '').trim()
       ? `<span title="Chat ID: ${u.telegram_chat_id}" style="font-size:13px;cursor:default">✅ <span style="font-family:monospace;font-size:11px;color:#555">${u.telegram_chat_id}</span></span>`
       : `<span style="color:#dc3545;font-size:12px;font-weight:600">❌ Sin ID</span>`;
-    return `<tr>
+    const accesoCell = _htmlUltimoAcceso(u);
+    return `<tr style="${u.activo ? '' : 'opacity:.62'}">
       <td class="monospace" style="font-size:13px">${u.username}</td>
       <td>${u.nombre}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
       <td style="font-size:12px;color:#666">${u.email||'—'}${u.email2 ? `<div style="font-size:10.5px;color:#999">+ ${u.email2}</div>` : ''}</td>
@@ -14327,13 +14348,100 @@ async function loadUsuarios() {
       <td>${tgCell}</td>
       <td>${rolBadge}</td>
       <td>${hotelesCell}</td>
+      <td>${accesoCell}</td>
       <td>${activoBadge}</td>
       <td style="white-space:nowrap">
         <button class="btn btn-ghost btn-sm" onclick="openModalUsuario(${u.id})">✏ Editar</button>
+        <button class="btn btn-ghost btn-sm" style="margin-left:4px" title="Conexiones y cambios de estado" onclick="abrirTrazabilidadUsuario(${u.id})">🔍</button>
+        ${esMismo ? '' : `<button class="btn btn-sm ${u.activo ? 'btn-ghost' : 'btn-primary'}" style="margin-left:4px" title="${u.activo ? 'Desactivar: no podrá entrar y se le cierra la sesión' : 'Volver a activar'}" onclick="toggleActivoUsuario(${u.id},${u.activo ? 0 : 1},'${u.username.replace(/'/g,"\\'")}')">${u.activo ? '⏸ Desactivar' : '▶ Activar'}</button>`}
         ${esMismo ? '' : `<button class="btn btn-danger btn-sm" style="margin-left:4px" onclick="confirmarEliminarUsuario(${u.id},'${u.username.replace(/'/g,"\\'")}')">🗑</button>`}
       </td>
     </tr>`;
   }).join('');
+}
+
+// ── Trazabilidad y activación de usuarios (v12.33.23) ─────────────────────────
+function _fmtFechaCanarias(iso) {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (isNaN(d)) return '—';
+  return d.toLocaleString('es-ES', { timeZone: 'Atlantic/Canary', day: '2-digit', month: '2-digit',
+    year: 'numeric', hour: '2-digit', minute: '2-digit' });
+}
+function _escUsr(t) {
+  return String(t == null ? '' : t).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+function _htmlUltimoAcceso(u) {
+  if (!u.ultimo_login) return '<span style="color:#bbb;font-size:12px">Nunca</span>';
+  const desde = [u.ultimo_ip, u.ultimo_pais].filter(Boolean).join(' · ');
+  const extra = [u.ultimo_dispositivo].filter(Boolean).join('');
+  return `<div style="font-size:12px;white-space:nowrap">${_fmtFechaCanarias(u.ultimo_login)}</div>` +
+    (desde || extra
+      ? `<div style="font-size:10.5px;color:#888" title="${_escUsr(extra)}">${_escUsr(desde)}${extra ? ' · ' + _escUsr(extra) : ''}</div>`
+      : '<div style="font-size:10.5px;color:#bbb">origen no registrado</div>');
+}
+
+async function toggleActivoUsuario(uid, activo, username) {
+  const txt = activo
+    ? `¿Volver a ACTIVAR a "${username}"? Podrá entrar de nuevo.`
+    : `¿DESACTIVAR a "${username}"?\n\nNo podrá entrar y, si tiene la sesión abierta, se le cierra en unos segundos. Sus datos y pedidos se conservan.`;
+  if (!confirm(txt)) return;
+  let r = await api(`/api/usuarios/${uid}/activo`, 'PUT', { activo }).catch(e => ({ error: e.message }));
+  r = await _confirmarHuerfanos(r, () => api(`/api/usuarios/${uid}/activo`, 'PUT', { activo, forzar: true }));
+  if (!r || r.error) { toast((r && r.error) || 'No se pudo cambiar el estado', 'error'); return; }
+  toast(activo ? `"${username}" activado` : `"${username}" desactivado`, 'success');
+  loadUsuarios();
+}
+
+// Si desactivar deja hoteles sin comprador activo, el servidor avisa (409) y
+// aquí se pide confirmación; con "Aceptar" se repite con forzar.
+async function _confirmarHuerfanos(r, reintentar) {
+  if (r && r.requiere_confirmacion) {
+    const ok = confirm(`⚠️ Estos hoteles se quedarán sin comprador activo:\n\n  ${(r.hoteles || []).join(', ')}\n\nAsígnalos a otro comprador cuando puedas. ¿Desactivar de todas formas?`);
+    if (!ok) return { error: 'Cancelado' };
+    return await reintentar().catch(e => ({ error: e.message }));
+  }
+  return r;
+}
+
+const _TRAZA_METODO = { login: 'Contraseña', login_verificado: 'Contraseña + código por email',
+  bridge: 'Agenda (proceso automático)' };
+async function abrirTrazabilidadUsuario(uid) {
+  const cont = document.getElementById('traza-contenido');
+  document.getElementById('traza-titulo').textContent = 'Trazabilidad';
+  cont.innerHTML = '<div style="padding:20px;color:#999">Cargando…</div>';
+  openModal('modal-trazabilidad');
+  let d;
+  try { d = await api(`/api/usuarios/${uid}/trazabilidad`); }
+  catch (e) { cont.innerHTML = `<div style="padding:20px;color:#dc3545">${_escUsr(e.message)}</div>`; return; }
+  const u = d.usuario;
+  document.getElementById('traza-titulo').textContent = `Trazabilidad — ${u.nombre}`;
+  const filas = d.eventos.map(e => {
+    if (e.tipo === 'conexion') {
+      return `<tr><td style="white-space:nowrap">${_fmtFechaCanarias(e.creado_en)}</td>
+        <td>Conexión</td><td>${_escUsr(_TRAZA_METODO[e.metodo] || e.metodo || '')}</td>
+        <td class="monospace">${_escUsr(e.ip || '—')}${e.pais ? ' · ' + _escUsr(e.pais) : ''}</td>
+        <td title="${_escUsr(e.user_agent || '')}">${_escUsr(e.dispositivo || '—')}</td></tr>`;
+    }
+    const act = e.tipo === 'activado';
+    return `<tr style="background:${act ? '#eefaf0' : '#fdeeee'}"><td style="white-space:nowrap">${_fmtFechaCanarias(e.creado_en)}</td>
+      <td><strong>${act ? 'Activada' : 'Desactivada'}</strong></td>
+      <td colspan="3">por ${_escUsr(e.actor_nombre || 'administrador')}${e.ip ? ' · ' + _escUsr(e.ip) : ''}</td></tr>`;
+  }).join('');
+  cont.innerHTML = `
+    <div style="padding:14px 20px;font-size:13px;color:#555;display:flex;flex-wrap:wrap;gap:6px 22px">
+      <span><strong>${_escUsr(u.username)}</strong> · ${_escUsr(u.email || 'sin email')}</span>
+      <span>${u.activo ? '<b style="color:#28a745">● Activo</b>' : '<b style="color:#dc3545">○ Inactivo</b>'}</span>
+      <span>Último acceso: <strong>${_fmtFechaCanarias(u.ultimo_login)}</strong></span>
+      <span>${d.conexiones_total} conexión(es) · ${d.ips_distintas} IP distinta(s)</span>
+    </div>
+    <div style="padding:0 20px 6px;font-size:11px;color:#888">Se registran las sesiones abiertas de verdad (no los intentos fallidos) y los cambios de estado. Máximo los 200 eventos más recientes. Horas en Canarias.</div>
+    <div style="overflow:auto;max-height:55vh;padding:0 20px 20px">
+      <table style="width:100%;font-size:12px">
+        <thead><tr><th>Fecha</th><th>Evento</th><th>Método</th><th>IP / país</th><th>Dispositivo</th></tr></thead>
+        <tbody>${filas || '<tr><td colspan="5" style="text-align:center;color:#999;padding:16px">Aún no hay registros (se rellena desde el próximo acceso).</td></tr>'}</tbody>
+      </table>
+    </div>`;
 }
 
 function openModalUsuario(id=null) {
@@ -14465,6 +14573,7 @@ async function saveUsuario() {
     const body = { nombre, email, email2, movil, telegram_chat_id, rol, activo };
     if (password) body.password = password;
     r = await api(`/api/usuarios/${id}`, 'PUT', body);
+    r = await _confirmarHuerfanos(r, () => api(`/api/usuarios/${id}`, 'PUT', { ...body, forzar: true }));
   } else {
     if (!username) { toast('El username es obligatorio', 'error'); return; }
     if (!password) { toast('La contraseña es obligatoria', 'error'); return; }

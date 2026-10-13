@@ -49,6 +49,13 @@
 
 ---
 
+## 2026-10-13 — [Control Pedidos] Usuarios: trazabilidad de conexiones y activar/desactivar (v12.33.23)
+
+Petición de Víctor: saber cuándo se conectó cada usuario por última vez y desde dónde, y que el admin pueda siempre activar/desactivar un usuario (ya existía algo equivalente en DALI: `conexiones_usuarios`, `TrazabilidadUsuarioModal`). Cambios: tabla `usuarios_trazabilidad` (en `_auto_migrate` y `models.py`) alimentada desde `_completar_login` (métodos `login`, `login_verificado`, `bridge`) con IP (`X-Forwarded-For`), país (`CF-IPCountry`) y dispositivo derivado del User-Agent; endpoint `GET /api/usuarios/<id>/trazabilidad`; `GET /api/usuarios` devuelve `ultimo_login` y último IP/dispositivo; `PUT /api/usuarios/<id>/activo` y la validación común `_validar_cambio_activo` (se elimina el bloqueo duro por hoteles huérfanos, que pasa a aviso con `forzar`; no autodesactivarse; debe quedar un admin activo); eventos «activado/desactivado» con el admin autor. `login_required`, `admin_required` y `/api/me` cortan la sesión de una cuenta desactivada (cache de 20 s, 1 worker); mensaje específico al intentar entrar con contraseña correcta. Interfaz: columna «Último acceso», botones 🔍 y Desactivar/Activar, modal de trazabilidad. Probado con Postgres real, API y Playwright. Documentos revisados (`GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`, `docs/hallazgo-seguridad-princess.md`): no aplica, salvo que la tabla nueva se crea sola en el arranque.
+
+
+---
+
 ## 2026-10-12 — [Control Pedidos] Pedido simplificado, Fase 3 y trazabilidad fuera de los correos al proveedor (v12.33.22)
 
 Problema reportado por Víctor (captura de un correo de reclamación, pedido 16080 de La Palma Princess): en los pedidos creados automáticamente desde SAP, el campo Observaciones lleva una línea de trazabilidad interna («Alta automática · Carga automática SAP · fecha · Nº SAP … · Datos y artículos tomados de los listados de SAP…») y las plantillas de correo la mostraban al proveedor. Corrección en `app.py`: `_obs_para_proveedor` elimina las líneas que empiezan por «Alta automática ·» y `_pedido_para_proveedor` entrega una copia depurada; se aplica en `_email_template_enviado_proveedor`, `_email_template_entrega_parcial`, `_email_template_pendiente_cotizacion` y en el «motivo» de cancelación de `enviar_emails_estado`. Las observaciones escritas a mano se conservan; los correos internos (comprador/directores) mantienen la trazabilidad.

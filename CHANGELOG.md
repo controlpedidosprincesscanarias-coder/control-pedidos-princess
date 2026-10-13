@@ -1,3 +1,17 @@
+# v12.33.23 — 13 octubre 2026
+
+👥 Usuarios: trazabilidad de conexiones (cuándo y desde dónde) y activar/desactivar con un clic
+
+**Petición de Víctor**: saber cuándo se conectó por última vez cada usuario y desde dónde, y poder activar/desactivar un usuario siempre (como ya se hace en DALI).
+
+**Trazabilidad**: tabla nueva `usuarios_trazabilidad` (se crea sola). Se anota una fila por cada sesión abierta de verdad —contraseña, contraseña + código por email, o la cuenta automática de la Agenda— con IP (primer valor de `X-Forwarded-For`), país si el proxy lo envía (`CF-IPCountry`) y dispositivo («Chrome 126 · Windows»). No se registran intentos fallidos. En Usuarios hay columna **Último acceso** (fecha, IP y dispositivo) y botón 🔍 con el historial (200 eventos), nº de conexiones e IP distintas.
+
+**Activar/desactivar**: botón ⏸ Desactivar / ▶ Activar en cada fila (endpoint `PUT /api/usuarios/<id>/activo`; el check «activo» de Editar sigue funcionando). El admin puede hacerlo siempre: antes, desactivar a un comprador con hoteles que quedaban sin otro comprador estaba **bloqueado**; ahora solo avisa y se confirma. Únicas limitaciones: no puedes desactivarte a ti mismo y debe quedar un admin activo. Cada cambio queda en la trazabilidad con el admin que lo hizo.
+
+**Efecto inmediato**: antes un usuario desactivado conservaba la sesión abierta hasta medianoche. Ahora `login_required`/`admin_required`/`/api/me` comprueban que la cuenta siga activa (consulta cacheada 20 s; al cambiar el estado se invalida) y devuelve a la pantalla de acceso con «Tu cuenta ha sido desactivada». Al intentar entrar con la contraseña correcta, un usuario desactivado ve «Tu cuenta está desactivada» (con contraseña errónea sigue el mensaje genérico).
+
+Límites: no hay geolocalización por ciudad (solo IP y país si lo da el proxy); no hay purga automática del historial.
+
 # v12.33.22 — 12 octubre 2026
 
 📎 Pedido simplificado (Fase 3): presupuestos en Word, Excel y correo + proveedor propuesto · 🔒 sin trazabilidad interna en los correos al proveedor

@@ -1143,6 +1143,29 @@ def _auto_migrate():
                     )""")
             except Exception as e:
                 log.warning(f"No se pudo crear la tabla presupuesto_lecturas: {e}")
+            # ── Trazabilidad de usuarios (v12.33.23) — ver models.py ───────────
+            try:
+                cur.execute("""
+                    CREATE TABLE IF NOT EXISTS usuarios_trazabilidad (
+                        id          SERIAL PRIMARY KEY,
+                        usuario_id  INTEGER NOT NULL,
+                        creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        tipo        TEXT NOT NULL,
+                        metodo      TEXT,
+                        ip          TEXT,
+                        ip_cadena   TEXT,
+                        pais        TEXT,
+                        user_agent  TEXT,
+                        dispositivo TEXT,
+                        actor_id    INTEGER,
+                        actor_nombre TEXT,
+                        detalle     TEXT
+                    )""")
+                cur.execute("""
+                    CREATE INDEX IF NOT EXISTS ix_usuarios_traza_usuario_fecha
+                    ON usuarios_trazabilidad (usuario_id, creado_en DESC)""")
+            except Exception as e:
+                log.warning(f"No se pudo crear la tabla usuarios_trazabilidad: {e}")
             # ── Código DALI del proveedor (2026-08-31) ────────────────────────
             # Víctor: "en la ficha de proveedores, necesito junto a la casilla
             # CODGIGO SAP, OTRA PARA CODIGO DALI ; Actualmente estamos
@@ -3769,6 +3792,99 @@ def _hoy_canarias():
     import pytz
     return datetime.now(pytz.timezone("Atlantic/Canary")).date()
 
+# ── v12.33.23 — Trazabilidad y activación de usuarios ────────────────────────
+# Una fila por conexión REAL (sesión abierta) y una por cada activación/
+# desactivación hecha por un admin. Los intentos fallidos no se registran.
+_ACTIVO_CACHE = {}          # uid -> (expira_monotonic, activo_bool)
+_ACTIVO_TTL = 20            # segundos; con 1 worker se invalida al instante al cambiar
+
+def _ip_cliente():
+    """IP de origen. Detrás del proxy de Render llega en X-Forwarded-For
+    (primer elemento = cliente); si no hay cabecera, la del socket."""
+    xff = (request.headers.get("X-Forwarded-For") or "").strip()
+    if xff:
+        primera = xff.split(",")[0].strip()
+        if primera:
+            return primera[:64]
+    return (request.remote_addr or "")[:64] or None
+
+def _describir_dispositivo(ua):
+    """'Chrome 126 · Windows' a partir del User-Agent (sin librerías)."""
+    ua = ua or ""
+    if not ua:
+        return None
+    nav = "Navegador"
+    for pat, nombre in (
+        (r"Edg(?:e|A|iOS)?/(\d+)", "Edge"), (r"OPR/(\d+)", "Opera"),
+        (r"(?:Chrome|CriOS)/(\d+)", "Chrome"), (r"(?:Firefox|FxiOS)/(\d+)", "Firefox"),
+        (r"Version/(\d+)[^ ]* .*Safari", "Safari"),
+    ):
+        m = re.search(pat, ua)
+        if m:
+            nav = f"{nombre} {m.group(1)}"
+            break
+    else:
+        if "python-requests" in ua or "curl" in ua.lower() or "urllib" in ua.lower():
+            nav = "Programa automático"
+    so = "—"
+    for pat, nombre in (("iPhone", "iPhone"), ("iPad", "iPad"), ("Android", "Android"),
+                        ("Windows", "Windows"), ("Mac OS X", "macOS"), ("CrOS", "ChromeOS"),
+                        ("Linux", "Linux")):
+        if pat in ua:
+            so = nombre
+            break
+    return nav if so == "—" else f"{nav} · {so}"
+
+def _registrar_traza(usuario_id, tipo, metodo=None, detalle=None, actor=False):
+    """Inserta una fila de trazabilidad. Nunca rompe el flujo que la llama.
+    tipo: conexion | activado | desactivado. actor=True anota al admin de la sesión."""
+    try:
+        ua = (request.headers.get("User-Agent") or "")[:400] or None
+        actor_id = actor_nombre = None
+        if actor:
+            actor_id = session.get("user_id")
+            actor_nombre = session.get("nombre")
+        execute(
+            """INSERT INTO usuarios_trazabilidad
+               (usuario_id, tipo, metodo, ip, ip_cadena, pais, user_agent, dispositivo,
+                actor_id, actor_nombre, detalle)
+               VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (usuario_id, tipo, metodo, _ip_cliente(),
+             (request.headers.get("X-Forwarded-For") or "")[:300] or None,
+             (request.headers.get("CF-IPCountry") or "")[:8] or None,
+             ua, _describir_dispositivo(ua), actor_id, actor_nombre, detalle))
+        get_db().commit()
+    except Exception as e:
+        try:
+            get_db().rollback()
+        except Exception:
+            pass
+        log.warning("TRAZA — no se pudo registrar (%s) para usuario %s: %s", tipo, usuario_id, e)
+
+def _usuario_sigue_activo(uid):
+    """False si el admin ha desactivado (o borrado) la cuenta: corta la sesión
+    abierta en la siguiente petición. Consulta cacheada _ACTIVO_TTL s."""
+    import time as _t
+    ahora = _t.monotonic()
+    hit = _ACTIVO_CACHE.get(uid)
+    if hit and hit[0] > ahora:
+        return hit[1]
+    try:
+        fila = query("SELECT activo FROM usuarios WHERE id=%s", (uid,), one=True)
+        activo = bool(fila and fila["activo"])
+    except Exception:
+        return True      # ante un fallo de BD no se expulsa a nadie
+    _ACTIVO_CACHE[uid] = (ahora + _ACTIVO_TTL, activo)
+    return activo
+
+def _olvidar_activo(uid):
+    _ACTIVO_CACHE.pop(uid, None)
+
+def _sesion_desactivada_resp():
+    session.clear()
+    return jsonify({"error": "Tu cuenta ha sido desactivada. Contacta con el administrador.",
+                    "cuenta_desactivada": True}), 401
+
 def login_required(f):
     @wraps(f)
     def decorated(*args, **kwargs):
@@ -3781,6 +3897,8 @@ def login_required(f):
         if session.get("login_date") != _hoy_canarias().isoformat():
             session.clear()
             return jsonify({"error": "Tu sesión ha caducado, vuelve a iniciar sesión", "sesion_caducada": True}), 401
+        if not _usuario_sigue_activo(session.get("user_id")):
+            return _sesion_desactivada_resp()
         return f(*args, **kwargs)
     return decorated
 
@@ -3792,6 +3910,8 @@ def admin_required(f):
         if session.get("login_date") != _hoy_canarias().isoformat():
             session.clear()
             return jsonify({"error": "Tu sesión ha caducado, vuelve a iniciar sesión", "sesion_caducada": True}), 401
+        if not _usuario_sigue_activo(session.get("user_id")):
+            return _sesion_desactivada_resp()
         if session.get("rol") != "admin":
             return jsonify({"error": "Solo administradores"}), 403
         return f(*args, **kwargs)
@@ -8910,6 +9030,16 @@ def login():
         "SELECT * FROM usuarios WHERE username=%s AND activo=1",
         (username,), one=True
     )
+    if not user:
+        # Cuenta desactivada: solo se dice si la contraseña es correcta
+        # (no se revela a nadie que no la conozca que el usuario existe).
+        inactivo = query("SELECT * FROM usuarios WHERE username=%s AND activo=0", (username,), one=True)
+        guardada = (inactivo or {}).get("password") or ""
+        coincide = bool(inactivo) and (check_password_hash(guardada, password)
+                                       if _es_hash_password(guardada) else guardada == password)
+        if coincide:
+            return jsonify({"error": "Tu cuenta está desactivada. Contacta con el administrador.",
+                            "cuenta_desactivada": True}), 403
     if not user or not _verifica_y_migra_password(user, password):
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
@@ -9031,7 +9161,7 @@ def login():
     return _completar_login(user)
 
 
-def _completar_login(user, verificado=False):
+def _completar_login(user, verificado=False, metodo=None):
     """Fija la sesión y actualiza ultimo_login (y, cuando verificado=True,
     también ultima_verificacion_login). Compartido entre el login normal
     (verificado=False — incluye el bridge de main_agenda, que se salta a
@@ -9057,6 +9187,8 @@ def _completar_login(user, verificado=False):
     else:
         execute("UPDATE usuarios SET ultimo_login=NOW() WHERE id=%s", (user["id"],))
     db.commit()
+    _olvidar_activo(user["id"])
+    _registrar_traza(user["id"], "conexion", metodo or ("login_verificado" if verificado else "login"))
 
     return jsonify({"ok": True, "id": user["id"], "username": user["username"],
                     "nombre": user["nombre"], "rol": user["rol"], "hoteles_ids": hoteles_ids})
@@ -9212,7 +9344,7 @@ def bridge_login():
     if not user or not _verifica_y_migra_password(user, password):
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
 
-    return _completar_login(user)
+    return _completar_login(user, metodo="bridge")
 
 @app.route("/api/bridge/existe", methods=["GET"])
 def bridge_existe_usuario():
@@ -10498,6 +10630,9 @@ def me():
     if session.get("login_date") != _hoy_canarias().isoformat():
         session.clear()
         return jsonify({"logged": False, "sesion_caducada": True})
+    if not _usuario_sigue_activo(session.get("user_id")):
+        session.clear()
+        return jsonify({"logged": False, "cuenta_desactivada": True})
     return jsonify({"logged": True, "id": session["user_id"], "username": session["username"],
                     "nombre": session["nombre"], "rol": session["rol"],
                     "hoteles_ids": session.get("hoteles_ids", [])})
@@ -10597,8 +10732,19 @@ def delete_familia(fid):
 @admin_required
 def get_usuarios():
     rows = rows_to_list(query(
-        "SELECT id, username, nombre, email, email2, movil, rol, activo, creado_en, telegram_chat_id FROM usuarios ORDER BY nombre"
+        """SELECT u.id, u.username, u.nombre, u.email, u.email2, u.movil, u.rol, u.activo, u.creado_en,
+                  u.telegram_chat_id, u.ultimo_login,
+                  t.ip AS ultimo_ip, t.pais AS ultimo_pais, t.dispositivo AS ultimo_dispositivo,
+                  t.metodo AS ultimo_metodo
+           FROM usuarios u
+           LEFT JOIN LATERAL (
+               SELECT ip, pais, dispositivo, metodo FROM usuarios_trazabilidad
+               WHERE usuario_id = u.id AND tipo = 'conexion'
+               ORDER BY creado_en DESC, id DESC LIMIT 1) t ON TRUE
+           ORDER BY u.nombre"""
     ))
+    for r in rows:
+        r["ultimo_login"] = _iso(r.get("ultimo_login"))
     return jsonify(rows)
 
 @app.route("/api/usuarios", methods=["POST"])
@@ -10633,6 +10779,93 @@ def create_usuario():
     db.commit()
     return jsonify({"ok": True, "id": new_id}), 201
 
+def _validar_cambio_activo(uid, fila, nuevo_activo, forzar):
+    """None si se puede cambiar el estado; o una respuesta (jsonify, código).
+    El admin PUEDE siempre activar/desactivar a cualquiera. Solo se evita:
+      · desactivarse a sí mismo (se quedaría fuera sin poder revertirlo), y
+      · dejar la aplicación sin ningún admin activo.
+    Si un comprador deja hoteles sin comprador, se avisa (409 con
+    requiere_confirmacion) y se aplica al reenviar con forzar=true."""
+    if nuevo_activo:
+        return None
+    if uid == current_user_id():
+        return jsonify({"error": "No puedes desactivar tu propia cuenta (te quedarías sin acceso)."}), 400
+    if fila["rol"] == "admin":
+        otros = query("SELECT COUNT(*) AS n FROM usuarios WHERE rol='admin' AND activo=1 AND id<>%s",
+                      (uid,), one=True)
+        if not otros or not otros["n"]:
+            return jsonify({"error": "Debe quedar al menos un administrador activo."}), 400
+    if fila["rol"] == "compras" and not forzar:
+        huerfanos = rows_to_list(query("""
+            SELECT h.codigo FROM hoteles h
+            JOIN usuario_comprador_hoteles uch ON uch.hotel_id = h.id
+            WHERE uch.usuario_id = %s AND h.activo = 1
+              AND NOT EXISTS (
+                  SELECT 1 FROM usuario_comprador_hoteles uch2
+                  JOIN usuarios u2 ON u2.id = uch2.usuario_id
+                  WHERE uch2.hotel_id = h.id AND uch2.usuario_id != %s
+                    AND u2.activo = 1 AND u2.rol = 'compras')
+        """, (uid, uid)))
+        if huerfanos:
+            codigos = ", ".join(r["codigo"] for r in huerfanos)
+            return jsonify({
+                "error": f"Los hoteles {codigos} se quedarían sin comprador activo.",
+                "requiere_confirmacion": True, "hoteles": [r["codigo"] for r in huerfanos],
+            }), 409
+    return None
+
+def _iso(dt):
+    return dt.isoformat() if hasattr(dt, "isoformat") else (dt or None)
+
+@app.route("/api/usuarios/<int:uid>/trazabilidad", methods=["GET"])
+@admin_required
+def get_usuario_trazabilidad(uid):
+    """Últimos 200 eventos: conexiones reales (IP, país si lo da el proxy,
+    dispositivo) y activaciones/desactivaciones con el admin que las hizo."""
+    u = query("SELECT id, username, nombre, email, activo, ultimo_login FROM usuarios WHERE id=%s",
+              (uid,), one=True)
+    if not u:
+        return jsonify({"error": "Usuario no encontrado"}), 404
+    filas = rows_to_list(query(
+        """SELECT id, creado_en, tipo, metodo, ip, pais, user_agent, dispositivo, actor_nombre, detalle
+           FROM usuarios_trazabilidad WHERE usuario_id=%s
+           ORDER BY creado_en DESC, id DESC LIMIT 200""", (uid,)))
+    for f in filas:
+        f["creado_en"] = _iso(f["creado_en"])
+    tot = query("""SELECT COUNT(*) FILTER (WHERE tipo='conexion') AS conexiones,
+                          COUNT(DISTINCT ip) FILTER (WHERE tipo='conexion') AS ips
+                   FROM usuarios_trazabilidad WHERE usuario_id=%s""", (uid,), one=True)
+    return jsonify({
+        "usuario": {"id": u["id"], "username": u["username"], "nombre": u["nombre"],
+                    "email": u["email"], "activo": bool(u["activo"]),
+                    "ultimo_login": _iso(u["ultimo_login"])},
+        "conexiones_total": tot["conexiones"], "ips_distintas": tot["ips"],
+        "eventos": filas,
+    })
+
+@app.route("/api/usuarios/<int:uid>/activo", methods=["PUT"])
+@admin_required
+def set_usuario_activo(uid):
+    """Activar/desactivar con un clic (botón de la tabla de usuarios)."""
+    data = request.get_json(silent=True) or {}
+    if "activo" not in data:
+        return jsonify({"error": "Falta 'activo'"}), 400
+    fila = query("SELECT rol, activo FROM usuarios WHERE id=%s", (uid,), one=True)
+    if not fila:
+        return jsonify({"error": "Usuario no encontrado"}), 404
+    nuevo = 1 if data["activo"] else 0
+    if nuevo == (1 if fila["activo"] else 0):
+        return jsonify({"ok": True, "activo": bool(nuevo), "sin_cambios": True})
+    err = _validar_cambio_activo(uid, fila, nuevo, bool(data.get("forzar")))
+    if err:
+        return err
+    db = get_db()
+    execute("UPDATE usuarios SET activo=%s WHERE id=%s", (nuevo, uid))
+    db.commit()
+    _olvidar_activo(uid)
+    _registrar_traza(uid, "activado" if nuevo else "desactivado", actor=True)
+    return jsonify({"ok": True, "activo": bool(nuevo)})
+
 @app.route("/api/usuarios/<int:uid>", methods=["PUT"])
 @admin_required
 def update_usuario(uid):
@@ -10657,33 +10890,18 @@ def update_usuario(uid):
         fields.append("movil=%s"); args.append((data["movil"] or "").strip())
     if "rol" in data and data["rol"] in ("admin", "user", "hotel", "compras"):
         fields.append("rol=%s"); args.append(data["rol"])
+    activo_anterior = None
     if "activo" in data:
-        # ── Protección: no desactivar comprador si deja hoteles huérfanos ────
-        desactivando = (not data["activo"]) or (data["activo"] == 0)
-        if desactivando:
-            usuario_actual = query("SELECT rol, activo FROM usuarios WHERE id=%s", (uid,), one=True)
-            if usuario_actual and usuario_actual["rol"] == "compras" and usuario_actual["activo"] == 1:
-                huerfanos = rows_to_list(query("""
-                    SELECT h.codigo FROM hoteles h
-                    JOIN usuario_comprador_hoteles uch ON uch.hotel_id = h.id
-                    WHERE uch.usuario_id = %s
-                      AND h.activo = 1
-                      AND NOT EXISTS (
-                          SELECT 1 FROM usuario_comprador_hoteles uch2
-                          JOIN usuarios u2 ON u2.id = uch2.usuario_id
-                          WHERE uch2.hotel_id = h.id
-                            AND uch2.usuario_id != %s
-                            AND u2.activo = 1
-                            AND u2.rol = 'compras'
-                      )
-                """, (uid, uid)))
-                if huerfanos:
-                    codigos = ", ".join(r["codigo"] for r in huerfanos)
-                    return jsonify({
-                        "error": f"⚠️ No se puede desactivar: los hoteles {codigos} quedarían sin comprador asignado. "
-                                 f"Reasígnalos a otro comprador antes de desactivar este usuario."
-                    }), 409
-        fields.append("activo=%s"); args.append(1 if data["activo"] else 0)
+        nuevo_activo = 1 if data["activo"] else 0
+        fila_prev = query("SELECT rol, activo FROM usuarios WHERE id=%s", (uid,), one=True)
+        if not fila_prev:
+            return jsonify({"error": "Usuario no encontrado"}), 404
+        activo_anterior = 1 if fila_prev["activo"] else 0
+        if nuevo_activo != activo_anterior:
+            err = _validar_cambio_activo(uid, fila_prev, nuevo_activo, bool(data.get("forzar")))
+            if err:
+                return err
+        fields.append("activo=%s"); args.append(nuevo_activo)
     if "password" in data and data["password"].strip():
         fields.append("password=%s"); args.append(generate_password_hash(data["password"].strip()))
     if "telegram_chat_id" in data:
@@ -10693,6 +10911,9 @@ def update_usuario(uid):
     args.append(uid)
     execute(f"UPDATE usuarios SET {', '.join(fields)} WHERE id=%s", args)
     db.commit()
+    if activo_anterior is not None and (1 if data["activo"] else 0) != activo_anterior:
+        _olvidar_activo(uid)
+        _registrar_traza(uid, "activado" if data["activo"] else "desactivado", actor=True)
     # Si cambié mi propio nombre, actualizar sesión
     if uid == current_user_id() and "nombre" in data:
         session["nombre"] = data["nombre"].strip()

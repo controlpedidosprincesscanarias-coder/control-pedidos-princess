@@ -387,6 +387,27 @@ SQL_STATEMENTS = [
         confianza     TEXT
     )
     """,
+    # ── Trazabilidad de usuarios (v12.33.23) ─────────────────────────────────
+    # Conexiones reales (IP, país si lo da el proxy, dispositivo) y
+    # activaciones/desactivaciones hechas por un admin.
+    """
+    CREATE TABLE IF NOT EXISTS usuarios_trazabilidad (
+        id          SERIAL PRIMARY KEY,
+        usuario_id  INTEGER NOT NULL,
+        creado_en   TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        tipo        TEXT NOT NULL,
+        metodo      TEXT,
+        ip          TEXT,
+        ip_cadena   TEXT,
+        pais        TEXT,
+        user_agent  TEXT,
+        dispositivo TEXT,
+        actor_id    INTEGER,
+        actor_nombre TEXT,
+        detalle     TEXT
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS ix_usuarios_traza_usuario_fecha ON usuarios_trazabilidad (usuario_id, creado_en DESC)",
 ]
 # Los usuarios se crean y gestionan exclusivamente desde el panel de administración.
 # No hay usuarios predefinidos en el código. Para el primer arranque usa seed_admin.py.
