@@ -1,3 +1,11 @@
+# v12.33.25 — 13 octubre 2026
+
+📘 Manual de usuario del rol COMPRADOR (PDF + Word)
+
+**Petición de Víctor**: un manual de Control Pedidos para el rol comprador, igual que los del rol hotel.
+
+Documentación nueva, sin cambios de código. `docs/Manual_Usuario_COMPRADOR_Control_Pedidos.pdf` y `.docx` (27 y 25 páginas, mismas capturas numeradas en ambos): entrar y conocer la pantalla, listado de pedidos (filtros, estados, imprimir/exportar/importar), crear un pedido con el asistente simplificado, la ficha, cambios de estado (firma, envío al proveedor con sus comprobaciones, cancelación), techo de gastos (aprobar/denegar), entregas y albaranes, alertas y aviso al proveedor, buscar artículo y pendientes, proveedores, pedidos eliminados, avisos, dudas frecuentes y glosario. Solo cambia la insignia de versión.
+
 # v12.33.24 — 13 octubre 2026
 
 🛒 Un administrador puede tener hoteles asignados (opcional)
