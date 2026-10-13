@@ -49,6 +49,12 @@
 
 ---
 
+## 2026-10-13 — [Control Pedidos] Manual de usuario del rol COMPRADOR (v12.33.25)
+
+Petición de Víctor: manual del rol comprador igual que los del rol hotel (alcance completo, PDF + Word). Solo documentación: `docs/Manual_Usuario_COMPRADOR_Control_Pedidos.pdf` y `.docx` (15 capítulos con capturas numeradas hechas sobre datos de demostración, no reales). Contenido contrastado con el código: un comprador ve los pedidos de todos los hoteles (los hoteles asignados determinan a quién llegan los avisos); aprobar/denegar un expediente de techo está abierto al comprador y al aprobar el pedido se envía solo al proveedor; la nota solo es obligatoria al reabrir un CANCELADO o al denegar; ENTREGADO no queda en solo lectura para Compras. Cambio de código: solo la insignia `V 12.33.25` en `templates/index.html`.
+
+---
+
 ## 2026-10-13 — [Control Pedidos] Administrador con hoteles asignados (v12.33.24)
 
 Petición de Víctor: que un admin pueda tener hoteles asignados, sin obligación. Decisión (confirmada con él): el admin con hoteles actúa como comprador de ellos. `app.py`: las consultas que resuelven el comprador de un hotel (`_get_compradores_hotel`, `_get_todos_usuarios_hotel`, `/api/compradores-por-hotel`, comprobaciones de Integridad «hotel sin comprador» y duplicados, protecciones de huérfanos al reasignar/desactivar/eliminar) pasan de `rol='compras'` a `rol IN ('compras','admin')` — seguro porque un admin solo aparece en `usuario_comprador_hoteles` si se le han asignado hoteles; `_validar_cambio_activo` y `delete_usuario` aplican la protección también a admins; `/api/admin/config-avisos` devuelve `es_comprador`. `templates/index.html`: bloque de hoteles de compras visible para admin (opcional, con nota), guardado y columna Hoteles de la tabla, y pestaña «Compradores y Hoteles» de Config. Avisos con los admins que tengan hoteles. Sin hoteles asignados, el comportamiento del admin no cambia (sigue viendo todo; no se cuenta como «comprador sin hoteles»). Probado con Postgres real, API y Playwright. Documentos de norma 5 revisados: no aplica.
