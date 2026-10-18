@@ -1,3 +1,11 @@
+# v12.33.26 — 18 octubre 2026
+
+🔗 Compradores por hotel disponibles para Activo Operacional
+
+**Petición de Víctor**: que Activo Operacional use la asignación de hoteles de los compradores de Control Pedidos, de forma que si se cambia aquí, cambie allí, y que los avisos de pedido lleguen al comprador asignado.
+
+Endpoint nuevo `GET /api/externo/dali-sap/compradores-hoteles` (servidor a servidor, firmado con `DALI_SSO_SECRET`, igual que el resto del puente con DALI): cada hotel activo con su comprador asignado (Usuarios → «Hoteles asignados (Compras)», incluidos los admins con hoteles) — nombre, email, email2 y móvil. Activo Operacional lo consulta al pasar cada pedido. Nada más cambia en esta app.
+
 # v12.33.25 — 13 octubre 2026
 
 📘 Manual de usuario del rol COMPRADOR (PDF + Word)

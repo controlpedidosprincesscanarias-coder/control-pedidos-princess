@@ -26893,6 +26893,66 @@ def api_externo_dali_compradores():
         return jsonify({"ok": False, "error": str(exc)}), 500
 
 
+@app.route("/api/externo/dali-sap/compradores-hoteles", methods=["GET"])
+def api_externo_compradores_hoteles():
+    """
+    GET /api/externo/dali-sap/compradores-hoteles — para cada hotel activo,
+    su comprador (o compradores) asignado(s) en Usuarios → «Hoteles
+    asignados (Compras)» (tabla usuario_comprador_hoteles): nombre, email,
+    email2 y móvil.
+
+    (2026-10-18) A petición de Víctor, para Activo Operacional (app hermana
+    de Catálogo DALI, misma base de datos que DALI): «en mi aplicación
+    control pedidos, los compradores tienen los hoteles seleccionados,
+    ¿podríamos utilizar esta configuración? la idea es que si se cambia en
+    control pedido la asignación de los compradores, también se cambie en
+    [Activo Operacional], los correos se envían a los compradores
+    asignados». Activo Operacional lo consulta en vivo al pasar cada
+    pedido, así que un cambio de asignación aquí se aplica al siguiente
+    pedido sin tocar nada allí.
+
+    Mismo criterio que _get_todos_usuarios_hotel() para los compradores
+    de un hotel (rol 'compras' o 'admin' con hoteles asignados, activos y
+    con email) y mismo uso de email2 que el resto de correos internos (se
+    añade como destinatario extra; aquí se devuelve y el que llama decide).
+    Hoteles sin comprador salen con la lista vacía.
+
+    Sin sesión (servidor a servidor): misma firma HMAC con DALI_SSO_SECRET
+    que el resto del puente (_dali_bridge_firma_valida), cuerpo vacío.
+    """
+    if not _dali_bridge_firma_valida(request.get_data()):
+        return jsonify({"ok": False, "error": "Firma inválida o caducada."}), 401
+    try:
+        hoteles = rows_to_list(query(
+            "SELECT id, codigo, nombre FROM hoteles WHERE activo = 1 ORDER BY codigo"
+        )) or []
+        filas = rows_to_list(query(
+            """SELECT h.codigo AS hotel, u.nombre, u.email, u.email2, u.movil
+               FROM usuario_comprador_hoteles uch
+               JOIN usuarios u ON u.id = uch.usuario_id
+               JOIN hoteles h  ON h.id = uch.hotel_id
+               WHERE h.activo = 1 AND u.activo = 1 AND u.rol IN ('compras', 'admin')
+                 AND u.email IS NOT NULL AND TRIM(u.email) != ''
+               ORDER BY h.codigo, u.nombre"""
+        )) or []
+        por_hotel = {}
+        for f in filas:
+            por_hotel.setdefault(f["hotel"], []).append({
+                "nombre": f["nombre"],
+                "email": (f["email"] or "").strip(),
+                "email2": (f["email2"] or "").strip() or None,
+                "movil": f["movil"] or None,
+            })
+        salida = [
+            {"hotel": h["codigo"], "nombre_hotel": h["nombre"], "compradores": por_hotel.get(h["codigo"], [])}
+            for h in hoteles
+        ]
+        return jsonify({"ok": True, "hoteles": salida})
+    except Exception as exc:
+        log.error("[DALI-BRIDGE] Error listando compradores por hotel: %s", exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+
 # (2026-08-19) Nº máximo de intentos de envío de una fila de
 # emails_sistema_pendientes antes de dejar de reintentarse sola — ver
 # api_emails_sistema_pendientes() y api_emails_sistema_atascados().

@@ -49,6 +49,18 @@
 
 ---
 
+## 2026-10-18 — [Control Pedidos] Compradores por hotel para Activo Operacional (v12.33.26)
+
+Petición de Víctor: «en mi aplicación control pedidos, los compradores tienen los hoteles seleccionados, ¿podríamos utilizar esta configuración? la idea es que si se cambia en control pedido la asignación de los compradores, también se cambie en [Activo Operacional], los correos se envían a los compradores asignados, pero la visualización de pedidos, al igual que pasa en catálogo de asignaciones, puede ser visualizada por todos los compradores y administradores».
+
+Cambio: endpoint nuevo `GET /api/externo/dali-sap/compradores-hoteles` (servidor a servidor, misma firma HMAC con `DALI_SSO_SECRET` que el resto del puente con DALI). Devuelve cada hotel activo con su(s) comprador(es) de `usuario_comprador_hoteles` (rol compras o admin, activos, con email): nombre, email, email2 y móvil. Mismo criterio que `_get_todos_usuarios_hotel()`. Activo Operacional lo consulta en vivo al pasar cada pedido para avisar por correo al comprador del hotel, así que cambiar la asignación aquí se aplica al pedido siguiente. No cambia nada de lo existente.
+
+Verificación: probado con el cliente de pruebas de Flask contra una base de datos local creada con `init_db.py`: sin firma → 401, firma mala → 401, firma buena → hoteles con su comprador (incluido un admin con hotel asignado y el email2), un comprador inactivo no sale, hoteles sin comprador con lista vacía.
+
+Norma 5: `GUIA_DESPLIEGUE.md` actualizado (la fila de `DALI_SSO_SECRET` menciona Activo Operacional); `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`: no aplica; `docs/hallazgo-seguridad-princess.md`: no existe en este repo.
+
+---
+
 ## 2026-10-13 — [Control Pedidos] Manual de usuario del rol COMPRADOR (v12.33.25)
 
 Petición de Víctor: manual del rol comprador igual que los del rol hotel (alcance completo, PDF + Word). Solo documentación: `docs/Manual_Usuario_COMPRADOR_Control_Pedidos.pdf` y `.docx` (15 capítulos con capturas numeradas hechas sobre datos de demostración, no reales). Contenido contrastado con el código: un comprador ve los pedidos de todos los hoteles (los hoteles asignados determinan a quién llegan los avisos); aprobar/denegar un expediente de techo está abierto al comprador y al aprobar el pedido se envía solo al proveedor; la nota solo es obligatoria al reabrir un CANCELADO o al denegar; ENTREGADO no queda en solo lectura para Compras. Cambio de código: solo la insignia `V 12.33.25` en `templates/index.html`.

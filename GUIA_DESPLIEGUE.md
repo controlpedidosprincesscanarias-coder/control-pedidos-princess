@@ -189,7 +189,7 @@ momento, sin desplegar nada.
    | `SUPABASE_URL` | Solo si usas Storage (Paso 6) | `https://xxxx.supabase.co` — la URL del **proyecto**, no la de la BD |
    | `SUPABASE_SERVICE_ROLE_KEY` | Solo si usas Storage (Paso 6) | Settings → API → **service_role** (nunca la `anon`/pública) |
    | `SUPABASE_STORAGE_BUCKET` | No | Por defecto `adjuntos-cerrados` si no se define |
-   | `DALI_SSO_SECRET` | Solo si integras con DALI | Debe ser idéntica a la del backend de DALI |
+   | `DALI_SSO_SECRET` | Solo si integras con DALI | Debe ser idéntica a la del backend de DALI y a la del backend de Activo Operacional (que la usa para leer los compradores de cada hotel, `/api/externo/dali-sap/compradores-hoteles`) |
    | `DALI_FRONTEND_URL` | No | Por defecto el proxy Cloudflare de DALI ya en producción |
    | `PORT` | Sí (solo con `runtime: docker`, desde v12.32.42) | `10000` — con el runtime nativo de Python, Render la fijaba sola; con Docker hay que fijarla a mano (o dejar que `render.yaml` la fije, si despliegas como Blueprint) para que Render sepa a qué puerto interno enrutar (coincide con `EXPOSE 10000` del `Dockerfile`) |
 
