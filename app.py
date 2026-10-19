@@ -26802,6 +26802,9 @@ def api_externo_dali_proveedores():
         _hoteles_posibles = _hoteles_con_servicio_posibles()
         _codigo_por_id = {h["id"]: h["codigo"] for h in _hoteles_posibles}
         _todos_codigos = [h["codigo"] for h in _hoteles_posibles]
+        # (v12.33.27) Todos los hoteles (también el de pruebas) para traducir
+        # los hoteles de cada contacto a código.
+        _codigo_hotel_contacto = {h["id"]: h["codigo"] for h in rows_to_list(query("SELECT id, codigo FROM hoteles"))}
 
         def _codigos_sin_servicio(p):
             return [_codigo_por_id[hid] for hid in p["hoteles_sin_servicio_ids"] if hid in _codigo_por_id]
@@ -26809,8 +26812,20 @@ def api_externo_dali_proveedores():
             {
                 "nombre": p["nombre"],
                 "email_principal": p["email"] or None,
+                # (2026-10-19, v12.33.27) `hoteles`: códigos de los hoteles
+                # asignados a cada contacto (proveedor_contacto_hoteles), para
+                # que Activo Operacional y Catálogo Asignaciones manden el
+                # correo al interlocutor de ESE hotel con la misma regla que
+                # _get_proveedor_emails_principales(). Lista vacía = contacto
+                # general (sin hotel asignado). Campo nuevo: quien no lo lea,
+                # sigue igual.
                 "contactos": [
-                    {"nombre": c["nombre"], "email": c["email"], "es_principal": c["es_principal"]}
+                    {
+                        "nombre": c["nombre"],
+                        "email": c["email"],
+                        "es_principal": c["es_principal"],
+                        "hoteles": [_codigo_hotel_contacto[hid] for hid in c.get("hotel_ids", []) if hid in _codigo_hotel_contacto],
+                    }
                     for c in p["contactos"]
                     if c.get("email")
                 ],

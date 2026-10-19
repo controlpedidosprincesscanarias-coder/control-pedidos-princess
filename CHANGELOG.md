@@ -1,3 +1,11 @@
+# v12.33.27 — 19 octubre 2026
+
+📇 Contactos de proveedor por hotel disponibles para Activo Operacional
+
+**Pregunta de Víctor**: «en Control Pedidos ya se indican las cuentas de correo de cada proveedor por hotel, ¿se utiliza esto?». Todavía no: el endpoint `GET /api/externo/dali-sap/proveedores` mandaba de cada contacto solo nombre, email y si es principal, sin sus hoteles.
+
+Ahora cada contacto trae también `hoteles` (códigos de los hoteles marcados en su ficha; lista vacía = contacto general). Con eso, las solicitudes de presupuesto de Activo Operacional (v1.7.1) van al interlocutor del hotel del pedido con la misma regla que los correos de esta app (`_get_proveedor_emails_principales`): primero los contactos principales de ese hotel; si no hay, los principales generales. Es un campo nuevo: quien no lo lea (Catálogo Asignaciones) sigue igual. Nada más cambia.
+
 # v12.33.26 — 18 octubre 2026
 
 🔗 Compradores por hotel disponibles para Activo Operacional

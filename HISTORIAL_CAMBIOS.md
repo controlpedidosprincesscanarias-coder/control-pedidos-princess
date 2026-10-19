@@ -49,6 +49,16 @@
 
 ---
 
+## 2026-10-19 — [Control Pedidos] Contactos de proveedor por hotel para Activo Operacional (v12.33.27)
+
+Pregunta de Víctor: «en control pedidos, ya se indican las cuentas de correo de cada proveedor por hotel, ¿se utiliza esto?». No: `GET /api/externo/dali-sap/proveedores` quitaba de cada contacto sus hoteles (`proveedor_contacto_hoteles`).
+
+Cambio: cada contacto del endpoint lleva `hoteles` (códigos de hotel, todos los hoteles incluido el de pruebas; lista vacía = contacto general). Activo Operacional v1.7.1 elige con eso los destinatarios de las solicitudes de presupuesto con la misma regla que `_get_proveedor_emails_principales()`: los principales de ese hotel; si no hay ninguno, los principales sin hotel asignado. Campo nuevo y opcional: Catálogo Asignaciones no lo lee y sigue igual.
+
+Verificación: probado con el cliente de pruebas de Flask contra la base de datos local: un proveedor con un contacto principal de GY, uno principal general y uno no principal devuelve `hoteles` = `['GY']`, `[]` y `[]`. Firma igual que antes.
+
+Norma 5: `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md`: no aplica (sin variables ni tablas nuevas); `docs/hallazgo-seguridad-princess.md`: no existe en este repo.
+
 ## 2026-10-18 — [Control Pedidos] Compradores por hotel para Activo Operacional (v12.33.26)
 
 Petición de Víctor: «en mi aplicación control pedidos, los compradores tienen los hoteles seleccionados, ¿podríamos utilizar esta configuración? la idea es que si se cambia en control pedido la asignación de los compradores, también se cambie en [Activo Operacional], los correos se envían a los compradores asignados, pero la visualización de pedidos, al igual que pasa en catálogo de asignaciones, puede ser visualizada por todos los compradores y administradores».
