@@ -1,3 +1,19 @@
+# v12.33.28 — 20 octubre 2026
+
+🧾 Pedidos iniciados desde Activo Operacional
+
+**Petición de Víctor**: al recibir una propuesta de pedido en Activo Operacional, el comprador o el administrador debe poder dar de alta el pedido aquí con un botón, antes incluso de pedir presupuestos. El alta debe llevar el hotel, el departamento, la fecha de solicitud y el PDF del pedido en el apartado de solicitud, todo automáticamente.
+
+Endpoint nuevo `POST /api/externo/activo-operacional/pedidos` (servidor a servidor, firmado con `DALI_SSO_SECRET` sobre el cuerpo, como el resto del puente). Hace lo mismo que «Nuevo pedido»:
+- **Datos del pedido:** el siguiente Nº interno, el estado inicial de siempre (PENDIENTE FIRMA DIRECCION COMPRAS), hotel, departamento (por nombre, sin importar acentos ni mayúsculas) y la fecha de solicitud, que es la del envío del hotel.
+- **Observaciones:** «Pedido nº X del Activo Operacional…».
+- **Historial:** «Pedido creado desde Activo Operacional».
+- **Correos internos:** los mismos que al crear un pedido.
+- **PDF:** el del pedido, adjunto en **Fecha solicitud → Solicitud del hotel**.
+- **Creado por:** el usuario de esta app con el mismo email que quien lo inicia en Activo Operacional.
+
+Columna nueva `pedidos.ref_activo_operacional` (única; se crea sola al arrancar). Si Activo Operacional repite la llamada, devuelve el mismo pedido y no crea otro. Si el departamento no existe aquí (p. ej. TEMÁTICOS o COMEDOR PERSONAL), responde con un error que explica que hay que crearlo en Administración → Departamentos.
+
 # v12.33.27 — 19 octubre 2026
 
 📇 Contactos de proveedor por hotel disponibles para Activo Operacional

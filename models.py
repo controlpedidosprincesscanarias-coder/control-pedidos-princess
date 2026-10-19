@@ -188,9 +188,12 @@ SQL_STATEMENTS = [
         creado_por_nombre       TEXT,
         modificado_por_nombre   TEXT,
         creado_en               TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-        modificado_en           TIMESTAMPTZ NOT NULL DEFAULT NOW()
+        modificado_en           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        -- (v12.33.28) pedido de Activo Operacional que lo originó (ver _auto_migrate)
+        ref_activo_operacional  TEXT
     )
     """,
+    "CREATE UNIQUE INDEX IF NOT EXISTS ux_pedidos_ref_activo_operacional ON pedidos(ref_activo_operacional) WHERE ref_activo_operacional IS NOT NULL",
     # ── Adjuntos del pedido ───────────────────────────────────────────────────
     """
     CREATE TABLE IF NOT EXISTS pedido_adjuntos (

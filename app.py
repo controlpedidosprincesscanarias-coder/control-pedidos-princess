@@ -2768,6 +2768,19 @@ def _auto_migrate():
                 "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS dashboard_prefs TEXT"
             )
 
+            # ── Pedidos iniciados desde Activo Operacional (v12.33.28) ──────
+            # Referencia del pedido de Activo Operacional que originó este
+            # pedido (p. ej. "AO-123"). Única: si Activo Operacional repite la
+            # llamada (reintento, doble clic), se devuelve el pedido ya creado
+            # en vez de crear otro. Ver api_externo_ao_crear_pedido().
+            cur.execute(
+                "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS ref_activo_operacional TEXT"
+            )
+            cur.execute(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ux_pedidos_ref_activo_operacional "
+                "ON pedidos(ref_activo_operacional) WHERE ref_activo_operacional IS NOT NULL"
+            )
+
             # ── Backfill: motivo de Telegram bloqueado, de JSON crudo a texto
             #    legible (v12.32.09, 2026-09-04) ─────────────────────────────
             # A petición de Víctor: antes de este cambio, telegram_bloqueado_motivo
@@ -26966,6 +26979,148 @@ def api_externo_compradores_hoteles():
     except Exception as exc:
         log.error("[DALI-BRIDGE] Error listando compradores por hotel: %s", exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
+
+
+@app.route("/api/externo/activo-operacional/pedidos", methods=["POST"])
+def api_externo_ao_crear_pedido():
+    """
+    POST /api/externo/activo-operacional/pedidos — (2026-10-20, v12.33.28)
+    da de alta en Control de Pedidos un pedido recibido en Activo Operacional.
+
+    A petición de Víctor: «una vez recibida la propuesta de pedido, el
+    comprador/administrador deberá en caso de comenzar el proceso, añadir
+    nuevo pedido a la aplicación control de pedidos, con la fecha de la
+    solicitud y acceso al PDF del pedido en el apartado de solicitud, debería
+    existir un botón que antes incluso de solicitar los presupuestos indique
+    el comienzo y creación del pedido, se cumplimentan los campos hotel,
+    departamento, fecha solicitud y se agrega el acceso al pdf del pedido en
+    este punto, todo esto automáticamente».
+
+    Body JSON:
+      { ref, numero, hotel_codigo, departamento, fecha_solicitud (AAAA-MM-DD),
+        observaciones?, pdf_nombre, pdf_base64, usuario_email?, usuario_nombre? }
+
+    Hace lo mismo que «Nuevo pedido» (create_pedido): mismo Nº interno
+    (_next_norden), mismo estado inicial por defecto, historial «Pedido
+    creado» y los mismos correos internos de cambio de estado; y adjunta el
+    PDF del pedido en el apartado de la Fecha de solicitud (tipo
+    solicitud_doc). Creado por: el usuario de Control de Pedidos con el
+    mismo email que quien lo inicia en Activo Operacional (si no hay, solo
+    su nombre).
+
+    Idempotente por `ref` (columna ref_activo_operacional, única): repetir la
+    llamada devuelve el pedido ya creado (`ya_existia: true`).
+
+    Sin sesión (servidor a servidor): firma HMAC con DALI_SSO_SECRET sobre el
+    cuerpo crudo (_dali_bridge_firma_valida), igual que el resto del puente.
+    """
+    cuerpo_crudo = request.get_data()
+    if not _dali_bridge_firma_valida(cuerpo_crudo):
+        return jsonify({"ok": False, "error": "Firma inválida o caducada."}), 401
+    datos = request.get_json(silent=True) or {}
+    ref = (datos.get("ref") or "").strip()[:60]
+    numero = (datos.get("numero") or "").strip()[:60]
+    hotel_codigo = (datos.get("hotel_codigo") or "").strip().upper()
+    depto_nombre = (datos.get("departamento") or "").strip()
+    fecha_solicitud = (datos.get("fecha_solicitud") or "").strip()
+    pdf_nombre = (datos.get("pdf_nombre") or "pedido.pdf").strip()[:200]
+    usuario_email = (datos.get("usuario_email") or "").strip()
+    usuario_nombre = (datos.get("usuario_nombre") or "").strip()[:120] or "Activo Operacional"
+    observaciones = (datos.get("observaciones") or "").strip()[:2000] or None
+
+    if not ref or not hotel_codigo or not depto_nombre:
+        return jsonify({"ok": False, "error": "Faltan la referencia, el hotel o el departamento."}), 400
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", fecha_solicitud):
+        return jsonify({"ok": False, "error": "Fecha de solicitud no válida (AAAA-MM-DD)."}), 400
+    try:
+        pdf = base64.b64decode(datos.get("pdf_base64") or "", validate=True)
+    except Exception:
+        return jsonify({"ok": False, "error": "El PDF del pedido no es válido."}), 400
+    if not pdf.startswith(b"%PDF"):
+        return jsonify({"ok": False, "error": "El PDF del pedido no es válido."}), 400
+    if len(pdf) > MAX_BYTES_DOCUMENTO:
+        return jsonify({"ok": False, "error": f"El PDF supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB."}), 400
+
+    try:
+        existente = query(
+            "SELECT id, norden, creado_en, creado_por_nombre FROM pedidos WHERE ref_activo_operacional=%s",
+            (ref,), one=True
+        )
+        if existente:
+            return jsonify({"ok": True, "ya_existia": True, "id": existente["id"], "norden": existente["norden"],
+                            "creado_en": existente["creado_en"].isoformat() if existente["creado_en"] else None,
+                            "creado_por": existente["creado_por_nombre"]})
+
+        hotel = query("SELECT id, codigo, nombre FROM hoteles WHERE UPPER(codigo)=%s AND activo=1", (hotel_codigo,), one=True)
+        if not hotel:
+            return jsonify({"ok": False, "error": f"El hotel {hotel_codigo} no existe o no está activo en Control de Pedidos."}), 422
+
+        # Departamento por nombre (sin acentos ni mayúsculas): «Temáticos» = TEMATICOS.
+        buscado = _normalizar_texto_generico(depto_nombre)
+        deptos = rows_to_list(query("SELECT id, nombre FROM departamentos WHERE activo=1")) or []
+        depto = next((d for d in deptos if _normalizar_texto_generico(d["nombre"]) == buscado), None)
+        if not depto:
+            return jsonify({"ok": False, "error": (
+                f"El departamento «{depto_nombre}» no existe en Control de Pedidos. "
+                "Créalo en Administración → Departamentos (con ese nombre) y vuelve a intentarlo."
+            )}), 422
+
+        usuario = None
+        if usuario_email:
+            usuario = query(
+                "SELECT id, nombre FROM usuarios WHERE LOWER(TRIM(email))=LOWER(%s) OR LOWER(TRIM(email2))=LOWER(%s) ORDER BY activo DESC, id LIMIT 1",
+                (usuario_email, usuario_email), one=True
+            )
+        uid = usuario["id"] if usuario else None
+        nombre = (usuario["nombre"] if usuario else None) or usuario_nombre
+
+        db = get_db()
+        norden = _next_norden(db)
+        estado = "PENDIENTE FIRMA DIRECCION COMPRAS"  # el mismo estado inicial que «Nuevo pedido»
+        cur = execute("""
+            INSERT INTO pedidos (
+                norden, hotel_id, departamento_id, fecha_solicitud, estado, observaciones,
+                creado_por_id, modificado_por_id, creado_por_nombre, modificado_por_nombre,
+                ref_activo_operacional
+            ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            RETURNING id
+        """, (norden, hotel["id"], depto["id"], fecha_solicitud, estado, observaciones,
+              uid, uid, nombre, nombre, ref))
+        pedido_id = cur.fetchone()["id"]
+        execute(
+            "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s)",
+            (pedido_id, estado, uid, nombre, f"Pedido creado desde Activo Operacional (pedido {numero or ref})")
+        )
+        execute(
+            "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+            (pedido_id, "solicitud_doc", pdf_nombre, "application/pdf", psycopg2.Binary(pdf), False, uid)
+        )
+        db.commit()
+    except psycopg2.errors.UniqueViolation:
+        # Dos llamadas a la vez con la misma ref: la otra ya lo ha creado.
+        get_db().rollback()
+        existente = query("SELECT id, norden FROM pedidos WHERE ref_activo_operacional=%s", (ref,), one=True)
+        if existente:
+            return jsonify({"ok": True, "ya_existia": True, "id": existente["id"], "norden": existente["norden"]})
+        return jsonify({"ok": False, "error": "No se pudo crear el pedido (conflicto)."}), 409
+    except Exception as exc:
+        try:
+            get_db().rollback()
+        except Exception:
+            pass
+        log.error("[AO-BRIDGE] Error creando pedido desde Activo Operacional (%s): %s", ref, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    try:
+        enviar_emails_estado(db, pedido_id, estado, usuario_nombre=nombre, usuario_id=uid)
+    except Exception as exc:
+        log.warning("[AO-BRIDGE] Pedido %s creado, pero no se pudieron encolar sus correos: %s", pedido_id, exc)
+
+    log.info("[AO-BRIDGE] Pedido %s (Nº %s, %s/%s) creado desde Activo Operacional %s por %s",
+             pedido_id, norden, hotel["codigo"], depto["nombre"], ref, nombre)
+    return jsonify({"ok": True, "ya_existia": False, "id": pedido_id, "norden": norden,
+                    "hotel": hotel["codigo"], "departamento": depto["nombre"], "creado_por": nombre}), 201
 
 
 # (2026-08-19) Nº máximo de intentos de envío de una fila de

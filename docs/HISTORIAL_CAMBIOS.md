@@ -49,6 +49,49 @@
 
 ---
 
+## 2026-10-20 — [Control Pedidos] Pedidos iniciados desde Activo Operacional (v12.33.28)
+
+**Petición de Víctor:** «una vez recibida la propuesta de pedido, el comprador/administrador deberá en caso de comenzar el proceso, añadir nuevo pedido a la aplicación control de pedidos, con la fecha de la solicitud y acceso al PDF del pedido en el apartado de solicitud, debería existir un botón que antes incluso de solicitar los presupuestos indique el comienzo y creación del pedido, se cumplimentan los campos hotel, departamento, fecha solicitud y se agrega el acceso al pdf del pedido en este punto, todo esto automáticamente».
+
+**Cambio:** endpoint nuevo `POST /api/externo/activo-operacional/pedidos` (`api_externo_ao_crear_pedido`). Usa la firma HMAC de `_dali_bridge_firma_valida` sobre el cuerpo crudo.
+
+Recibe:
+- `ref` (AO-<nº>) y el nº del pedido;
+- el código del hotel y el nombre del departamento;
+- `fecha_solicitud` (la del envío del hotel);
+- observaciones;
+- el PDF en base64;
+- el email y el nombre de quien lo inicia.
+
+Hace lo mismo que `create_pedido()`:
+- `_next_norden`, el estado inicial por defecto e `historial_estados` con la nota «Pedido creado desde Activo Operacional (pedido X)»;
+- `enviar_emails_estado()`, es decir, los mismos correos internos que al crear un pedido;
+- el PDF va a `pedido_adjuntos` con tipo `solicitud_doc`: el apartado de Fecha solicitud, «Solicitud del hotel»;
+- «Creado por» es el usuario con ese email o email2; si no hay ninguno, solo el nombre.
+
+Validaciones:
+- el hotel tiene que existir y estar activo;
+- el departamento se busca por nombre normalizado (`_normalizar_texto_generico`), así que «Temáticos» = TEMATICOS y «Restaurante & Bares» = RESTAURANTE & BARES; si no existe, devuelve 422 con instrucciones (crearlo en Administración → Departamentos);
+- el PDF tiene que empezar por %PDF y no pasar de `MAX_BYTES_DOCUMENTO`.
+
+**Idempotencia:** columna `pedidos.ref_activo_operacional` con índice único parcial (`_auto_migrate` y models.py). Repetir la llamada, aunque sea a la vez (UniqueViolation), devuelve el pedido existente con `ya_existia: true`.
+
+**Verificación** con el cliente de pruebas de Flask y con la app levantada (Activo Operacional → este Flask, de punta a punta):
+- firma mala → 401;
+- se crea el pedido con GY · COCINA · fecha de solicitud · estado inicial;
+- «Creado por» sale del usuario con ese email;
+- el PDF real del pedido (21 KB) queda en solicitud_doc;
+- el historial lo registra;
+- repetir la llamada no duplica;
+- TEMÁTICOS inexistente → 422 legible;
+- «Restaurante & Bares» casa con su departamento;
+- un PDF no válido → 400.
+
+**Norma 5:**
+- `GUIA_DESPLIEGUE.md`: sin variables nuevas (usa `DALI_SSO_SECRET`);
+- `INSTRUCCIONES_RESTAURACION.md`: la columna nueva se crea sola al arrancar;
+- `PENDIENTES.md`: no aplica.
+
 ## 2026-10-19 — [Control Pedidos] Contactos de proveedor por hotel para Activo Operacional (v12.33.27)
 
 Pregunta de Víctor: «en control pedidos, ya se indican las cuentas de correo de cada proveedor por hotel, ¿se utiliza esto?». No: `GET /api/externo/dali-sap/proveedores` quitaba de cada contacto sus hoteles (`proveedor_contacto_hoteles`).
