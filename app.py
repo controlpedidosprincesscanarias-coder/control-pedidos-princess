@@ -27071,7 +27071,7 @@ def api_externo_ao_crear_pedido():
         observaciones?, pdf_nombre, pdf_base64, usuario_email?, usuario_nombre? }
 
     Hace lo mismo que «Nuevo pedido» (create_pedido): mismo Nº interno
-    (_next_norden), mismo estado inicial por defecto, historial «Pedido
+    (_next_norden), estado inicial PENDIENTE COTIZACIÓN (v12.33.30), historial «Pedido
     creado» y los mismos correos internos de cambio de estado; y adjunta el
     PDF del pedido en el apartado de la Fecha de solicitud (tipo
     solicitud_doc). Creado por: el usuario de Control de Pedidos con el
@@ -27180,7 +27180,9 @@ def api_externo_ao_crear_pedido():
             return jsonify({"ok": True, "ya_existia": True, "vinculado": True, "id": pedido_id, "norden": fila["norden"],
                             "hotel": hotel["codigo"], "departamento": depto["nombre"], "creado_por": nombre})
         norden = _next_norden(db)
-        estado = "PENDIENTE FIRMA DIRECCION COMPRAS"  # el mismo estado inicial que «Nuevo pedido»
+        # (v12.33.30) A petición de Víctor: el pedido que llega desde Activo Operacional
+        # nace en PENDIENTE COTIZACIÓN (se inicia antes de pedir los presupuestos).
+        estado = "PENDIENTE COTIZACIÓN"
         cur = execute("""
             INSERT INTO pedidos (
                 norden, hotel_id, departamento_id, fecha_solicitud, estado, observaciones,

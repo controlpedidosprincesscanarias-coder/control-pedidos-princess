@@ -49,6 +49,16 @@
 
 ---
 
+## 2026-10-20 — [Control Pedidos] Pedidos desde Activo Operacional en PENDIENTE COTIZACIÓN (v12.33.30)
+
+Petición de Víctor: «desde que el comprador pulsa en crear en control de pedido, pase el estado a tramitación en activo operacional y el nuevo que se crea en control-pedidos el estado deberá ser pendiente de cotización».
+
+Cambio: `api_externo_ao_crear_pedido()` crea el pedido con el estado `PENDIENTE COTIZACIÓN` en vez del estado inicial por defecto. El historial y `enviar_emails_estado()` usan ese estado. Si el pedido se vincula a uno existente (`vincular_a`), su estado no se toca. Activo Operacional v1.10.3 pasa a la vez su propio pedido a «En trámite».
+
+Verificación: cliente de pruebas de Flask y prueba de punta a punta desde Activo Operacional. El pedido nace en PENDIENTE COTIZACIÓN y el resto de comprobaciones de la v12.33.28/29 siguen OK.
+
+Norma 5: no aplica (sin variables ni tablas nuevas).
+
 ## 2026-10-20 — [Control Pedidos] Aviso de posible pedido duplicado al dar de alta (v12.33.29)
 
 **Petición de Víctor:** «para evitar duplicidades en control-pedidos, cuando se vaya a crear un nuevo pedido tanto manual como automático, al introducir hotel y departamento, la aplicación debe verificar que no exista ningún pedido abierto con esta configuración y sin número de pedido aún adjudicado. Si existe, preguntar al usuario que compruebe que no es el mismo inicio de pedido nuevamente».

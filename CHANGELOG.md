@@ -1,3 +1,9 @@
+# v12.33.30 — 20 octubre 2026
+
+🟡 Los pedidos que llegan desde Activo Operacional nacen en PENDIENTE COTIZACIÓN
+
+**Petición de Víctor**: cuando el comprador pulsa en Activo Operacional el botón para crear el pedido aquí, el pedido nuevo debe quedar en **PENDIENTE COTIZACIÓN**, porque se inicia antes de pedir los presupuestos. Hasta ahora nacía en el estado inicial de «Nuevo pedido» (PENDIENTE FIRMA DIRECCION COMPRAS). El resto no cambia: los correos internos son los de ese estado, y si se vincula a un pedido que ya existía, su estado no se toca.
+
 # v12.33.29 — 20 octubre 2026
 
 🧭 Aviso de posible pedido duplicado al dar de alta
