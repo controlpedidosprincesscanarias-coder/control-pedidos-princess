@@ -18835,6 +18835,68 @@ def get_pedidos():
         "pages":     max(1, (total + page_size - 1) // page_size),
     })
 
+# (2026-10-20, v12.33.29) Posibles duplicados al dar de alta un pedido — a
+# petición de Víctor: «para evitar duplicidades en control-pedidos, cuando se
+# vaya a crear un nuevo pedido tanto manual como automático, al introducir
+# hotel y departamento, la aplicación debe verificar que no exista ningún
+# pedido abierto con esta configuración y sin número de pedido aún
+# adjudicado. Si existe, preguntar al usuario que compruebe que no es el
+# mismo inicio de pedido nuevamente».
+# «Abierto» = cualquier estado salvo ENTREGADO, CANCELADO y DENEGADO POR
+# DIRECCION GENERAL. «Sin número» = pedido_num vacío (aún sin el PDF oficial).
+_ESTADOS_NO_ABIERTOS = ESTADOS_CERRADOS + ("DENEGADO POR DIRECCION GENERAL",)
+
+def _pedidos_abiertos_sin_numero(hotel_id, departamento_id, excluir_id=None):
+    if not hotel_id or not departamento_id:
+        return []
+    filas = rows_to_list(query(
+        """SELECT p.id, p.norden, p.fecha_solicitud, p.estado, p.creado_por_nombre, p.creado_en,
+                  p.observaciones, p.ref_activo_operacional,
+                  (SELECT COUNT(*) FROM pedido_adjuntos a WHERE a.pedido_id = p.id) AS adjuntos
+           FROM pedidos p
+           WHERE p.hotel_id = %s AND p.departamento_id = %s
+             AND (p.pedido_num IS NULL OR TRIM(p.pedido_num) = '')
+             AND p.estado NOT IN %s
+             AND (%s IS NULL OR p.id <> %s)
+           ORDER BY p.creado_en DESC
+           LIMIT 20""",
+        (hotel_id, departamento_id, _ESTADOS_NO_ABIERTOS, excluir_id, excluir_id)
+    )) or []
+    for f in filas:
+        if f.get("creado_en") is not None and hasattr(f["creado_en"], "isoformat"):
+            f["creado_en"] = f["creado_en"].isoformat()
+        if f.get("observaciones"):
+            f["observaciones"] = f["observaciones"][:160]
+    return filas
+
+def _respuesta_posible_duplicado(lista):
+    n = len(lista)
+    return jsonify({
+        "ok": False,
+        "requiere_confirmacion": True,
+        "tipo": "posible_duplicado",
+        "error": (f"Ya hay {n} pedido{'s' if n != 1 else ''} abierto{'s' if n != 1 else ''} de este hotel y "
+                  f"departamento sin Nº de pedido todavía. Compruebe que no es el mismo inicio de pedido."),
+        "posibles_duplicados": lista,
+    }), 409
+
+
+@app.route("/api/pedidos/abiertos-sin-numero")
+@login_required
+def api_pedidos_abiertos_sin_numero():
+    """GET /api/pedidos/abiertos-sin-numero?hotel_id=&departamento_id=[&excluir_id=] — (v12.33.29)
+    pedidos abiertos de ese hotel y departamento sin Nº de pedido (aviso de posible duplicado al dar de alta)."""
+    try:
+        hotel_id = int(request.args.get("hotel_id") or 0) or None
+        depto_id = int(request.args.get("departamento_id") or 0) or None
+        excluir = int(request.args.get("excluir_id") or 0) or None
+    except ValueError:
+        return jsonify({"pedidos": []})
+    if not _puede_ver_hotel_pruebas() and _es_hotel_pruebas_id(hotel_id):
+        return jsonify({"pedidos": []})
+    return jsonify({"pedidos": _pedidos_abiertos_sin_numero(hotel_id, depto_id, excluir)})
+
+
 @app.route("/api/pedidos/<int:pid>")
 @login_required
 def get_pedido(pid):
@@ -18915,6 +18977,14 @@ def create_pedido():
         _prov_manual_row = query("SELECT id FROM proveedores WHERE id=%s", (proveedor_id_manual,), one=True)
         if not _prov_manual_row:
             return jsonify({"error": "El proveedor seleccionado no existe."}), 400
+
+    # (v12.33.29) Posible duplicado: otro pedido abierto del mismo hotel y
+    # departamento sin Nº de pedido. Se pregunta; si el usuario confirma que es
+    # otro pedido, el formulario repite la petición con confirmar_duplicado.
+    if not data.get("confirmar_duplicado"):
+        _posibles = _pedidos_abiertos_sin_numero(data.get("hotel_id"), data.get("departamento_id"))
+        if _posibles:
+            return _respuesta_posible_duplicado(_posibles)
 
     # (2026-08-01 — rediseño Techo de Gastos) Ya NO se comprueba el techo al
     # crear un pedido — el momento real de "consumo" es al pasar a ENVIADO
@@ -27065,6 +27135,21 @@ def api_externo_ao_crear_pedido():
                 "Créalo en Administración → Departamentos (con ese nombre) y vuelve a intentarlo."
             )}), 422
 
+        # (v12.33.29) Posible duplicado: pedidos abiertos de ese hotel y departamento sin Nº de pedido.
+        #   · sin decidir → 409 con la lista, para que quien lo inicia lo compruebe;
+        #   · vincular_a=<id de esa lista> → «es el mismo»: se vincula a ese pedido (ref + PDF), sin crear otro;
+        #   · confirmar_duplicado=true → «es otro pedido»: se crea igualmente.
+        posibles = _pedidos_abiertos_sin_numero(hotel["id"], depto["id"])
+        vincular_a = datos.get("vincular_a")
+        if vincular_a:
+            elegido = next((p for p in posibles if int(p["id"]) == int(vincular_a)), None)
+            if not elegido:
+                return jsonify({"ok": False, "error": "Ese pedido ya no está abierto o ya tiene Nº de pedido: vuelva a intentarlo."}), 409
+            if elegido.get("ref_activo_operacional") and elegido["ref_activo_operacional"] != ref:
+                return jsonify({"ok": False, "error": f"Ese pedido ya está vinculado a otro pedido del Activo Operacional ({elegido['ref_activo_operacional']})."}), 409
+        elif posibles and not datos.get("confirmar_duplicado"):
+            return _respuesta_posible_duplicado(posibles)
+
         usuario = None
         if usuario_email:
             usuario = query(
@@ -27075,6 +27160,25 @@ def api_externo_ao_crear_pedido():
         nombre = (usuario["nombre"] if usuario else None) or usuario_nombre
 
         db = get_db()
+        if vincular_a:
+            pedido_id = int(vincular_a)
+            execute("UPDATE pedidos SET ref_activo_operacional=%s, modificado_por_id=COALESCE(%s, modificado_por_id), "
+                    "modificado_por_nombre=%s, modificado_en=NOW() WHERE id=%s", (ref, uid, nombre, pedido_id))
+            execute(
+                "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (pedido_id, "solicitud_doc", pdf_nombre, "application/pdf", psycopg2.Binary(pdf), False, uid)
+            )
+            fila = query("SELECT norden, estado FROM pedidos WHERE id=%s", (pedido_id,), one=True)
+            execute(
+                "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
+                (pedido_id, fila["estado"], fila["estado"], uid, nombre,
+                 f"Vinculado al pedido {numero or ref} del Activo Operacional (se adjunta su PDF a la solicitud)")
+            )
+            db.commit()
+            log.info("[AO-BRIDGE] Pedido %s (Nº %s) vinculado a %s por %s", pedido_id, fila["norden"], ref, nombre)
+            return jsonify({"ok": True, "ya_existia": True, "vinculado": True, "id": pedido_id, "norden": fila["norden"],
+                            "hotel": hotel["codigo"], "departamento": depto["nombre"], "creado_por": nombre})
         norden = _next_norden(db)
         estado = "PENDIENTE FIRMA DIRECCION COMPRAS"  # el mismo estado inicial que «Nuevo pedido»
         cur = execute("""

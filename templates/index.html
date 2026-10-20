@@ -1461,7 +1461,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.28
+          V 12.33.29
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -2557,12 +2557,14 @@ tbody tr:last-child{border-bottom:none}
         <!-- Hotel + Departamento -->
         <div class="form-group">
           <label class="form-label">Hotel *</label>
-          <select class="form-control" id="p-hotel" required onchange="poblarSelectDeptos(); _revisarHotelTrasCambio();"></select>
+          <select class="form-control" id="p-hotel" required onchange="poblarSelectDeptos(); _revisarHotelTrasCambio(); _revisarDuplicadosAlta();"></select>
         </div>
         <div class="form-group">
           <label class="form-label">Departamento *</label>
-          <select class="form-control" id="p-depto" required onchange="_revisarDepartamentoTrasCambio()"></select>
+          <select class="form-control" id="p-depto" required onchange="_revisarDepartamentoTrasCambio(); _revisarDuplicadosAlta();"></select>
         </div>
+        <!-- (v12.33.29) Aviso de posible duplicado al dar de alta (hotel + departamento) -->
+        <div class="form-group full" id="p-aviso-duplicados" style="display:none"></div>
 
         <!-- Fechas -->
         <div class="form-section">Fechas del flujo</div>
@@ -5707,6 +5709,8 @@ function _renderTrazabilidadPedido(p) {
 async function openPedidoModal(id=null) {
   G.editingPedidoId = id;
   G.currentPedidoData = null;
+  _duplicadosAlta = [];   // (v12.33.29)
+  { const _avDup = document.getElementById('p-aviso-duplicados'); if (_avDup) { _avDup.style.display = 'none'; _avDup.innerHTML = ''; } }
   _estadoSelectorPrevio = null;   // reset rastreador al abrir modal
   G.estadoPendienteRevision = false;   // (v12.32.83)
   clearPedidoForm();
@@ -6475,6 +6479,57 @@ function _opcionDeptoDelPdf(almacenPdf) {
   return o || null;
 }
 // Pregunta «¿cuál dejo?». Devuelve true si el usuario decidió (PDF o manual), false si lo deja para más tarde.
+// ══════════════════════════════════════════════════════════════════════
+//  (v12.33.29) POSIBLES DUPLICADOS AL DAR DE ALTA UN PEDIDO
+//  A petición de Víctor: al indicar hotel y departamento de un pedido nuevo
+//  (formulario, modo simplificado o desde Activo Operacional), se comprueba
+//  si ya hay un pedido abierto de ese hotel y departamento SIN Nº de pedido;
+//  si lo hay, se avisa y, al guardar, se pregunta si no es el mismo.
+// ══════════════════════════════════════════════════════════════════════
+let _duplicadosAlta = [];
+function _htmlListaDuplicados(lista) {
+  return '<ul style="margin:6px 0 0;padding-left:18px">' + lista.map(d => {
+    const obs = d.observaciones ? ` · <span style="color:#64748b">${_escHtmlCp(d.observaciones)}</span>` : '';
+    const ao = d.ref_activo_operacional ? ` · <b>Activo Operacional ${_escHtmlCp(d.ref_activo_operacional)}</b>` : '';
+    return `<li style="margin:3px 0">Nº <b>${_escHtmlCp(String(d.norden))}</b> · solicitud ${_spFmt(d.fecha_solicitud)} · ${_escHtmlCp(d.estado)}`
+      + ` · creado por ${_escHtmlCp(d.creado_por_nombre || '—')}${ao}${obs}`
+      + ` · <a href="/?pedido=${d.id}" target="_blank" rel="noopener">abrir</a></li>`;
+  }).join('') + '</ul>';
+}
+async function _revisarDuplicadosAlta() {
+  const av = document.getElementById('p-aviso-duplicados');
+  if (!av) return;
+  const hotel = document.getElementById('p-hotel').value;
+  const depto = document.getElementById('p-depto').value;
+  if (G.editingPedidoId || !hotel || !depto) { _duplicadosAlta = []; av.style.display = 'none'; av.innerHTML = ''; return; }
+  let lista = [];
+  try { lista = (await api(`/api/pedidos/abiertos-sin-numero?hotel_id=${hotel}&departamento_id=${depto}`)).pedidos || []; } catch (e) { lista = []; }
+  // Si mientras tanto ha cambiado la selección, no se pinta un resultado viejo.
+  if (document.getElementById('p-hotel').value !== hotel || document.getElementById('p-depto').value !== depto || G.editingPedidoId) return;
+  _duplicadosAlta = lista;
+  if (!lista.length) { av.style.display = 'none'; av.innerHTML = ''; return; }
+  av.style.display = '';
+  av.innerHTML = `<div style="border:1px solid #e0a800;background:#fff8e1;border-radius:6px;padding:10px 12px;font-size:13px">
+    ⚠️ <b>Ya hay ${lista.length} pedido${lista.length === 1 ? '' : 's'} abierto${lista.length === 1 ? '' : 's'} de este hotel y departamento sin Nº de pedido todavía.</b>
+    Compruebe que no es el mismo inicio de pedido antes de crear otro:${_htmlListaDuplicados(lista)}</div>`;
+}
+// Pregunta (al guardar): «¿es otro pedido distinto?». Devuelve true si el usuario confirma crearlo igualmente.
+function _preguntarPosibleDuplicado(lista) {
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.className = 'modal-overlay open'; ov.style.zIndex = 1300;
+    ov.innerHTML = `<div class="modal" style="width:min(640px,94vw)"><div class="modal-header"><div class="modal-title">⚠️ ¿Es el mismo pedido?</div></div>
+      <div class="modal-body" style="font-size:13px">Ya hay ${lista.length === 1 ? 'un pedido abierto' : lista.length + ' pedidos abiertos'} de este hotel y departamento
+      <b>sin Nº de pedido</b> todavía:${_htmlListaDuplicados(lista)}<br>Compruebe que no es el mismo inicio de pedido. Si lo es, cancele y continúe con el que ya existe.</div>
+      <div class="modal-footer" style="flex-wrap:wrap;gap:6px">
+        <button class="btn btn-ghost" id="dup-no">Cancelar y revisarlo</button>
+        <button class="btn btn-gold" id="dup-si">Es otro pedido distinto: crearlo</button></div></div>`;
+    document.body.appendChild(ov);
+    ov.querySelector('#dup-no').onclick = () => { ov.remove(); resolve(false); };
+    ov.querySelector('#dup-si').onclick = () => { ov.remove(); resolve(true); };
+  });
+}
+
 function _preguntarDepartamentoPdf(almacenPdf) {
   return new Promise(resolve => {
     const sel = document.getElementById('p-depto');
@@ -8547,6 +8602,12 @@ async function savePedido() {
       r = await api(`/api/pedidos/${G.editingPedidoId}`, 'PUT', body);
     } else {
       r = await api('/api/pedidos', 'POST', body);
+      // (v12.33.29) Posible duplicado: se pregunta y, si es otro pedido, se crea igualmente.
+      if (r && r.requiere_confirmacion && r.tipo === 'posible_duplicado') {
+        const _esOtro = await _preguntarPosibleDuplicado(r.posibles_duplicados || []);
+        if (!_esOtro) return;
+        r = await api('/api/pedidos', 'POST', { ...body, confirmar_duplicado: true });
+      }
     }
     // (2026-08-27) FIX duplicados en Techo de Gastos: si el backend avisa
     // de que este pedido YA tiene un apunte pendiente de Vº Bº (ver
@@ -11582,7 +11643,13 @@ async function _spCrear() {
   if (_sp.techo) { body.sujeto_techo = true; body.familia_id = _sp.familia || null; body.importe = _sp.importe; }
   let nuevo = null;
   try {
-    const r = await api('/api/pedidos', 'POST', body);
+    let r = await api('/api/pedidos', 'POST', body);
+    // (v12.33.29) Posible duplicado (mismo hotel y departamento, abierto y sin Nº de pedido): preguntar.
+    if (r && r.requiere_confirmacion && r.tipo === 'posible_duplicado') {
+      const esOtro = await _preguntarPosibleDuplicado(r.posibles_duplicados || []);
+      if (!esOtro) { _sp.ocupado = false; _sp.error = 'Creación cancelada: revise el pedido abierto que ya existe.'; _spRender(); return; }
+      r = await api('/api/pedidos', 'POST', { ...body, confirmar_duplicado: true });
+    }
     if (!r.ok) throw new Error(r.error || 'No se pudo crear el pedido');
     nuevo = r;
   } catch (e) {

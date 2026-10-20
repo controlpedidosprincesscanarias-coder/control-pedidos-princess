@@ -49,6 +49,49 @@
 
 ---
 
+## 2026-10-20 — [Control Pedidos] Aviso de posible pedido duplicado al dar de alta (v12.33.29)
+
+**Petición de Víctor:** «para evitar duplicidades en control-pedidos, cuando se vaya a crear un nuevo pedido tanto manual como automático, al introducir hotel y departamento, la aplicación debe verificar que no exista ningún pedido abierto con esta configuración y sin número de pedido aún adjudicado. Si existe, preguntar al usuario que compruebe que no es el mismo inicio de pedido nuevamente».
+
+**Backend:**
+- `_pedidos_abiertos_sin_numero(hotel_id, departamento_id)` busca los pedidos que cumplen todo esto (como mucho 20, los más recientes primero):
+  - mismo hotel y departamento;
+  - `pedido_num` vacío;
+  - estado distinto de ENTREGADO, CANCELADO y DENEGADO POR DIRECCION GENERAL.
+- Endpoint nuevo `GET /api/pedidos/abiertos-sin-numero`, que usa el formulario.
+- `create_pedido()` devuelve 409 con `requiere_confirmacion`, `tipo: "posible_duplicado"` y la lista, salvo que llegue `confirmar_duplicado`. `api()` del frontend ya trata ese 409 como respuesta normal, así que no hace falta tocar nada más para que pase.
+- `api_externo_ao_crear_pedido()`, con la misma comprobación y dos salidas:
+  - `confirmar_duplicado` crea el pedido igualmente;
+  - `vincular_a=<id de la lista>` enlaza ese pedido: pone `ref_activo_operacional`, adjunta el PDF como `solicitud_doc` y lo apunta en el historial. No crea otro pedido. Se niega si ese pedido ya está vinculado a otro del Activo Operacional.
+
+**Frontend:**
+- Aviso `#p-aviso-duplicados` en el modal al cambiar hotel o departamento, solo en altas.
+- `_preguntarPosibleDuplicado()`, la pregunta en un modal propio, en `savePedido()` y `_spCrear()`. Si la respuesta es «es otro», se repite la petición con `confirmar_duplicado`.
+
+**Verificación:**
+- Cliente de pruebas de Flask:
+  - el 1.º pedido GY·COCINA no pregunta;
+  - el aviso lo encuentra;
+  - el 2.º igual → 409;
+  - confirmado → se crea;
+  - otro departamento → no pregunta;
+  - si los abiertos ya tienen Nº → no pregunta.
+- Desde Activo Operacional:
+  - 409;
+  - vincular (referencia + PDF);
+  - no se puede vincular a uno ya vinculado;
+  - «es otro» → se crea.
+- Navegador con la app levantada:
+  - el aviso aparece al elegir GY + COCINA;
+  - Guardar → la pregunta;
+  - «Cancelar y revisarlo» no crea nada;
+  - «Es otro pedido distinto» crea y abre el pedido;
+  - con PISOS no hay aviso.
+
+**Encontrado de paso** (sin tocar): en una base de datos vacía, `_auto_migrate()` hace `ALTER TABLE emails_sistema_pendientes` antes del `CREATE TABLE` de esa tabla y se detiene. No afecta a producción, donde la tabla ya existe; solo a una instalación nueva desde cero.
+
+**Norma 5:** sin variables ni tablas nuevas. `GUIA_DESPLIEGUE.md`, `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md` no aplican.
+
 ## 2026-10-20 — [Control Pedidos] Pedidos iniciados desde Activo Operacional (v12.33.28)
 
 **Petición de Víctor:** «una vez recibida la propuesta de pedido, el comprador/administrador deberá en caso de comenzar el proceso, añadir nuevo pedido a la aplicación control de pedidos, con la fecha de la solicitud y acceso al PDF del pedido en el apartado de solicitud, debería existir un botón que antes incluso de solicitar los presupuestos indique el comienzo y creación del pedido, se cumplimentan los campos hotel, departamento, fecha solicitud y se agrega el acceso al pdf del pedido en este punto, todo esto automáticamente».

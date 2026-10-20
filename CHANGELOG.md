@@ -1,3 +1,16 @@
+# v12.33.29 — 20 octubre 2026
+
+🧭 Aviso de posible pedido duplicado al dar de alta
+
+**Petición de Víctor**: para evitar duplicidades, al crear un pedido nuevo, manual o automático, y en cuanto se indican hotel y departamento, la aplicación debe comprobar que no haya ningún pedido abierto con esa misma configuración y todavía sin Nº de pedido adjudicado. Si lo hay, debe pedir al usuario que compruebe que no es el mismo inicio de pedido.
+
+- **Formulario «Nuevo pedido»**: al elegir hotel y departamento aparece un aviso con esos pedidos (Nº, fecha de solicitud, estado, quién lo creó, observaciones y enlace para abrirlo). Al pulsar Guardar se pregunta «¿Es el mismo pedido?», con dos opciones: «Cancelar y revisarlo» o «Es otro pedido distinto: crearlo».
+- **Modo simplificado**: hace la misma pregunta al crear.
+- **Desde Activo Operacional**: se muestran los mismos pedidos y se puede elegir entre **«Es este: vincularlo»**, que enlaza el pedido de Activo Operacional al que ya existía y le adjunta el PDF en la solicitud sin crear otro, o **«Es otro pedido distinto: crearlo»**.
+- **Criterio**: se considera abierto cualquier estado salvo ENTREGADO, CANCELADO y DENEGADO POR DIRECCION GENERAL. «Sin Nº de pedido» significa que todavía no se ha adjuntado el PDF oficial.
+- **Comprobación en el servidor**: `POST /api/pedidos` también lo comprueba (409 con `requiere_confirmacion`) y solo crea el pedido cuando se confirma, así que no se puede saltar desde otra pantalla.
+- **Endpoint nuevo**: `GET /api/pedidos/abiertos-sin-numero`.
+
 # v12.33.28 — 20 octubre 2026
 
 🧾 Pedidos iniciados desde Activo Operacional
