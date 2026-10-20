@@ -11339,6 +11339,11 @@ def get_proveedores():
         page, page_size = 1, 30
 
     wheres, args = ["activo=1"], []
+    # (v12.33.31) ?id=<id>: un proveedor concreto (enlace /?proveedor=<id> desde Activo Operacional).
+    _id_prov = request.args.get("id", "").strip()
+    if _id_prov.isdigit():
+        wheres.append("id = %s")
+        args.append(int(_id_prov))
     if q:
         # (2026-08-31) Víctor: "debe dejar buscar por nombre, codigo sap y
         # codigo dali" — antes solo buscaba por nombre. Un único cuadro de
@@ -26893,6 +26898,9 @@ def api_externo_dali_proveedores():
             return [_codigo_por_id[hid] for hid in p["hoteles_sin_servicio_ids"] if hid in _codigo_por_id]
         salida = [
             {
+                # (2026-10-20, v12.33.31) id: para que Activo Operacional pueda abrir la
+                # ficha del proveedor aquí (/?proveedor=<id>) si le falta el correo.
+                "id": p["id"],
                 "nombre": p["nombre"],
                 "email_principal": p["email"] or None,
                 # (2026-10-19, v12.33.27) `hoteles`: códigos de los hoteles

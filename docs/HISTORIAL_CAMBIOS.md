@@ -49,6 +49,25 @@
 
 ---
 
+## 2026-10-20 — [Control Pedidos] Enlace directo a la ficha de un proveedor (v12.33.31)
+
+**Petición de Víctor:** «cuando se va a solicitar presupuesto, si el proveedor no tiene correo electrónico asignado, se deberá dar la opción de abrir la ficha del proveedor directamente para cumplimentar la info».
+
+**Cambios:**
+- `api_externo_dali_proveedores` añade `id` a cada proveedor (campo nuevo; Catálogo Asignaciones no lo lee).
+- `get_proveedores` acepta `?id=<id>`.
+- **Frontend:**
+  - `_enlaceProveedorInit()` guarda `?proveedor=<id>` al cargar la página y limpia la URL;
+  - `_abrirProveedorEnlace()`, después del login o al restaurar la sesión, va a Proveedores, trae ese proveedor (`/api/proveedores?id=`), lo mete en `_provCache` y abre `openProveedorModal()` con el aviso «Completa los contactos (correo) del proveedor y guarda».
+
+**Verificación:**
+- Con el cliente de pruebas de Flask:
+  - el puente devuelve el `id`;
+  - `?id=` devuelve solo ese proveedor.
+- En el navegador: `/?proveedor=<id>` → login → código de verificación → se abre «Editar proveedor» con su nombre, sin errores.
+
+**Norma 5:** no aplica (sin variables ni tablas nuevas).
+
 ## 2026-10-20 — [Control Pedidos] Pedidos desde Activo Operacional en PENDIENTE COTIZACIÓN (v12.33.30)
 
 Petición de Víctor: «desde que el comprador pulsa en crear en control de pedido, pase el estado a tramitación en activo operacional y el nuevo que se crea en control-pedidos el estado deberá ser pendiente de cotización».

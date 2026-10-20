@@ -1461,7 +1461,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.30
+          V 12.33.31
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3967,6 +3967,7 @@ async function _entrarEnApp(r) {
   _startVersionPolling();   // polling automático de nueva versión cada 5 min
   if (G.rol === 'admin' || G.rol === 'compras') _startEmailsSistemaPolling();
   _abrirPedidoEnlace();     // (v12.32.87) si se entró desde un enlace a un pedido
+  _abrirProveedorEnlace();  // (v12.33.31) si se entró desde un enlace a un proveedor
 }
 
 async function doLogout() {
@@ -4186,6 +4187,28 @@ async function enviarSolicitudReset() {
     if (id > 0) { window._pedidoEnlace = id; window.history.replaceState({}, '', window.location.pathname); }
   } catch (_) {}
 })();
+// (v12.33.31) Enlace directo a la ficha de un proveedor (?proveedor=ID): lo usa Activo
+// Operacional cuando a un proveedor le falta el correo para pedirle presupuesto.
+(function _enlaceProveedorInit() {
+  try {
+    const sp = new URLSearchParams(window.location.search);
+    const id = parseInt(sp.get('proveedor') || '', 10);
+    if (id > 0) { window._proveedorEnlace = id; window.history.replaceState({}, '', window.location.pathname); }
+  } catch (_) {}
+})();
+async function _abrirProveedorEnlace() {
+  const id = window._proveedorEnlace; window._proveedorEnlace = null;
+  if (!id) return;
+  try {
+    showView('proveedores', document.querySelector('[data-view="proveedores"]'));
+    const d = await api(`/api/proveedores?id=${id}&page_size=1`);
+    const p = (d.proveedores || [])[0];
+    if (!p) { toast('Ese proveedor no existe o no está activo.', 'error'); return; }
+    _provCache[p.id] = p;
+    openProveedorModal(p.id);
+    toast('Completa los contactos (correo) del proveedor y guarda.', 'info', 6000);
+  } catch (e) { toast('No se pudo abrir la ficha del proveedor del enlace.', 'error'); }
+}
 async function _abrirPedidoEnlace() {
   const id = window._pedidoEnlace; window._pedidoEnlace = null;
   if (!id) return;
@@ -12083,6 +12106,7 @@ function calcDias(s) {
     _startVersionPolling();   // polling automático cada 30 s (primeros 15 min) luego 1 min
     if (G.rol === 'admin' || G.rol === 'compras') _startEmailsSistemaPolling();
     _abrirPedidoEnlace();     // (v12.32.87) si se entró desde un enlace a un pedido
+  _abrirProveedorEnlace();  // (v12.33.31) si se entró desde un enlace a un proveedor
   }
 })();
 </script>

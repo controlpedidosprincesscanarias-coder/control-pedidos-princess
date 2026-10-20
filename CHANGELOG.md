@@ -1,3 +1,13 @@
+# v12.33.31 — 20 octubre 2026
+
+🔗 Enlace directo a la ficha de un proveedor
+
+**Petición de Víctor**: al solicitar presupuesto desde Activo Operacional, si el proveedor no tiene correo electrónico, debe poder abrirse directamente su ficha para completar los datos.
+
+- **Enlace** `/?proveedor=<id>`: abre la ficha del proveedor (Proveedores → Editar) en cuanto hay sesión, igual que `/?pedido=<id>`, también si antes hay que iniciar sesión.
+- **Proveedores**: `GET /api/proveedores?id=<id>` devuelve ese proveedor concreto.
+- **Puente con Activo Operacional**: `GET /api/externo/dali-sap/proveedores` incluye el `id` de cada proveedor, para poder construir el enlace.
+
 # v12.33.30 — 20 octubre 2026
 
 🟡 Los pedidos que llegan desde Activo Operacional nacen en PENDIENTE COTIZACIÓN
