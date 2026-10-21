@@ -27252,9 +27252,19 @@ def api_externo_ao_visto_bueno():
       { ref ("AO-<nº>"), fecha (AAAA-MM-DD), documentos: [{ nombre, pdf_base64 }],
         nota?, usuario_email?, usuario_nombre? }
 
-    No cambia el estado del pedido. Si se reenvía, se actualiza la fecha y se
-    añaden los documentos nuevos (los anteriores se conservan). Sin sesión:
-    firma HMAC con DALI_SSO_SECRET sobre el cuerpo, como el resto del puente.
+    Si se reenvía, se actualiza la fecha y se añaden los documentos nuevos
+    (los anteriores se conservan). Sin sesión: firma HMAC con DALI_SSO_SECRET
+    sobre el cuerpo, como el resto del puente.
+
+    (v12.33.33) A petición de Víctor: «si al enviar a Vº Bº se cambiara el
+    ESTADO en control pedidos a PENDIENTE FIRMA DIRECCION HOTEL, se incluye la
+    firma y se incluyen los PDF asociados a la firma pendiente». Con
+    `cambiar_estado` (por defecto sí), el pedido pasa a PENDIENTE DE FIRMA
+    DIRECCION HOTEL si está todavía antes de la firma (PENDIENTE COTIZACIÓN o
+    PENDIENTE FIRMA DIRECCION COMPRAS): la fecha y los PDF ya quedan puestos
+    en el mismo paso, que es lo que exige ese estado, y salen los correos y
+    avisos normales del cambio de estado (_notificar_cambio_estado). En
+    cualquier otro estado no se toca y la respuesta dice por qué.
     """
     cuerpo_crudo = request.get_data()
     if not _dali_bridge_firma_valida(cuerpo_crudo):
@@ -27265,6 +27275,7 @@ def api_externo_ao_visto_bueno():
     usuario_email = (datos.get("usuario_email") or "").strip()
     usuario_nombre = (datos.get("usuario_nombre") or "").strip()[:120] or "Activo Operacional"
     nota = (datos.get("nota") or "").strip()[:1000] or "Enviado a V.º B.º de Dirección desde Activo Operacional"
+    cambiar_estado = datos.get("cambiar_estado", True) is not False
     if not ref:
         return jsonify({"ok": False, "error": "Falta la referencia del pedido."}), 400
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", fecha):
@@ -27303,9 +27314,18 @@ def api_externo_ao_visto_bueno():
                 "VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (pedido["id"], "vb_eml", nombre_pdf, "application/pdf", psycopg2.Binary(pdf), False, uid)
             )
+        estado_antes = pedido["estado"]
+        estado_nuevo = estado_antes
+        estado_motivo = None
+        if cambiar_estado:
+            if estado_antes in _AO_VB_ESTADOS_PREVIOS:
+                estado_nuevo = _AO_VB_ESTADO_FIRMA
+                execute("UPDATE pedidos SET estado=%s WHERE id=%s", (estado_nuevo, pedido["id"]))
+            elif estado_antes != _AO_VB_ESTADO_FIRMA:
+                estado_motivo = f"el pedido está en «{estado_antes}»: no se cambia a «{_AO_VB_ESTADO_FIRMA}»"
         execute(
             "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
-            (pedido["id"], pedido["estado"], pedido["estado"], uid, nombre, nota)
+            (pedido["id"], estado_antes, estado_nuevo, uid, nombre, nota)
         )
         db.commit()
     except Exception as exc:
@@ -27315,9 +27335,66 @@ def api_externo_ao_visto_bueno():
             pass
         log.error("[AO-BRIDGE] Error registrando el V.º B.º de %s: %s", ref, exc)
         return jsonify({"ok": False, "error": str(exc)}), 500
-    log.info("[AO-BRIDGE] V.º B.º de %s (pedido %s, Nº %s): fecha %s y %d documento(s) por %s",
-             ref, pedido["id"], pedido["norden"], fecha, len(documentos), nombre)
-    return jsonify({"ok": True, "id": pedido["id"], "norden": pedido["norden"], "documentos": len(documentos)})
+    if estado_nuevo != estado_antes:
+        # Los correos y avisos de siempre del cambio de estado (no bloquean la respuesta).
+        try:
+            _notificar_cambio_estado(get_db(), pedido["id"], estado_nuevo, estado_antes, usuario_nombre=nombre, usuario_id=uid)
+        except Exception as exc:
+            log.error("[AO-BRIDGE] V.º B.º de %s: estado cambiado, pero falló el aviso del cambio: %s", ref, exc)
+    log.info("[AO-BRIDGE] V.º B.º de %s (pedido %s, Nº %s): fecha %s, %d documento(s), estado %s → %s, por %s",
+             ref, pedido["id"], pedido["norden"], fecha, len(documentos), estado_antes, estado_nuevo, nombre)
+    return jsonify({"ok": True, "id": pedido["id"], "norden": pedido["norden"], "documentos": len(documentos),
+                    "estado_antes": estado_antes, "estado": estado_nuevo,
+                    "estado_cambiado": estado_nuevo != estado_antes, "estado_motivo": estado_motivo})
+
+
+# (v12.33.33) Estado al que pasa el pedido al enviarlo a V.º B.º desde Activo
+# Operacional, y estados desde los que se pasa (los anteriores a la firma).
+_AO_VB_ESTADO_FIRMA = "PENDIENTE DE FIRMA DIRECCION HOTEL"
+_AO_VB_ESTADOS_PREVIOS = ("PENDIENTE COTIZACIÓN", "PENDIENTE FIRMA DIRECCION COMPRAS")
+
+
+@app.route("/api/externo/activo-operacional/departamentos-hotel", methods=["GET"])
+def api_externo_ao_departamentos_hotel():
+    """
+    GET /api/externo/activo-operacional/departamentos-hotel?hotel=<código> — (v12.33.33)
+    Correos de cada departamento en ese hotel (Administración → Departamentos —
+    correo por hotel). A petición de Víctor: «el correo de la dirección de los
+    hoteles se encuentra en el apartado departamentos, cada uno en su hotel»:
+    Activo Operacional toma de aquí el correo de DIRECCION para el envío a
+    V.º B.º. Sin sesión: firma HMAC con DALI_SSO_SECRET (cuerpo vacío).
+    Respuesta: { ok, hotel, departamentos: [{nombre, emails[]}], direccion: [emails] }
+    """
+    if not _dali_bridge_firma_valida(request.get_data()):
+        return jsonify({"ok": False, "error": "Firma inválida o caducada."}), 401
+    codigo = (request.args.get("hotel") or "").strip().upper()[:20]
+    if not codigo:
+        return jsonify({"ok": False, "error": "Falta el hotel."}), 400
+    try:
+        hotel = query("SELECT id, codigo, nombre FROM hoteles WHERE UPPER(TRIM(codigo))=%s ORDER BY activo DESC, id LIMIT 1", (codigo,), one=True)
+        if not hotel:
+            return jsonify({"ok": False, "error": f"No hay ningún hotel {codigo} en Control de Pedidos."}), 404
+        filas = rows_to_list(query(
+            "SELECT d.nombre, e.email, e.email2 FROM departamento_hotel_email e "
+            "JOIN departamentos d ON d.id=e.departamento_id WHERE e.hotel_id=%s ORDER BY d.nombre",
+            (hotel["id"],)
+        )) or []
+    except Exception as exc:
+        log.error("[AO-BRIDGE] Error leyendo los correos de departamento de %s: %s", codigo, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+
+    def _norm(t):
+        t = unicodedata.normalize("NFD", str(t or "")).encode("ascii", "ignore").decode().upper()
+        return re.sub(r"\s+", " ", t).strip()
+
+    departamentos, direccion = [], []
+    for f in filas:
+        emails = [e.strip() for e in (f.get("email"), f.get("email2")) if e and e.strip()]
+        departamentos.append({"nombre": f["nombre"], "emails": emails})
+        if _norm(f["nombre"]) == "DIRECCION":
+            direccion.extend(emails)
+    return jsonify({"ok": True, "hotel": {"codigo": hotel["codigo"], "nombre": hotel["nombre"]},
+                    "departamentos": departamentos, "direccion": direccion})
 
 
 # (2026-08-19) Nº máximo de intentos de envío de una fila de

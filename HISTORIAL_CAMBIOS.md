@@ -49,6 +49,32 @@
 
 ---
 
+## 2026-10-21 — [Control Pedidos] V.º B.º desde Activo Operacional: estado de firma y correo de Dirección (v12.33.33)
+
+**Petición de Víctor:**
+- «Si al enviar a Vº Bº se cambiara el ESTADO en control pedidos a PENDIENTE FIRMA DIRECCION HOTEL, se incluye la firma y se incluyen los PDF asociados a la firma pendiente.»
+- «El correo de la dirección de los hoteles se encuentra en el apartado departamentos, cada uno en su hotel.»
+
+**Cambios:**
+- **`api_externo_ao_visto_bueno()`** acepta `cambiar_estado` (por defecto, sí).
+  - Si el pedido está en `_AO_VB_ESTADOS_PREVIOS` (PENDIENTE COTIZACIÓN, PENDIENTE FIRMA DIRECCION COMPRAS), pasa a `_AO_VB_ESTADO_FIRMA` (PENDIENTE DE FIRMA DIRECCION HOTEL) en la misma transacción en que se ponen la fecha y los PDF `vb_eml`, que es lo que exige `_faltan_datos_envio_firma()`.
+  - La fila de `historial_estados` recoge el cambio con la nota.
+  - Después se llama a `_notificar_cambio_estado()`, como en un cambio a mano; si falla, solo se registra en el log.
+  - Respuesta con `estado_antes`, `estado`, `estado_cambiado` y `estado_motivo` (cuando no se cambia porque el pedido ya va más adelante).
+- **Nueva ruta `api_externo_ao_departamentos_hotel()`** → `GET /api/externo/activo-operacional/departamentos-hotel?hotel=<código>`.
+  - Firma HMAC con cuerpo vacío, como el resto de GET del puente.
+  - Lee `departamento_hotel_email` del hotel.
+  - Devuelve `departamentos: [{nombre, emails}]` y `direccion` (los de la fila DIRECCION, sin tildes ni mayúsculas en la comparación).
+
+**Verificación:** prueba de punta a punta desde Activo Operacional (`test/vistoBueno.test.mjs`) contra este Flask en local:
+- sin fila DIRECCION en GY, Activo Operacional lo avisa; con ella, la usa;
+- el pedido pasa de PENDIENTE COTIZACIÓN a PENDIENTE DE FIRMA DIRECCION HOTEL;
+- al reenviar ya no cambia;
+- en ENVIADO AL PROVEEDOR no se toca y se explica;
+- hotel inexistente → 404 y firma incorrecta → 401.
+
+**Norma 5:** no aplica (sin variables ni tablas nuevas).
+
 ## 2026-10-21 — [Control Pedidos] Envío a V.º B.º de Dirección desde Activo Operacional (v12.33.32)
 
 **Petición de Víctor:** desde la comparativa de presupuestos de Activo Operacional, «enviar presupuestos para visto bueno de dirección» con un documento por proveedor; en Control de Pedidos, que quede la «Fecha de envío para V.º B.º» con los documentos adjuntos.

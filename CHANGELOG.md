@@ -1,3 +1,16 @@
+# v12.33.33 — 21 octubre 2026
+
+✍️ El envío a V.º B.º desde Activo Operacional pasa el pedido a PENDIENTE DE FIRMA DIRECCION HOTEL
+
+**Petición de Víctor**: «si al enviar a Vº Bº se cambiara el ESTADO en control pedidos a PENDIENTE FIRMA DIRECCION HOTEL, se incluye la firma y se incluyen los PDF asociados a la firma pendiente»; y «el correo de la dirección de los hoteles se encuentra en el apartado departamentos, cada uno en su hotel».
+
+- **Estado**: el puente del V.º B.º, además de la fecha de envío para V.º B.º y los PDF, pasa el pedido a **PENDIENTE DE FIRMA DIRECCION HOTEL**.
+  - Solo si estaba antes de la firma (PENDIENTE COTIZACIÓN o PENDIENTE FIRMA DIRECCION COMPRAS).
+  - Salen los correos y avisos normales del cambio de estado, y queda en el historial.
+  - Si el pedido está más adelante, no se toca y se responde por qué.
+- **Correo de Dirección**: nuevo puente `GET /api/externo/activo-operacional/departamentos-hotel?hotel=<código>` (firmado), con los correos de cada departamento del hotel de Administración → Departamentos — correo por hotel. Activo Operacional usa la fila DIRECCION.
+- Lo usa Activo Operacional v1.15.1.
+
 # v12.33.32 — 21 octubre 2026
 
 ✍️ Envío a V.º B.º de Dirección desde Activo Operacional
