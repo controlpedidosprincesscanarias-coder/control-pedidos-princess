@@ -49,6 +49,21 @@
 
 ---
 
+## 2026-10-21 — [Control Pedidos] Envío a V.º B.º de Dirección desde Activo Operacional (v12.33.32)
+
+**Petición de Víctor:** desde la comparativa de presupuestos de Activo Operacional, «enviar presupuestos para visto bueno de dirección» con un documento por proveedor; en Control de Pedidos, que quede la «Fecha de envío para V.º B.º» con los documentos adjuntos.
+
+**Cambios:**
+- Nueva ruta `api_externo_ao_visto_bueno()` → `POST /api/externo/activo-operacional/pedidos/visto-bueno`.
+  - Comprueba la firma (`_dali_bridge_firma_valida`), `ref`, `fecha` y los PDF (hasta 30, cada uno ≤ `MAX_BYTES_DOCUMENTO`).
+  - Busca el pedido por `ref_activo_operacional` (404 si no existe).
+  - Pone `fecha_envio_visto_bueno` y `modificado_por`; inserta cada PDF en `pedido_adjuntos` con tipo `vb_eml` (`es_correo` falso).
+  - Añade una fila en `historial_estados` con el mismo estado y la nota recibida. No cambia el estado.
+
+**Verificación:** prueba de punta a punta desde Activo Operacional (`test/vistoBueno.test.mjs`) contra este Flask en local: fecha de hoy, los 2 PDF en el apartado «Envío para Vº Bº / firma», nota en el historial y estado sin tocar; pedido inexistente → 404; firma incorrecta → 401.
+
+**Norma 5:** no aplica (sin variables ni tablas nuevas; usa columnas y tipos de adjunto que ya existían).
+
 ## 2026-10-20 — [Control Pedidos] Enlace directo a la ficha de un proveedor (v12.33.31)
 
 **Petición de Víctor:** «cuando se va a solicitar presupuesto, si el proveedor no tiene correo electrónico asignado, se deberá dar la opción de abrir la ficha del proveedor directamente para cumplimentar la info».

@@ -1,3 +1,13 @@
+# v12.33.32 — 21 octubre 2026
+
+✍️ Envío a V.º B.º de Dirección desde Activo Operacional
+
+**Petición de Víctor**: cuando, en Activo Operacional, el comprador envía a V.º B.º de Dirección los documentos de compra por proveedor (sacados de la comparativa de presupuestos), el pedido de Control de Pedidos debe quedar con la «Fecha de envío para V.º B.º» y con esos documentos adjuntos.
+
+- **Puente nuevo** `POST /api/externo/activo-operacional/pedidos/visto-bueno` (firmado con `DALI_SSO_SECRET`, como el resto del puente): busca el pedido por su referencia de Activo Operacional, pone `fecha_envio_visto_bueno`, adjunta cada PDF en «Envío para Vº Bº / firma» y añade una nota en el historial.
+- **El estado no cambia**: el comprador lo pasa a PENDIENTE FIRMA cuando corresponda; con la fecha y los documentos ya puestos, esa comprobación queda cumplida.
+- Lo usa Activo Operacional v1.15.0.
+
 # v12.33.31 — 20 octubre 2026
 
 🔗 Enlace directo a la ficha de un proveedor

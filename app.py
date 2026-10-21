@@ -27237,6 +27237,89 @@ def api_externo_ao_crear_pedido():
                     "hotel": hotel["codigo"], "departamento": depto["nombre"], "creado_por": nombre}), 201
 
 
+@app.route("/api/externo/activo-operacional/pedidos/visto-bueno", methods=["POST"])
+def api_externo_ao_visto_bueno():
+    """
+    POST /api/externo/activo-operacional/pedidos/visto-bueno — (2026-10-21, v12.33.32)
+    Activo Operacional ha enviado a V.º B.º de Dirección la propuesta de compra
+    de un pedido (un documento PDF por proveedor adjudicado en su comparativa
+    de presupuestos). A petición de Víctor: al enviarlos a firma, el pedido de
+    Control de Pedidos se actualiza solo: «Fecha de envío para Vº Bº» y los
+    documentos adjuntos en ese apartado (tipo vb_eml), que es lo que pide
+    _faltan_datos_envio_firma() para poder pasarlo después a un estado de firma.
+
+    Body JSON:
+      { ref ("AO-<nº>"), fecha (AAAA-MM-DD), documentos: [{ nombre, pdf_base64 }],
+        nota?, usuario_email?, usuario_nombre? }
+
+    No cambia el estado del pedido. Si se reenvía, se actualiza la fecha y se
+    añaden los documentos nuevos (los anteriores se conservan). Sin sesión:
+    firma HMAC con DALI_SSO_SECRET sobre el cuerpo, como el resto del puente.
+    """
+    cuerpo_crudo = request.get_data()
+    if not _dali_bridge_firma_valida(cuerpo_crudo):
+        return jsonify({"ok": False, "error": "Firma inválida o caducada."}), 401
+    datos = request.get_json(silent=True) or {}
+    ref = (datos.get("ref") or "").strip()[:60]
+    fecha = (datos.get("fecha") or "").strip()
+    usuario_email = (datos.get("usuario_email") or "").strip()
+    usuario_nombre = (datos.get("usuario_nombre") or "").strip()[:120] or "Activo Operacional"
+    nota = (datos.get("nota") or "").strip()[:1000] or "Enviado a V.º B.º de Dirección desde Activo Operacional"
+    if not ref:
+        return jsonify({"ok": False, "error": "Falta la referencia del pedido."}), 400
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", fecha):
+        return jsonify({"ok": False, "error": "Fecha no válida (AAAA-MM-DD)."}), 400
+    documentos = []
+    for d in (datos.get("documentos") or [])[:30]:
+        try:
+            pdf = base64.b64decode(d.get("pdf_base64") or "", validate=True)
+        except Exception:
+            return jsonify({"ok": False, "error": "Un documento no es un PDF válido."}), 400
+        if not pdf.startswith(b"%PDF"):
+            return jsonify({"ok": False, "error": "Un documento no es un PDF válido."}), 400
+        if len(pdf) > MAX_BYTES_DOCUMENTO:
+            return jsonify({"ok": False, "error": f"Un documento supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB."}), 400
+        documentos.append(((d.get("nombre") or "visto-bueno.pdf").strip()[:200], pdf))
+    if not documentos:
+        return jsonify({"ok": False, "error": "No llega ningún documento."}), 400
+    try:
+        pedido = query("SELECT id, norden, estado FROM pedidos WHERE ref_activo_operacional=%s", (ref,), one=True)
+        if not pedido:
+            return jsonify({"ok": False, "error": f"No hay ningún pedido en Control de Pedidos vinculado a {ref}."}), 404
+        usuario = None
+        if usuario_email:
+            usuario = query(
+                "SELECT id, nombre FROM usuarios WHERE LOWER(TRIM(email))=LOWER(%s) OR LOWER(TRIM(email2))=LOWER(%s) ORDER BY activo DESC, id LIMIT 1",
+                (usuario_email, usuario_email), one=True
+            )
+        uid = usuario["id"] if usuario else None
+        nombre = (usuario["nombre"] if usuario else None) or usuario_nombre
+        db = get_db()
+        execute("UPDATE pedidos SET fecha_envio_visto_bueno=%s, modificado_por_id=COALESCE(%s, modificado_por_id), "
+                "modificado_por_nombre=%s, modificado_en=NOW() WHERE id=%s", (fecha, uid, nombre, pedido["id"]))
+        for nombre_pdf, pdf in documentos:
+            execute(
+                "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (pedido["id"], "vb_eml", nombre_pdf, "application/pdf", psycopg2.Binary(pdf), False, uid)
+            )
+        execute(
+            "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
+            (pedido["id"], pedido["estado"], pedido["estado"], uid, nombre, nota)
+        )
+        db.commit()
+    except Exception as exc:
+        try:
+            get_db().rollback()
+        except Exception:
+            pass
+        log.error("[AO-BRIDGE] Error registrando el V.º B.º de %s: %s", ref, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    log.info("[AO-BRIDGE] V.º B.º de %s (pedido %s, Nº %s): fecha %s y %d documento(s) por %s",
+             ref, pedido["id"], pedido["norden"], fecha, len(documentos), nombre)
+    return jsonify({"ok": True, "id": pedido["id"], "norden": pedido["norden"], "documentos": len(documentos)})
+
+
 # (2026-08-19) Nº máximo de intentos de envío de una fila de
 # emails_sistema_pendientes antes de dejar de reintentarse sola — ver
 # api_emails_sistema_pendientes() y api_emails_sistema_atascados().
