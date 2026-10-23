@@ -49,6 +49,48 @@
 
 ---
 
+## 2026-10-22 — [Control Pedidos] Seguridad: límite de intentos, contraseñas temporales y dependencias (v12.33.35)
+
+**Origen:** segunda parte de la auditoría de Control Pedidos. Hallazgos CP-04, CP-05, CP-08, CP-09 (parte) y vulnerabilidades de dependencias.
+
+**Cambios:**
+- **CP-04, sin límite de intentos.** Nuevo limitador en memoria (`_rl_segundos_bloqueo`, `_rl_registrar`, `_rl_limpiar`, `_rl_golpe`, `_rl_respuesta_429`, `_reglas_login`) junto a `_ip_cliente()`. `login`: 8 fallos/15 min por cuenta+IP, 30 por cuenta, 60 por IP. `verificar_codigo_login`: 5 fallos/10 min por cuenta (y 40 por IP); al excederse se marcan como usados los códigos vigentes. `solicitar_reset_password`: 3/h por usuario, 20/h por IP, con respuesta genérica. `cambiar_password_con_token`: 20 fallos/h por IP. Solicitudes públicas (`solicitar_usuario_fase1`, `_directo`, `_fase2`): 15/h por IP. Las claves combinan cuenta e IP para que un tercero no pueda bloquear a un usuario desde otra IP.
+- **CP-04, contraseña temporal.** `admin_aprobar_solicitud` usa `secrets.choice` sobre un alfabeto sin ambiguos, 12 caracteres (antes `Princess` + `randint(1000, 9999)`).
+- **CP-05, `bridge_login`.** Mismo límite de intentos; variable opcional `BRIDGE_USUARIOS` (lista de usernames) que restringe quién puede saltarse la verificación por email. Sin ella, igual que antes con aviso en el log. Documentada en `GUIA_DESPLIEGUE.md`.
+- **CP-08, base vacía.** CREATE TABLE IF NOT EXISTS de `emails_sistema_pendientes` antes de sus primeros ALTER en `_auto_migrate`.
+- **CP-09 (parte).** `login`, `verificar_codigo_login`, `bridge_login`, `solicitar_reset_password` y `cambiar_password_con_token` aplican `str()` a los campos recibidos.
+- **Dependencias** (`requirements.txt`): Pillow 12.3.0→13.0.0, pypdf 6.16.2→6.21.2, cryptography 46.0.7→50.0.2, certifi→2026.10.19, urllib3 2.7.0→2.8.0, werkzeug 3.1.8→3.1.9.
+
+**Verificación:** `t_v35` (Postgres 16 + cliente de Flask), 21 comprobaciones: 8 fallos → 401 y el noveno, con la clave correcta, → 429 con `Retry-After`; la misma cuenta desde otra IP entra; rotar `X-Forwarded-For` acaba bloqueado por cuenta; 5 códigos malos → 401 y el sexto, con el código correcto, → 429 y el código queda invalidado; 5 solicitudes de reset generan 3 tokens; solicitudes públicas 15 → 200, después 429; bridge: cuenta fuera de `BRIDGE_USUARIOS` → 401, dentro → 200, sin variable → 200, y 429 tras 8 fallos. `t_v34` sigue en TODO OK. En un entorno virtual limpio con las dependencias nuevas: pypdf, pdfplumber, miniaturas de Pillow y `pip check` correctos; `pip-audit` sin vulnerabilidades. Base nueva: `init_db.py` + dos arranques sin errores.
+
+**Limitaciones conocidas:** el limitador se pierde al reiniciar y asume 1 worker; la IP sale de `X-Forwarded-For` (primer elemento), por eso hay también un umbral solo por cuenta. Los mensajes `str(exc)` de endpoints autenticados no se han tocado. Falta el cambio forzado de la contraseña temporal en el primer acceso (requiere pantalla).
+
+## 2026-10-22 — [Control Pedidos] Seguridad: correcciones de la auditoría (v12.33.34)
+
+**Origen:** auditoría completa de Control Pedidos, Catálogo Asignaciones y Activo Operacional pedida por Víctor («auditoría completa, si hay alguna vulnerabilidad»). Informe: «Auditoría de las tres aplicaciones Princess (octubre 2026)». Hallazgos CP-01, CP-02, CP-03, CP-06 y CP-07, más una parte de CP-09.
+
+**Cambios:**
+- **CP-01, XSS almacenado sin autenticación.** `adminCargarSolicitudes()` y unos 80 puntos más de `templates/index.html` pintaban datos de usuario con `innerHTML` sin escapar; ahora usan `_escHtmlCp()` (nombres, apellidos, correo, hoteles, usuario Windows, usuarios, adjuntos, historial, notas, observaciones, hoteles y proveedores). Los atributos `value="${esc(...)}"` pasan a `_escHtmlCp()` porque `esc()` solo escapa la comilla simple.
+  - Segunda barrera en `app.py`: `_con_marcado()` rechaza `<`, `>`, `"` y caracteres de control en `solicitar_usuario_fase1`, `solicitar_usuario_directo`, `solicitar_usuario_fase2`, `bridge_solicitar_alta`, `create_usuario` y el cambio de nombre de usuario, con tope de 300 caracteres en las solicitudes.
+  - `upload_adjunto` sustituye esos caracteres en el nombre del archivo.
+- **CP-02, adjuntos sin control de hotel.** Nuevos `_hotel_accesible()`, `_sin_acceso_pedido()` y `_adjunto_hotel_id()`; los cinco endpoints (`get_adjuntos`, `upload_adjunto`, `download_adjunto`, `download_adjunto_thumb`, `delete_adjunto`) devuelven 403 si un usuario de rol hotel no tiene ese hotel. La descarga pública por token no se toca.
+- **CP-03, `aprobar_expediente` y `denegar_expediente`** devuelven 403 si el rol no es admin ni compras.
+- **CP-06, cabeceras y cookie.** Nuevo `after_request` `_cabeceras_seguridad`; `SESSION_COOKIE_SECURE` (variable `COOKIE_SECURE`, por defecto sí), `SESSION_COOKIE_SAMESITE=Lax`, `MAX_CONTENT_LENGTH` de 80 MB.
+- **CP-07.** `solicitar_reset_password` ya no escribe el enlace en el log.
+- **CP-09 (parte).** Observaciones escapadas con `_html_escape` en los correos HTML de estado y de alertas.
+
+**Verificación:** contra Postgres 16 y el cliente de pruebas de Flask, con Chromium (Playwright):
+- usuario hotel A: listar, descargar, miniatura, subir y borrar adjuntos del hotel B → 403 (antes 200/201); con su propio pedido → 200/201;
+- usuario hotel: aprobar y denegar expediente → 403 y el expediente sigue pendiente; compras: denegar → 200 y aprobar pasa el control de rol;
+- cookie con `Secure; SameSite=Lax; HttpOnly` y cinco cabeceras de seguridad presentes;
+- solicitud pública con `<img onerror>` → 400; solicitud normal con apóstrofo → 200; admin que crea un usuario con HTML → 400;
+- con datos ya envenenados en la base (solicitud, nombre de usuario, observaciones, historial, nombre de adjunto) la versión anterior ejecutaba 7 scripts; esta, ninguno, y la solicitud se ve como texto;
+- `py_compile` correcto y sin errores de JavaScript en la página.
+
+**Pendiente (otra versión):** límite de intentos de login, código y restablecimiento; contraseñas temporales con `secrets` y cambio forzado; `bridge/login`; actualizar Pillow, pypdf y cryptography; arranque en base vacía.
+
+**Norma 5:** no aplica (sin variables obligatorias ni tablas nuevas; `COOKIE_SECURE=0` es opcional y solo para desarrollo local sin HTTPS).
+
 ## 2026-10-21 — [Control Pedidos] V.º B.º desde Activo Operacional: estado de firma y correo de Dirección (v12.33.33)
 
 **Petición de Víctor:**

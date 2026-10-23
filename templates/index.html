@@ -1461,7 +1461,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.33
+          V 12.33.35
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -4462,12 +4462,12 @@ async function adminCargarSolicitudes() {
       const emailBadge = _solEmailBadgeHtml(r);
       tr.innerHTML = `
         <td style="padding:10px 14px;font-family:monospace;font-size:12px;color:var(--muted);">#${r.id}</td>
-        <td style="padding:10px 14px;font-size:13px;font-weight:600;">${r.nombre} ${r.apellidos}
+        <td style="padding:10px 14px;font-size:13px;font-weight:600;">${_escHtmlCp(r.nombre)} ${_escHtmlCp(r.apellidos)}
           <div style="font-size:11px;color:var(--muted);font-weight:400;">${fecha}</div></td>
-        <td style="padding:10px 14px;font-size:13px;"><a href="mailto:${r.email}" style="color:var(--navy2);">${r.email}</a></td>
-        <td style="padding:10px 14px;font-size:12px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${r.hoteles}">${r.hoteles}</td>
+        <td style="padding:10px 14px;font-size:13px;"><a href="mailto:${_escHtmlCp(r.email)}" style="color:var(--navy2);">${_escHtmlCp(r.email)}</a></td>
+        <td style="padding:10px 14px;font-size:12px;max-width:160px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${_escHtmlCp(r.hoteles)}">${_escHtmlCp(r.hoteles)}</td>
         <td style="padding:10px 14px;font-family:monospace;font-size:13px;font-weight:700;color:var(--navy);">
-          ${r.usuario_windows || '<span style="color:var(--muted);font-style:italic;font-weight:400;font-family:inherit;">Pendiente</span>'}</td>
+          ${_escHtmlCp(r.usuario_windows) || '<span style="color:var(--muted);font-style:italic;font-weight:400;font-family:inherit;">Pendiente</span>'}</td>
         <td style="padding:10px 14px;">
           <span style="background:${est.bg};color:${est.color};padding:3px 9px;border-radius:5px;font-size:11px;font-weight:700;white-space:nowrap;">${est.label}</span>
           ${emailBadge}
@@ -5054,13 +5054,13 @@ async function loadMaestros() {
     if (el) while (el.options.length > 1) el.remove(1);
   });
   const fh = document.getElementById('f-hotel');
-  d.hoteles.forEach(h => fh.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  d.hoteles.forEach(h => fh.innerHTML += `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`);
 
   const fe = document.getElementById('f-estado');
   d.estados.forEach(e => fe.innerHTML += `<option value="${e}">${e}</option>`);
 
   const fd = document.getElementById('f-depto');
-  d.departamentos.forEach(dep => fd.innerHTML += `<option value="${dep.id}">${dep.nombre}</option>`);
+  d.departamentos.forEach(dep => fd.innerHTML += `<option value="${dep.id}">${_escHtmlCp(dep.nombre)}</option>`);
 
   // Poblar selects del modal pedido
   poblarSelectHoteles(); poblarSelectDeptos(); poblarSelectEstados(); poblarSelectProveedores();
@@ -5071,13 +5071,13 @@ function poblarSelectFamilias() {
   const s = document.getElementById('p-familia');
   if (!s) return;
   s.innerHTML = '<option value="">— Seleccionar familia —</option>';
-  (G.maestros.familias || []).forEach(f => s.innerHTML += `<option value="${f.id}">${f.nombre}</option>`);
+  (G.maestros.familias || []).forEach(f => s.innerHTML += `<option value="${f.id}">${_escHtmlCp(f.nombre)}</option>`);
 }
 
 function poblarSelectHoteles() {
   const s = document.getElementById('p-hotel');
   s.innerHTML = '<option value="">— Selecciona —</option>';
-  G.maestros.hoteles.forEach(h => s.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  G.maestros.hoteles.forEach(h => s.innerHTML += `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`);
 }
 // (2026-08-31) A petición de Víctor: los hoteles GY/IT/MT/TA tienen
 // RESTAURANTE y BARES como departamentos separados, así que para ellos no
@@ -5115,7 +5115,7 @@ function poblarSelectDeptos() {
 
   G.maestros.departamentos
     .filter(d => !excluidos.has((d.nombre || '').toUpperCase()))
-    .forEach(d => s.innerHTML += `<option value="${d.id}">${d.nombre}</option>`);
+    .forEach(d => s.innerHTML += `<option value="${d.id}">${_escHtmlCp(d.nombre)}</option>`);
 
   if (!valorPrevio) return;
   if ([...s.options].some(o => o.value === valorPrevio)) {
@@ -5128,7 +5128,7 @@ function poblarSelectDeptos() {
   // perder lo ya guardado; el filtro solo limita las opciones NUEVAS.
   const depExistente = (G.maestros.departamentos || []).find(d => String(d.id) === String(valorPrevio));
   if (depExistente) {
-    s.innerHTML += `<option value="${depExistente.id}">${depExistente.nombre} (no habitual en este hotel)</option>`;
+    s.innerHTML += `<option value="${depExistente.id}">${_escHtmlCp(depExistente.nombre)} (no habitual en este hotel)</option>`;
     s.value = valorPrevio;
   }
 }
@@ -5185,7 +5185,7 @@ async function loadStats() {
   const maxH = Math.max(...d.by_hotel.map(h=>h.total), 1);
   document.getElementById('chart-hotel').innerHTML = d.by_hotel.map(h => `
     <div class="chart-bar-row">
-      <div class="chart-bar-label">${h.codigo} – ${h.nombre}</div>
+      <div class="chart-bar-label">${h.codigo} – ${_escHtmlCp(h.nombre)}</div>
       <div class="chart-bar-track"><div class="chart-bar-fill" style="width:${Math.round(h.total/maxH*100)}%;background:var(--gold)"></div></div>
       <div class="chart-bar-val">${h.total}</div>
     </div>`).join('');
@@ -5322,7 +5322,7 @@ function _buildInsights(d) {
   const provConInc = (d.ranking_proveedores || []).filter(p => p.incidencias > 0).sort((a, b) => b.incidencias - a.incidencias)[0];
   if (provConInc) {
     out.push({ icon: '🚚', tone: 'warn', prio: 6, html:
-      `<b>${provConInc.nombre}</b> acumula ${provConInc.incidencias} pedido${provConInc.incidencias > 1 ? 's' : ''} con seguimiento activo entre sus entregas.` });
+      `<b>${_escHtmlCp(provConInc.nombre)}</b> acumula ${provConInc.incidencias} pedido${provConInc.incidencias > 1 ? 's' : ''} con seguimiento activo entre sus entregas.` });
   }
 
   // 8) Tiempo medio de espera de los pendientes
@@ -5437,7 +5437,7 @@ async function loadDashboardResumen() {
         const semaforo = pct === null ? '⚪' : pct >= 95 ? '🟢' : pct >= 85 ? '🟡' : '🔴';
         return `
         <div class="dash-hotel-card">
-          <div class="h-nombre" title="${h.nombre}">${h.codigo} – ${h.nombre}</div>
+          <div class="h-nombre" title="${_escHtmlCp(h.nombre)}">${h.codigo} – ${_escHtmlCp(h.nombre)}</div>
           <div class="h-total">${h.total}</div>
           <div class="h-label">pedidos</div>
           <div class="h-row">
@@ -5498,7 +5498,7 @@ async function loadDashboardResumen() {
         <span class="dash-timeline-time">${_fmtTimelineTime(t.creado_en)}</span>
         <span class="dash-timeline-text">
           Pedido <b>${t.pedido_num || ('#' + (t.norden || t.pedido_id))}</b> (${t.hotel_codigo || '—'}) → <b>${t.estado_nuevo}</b>
-          ${t.usuario_nombre ? ` · ${t.usuario_nombre}` : ''}
+          ${t.usuario_nombre ? ` · ${_escHtmlCp(t.usuario_nombre)}` : ''}
         </span>
       </div>`).join('')
     : '<div class="dash-activity-empty">Sin actividad reciente.</div>';
@@ -5509,7 +5509,7 @@ async function loadDashboardResumen() {
   document.getElementById('dash-ranking-proveedores').innerHTML = d.ranking_proveedores.length
     ? d.ranking_proveedores.map(r => `
       <div class="dash-ranking-row">
-        <span class="r-nombre" title="${r.nombre}">${r.nombre}</span>
+        <span class="r-nombre" title="${_escHtmlCp(r.nombre)}">${_escHtmlCp(r.nombre)}</span>
         <span class="r-total">${r.total} pedidos</span>
         <span class="r-pct">${r.pct_cumplimiento !== null ? r.pct_cumplimiento + '%' : '—'}</span>
         <span class="r-inc ${r.incidencias > 0 ? 'some' : 'zero'}">${r.incidencias} alerta${r.incidencias!==1?'s':''}</span>
@@ -5664,7 +5664,7 @@ function renderPedidosTable(pedidos) {
       <td>${estadoBadge(p.estado)}</td>
       <td>${fmtDate(p.fecha_tramitacion)}${entregaPrevPedidosLabel}</td>
       <td>${p.proveedor_nombre||'—'}</td>
-      <td class="comentarios-cell" title="${(p.observaciones||'').replace(/"/g,'&quot;')}">${p.observaciones ? `<span class="comentarios-text">${p.observaciones}</span>` : '<span class="bool-no">—</span>'}</td>
+      <td class="comentarios-cell" title="${_escHtmlCp(p.observaciones||'')}">${p.observaciones ? `<span class="comentarios-text">${_escHtmlCp(p.observaciones)}</span>` : '<span class="bool-no">—</span>'}</td>
       <td style="text-align:center">${p.has_adjuntos ? `<span class="adj-indicator" title="Tiene archivos adjuntos">📎</span>` : ''}</td>
       <td><button class="btn btn-ghost btn-sm" onclick="event.stopPropagation();openPedidoModal(${p.id})">✏ Editar</button></td>
     </tr>`;
@@ -5831,10 +5831,10 @@ async function openPedidoModal(id=null) {
       document.getElementById('p-historial-section').style.display='';
       document.getElementById('p-historial').innerHTML = d.historial.map(h => `
         <div class="tl-item">
-          <div class="tl-dot">${h.usuario_nombre?h.usuario_nombre.charAt(0):'?'}</div>
+          <div class="tl-dot">${h.usuario_nombre?_escHtmlCp(h.usuario_nombre.charAt(0)):'?'}</div>
           <div class="tl-content">
             <div class="tl-estado">${h.estado_nuevo}</div>
-            <div class="tl-meta">${h.usuario_nombre||'—'} · ${fmtDateTime(h.creado_en)}${h.nota?` · "${h.nota}"`:''}</div>
+            <div class="tl-meta">${_escHtmlCp(h.usuario_nombre)||'—'} · ${fmtDateTime(h.creado_en)}${h.nota?` · "${_escHtmlCp(h.nota)}"`:''}</div>
           </div>
         </div>`).join('');
     }
@@ -5996,7 +5996,7 @@ function renderAdjuntosPdf(prefijo, lista) {
   contenedor.innerHTML = lista.map(a => `
     <div class="adj-item" id="adj-item-${a.id}">
       <span style="font-size:16px">📄</span>
-      <a href="/api/adjuntos/${a.id}" target="_blank" title="${a.nombre}">${a.nombre}</a>
+      <a href="/api/adjuntos/${a.id}" target="_blank" title="${_escHtmlCp(a.nombre)}">${_escHtmlCp(a.nombre)}</a>
       <button class="adj-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
     </div>`).join('');
 }
@@ -6008,7 +6008,7 @@ function renderAdjuntosImg(lista) {
     <div class="adj-img-wrap" id="adj-item-${a.id}">
       <img class="adj-img-thumb" src="/api/adjuntos/${a.id}/thumb"
            onclick="window.open('/api/adjuntos/${a.id}','_blank')"
-           title="${a.nombre}" alt="${a.nombre}">
+           title="${_escHtmlCp(a.nombre)}" alt="${_escHtmlCp(a.nombre)}">
       <button class="adj-img-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
     </div>`).join('');
 }
@@ -6022,7 +6022,7 @@ function renderAdjuntosFecha(prefijo, lista) {
     const ico = iconos[ext] || '📎';
     return `<div class="adj-item" id="adj-item-${a.id}">
       <span style="font-size:14px">${ico}</span>
-      <a href="/api/adjuntos/${a.id}" target="_blank" title="${a.nombre}">${a.nombre}</a>
+      <a href="/api/adjuntos/${a.id}" target="_blank" title="${_escHtmlCp(a.nombre)}">${_escHtmlCp(a.nombre)}</a>
       <button class="adj-del" onclick="borrarAdjunto(${a.id})" title="Eliminar">✕</button>
     </div>`;
   }).join('');
@@ -7218,7 +7218,7 @@ function abrirEntregaLineas(row, modoDiferencia = false) {
     const pend = Math.max(0, Math.round((l.pedida - ya) * 10000) / 10000);
     const marcada = (actual[l.codigo] != null) || (sinDetalle && _melModoDif && pend > 0);
     const cant = actual[l.codigo] != null ? actual[l.codigo] : pend;
-    return `<tr data-orden="${i}" data-cod="${esc(l.codigo)}" data-pedida="${l.pedida}" data-ya="${ya}" data-precio="${l.precio == null ? '' : l.precio}" style="border-top:1px solid #eef1f6">
+    return `<tr data-orden="${i}" data-cod="${_escHtmlCp(l.codigo)}" data-pedida="${l.pedida}" data-ya="${ya}" data-precio="${l.precio == null ? '' : l.precio}" style="border-top:1px solid #eef1f6">
       <td style="padding:4px 6px"><input type="checkbox" class="mel-chk" ${marcada ? 'checked' : ''} ${_melSoloLectura ? 'disabled' : ''} onchange="melCambio(this.closest('tr'), true)"></td>
       <td class="monospace" style="padding:4px 6px">${_htmlLinea(l.codigo_vista || l.codigo)}</td>
       <td class="monospace" style="padding:4px 6px">${_htmlLinea(l.ref_proveedor || '—')}</td>
@@ -7992,7 +7992,7 @@ function prepararBuscadorArticulo() {
   if (!document.getElementById('bq-modo-buscar').style.background) bqCambiarModo('buscar');
   const fh = document.getElementById('bq-hotel');
   if (fh && fh.options.length <= 1 && G.maestros) {
-    (G.maestros.hoteles || []).forEach(h => fh.insertAdjacentHTML('beforeend', `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`));
+    (G.maestros.hoteles || []).forEach(h => fh.insertAdjacentHTML('beforeend', `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`));
   }
   const fe = document.getElementById('bq-estado');
   if (fe && fe.options.length <= 1 && G.maestros) {
@@ -8018,7 +8018,7 @@ function bqCambiarModo(modo) {
   if (pend) {
     const fh = document.getElementById('bp-hotel');
     if (fh && fh.options.length <= 1 && G.maestros) {
-      (G.maestros.hoteles || []).forEach(h => fh.insertAdjacentHTML('beforeend', `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`));
+      (G.maestros.hoteles || []).forEach(h => fh.insertAdjacentHTML('beforeend', `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`));
     }
     cargarPendientesEntrega();
   }
@@ -8713,12 +8713,12 @@ async function deletePedido() {
 
   // Resumen del pedido
   const lines = [
-    p.hotel_nombre    ? `<b>Hotel:</b> ${p.hotel_nombre}` : null,
+    p.hotel_nombre    ? `<b>Hotel:</b> ${_escHtmlCp(p.hotel_nombre)}` : null,
     p.departamento_nombre ? `<b>Departamento:</b> ${p.departamento_nombre}` : null,
-    p.proveedor_nombre ? `<b>Proveedor:</b> ${p.proveedor_nombre}` : null,
+    p.proveedor_nombre ? `<b>Proveedor:</b> ${_escHtmlCp(p.proveedor_nombre)}` : null,
     p.estado          ? `<b>Estado:</b> ${p.estado}` : null,
     p.pedido_num      ? `<b>Nº Pedido:</b> ${p.pedido_num}` : null,
-    p.creado_por_nombre ? `<b>Creado por:</b> ${p.creado_por_nombre}` : null,
+    p.creado_por_nombre ? `<b>Creado por:</b> ${_escHtmlCp(p.creado_por_nombre)}` : null,
   ].filter(Boolean);
   document.getElementById('del-confirm-resumen').innerHTML = lines.join('<br>') || '(sin datos)';
 
@@ -8769,7 +8769,7 @@ function _poblarFiltroHotelAlertas() {
   if (!sel || sel.dataset.poblado) return; // solo una vez; el maestro no cambia en caliente
   const actual = sel.value;
   (G.maestros?.hoteles || []).forEach(h => {
-    sel.innerHTML += `<option value="${h.codigo}">${h.codigo} – ${h.nombre}</option>`;
+    sel.innerHTML += `<option value="${h.codigo}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`;
   });
   sel.value = actual;
   sel.dataset.poblado = '1';
@@ -8974,7 +8974,7 @@ async function loadEliminados() {
       <td>${r.proveedor_nombre||'—'}</td>
       <td><span class="badge">${r.estado||'—'}</span></td>
       <td>${r.pedido_num||'—'}</td>
-      <td>${r.creado_por_nombre||'—'}</td>
+      <td>${_escHtmlCp(r.creado_por_nombre)||'—'}</td>
       <td style="max-width:200px;font-size:12px;color:#555">${r.motivo_eliminacion||'—'}</td>
       <td><strong>${r.eliminado_por_nombre||'—'}</strong></td>
       <td style="font-size:12px;white-space:nowrap">${fecha}</td>
@@ -9141,9 +9141,9 @@ async function loadProveedores() {
     <tr>
       <td style="color:var(--text-secondary);font-size:.85rem">${p.codigo||'—'}</td>
       <td style="color:var(--text-secondary);font-size:.85rem">${p.codigo_dali||'—'}</td>
-      <td><strong>${p.nombre}</strong></td>
+      <td><strong>${_escHtmlCp(p.nombre)}</strong></td>
       <td style="font-size:.85rem;line-height:1.5">${contactos}</td>
-      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${esc(p.observaciones||'')}">${p.observaciones||'—'}</td>
+      <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${_escHtmlCp(p.observaciones||'')}">${_escHtmlCp(p.observaciones)||'—'}</td>
       <td>
         ${G.rol === 'hotel'
           ? '<span style="color:var(--text-secondary);font-size:.8rem" title="Los usuarios de hotel no pueden editar proveedores">🔒 Solo lectura</span>'
@@ -9186,7 +9186,7 @@ function pvContactoRow(c = {}, idx) {
               class="pv-c-principal-btn"
               style="background:none;border:none;cursor:pointer;font-size:1.3rem;padding:0;line-height:1;color:${starColor};flex-shrink:0"
               data-principal="${esPrincipal ? '1' : '0'}">★</button>
-      <input class="form-control pv-c-nombre" placeholder="Nombre del contacto" value="${esc(c.nombre||'')}" style="font-size:.9rem;font-weight:500;flex:1">
+      <input class="form-control pv-c-nombre" placeholder="Nombre del contacto" value="${_escHtmlCp(c.nombre||'')}" style="font-size:.9rem;font-weight:500;flex:1">
       ${badge}
       <button type="button" onclick="pvRemoveContacto(this)" title="Eliminar contacto"
               style="background:none;border:none;color:#e74c3c;cursor:pointer;font-size:1.1rem;padding:0 2px;flex-shrink:0;margin-left:auto">✕</button>
@@ -9194,15 +9194,15 @@ function pvContactoRow(c = {}, idx) {
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
       <div style="position:relative">
         <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.8rem;pointer-events:none">📞</span>
-        <input class="form-control pv-c-tel" placeholder="Teléfono fijo" value="${esc(c.telefono||'')}" style="font-size:.88rem;padding-left:28px">
+        <input class="form-control pv-c-tel" placeholder="Teléfono fijo" value="${_escHtmlCp(c.telefono||'')}" style="font-size:.88rem;padding-left:28px">
       </div>
       <div style="position:relative">
         <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.8rem;pointer-events:none">📱</span>
-        <input class="form-control pv-c-movil" placeholder="Móvil / WhatsApp" value="${esc(c.movil||'')}" style="font-size:.88rem;padding-left:28px">
+        <input class="form-control pv-c-movil" placeholder="Móvil / WhatsApp" value="${_escHtmlCp(c.movil||'')}" style="font-size:.88rem;padding-left:28px">
       </div>
       <div style="position:relative">
         <span style="position:absolute;left:9px;top:50%;transform:translateY(-50%);font-size:.8rem;pointer-events:none">✉</span>
-        <input class="form-control pv-c-email" placeholder="Email" type="email" value="${esc(c.email||'')}" style="font-size:.88rem;padding-left:28px">
+        <input class="form-control pv-c-email" placeholder="Email" type="email" value="${_escHtmlCp(c.email||'')}" style="font-size:.88rem;padding-left:28px">
       </div>
     </div>
     <div>
@@ -9362,7 +9362,7 @@ function rtRutaRow(r = {}, idx) {
         <div class="rt-dias-reparto" style="display:flex;gap:4px">${diasReparto}</div>
       </div>
     </div>
-    <input class="form-control rt-obs" placeholder="Observaciones de esta ruta (opcional)…" value="${esc(r.observaciones || '')}" style="font-size:.85rem">
+    <input class="form-control rt-obs" placeholder="Observaciones de esta ruta (opcional)…" value="${_escHtmlCp(r.observaciones || '')}" style="font-size:.85rem">
   </div>`;
 }
 function rtAddRuta(r = {}) {
@@ -9420,8 +9420,8 @@ async function rtRenderServicio(sinServicioIds) {
     return;
   }
   cont.innerHTML = hoteles.map(h => `
-    <label style="display:flex;align-items:center;gap:5px;font-size:.85rem;cursor:pointer" title="${esc(h.nombre)}">
-      <input type="checkbox" class="rt-serv-chk" value="${h.id}" data-codigo="${esc(h.codigo)}"
+    <label style="display:flex;align-items:center;gap:5px;font-size:.85rem;cursor:pointer" title="${_escHtmlCp(h.nombre)}">
+      <input type="checkbox" class="rt-serv-chk" value="${h.id}" data-codigo="${_escHtmlCp(h.codigo)}"
              ${excluidos.has(h.id) ? '' : 'checked'} onchange="rtActualizarResumenServicio()">
       <strong>${esc(h.codigo)}</strong>
     </label>`).join('');
@@ -9653,7 +9653,7 @@ function abrirModalCruceSap() {
   // (v12.32.97) Carga unificada de listados SAP — ver el modal «modal-cruce-sap».
   const sel = document.getElementById('csl-hotel');
   if (sel && sel.options.length <= 1) {
-    (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+    (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`);
   }
   document.getElementById('csl-form').style.display = '';
   _cslTimerStop(); _cslErrorCerrar();
@@ -9836,7 +9836,7 @@ let _cmpSapCrearPedidos = [];
 function abrirModalCompararListado() {
   const sel = document.getElementById('cmp-pdf-hotel');
   sel.innerHTML = '<option value="">— Selecciona —</option>';
-  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`);
   _resetModalCompararPdf();
   openModal('modal-comparar-pdf');
 }
@@ -10047,7 +10047,7 @@ async function _pollCompararListadoPdf(jobId, intentos) {
 function abrirModalActualizarDepartamentos() {
   const sel = document.getElementById('dep-list-hotel');
   sel.innerHTML = '<option value="">— Selecciona —</option>';
-  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`);
   document.getElementById('dep-list-form').style.display = '';
   document.getElementById('dep-list-loading').style.display = 'none';
   document.getElementById('dep-list-resultado').style.display = 'none';
@@ -10167,7 +10167,7 @@ async function _pollActualizarDepartamentos(jobId, intentos) {
 function abrirModalImportarAlbaranes() {
   const sel = document.getElementById('alb-list-hotel');
   sel.innerHTML = '<option value="">— Selecciona —</option>';
-  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`);
   document.getElementById('alb-list-form').style.display = '';
   document.getElementById('alb-list-loading').style.display = 'none';
   document.getElementById('alb-list-resultado').style.display = 'none';
@@ -10388,7 +10388,7 @@ let _sugAlbPendHotelId = null;
 function abrirModalSugerenciasAlbaranesPendientes() {
   const sel = document.getElementById('sug-alb-pend-hotel');
   sel.innerHTML = '<option value="">— Selecciona —</option>';
-  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`);
   document.getElementById('sug-alb-pend-loading').style.display = 'none';
   document.getElementById('sug-alb-pend-vacio').style.display = '';
   document.getElementById('sug-alb-pend-resultado').style.display = 'none';
@@ -10513,7 +10513,7 @@ async function aplicarSugerenciasAlbaranesPendientes() {
 function abrirModalConfirmarAlbaran() {
   const sel = document.getElementById('conf-alb-hotel');
   sel.innerHTML = '<option value="">— Selecciona —</option>';
-  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${h.nombre}</option>`);
+  (G.maestros.hoteles || []).forEach(h => sel.innerHTML += `<option value="${h.id}">${h.codigo} – ${_escHtmlCp(h.nombre)}</option>`);
   document.getElementById('conf-alb-form').style.display = '';
   document.getElementById('conf-alb-loading').style.display = 'none';
   document.getElementById('conf-alb-resultado').style.display = 'none';
@@ -11877,7 +11877,7 @@ async function buscarProveedor(q) {
              onmousedown="seleccionarProveedor(${p.id}, '${esc(p.nombre)}', '${esc(p.email || '')}')"
              onmouseover="this.style.background='#eef2ff';this.style.borderRadius='6px'"
              onmouseout="this.style.background='#fff';this.style.borderRadius='0'">
-          <span style="font-weight:600;font-size:.9rem;color:#1e1b4b;letter-spacing:.01em">${p.nombre}</span>
+          <span style="font-weight:600;font-size:.9rem;color:#1e1b4b;letter-spacing:.01em">${_escHtmlCp(p.nombre)}</span>
           ${p.codigo ? `<span style="color:#6366f1;font-size:.78rem;font-weight:600;background:#eef2ff;padding:2px 8px;border-radius:99px;white-space:nowrap;margin-left:10px">${p.codigo}</span>` : ''}
         </div>`).join('');
     }
@@ -12647,7 +12647,7 @@ async function loadTecho() {
     return `
     <div style="background:#fff;border:1.5px solid ${semColores[h.semaforo]};border-radius:12px;padding:16px;box-shadow:0 2px 8px rgba(0,0,0,.06)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
-        <strong style="font-size:14px">${h.hotel_codigo} — ${h.hotel_nombre}</strong>
+        <strong style="font-size:14px">${h.hotel_codigo} — ${_escHtmlCp(h.hotel_nombre)}</strong>
         <span style="font-size:18px" title="${h.semaforo}">${semIcono[h.semaforo]}</span>
       </div>
       <div style="background:#e9ecef;border-radius:6px;height:8px;margin-bottom:10px;overflow:hidden">
@@ -12855,7 +12855,7 @@ function _renderTechoAlertas(d) {
          style="display:flex;align-items:center;gap:12px;cursor:pointer;background:${bgColor};margin:0 -16px;padding:10px 16px;border-bottom:1px solid rgba(0,0,0,.06)">
       <span style="font-size:20px">${icono}</span>
       <div style="flex:1;min-width:0">
-        <div style="font-weight:600;font-size:13px">${h.hotel_codigo} — ${h.hotel_nombre}</div>
+        <div style="font-weight:600;font-size:13px">${h.hotel_codigo} — ${_escHtmlCp(h.hotel_nombre)}</div>
         <div style="font-size:12px;color:#555;margin-top:2px">${msg}</div>
         <div style="background:#e9ecef;border-radius:4px;height:5px;margin-top:6px;overflow:hidden">
           <div style="height:100%;width:${pct}%;background:${barColor};border-radius:4px"></div>
@@ -12933,7 +12933,7 @@ async function loadFamilias() {
   tbody.innerHTML = rows.map((f, i) => `
     <tr>
       <td class="monospace">${i+1}</td>
-      <td>${f.nombre}</td>
+      <td>${_escHtmlCp(f.nombre)}</td>
       <td>
         <button class="btn btn-ghost btn-sm" onclick="openModalFamilia(${f.id},'${f.nombre.replace(/'/g,"\\'")}')">✏ Editar</button>
         <button class="btn btn-sm" style="color:#dc3545;border-color:#dc3545;background:#fff" onclick="deleteFamilia(${f.id},'${f.nombre.replace(/'/g,"\\'")}')">✕</button>
@@ -13364,20 +13364,20 @@ async function loadEmailjsConfig() {
                 Cuenta ${n} ${n === 1 ? '(principal)' : n === 2 ? '(secundaria)' : n === 3 ? '(terciaria)' : '(backup)'} ${activa === n ? ' · en uso' : ''}
               </div>
               <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Public Key</label>
-              <input type="text" id="cfg_emailjs_public_key_${n}" value="${esc(get('emailjs_public_key_' + n))}"
+              <input type="text" id="cfg_emailjs_public_key_${n}" value="${_escHtmlCp(get('emailjs_public_key_' + n))}"
                      placeholder="Public Key" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
               <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Service ID</label>
-              <input type="text" id="cfg_emailjs_service_id_${n}" value="${esc(get('emailjs_service_id_' + n))}"
+              <input type="text" id="cfg_emailjs_service_id_${n}" value="${_escHtmlCp(get('emailjs_service_id_' + n))}"
                      placeholder="service_xxxxxxx" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
               <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px">Template ID</label>
-              <input type="text" id="cfg_emailjs_template_id_${n}" value="${esc(get('emailjs_template_id_' + n))}"
+              <input type="text" id="cfg_emailjs_template_id_${n}" value="${_escHtmlCp(get('emailjs_template_id_' + n))}"
                      placeholder="template_xxxxxxx" style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
               <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px" title="Fecha en la que esta cuenta de EmailJS recupera su cupo de 200 envíos/mes — visible en su panel de EmailJS ('Resets on ...'), cópiala aquí a mano para tenerlas todas controladas sin entrar a cada cuenta por separado">Reinicia cupo el</label>
-              <input type="date" id="cfg_emailjs_reinicio_fecha_${n}" value="${esc(get('emailjs_reinicio_fecha_' + n))}"
+              <input type="date" id="cfg_emailjs_reinicio_fecha_${n}" value="${_escHtmlCp(get('emailjs_reinicio_fecha_' + n))}"
                      style="width:100%;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px;margin-bottom:6px">
               <label style="display:block;font-size:10.5px;color:#888;margin-bottom:2px" title="Solo para el código de verificación de login y el enlace de restablecimiento de contraseña — envíos que hace este SERVIDOR directamente, nunca el navegador. Se encuentra en EmailJS.com → Account → API Keys ('Private Key'), distinta de la Public Key de arriba.">Private Key (envío desde servidor)</label>
               <div style="display:flex;gap:4px">
-                <input type="password" id="cfg_emailjs_private_key_${n}" value="${esc(get('emailjs_private_key_' + n))}"
+                <input type="password" id="cfg_emailjs_private_key_${n}" value="${_escHtmlCp(get('emailjs_private_key_' + n))}"
                        placeholder="Private Key" autocomplete="new-password"
                        style="flex:1;min-width:0;padding:5px 8px;border:1px solid #ccc;border-radius:5px;font-size:12px">
                 <button type="button" onclick="togglePwdVisibility('cfg_emailjs_private_key_${n}', this)"
@@ -13564,7 +13564,7 @@ async function loadConfigAvisos() {
 
     // Rellenar el selector de hotel (solo la primera vez / si cambian los hoteles)
     if (sel && (!sel.options.length || sel.dataset.loaded !== '1')) {
-      sel.innerHTML = d.hoteles.map(h => `<option value="${h.id}">🏨 ${h.codigo} — ${h.nombre}</option>`).join('');
+      sel.innerHTML = d.hoteles.map(h => `<option value="${h.id}">🏨 ${h.codigo} — ${_escHtmlCp(h.nombre)}</option>`).join('');
       sel.dataset.loaded = '1';
     }
     if (sel && d.hotel_id) sel.value = String(d.hotel_id);
@@ -13601,7 +13601,7 @@ function renderConfigAvisos() {
   const filaEvento = (ev, hotelIdEvento, usuarios) => {
     let f = `<tr>
       <td style="padding:8px 10px;border-bottom:1px solid #eee;position:sticky;left:0;background:var(--surface)">
-        <div style="font-weight:600">${ev.nombre}</div>
+        <div style="font-weight:600">${_escHtmlCp(ev.nombre)}</div>
         <div style="font-size:10.5px;color:var(--text-secondary);line-height:1.3;max-width:260px">${ev.descripcion || ''}</div>
       </td>`;
     for (const u of usuarios) {
@@ -13714,7 +13714,7 @@ async function loadDepartamentosEmail() {
     _deptoEmailData = d;
 
     if (sel && (!sel.options.length || sel.dataset.loaded !== '1')) {
-      sel.innerHTML = d.hoteles.map(h => `<option value="${h.id}">🏨 ${h.codigo} — ${h.nombre}</option>`).join('');
+      sel.innerHTML = d.hoteles.map(h => `<option value="${h.id}">🏨 ${h.codigo} — ${_escHtmlCp(h.nombre)}</option>`).join('');
       sel.dataset.loaded = '1';
     }
     if (sel && d.hotel_id) sel.value = String(d.hotel_id);
@@ -13726,7 +13726,7 @@ async function loadDepartamentosEmail() {
     tbody.innerHTML = d.departamentos.map(dep => {
       const cfg = d.config[String(dep.id)] || { email: '', email2: '' };
       return `<tr>
-        <td style="font-weight:600">${dep.nombre}</td>
+        <td style="font-weight:600">${_escHtmlCp(dep.nombre)}</td>
         <td><input type="email" class="depto-email-input" data-depto="${dep.id}" data-campo="email"
               value="${cfg.email || ''}" placeholder="correo@hotel.com"
               style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:5px;font-size:12.5px"></td>
@@ -13826,15 +13826,15 @@ function _renderNotificacionesContactos() {
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end;padding:12px 14px;background:#f8f9fa">
         <div>
           <label style="display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:3px">Nombre</label>
-          <input class="notif-c-nombre" value="${esc(c.nombre)}" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-weight:700;min-width:180px">
+          <input class="notif-c-nombre" value="${_escHtmlCp(c.nombre)}" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;font-weight:700;min-width:180px">
         </div>
         <div>
           <label style="display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:3px">Correo</label>
-          <input class="notif-c-email" type="email" value="${esc(c.email||'')}" placeholder="correo@princess.com" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:200px">
+          <input class="notif-c-email" type="email" value="${_escHtmlCp(c.email||'')}" placeholder="correo@princess.com" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:200px">
         </div>
         <div>
           <label style="display:block;font-size:11px;font-weight:600;color:#888;margin-bottom:3px">Correo 2 (opcional)</label>
-          <input class="notif-c-email2" type="email" value="${esc(c.email2||'')}" placeholder="(opcional)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:200px">
+          <input class="notif-c-email2" type="email" value="${_escHtmlCp(c.email2||'')}" placeholder="(opcional)" style="padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px;min-width:200px">
         </div>
         <label class="checkbox-item" style="font-size:12.5px;font-weight:600">
           <input type="checkbox" class="notif-c-activo" ${c.activo ? 'checked' : ''}> Activo
@@ -13854,9 +13854,9 @@ function _renderNotificacionesContactos() {
           }).join('')}</tr></thead>
           <tbody>
             ${d.departamentos.map(dep => `<tr>
-              <td style="font-weight:600;white-space:nowrap">${dep.nombre}</td>
+              <td style="font-weight:600;white-space:nowrap">${_escHtmlCp(dep.nombre)}</td>
               ${estadosTodos.map(e => `<td style="text-align:center${e === d.estado_exceso_techo ? ';background:#fffdf5' : ''}">
-                <input type="checkbox" class="notif-c-regla" data-depto="${dep.id}" data-estado="${esc(e)}"
+                <input type="checkbox" class="notif-c-regla" data-depto="${dep.id}" data-estado="${_escHtmlCp(e)}"
                   ${reglasSet.has(dep.id + '|' + e) ? 'checked' : ''}>
               </td>`).join('')}
             </tr>`).join('')}
@@ -14019,7 +14019,7 @@ async function loadIntegridad() {
       titulo: '❌ Hoteles sin comprador asignado',
       gravedad: 'critico',
       desc: 'Crítico — alertas Telegram, emails y seguimiento sin destinatario.',
-      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.hotel_codigo}</td><td style="padding:6px 10px">${u.hotel_nombre}</td></tr>`,
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.hotel_codigo}</td><td style="padding:6px 10px">${_escHtmlCp(u.hotel_nombre)}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Código</th><th style="padding:6px 10px;text-align:left">Hotel</th></tr>',
     },
     {
@@ -14027,7 +14027,7 @@ async function loadIntegridad() {
       titulo: '⚠️ Compradores sin hoteles asignados',
       gravedad: 'aviso',
       desc: 'El usuario tiene rol compras pero no gestionará ningún hotel.',
-      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${_escHtmlCp(u.username)}</td><td style="padding:6px 10px">${_escHtmlCp(u.nombre)}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
     },
     {
@@ -14035,7 +14035,7 @@ async function loadIntegridad() {
       titulo: '⚠️ Compradores sin Telegram Chat ID',
       gravedad: 'aviso',
       desc: 'Las alertas automáticas de Telegram no llegarán a este comprador.',
-      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${_escHtmlCp(u.username)}</td><td style="padding:6px 10px">${_escHtmlCp(u.nombre)}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
     },
     {
@@ -14061,7 +14061,7 @@ async function loadIntegridad() {
       //   solo hace falta darle más aire visualmente (más tamaño de letra
       //   y una línea propia) para que se lea bien en vez de venir
       //   apretado en una celda pequeña.
-      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600;vertical-align:top">${u.username}</td><td style="padding:6px 10px;vertical-align:top">${u.nombre}</td><td style="padding:6px 10px;color:var(--text-secondary);white-space:nowrap;vertical-align:top">${u.telegram_bloqueado_en ? new Date(u.telegram_bloqueado_en).toLocaleString('es-ES') : '—'}</td><td style="padding:6px 10px;font-size:12.5px;line-height:1.5;color:var(--text-secondary);white-space:normal;min-width:260px">${u.telegram_bloqueado_motivo || '—'}</td></tr>`,
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600;vertical-align:top">${_escHtmlCp(u.username)}</td><td style="padding:6px 10px;vertical-align:top">${_escHtmlCp(u.nombre)}</td><td style="padding:6px 10px;color:var(--text-secondary);white-space:nowrap;vertical-align:top">${u.telegram_bloqueado_en ? new Date(u.telegram_bloqueado_en).toLocaleString('es-ES') : '—'}</td><td style="padding:6px 10px;font-size:12.5px;line-height:1.5;color:var(--text-secondary);white-space:normal;min-width:260px">${u.telegram_bloqueado_motivo || '—'}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th><th style="padding:6px 10px;text-align:left">Bloqueado desde</th><th style="padding:6px 10px;text-align:left">Motivo</th></tr>',
     },
     {
@@ -14069,7 +14069,7 @@ async function loadIntegridad() {
       titulo: '⚠️ Compradores sin teléfono móvil',
       gravedad: 'aviso',
       desc: 'Sin móvil no se pueden enviar notificaciones WhatsApp a este comprador.',
-      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${_escHtmlCp(u.username)}</td><td style="padding:6px 10px">${_escHtmlCp(u.nombre)}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
     },
     {
@@ -14077,7 +14077,7 @@ async function loadIntegridad() {
       titulo: '⚠️ Compradores sin email',
       gravedad: 'aviso',
       desc: 'Los emails de estado no tendrán destinatario para este comprador.',
-      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${_escHtmlCp(u.username)}</td><td style="padding:6px 10px">${_escHtmlCp(u.nombre)}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
     },
     {
@@ -14085,7 +14085,7 @@ async function loadIntegridad() {
       titulo: '⚠️ Administradores sin email',
       gravedad: 'info',
       desc: 'El sistema usa el email de admin para notificaciones de sistema.',
-      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.username}</td><td style="padding:6px 10px">${u.nombre}</td></tr>`,
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${_escHtmlCp(u.username)}</td><td style="padding:6px 10px">${_escHtmlCp(u.nombre)}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Usuario</th><th style="padding:6px 10px;text-align:left">Nombre</th></tr>',
     },
     {
@@ -14093,7 +14093,7 @@ async function loadIntegridad() {
       titulo: '🔴 Hoteles con múltiples compradores (violación unicidad)',
       gravedad: 'critico',
       desc: 'Anómalo — el índice uq_comprador_hotel debería impedirlo.',
-      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.hotel_codigo}</td><td style="padding:6px 10px">${u.hotel_nombre}</td><td style="padding:6px 10px;color:#dc3545;font-weight:700">${u.n_compradores}</td></tr>`,
+      renderFila: u => `<tr><td style="padding:6px 10px;font-weight:600">${u.hotel_codigo}</td><td style="padding:6px 10px">${_escHtmlCp(u.hotel_nombre)}</td><td style="padding:6px 10px;color:#dc3545;font-weight:700">${u.n_compradores}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Código</th><th style="padding:6px 10px;text-align:left">Hotel</th><th style="padding:6px 10px;text-align:left">Nº compradores</th></tr>',
     },
     {
@@ -14102,7 +14102,7 @@ async function loadIntegridad() {
       // gravedad dinámica: umbral sin backup = crítico; cambio ya hecho o cerca del umbral = aviso
       gravedad: (probs.emailjs && probs.emailjs[0] && probs.emailjs[0].tipo === 'umbral_alcanzado_sin_backup') ? 'critico' : 'aviso',
       desc: 'Estado del contador de envíos y del backup automático de cuenta (ver Parámetros de Alertas → EmailJS).',
-      renderFila: u => `<tr><td style="padding:6px 10px">${u.mensaje}</td></tr>`,
+      renderFila: u => `<tr><td style="padding:6px 10px">${_escHtmlCp(u.mensaje)}</td></tr>`,
       cabecera: '<tr><th style="padding:6px 10px;text-align:left">Detalle</th></tr>',
     },
   ];
@@ -14430,13 +14430,13 @@ async function loadUsuarios() {
       ? `<span style="font-size:12px;color:#7a5c00;font-weight:600" title="Administrador con hoteles asignados como comprador">${compradorMap[u.id].join(', ')}</span>`
       : '<span style="color:#ddd;font-size:12px">—</span>';
     const tgCell = (u.telegram_chat_id || '').trim()
-      ? `<span title="Chat ID: ${u.telegram_chat_id}" style="font-size:13px;cursor:default">✅ <span style="font-family:monospace;font-size:11px;color:#555">${u.telegram_chat_id}</span></span>`
+      ? `<span title="Chat ID: ${_escHtmlCp(u.telegram_chat_id)}" style="font-size:13px;cursor:default">✅ <span style="font-family:monospace;font-size:11px;color:#555">${_escHtmlCp(u.telegram_chat_id)}</span></span>`
       : `<span style="color:#dc3545;font-size:12px;font-weight:600">❌ Sin ID</span>`;
     const accesoCell = _htmlUltimoAcceso(u);
     return `<tr style="${u.activo ? '' : 'opacity:.62'}">
-      <td class="monospace" style="font-size:13px">${u.username}</td>
-      <td>${u.nombre}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
-      <td style="font-size:12px;color:#666">${u.email||'—'}${u.email2 ? `<div style="font-size:10.5px;color:#999">+ ${u.email2}</div>` : ''}</td>
+      <td class="monospace" style="font-size:13px">${_escHtmlCp(u.username)}</td>
+      <td>${_escHtmlCp(u.nombre)}${esMismo ? ' <span style="font-size:10px;color:#b8860b">(tú)</span>' : ''}</td>
+      <td style="font-size:12px;color:#666">${_escHtmlCp(u.email)||'—'}${u.email2 ? `<div style="font-size:10.5px;color:#999">+ ${_escHtmlCp(u.email2)}</div>` : ''}</td>
       <td>${movilLink}</td>
       <td>${tgCell}</td>
       <td>${rolBadge}</td>
@@ -14915,7 +14915,7 @@ async function abrirModalEmailAlerta(pedidoId, dias, nivel) {
     ccList.innerHTML = d.cc_emails.map(e =>
       `<span style="background:#e3f0ff;border:1px solid #90c0f0;border-radius:12px;padding:2px 10px;font-size:12px">
          📋 ${esc(e)}
-         <button onclick="meaRemoveCC(this)" data-email="${esc(e)}"
+         <button onclick="meaRemoveCC(this)" data-email="${_escHtmlCp(e)}"
            style="background:none;border:none;cursor:pointer;color:#666;margin-left:4px">✕</button>
        </span>`).join('');
   } else {
@@ -15391,7 +15391,7 @@ function abrirModalImpresionPedidos() {
       lbl.innerHTML =
         '<input type="checkbox"' + (preselected ? ' checked' : '') + ' style="accent-color:#1a73e8;width:14px;height:14px;flex-shrink:0">' +
         '<span style="font-weight:700;color:#1a3a6b;min-width:40px">' + h.codigo + '</span>' +
-        '<span style="color:#444">' + h.nombre + '</span>';
+        '<span style="color:#444">' + _escHtmlCp(h.nombre) + '</span>';
       var cb = lbl.querySelector('input');
       cb.dataset.hotelId = h.id;
       cb.dataset.codigo  = h.codigo;
@@ -15564,7 +15564,7 @@ async function ejecutarImpresionPedidos() {
     if (mostrarFTramit) cols.push('<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + fmtD(p.fecha_tramitacion) + '</td>');
     if (mostrarProveedor) cols.push('<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.proveedor_nombre||'—') + '</td>');
     if (mostrarImporte) cols.push('<td style="padding:6px 8px;font-size:11px;text-align:right;font-weight:700;border-bottom:1px solid #eee">' + fmtImporte(p.importe) + '</td>');
-    if (mostrarObs)     cols.push('<td style="padding:6px 8px;font-size:11px;color:#555;font-style:italic;border-bottom:1px solid #eee;max-width:200px">' + (p.observaciones||'') + '</td>');
+    if (mostrarObs)     cols.push('<td style="padding:6px 8px;font-size:11px;color:#555;font-style:italic;border-bottom:1px solid #eee;max-width:200px">' + _escHtmlCp(p.observaciones||'') + '</td>');
     return '<tr style="background:' + bg + '">' + cols.join('') + '</tr>';
   }
 
@@ -15923,7 +15923,7 @@ function abrirModalImpresion(tipo) {
       lbl.innerHTML =
         '<input type="checkbox" checked style="accent-color:#1a73e8;width:15px;height:15px;flex-shrink:0">' +
         '<span style="font-weight:700;color:#1a3a6b;min-width:36px">' + h.codigo + '</span>' +
-        '<span style="color:#444">' + h.nombre + '</span>';
+        '<span style="color:#444">' + _escHtmlCp(h.nombre) + '</span>';
       var cb = lbl.querySelector('input');
       cb.dataset.codigo = h.codigo;
       cb.addEventListener('change', function() {
@@ -16016,14 +16016,14 @@ async function imprimirTecho(codigosSeleccionados) {
              '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;font-weight:600;color:' + estColor + '">' + (p.estado || '\u2014') + '</td>' +
              '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee">' + (p.proveedor_nombre || '\u2014') + '</td>' +
              '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:right;font-weight:700">' + _fmtEur(p.importe) + '</td>' +
-             '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;color:#555;font-style:italic">' + (p.observaciones || '') + '</td>' +
+             '<td style="padding:5px 8px;font-size:11px;border-bottom:1px solid #eee;color:#555;font-style:italic">' + _escHtmlCp(p.observaciones || '') + '</td>' +
            '</tr>';
         }).join('')
       : '<tr><td colspan="6" style="padding:6px 8px;font-size:11px;color:#999;font-style:italic">Sin pedidos sujetos al techo este mes</td></tr>';
 
     return '<div style="border:1.5px solid ' + semBorder[h.semaforo] + ';border-radius:10px;padding:16px;margin-bottom:16px;background:' + semBg[h.semaforo] + ';page-break-inside:avoid">' +
       '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">' +
-        '<strong style="font-size:14px;color:#1a1a2e">' + h.hotel_codigo + ' \u2014 ' + h.hotel_nombre + '</strong>' +
+        '<strong style="font-size:14px;color:#1a1a2e">' + h.hotel_codigo + ' \u2014 ' + _escHtmlCp(h.hotel_nombre) + '</strong>' +
         '<span style="font-size:22px">' + semIcono[h.semaforo] + '</span>' +
       '</div>' +
       '<div style="background:#e9ecef;border-radius:5px;height:10px;margin-bottom:10px;overflow:hidden">' +
@@ -16199,7 +16199,7 @@ async function imprimirExpediente(eid) {
       '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee;text-align:right">' + _fmtEur(h.importe_pedido) + '</td>' +
       '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee;font-weight:700;color:' + (resultadoColor[h.resultado]||'#555') + '">' + (resultadoTexto[h.resultado] || h.resultado) + '</td>' +
       '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + (h.usuario_resuelve_nombre || (h.resultado === 'pendiente' ? '—' : '—')) + '</td>' +
-      '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + (h.observaciones_direccion_general || '') + '</td>' +
+      '<td style="padding:6px 8px;font-size:11px;border-bottom:1px solid #eee">' + _escHtmlCp(h.observaciones_direccion_general || '') + '</td>' +
     '</tr>';
   }
 
@@ -16261,7 +16261,7 @@ async function imprimirExpediente(eid) {
         '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:16px">' +
           '<tr><td style="padding:6px 10px;width:30%"><strong>Resuelto por</strong></td><td style="padding:6px 10px">' + (e.usuario_resuelve_nombre||'—') + '</td></tr>' +
           '<tr style="background:#f8f9fa"><td style="padding:6px 10px"><strong>Fecha de resolución</strong></td><td style="padding:6px 10px">' + fmtFecha(e.fecha_resolucion) + '</td></tr>' +
-          '<tr><td style="padding:6px 10px"><strong>Observaciones</strong></td><td style="padding:6px 10px">' + (e.observaciones_direccion_general||'—') + '</td></tr>' +
+          '<tr><td style="padding:6px 10px"><strong>Observaciones</strong></td><td style="padding:6px 10px">' + _escHtmlCp(e.observaciones_direccion_general||'—') + '</td></tr>' +
         '</table>'
       : '<div style="border:1.5px dashed #ccc;border-radius:8px;padding:16px;margin-bottom:16px">' +
           '<div style="font-size:11px;color:#888;margin-bottom:30px">Espacio para observaciones y resolución manuscritas, si el informe se firma en papel:</div>' +
@@ -16949,7 +16949,7 @@ async function restoreCargarLista() {
 
       tr.innerHTML = `
         <td style="padding:10px 12px;font-weight:600">${b.fecha} ${tipoBadge}</td>
-        <td style="padding:10px 12px;font-family:monospace;font-size:11px;color:var(--text-secondary)">${b.nombre}</td>
+        <td style="padding:10px 12px;font-family:monospace;font-size:11px;color:var(--text-secondary)">${_escHtmlCp(b.nombre)}</td>
         <td style="padding:10px 12px;text-align:center">${b.adjuntos}</td>
         <td style="padding:10px 12px;text-align:center">${b.mb} MB</td>
         <td style="padding:10px 12px;text-align:center">${estadoBadge}</td>
@@ -17035,7 +17035,7 @@ function restoreSeleccionar(backup) {
   _restoreBackupSeleccionado = backup;
   document.getElementById('restore-confirm-desc').innerHTML =
     `Vas a restaurar el backup del <strong>${backup.fecha}</strong><br>
-     Carpeta: <code style="font-size:12px">${backup.nombre}</code><br>
+     Carpeta: <code style="font-size:12px">${_escHtmlCp(backup.nombre)}</code><br>
      Adjuntos: <strong>${backup.adjuntos}</strong> ficheros &nbsp;|&nbsp; Tamaño: <strong>${backup.mb} MB</strong>`;
   document.querySelector('input[name="restore-modo"][value="pedidos"]').checked = true;
   document.getElementById('modal-restore').style.display = 'flex';

@@ -15,9 +15,9 @@ openpyxl==3.1.5
 gunicorn==26.2.0
 apscheduler==3.11.3
 pytz==2026.3.post1
-Pillow==12.3.0
+Pillow==13.0.0
 requests==2.34.2
-pypdf==6.16.2
+pypdf==6.21.2
 # (2026-09-04, v12.32.16) pdfplumber: para leer el Listado de Pedidos
 # DETALLADO de SAP como tabla real (pypdf desordena las columnas en este
 # formato — ver comentario junto a _extraer_listado_detallado_completo() en
@@ -28,7 +28,7 @@ pypdf==6.16.2
 pdfplumber==0.11.9
 pdfminer.six==20251230
 pypdfium2==5.7.1
-cryptography==46.0.7
+cryptography==50.0.2
 # (2026-09-07, v12.32.42) pytesseract: lectura por OCR del PDF de pedido oficial
 # cuando llega firmado/sellado — al escanear el papel firmado pierde toda su
 # capa de texto (ver comentario junto a _ocr_texto_pdf_pedido_oficial() en
@@ -48,7 +48,7 @@ pytesseract==0.3.13
 # ── Transitivas (dependencias de las de arriba) — fijadas también   ──
 # ── para que el deploy instale SIEMPRE lo mismo, no solo lo directo ──
 blinker==1.9.0
-certifi==2026.7.22
+certifi==2026.10.19
 charset-normalizer==3.5.1
 click==8.5.0
 et-xmlfile==2.0.0
@@ -57,5 +57,5 @@ itsdangerous==2.2.0
 jinja2==3.1.6
 markupsafe==3.0.3
 tzlocal==5.4.4
-urllib3==2.7.0
-werkzeug==3.1.8
+urllib3==2.8.0
+werkzeug==3.1.9

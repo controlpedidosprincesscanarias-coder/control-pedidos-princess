@@ -125,6 +125,17 @@ USERNAME_HOTEL_PRUEBAS = "usuario prueba"
 
 app = Flask(__name__)
 app.secret_key = SECRET_KEY
+# (v12.33.34, auditoría 22-oct-2026) Cookie de sesión: solo por HTTPS y sin
+# envío en peticiones cruzadas (Lax). Render sirve siempre por HTTPS (y el
+# Worker de Cloudflare también), así que no afecta al uso normal; en local
+# (http://localhost) se desactiva con COOKIE_SECURE=0.
+app.config["SESSION_COOKIE_SECURE"] = os.environ.get("COOKIE_SECURE", "1") != "0"
+app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+app.config["SESSION_COOKIE_HTTPONLY"] = True
+# Límite global del cuerpo de una petición (el mayor adjunto permitido es de
+# 20 MB; los PDF de listado SAP caben de sobra) — evita que una petición sin
+# autenticar llene la memoria del plan Free (512 MB).
+app.config["MAX_CONTENT_LENGTH"] = 80 * 1024 * 1024
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger(__name__)
 
@@ -172,6 +183,20 @@ _GZIP_MIMETYPES = {
     "application/json", "text/plain", "text/xml", "application/xml",
 }
 _GZIP_MIN_BYTES = 500
+
+@app.after_request
+def _cabeceras_seguridad(response):
+    """(v12.33.34) Cabeceras de seguridad básicas. Sin CSP estricta a
+    propósito: la app usa scripts y manejadores en línea; X-Frame-Options /
+    frame-ancestors evita que otra web la incruste (clickjacking)."""
+    h = response.headers
+    h.setdefault("X-Content-Type-Options", "nosniff")
+    h.setdefault("X-Frame-Options", "SAMEORIGIN")
+    h.setdefault("Content-Security-Policy", "frame-ancestors 'self'")
+    h.setdefault("Referrer-Policy", "strict-origin-when-cross-origin")
+    h.setdefault("Strict-Transport-Security", "max-age=31536000")
+    return response
+
 
 @app.after_request
 def _comprimir_respuesta_gzip(response):
@@ -1206,6 +1231,26 @@ def _auto_migrate():
             # api_marcar_email_sistema_enviado), nunca antes. Puesta aquí, en
             # el bloque protegido, por el mismo motivo que codigo_dali/
             # total_pedido/sujeto_seguimiento arriba.
+            # (v12.33.35) La tabla se crea más abajo en este mismo método, pero
+            # varios ALTER anteriores a ese CREATE la necesitan: en una BD
+            # vacía (entorno nuevo, restauración, tests) el arranque fallaba
+            # con "relation emails_sistema_pendientes does not exist". Se
+            # crea aquí con la definición base; el CREATE de más abajo es
+            # IF NOT EXISTS y no cambia nada.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS emails_sistema_pendientes (
+                    id             SERIAL PRIMARY KEY,
+                    evento_codigo  TEXT NOT NULL,
+                    destinatario   TEXT NOT NULL,
+                    asunto         TEXT NOT NULL,
+                    cuerpo_html    TEXT,
+                    cuerpo_text    TEXT,
+                    enviado        BOOLEAN NOT NULL DEFAULT FALSE,
+                    creado_en      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    enviado_en     TIMESTAMPTZ,
+                    visible_en     TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                )
+            """)
             try:
                 cur.execute(
                     "ALTER TABLE emails_sistema_pendientes "
@@ -3821,6 +3866,75 @@ def _ip_cliente():
             return primera[:64]
     return (request.remote_addr or "")[:64] or None
 
+# ── Límite de intentos (v12.33.35) ────────────────────────────────────────────
+# En memoria (la app corre con 1 worker de gunicorn, ver render.yaml/Dockerfile;
+# si algún día hay varios workers, cada uno cuenta por su cuenta y el límite
+# real se multiplica por el nº de workers). Se reinicia al reiniciar el proceso.
+# Las claves combinan usuario+IP para que un tercero no pueda bloquear a un
+# usuario legítimo desde otra IP; además hay un umbral más alto solo por
+# usuario (protege frente a quien rota IP / X-Forwarded-For) y otro por IP.
+_RL_DATOS = {}              # clave -> [timestamps monotonic]
+_RL_LOCK = threading.Lock()
+
+def _rl_purgar(clave, ventana, ahora):
+    lst = [t for t in _RL_DATOS.get(clave, ()) if ahora - t < ventana]
+    if lst:
+        _RL_DATOS[clave] = lst
+    else:
+        _RL_DATOS.pop(clave, None)
+    return lst
+
+def _rl_segundos_bloqueo(reglas):
+    """reglas: [(clave, maximo, ventana_s)]. Devuelve 0 si se puede seguir o
+    los segundos que faltan para que la regla más restrictiva libere."""
+    import time as _t
+    ahora = _t.monotonic()
+    espera = 0
+    with _RL_LOCK:
+        if len(_RL_DATOS) > 20000:          # tope de memoria
+            for k in list(_RL_DATOS)[:5000]:
+                _RL_DATOS.pop(k, None)
+        for clave, maximo, ventana in reglas:
+            lst = _rl_purgar(clave, ventana, ahora)
+            if len(lst) >= maximo:
+                espera = max(espera, int(ventana - (ahora - lst[0])) + 1)
+    return espera
+
+def _rl_registrar(reglas):
+    import time as _t
+    ahora = _t.monotonic()
+    with _RL_LOCK:
+        for clave, _m, ventana in reglas:
+            _rl_purgar(clave, ventana, ahora)
+            _RL_DATOS.setdefault(clave, []).append(ahora)
+
+def _rl_limpiar(claves):
+    with _RL_LOCK:
+        for c in claves:
+            _RL_DATOS.pop(c, None)
+
+def _rl_golpe(reglas):
+    """Cuenta TODA petición (no solo fallos). True si ya está excedido
+    (y no registra); si no, registra y devuelve False."""
+    if _rl_segundos_bloqueo(reglas):
+        return True
+    _rl_registrar(reglas)
+    return False
+
+def _rl_respuesta_429(espera):
+    mins = max(1, (espera + 59) // 60)
+    r = jsonify({"error": f"Demasiados intentos. Espera {mins} min e inténtalo de nuevo."})
+    r.status_code = 429
+    r.headers["Retry-After"] = str(espera)
+    return r
+
+def _reglas_login(username):
+    ip = _ip_cliente() or "?"
+    u = (username or "")[:80]
+    return [("login:ui:%s|%s" % (u, ip), 8, 900),
+            ("login:u:%s" % u, 30, 900),
+            ("login:ip:%s" % ip, 60, 900)]
+
 def _describir_dispositivo(ua):
     """'Chrome 126 · Windows' a partir del User-Agent (sin librerías)."""
     ua = ua or ""
@@ -3914,6 +4028,38 @@ def login_required(f):
             return _sesion_desactivada_resp()
         return f(*args, **kwargs)
     return decorated
+
+# ── (v12.33.34, auditoría 22-oct-2026) Control de acceso por hotel/rol ───────
+# Antes, los endpoints de adjuntos solo exigían estar logueado: un usuario del
+# hotel A podía listar, descargar, subir y borrar adjuntos de pedidos del
+# hotel B conociendo el número de id. Misma regla que get_pedido/update_pedido:
+# el rol «hotel» solo accede a pedidos de SUS hoteles; admin y compras, a todos.
+_RE_MARCADO = re.compile(r'[<>"\x00-\x08\x0b\x0c\x0e-\x1f]')
+
+def _con_marcado(*valores) -> bool:
+    """True si algún valor lleva caracteres de marcado HTML (< > ") o de
+    control. En nombres, apellidos, hoteles, usuarios y similares no tienen
+    uso legítimo; rechazarlos en la entrada es una segunda barrera (la
+    primera es escapar al pintar) contra XSS almacenado."""
+    return any(_RE_MARCADO.search(str(v or "")) for v in valores)
+
+MSG_CARACTERES = {"error": "Hay caracteres no permitidos (< > \") en los datos enviados"}
+
+def _hotel_accesible(hotel_id) -> bool:
+    if session.get("rol") != "hotel":
+        return True
+    return hotel_id in (session.get("hoteles_ids") or [])
+
+def _sin_acceso_pedido():
+    return jsonify({"ok": False, "error": "Sin acceso a este pedido"}), 403
+
+def _adjunto_hotel_id(aid):
+    """hotel_id del pedido al que pertenece el adjunto (None si no existe)."""
+    fila = query(
+        "SELECT p.hotel_id FROM pedido_adjuntos a JOIN pedidos p ON p.id = a.pedido_id WHERE a.id=%s",
+        (aid,), one=True
+    )
+    return fila["hotel_id"] if fila else None
 
 def admin_required(f):
     @wraps(f)
@@ -4865,7 +5011,7 @@ def enviar_emails_estado(db, pedido_id: int, estado_nuevo: str, estado_antes: st
         _fila_obs_html = ''
         if pedido.get('observaciones') and estado_nuevo not in ("CANCELADO", "DENEGADO POR DIRECCION GENERAL"):
             _fila_obs_html = (
-                f'<tr><td><b>Observaciones</b></td><td>{pedido["observaciones"].replace(chr(10), "<br>")}</td></tr>'
+                f'<tr><td><b>Observaciones</b></td><td>{_html_escape(pedido["observaciones"]).replace(chr(10), "<br>")}</td></tr>'
             )
         # (2026-08-31) Estado anterior/Estado nuevo ya no aportan nada en el
         # caso ENVIADO AL PROVEEDOR — el correo entero ya trata justo de
@@ -8117,7 +8263,7 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
           <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
           <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
           <strong>Estado actual:</strong> <span style="color:#8B0000">{pedido.get('estado','ENVIADO AL PROVEEDOR')}</span><br>
-          <strong>Días transcurridos:</strong> <span style="color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</span>{_fila_tp_ep}{('<br><strong>Observaciones:</strong> ' + pedido['observaciones']) if pedido.get('observaciones') else ''}
+          <strong>Días transcurridos:</strong> <span style="color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</span>{_fila_tp_ep}{('<br><strong>Observaciones:</strong> ' + _html_escape(pedido['observaciones'])) if pedido.get('observaciones') else ''}
         </p>
         {_nota_base_imponible_html() if _tp_ep is not None else ''}
         <p>Le rogamos que nos confirme el estado actual del pedido y la fecha estimada de entrega
@@ -8193,7 +8339,7 @@ def _email_template_pendiente_firma(pedido: dict, dias: int, tipo: str) -> tuple
           <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días en espera</td>
               <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">{dias} días</td></tr>
           {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Total Pedido (base imponible)</td><td style="padding:8px 12px;border:1px solid #ddd">{_fmt_importe_es(pedido.get("total_pedido"))} €</td></tr>' if pedido.get("total_pedido") is not None else ''}
-          {f'<tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
+          {f'<tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{_html_escape(pedido["observaciones"])}</td></tr>' if pedido.get("observaciones") else ''}
         </table>
         {_nota_base_imponible_html() if pedido.get("total_pedido") is not None else ''}
         <p>Por favor, gestione con {dest_label} la revisión y firma del pedido
@@ -8236,7 +8382,7 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
           <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
           <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
           <strong>Estado actual:</strong> <span style="color:#8B0000">ENTREGA PARCIAL</span><br>
-          <strong>Días transcurridos:</strong> <span style="color:#b45309;font-weight:bold">{dias} días</span>{_fila_tp_pp}{('<br><strong>Observaciones:</strong> ' + pedido['observaciones']) if pedido.get('observaciones') else ''}
+          <strong>Días transcurridos:</strong> <span style="color:#b45309;font-weight:bold">{dias} días</span>{_fila_tp_pp}{('<br><strong>Observaciones:</strong> ' + _html_escape(pedido['observaciones'])) if pedido.get('observaciones') else ''}
         </p>
         {_bloque_ent_pp if _bloque_ent_pp else (_nota_base_imponible_html() if _tp_pp is not None else '')}
         {_bloque_pend_pp}
@@ -8276,7 +8422,7 @@ def _email_template_pendiente_cotizacion(pedido: dict, dias: int, urgente: bool,
           <strong>Hotel:</strong> {pedido.get('hotel_nombre','—')}<br>
           <strong>Departamento:</strong> {pedido.get('departamento_nombre','—')}<br>
           <strong>Estado actual:</strong> <span style="color:#8B0000">PENDIENTE COTIZACIÓN</span><br>
-          <strong>Días transcurridos:</strong> <span style="color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</span>{('<br><strong>Observaciones:</strong> ' + pedido['observaciones']) if pedido.get('observaciones') else ''}
+          <strong>Días transcurridos:</strong> <span style="color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</span>{('<br><strong>Observaciones:</strong> ' + _html_escape(pedido['observaciones'])) if pedido.get('observaciones') else ''}
         </p>
         {'<p style="color:#dc2626;font-weight:bold;border:1px solid #fca5a5;background:#fee2e2;padding:10px;border-radius:4px">⚠️ URGENTE: Necesitamos su cotización hoy para no retrasar la tramitación del pedido.</p>' if urgente else '<p>Le agradecemos que nos envíe su mejor oferta a la mayor brevedad posible.</p>'}
         <hr style="border:none;border-top:1px solid #eee;margin:20px 0">
@@ -8396,7 +8542,7 @@ def _email_template_cotizacion_sin_proveedor(pedido: dict, dias: int) -> tuple:
               <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">Sin proveedor asignado hasta la fecha</td></tr>
           <tr><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Días en espera</td>
               <td style="padding:8px 12px;border:1px solid #ddd;color:#b45309;font-weight:bold">{dias} días</td></tr>
-          {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{pedido["observaciones"]}</td></tr>' if pedido.get("observaciones") else ''}
+          {f'<tr style="background:#f5f5f5"><td style="padding:8px 12px;border:1px solid #ddd;font-weight:bold">Observaciones</td><td style="padding:8px 12px;border:1px solid #ddd">{_html_escape(pedido["observaciones"])}</td></tr>' if pedido.get("observaciones") else ''}
         </table>
         <p>Por favor, asigna un proveedor y solicita la cotización a la mayor brevedad
            posible para no retrasar la tramitación del pedido.</p>
@@ -9036,8 +9182,14 @@ def _verifica_y_migra_password(user, password_recibida):
 @app.route("/api/login", methods=["POST"])
 def login():
     body     = request.get_json(silent=True) or {}
-    username = body.get("username", "").strip().lower()
-    password = body.get("password", "").strip()
+    username = str(body.get("username", "")).strip().lower()
+    password = str(body.get("password", "")).strip()
+
+    reglas = _reglas_login(username)
+    espera = _rl_segundos_bloqueo(reglas)
+    if espera:
+        log.warning("LOGIN bloqueado por exceso de intentos: '%s'", username[:80])
+        return _rl_respuesta_429(espera)
 
     user = query(
         "SELECT * FROM usuarios WHERE username=%s AND activo=1",
@@ -9054,7 +9206,9 @@ def login():
             return jsonify({"error": "Tu cuenta está desactivada. Contacta con el administrador.",
                             "cuenta_desactivada": True}), 403
     if not user or not _verifica_y_migra_password(user, password):
+        _rl_registrar(reglas)
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
+    _rl_limpiar([reglas[0][0]])
 
     # ── Verificación por email tras varios días de inactividad, o cada 6
     #    meses a todos los usuarios ──────────────────────────────────────
@@ -9275,11 +9429,19 @@ def dali_sso():
 @app.route("/api/login/verificar-codigo", methods=["POST"])
 def verificar_codigo_login():
     body     = request.get_json(silent=True) or {}
-    username = body.get("username", "").strip().lower()
-    codigo   = (body.get("codigo") or "").strip()
+    username = str(body.get("username", "")).strip().lower()
+    codigo   = str(body.get("codigo") or "").strip()
+
+    ip = _ip_cliente() or "?"
+    reglas_cod = [("cod:u:%s" % username[:80], 5, 600),
+                  ("cod:ip:%s" % ip, 40, 600)]
+    espera = _rl_segundos_bloqueo(reglas_cod)
+    if espera:
+        return _rl_respuesta_429(espera)
 
     user = query("SELECT * FROM usuarios WHERE username=%s AND activo=1", (username,), one=True)
     if not user:
+        _rl_registrar(reglas_cod)
         return jsonify({"error": "Usuario no válido"}), 401
 
     row = query(
@@ -9289,6 +9451,16 @@ def verificar_codigo_login():
         (user["id"], codigo), one=True
     )
     if not row:
+        _rl_registrar(reglas_cod)
+        # Tras 5 fallos seguidos se invalida el código vigente: fuerza a
+        # repetir el login con contraseña para obtener uno nuevo (6 dígitos
+        # no resisten fuerza bruta ilimitada dentro de los 10 min de validez).
+        if _rl_segundos_bloqueo(reglas_cod):
+            try:
+                execute("UPDATE login_verification_codes SET usado=1 WHERE usuario_id=%s AND usado=0", (user["id"],))
+                get_db().commit()
+            except Exception:
+                log.exception("No se pudo invalidar el código tras exceso de intentos")
         # El código no es válido — antes se devolvía siempre el mismo mensaje
         # genérico, lo que impedía distinguir si de verdad había caducado por
         # tiempo o si había sido invalidado por una petición de login
@@ -9320,6 +9492,7 @@ def verificar_codigo_login():
     db = get_db()
     execute("UPDATE login_verification_codes SET usado=1 WHERE id=%s", (row["id"],))
     db.commit()
+    _rl_limpiar([reglas_cod[0][0]])
 
     return _completar_login(user, verificado=True)
 
@@ -9347,15 +9520,36 @@ def bridge_login():
     así que no hace falta ninguna excepción para eso.
     """
     body     = request.get_json(silent=True) or {}
-    username = body.get("username", "").strip().lower()
-    password = body.get("password", "").strip()
+    username = str(body.get("username", "")).strip().lower()
+    password = str(body.get("password", "")).strip()
+
+    # (v12.33.35) Mismo límite de intentos que /api/login (clave propia).
+    reglas = [("bridge:ui:%s|%s" % (username[:80], _ip_cliente() or "?"), 8, 900),
+              ("bridge:u:%s" % username[:80], 30, 900)]
+    espera = _rl_segundos_bloqueo(reglas)
+    if espera:
+        return _rl_respuesta_429(espera)
+
+    # (v12.33.35) Este endpoint se salta la verificación por email, así que
+    # cualquier contraseña robada de CUALQUIER usuario valdría aquí. Si se
+    # define BRIDGE_USUARIOS (lista de usernames separados por coma) solo
+    # esas cuentas pueden usarlo; sin la variable se mantiene el
+    # comportamiento anterior (y se avisa en el log).
+    permitidos = {u.strip().lower() for u in os.environ.get("BRIDGE_USUARIOS", "").split(",") if u.strip()}
+    if permitidos and username not in permitidos:
+        _rl_registrar(reglas)
+        return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
+    if not permitidos:
+        log.warning("BRIDGE-LOGIN sin BRIDGE_USUARIOS definido: cualquier cuenta puede saltarse la verificación por email")
 
     user = query(
         "SELECT * FROM usuarios WHERE username=%s AND activo=1",
         (username,), one=True
     )
     if not user or not _verifica_y_migra_password(user, password):
+        _rl_registrar(reglas)
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
+    _rl_limpiar([reglas[0][0]])
 
     return _completar_login(user, metodo="bridge")
 
@@ -9402,6 +9596,8 @@ def bridge_solicitar_alta():
     usuario_windows = (body.get("usuario_windows") or "").strip().lower()
     nombre          = (body.get("nombre") or "").strip()
 
+    if _con_marcado(usuario_windows, nombre):
+        return jsonify(MSG_CARACTERES), 400
     if not usuario_windows:
         return jsonify({"error": "Falta usuario_windows"}), 400
     if not nombre:
@@ -9462,11 +9658,16 @@ def solicitar_reset_password():
     _enviar_emailjs_servidor).
     """
     body    = request.get_json(silent=True) or {}
-    usuario = (body.get("usuario") or "").strip().lower()
+    usuario = str(body.get("usuario") or "").strip().lower()
     if not usuario:
         return jsonify({"error": "Indica tu usuario o email"}), 400
 
     MSG_GENERICO = "Si el usuario existe, recibirás un correo."
+    # (v12.33.35) Límite: evita usar el endpoint para bombardear de correos
+    # a un usuario o agotar la cuota de EmailJS. Mismo mensaje genérico.
+    if _rl_golpe([("reset:u:%s" % usuario[:120], 3, 3600),
+                  ("reset:ip:%s" % (_ip_cliente() or "?"), 20, 3600)]):
+        return jsonify({"ok": True, "msg": MSG_GENERICO})
 
     user = query(
         "SELECT * FROM usuarios WHERE (username=%s OR email=%s) AND activo=1",
@@ -9505,8 +9706,9 @@ def solicitar_reset_password():
     )
     # El enlace se loguea SIEMPRE en el servidor (único sitio, aparte del
     # correo real, donde queda visible — nunca en una respuesta HTTP).
-    log.info("PASSWORD RESET solicitado por '%s' (id=%s) — enlace: %s",
-             user["username"], user["id"], link)
+    # (v12.33.34) El enlace ya NO se escribe en el log: quien pudiera leer
+    # los logs de Render podría tomar la cuenta durante las 2 h de validez.
+    log.info("PASSWORD RESET solicitado por '%s' (id=%s)", user["username"], user["id"])
 
     enviado, motivo = _enviar_emailjs_servidor(
         to_email=user["email"],
@@ -9539,10 +9741,14 @@ def validar_reset_token(token):
 def cambiar_password_con_token():
     """El usuario envía el token + nueva contraseña elegida por él."""
     body     = request.get_json(silent=True) or {}
-    token    = (body.get("token") or "").strip()
-    nueva    = (body.get("nueva_password") or "").strip()
+    token    = str(body.get("token") or "").strip()
+    nueva    = str(body.get("nueva_password") or "").strip()
     if not token or not nueva:
         return jsonify({"error": "Datos incompletos"}), 400
+    reglas_rp = [("resetchg:ip:%s" % (_ip_cliente() or "?"), 20, 3600)]
+    espera = _rl_segundos_bloqueo(reglas_rp)
+    if espera:
+        return _rl_respuesta_429(espera)
     if len(nueva) < 6:
         return jsonify({"error": "La contraseña debe tener al menos 6 caracteres"}), 400
 
@@ -9551,6 +9757,7 @@ def cambiar_password_con_token():
         (token,), one=True
     )
     if not row:
+        _rl_registrar(reglas_rp)
         return jsonify({"error": "El enlace no es válido o ha caducado"}), 400
 
     db = get_db()
@@ -9595,6 +9802,8 @@ def solicitar_usuario_fase1():
     paso lo hacía un admin a mano). El aviso de Telegram al admin dice
     explícitamente que tiene que abrir la app para que se complete.
     """
+    if _rl_golpe([("solic:ip:%s" % (_ip_cliente() or "?"), 15, 3600)]):
+        return _rl_respuesta_429(3600)
     import re as _re
 
     body      = request.get_json(silent=True) or {}
@@ -9604,6 +9813,8 @@ def solicitar_usuario_fase1():
     movil_sol = (body.get("movil") or "").strip()
     hoteles   = (body.get("hoteles") or body.get("hotel") or "").strip()
 
+    if _con_marcado(nombre, apellidos, email_sol, movil_sol, hoteles) or max(len(nombre), len(apellidos), len(email_sol), len(movil_sol), len(hoteles)) > 300:
+        return jsonify(MSG_CARACTERES), 400
     if not nombre:
         return jsonify({"error": "El nombre es obligatorio"}), 400
     if not apellidos:
@@ -9772,6 +9983,8 @@ def solicitar_usuario_directo():
     apruebe con /api/admin/solicitudes-acceso/<id>/aprobar, que es
     donde se genera y envía la contraseña — no aquí.
     """
+    if _rl_golpe([("solic:ip:%s" % (_ip_cliente() or "?"), 15, 3600)]):
+        return _rl_respuesta_429(3600)
     import re as _re
 
     body            = request.get_json(silent=True) or {}
@@ -9781,6 +9994,8 @@ def solicitar_usuario_directo():
     movil_sol       = (body.get("movil") or "").strip()
     hoteles         = (body.get("hoteles") or body.get("hotel") or "").strip()
     usuario_windows = (body.get("usuario_windows") or "").strip().upper()
+    if _con_marcado(nombre, apellidos, email_sol, movil_sol, hoteles, usuario_windows) or max(len(nombre), len(apellidos), len(email_sol), len(movil_sol), len(hoteles), len(usuario_windows)) > 300:
+        return jsonify(MSG_CARACTERES), 400
 
     if not nombre:
         return jsonify({"error": "El nombre es obligatorio"}), 400
@@ -10192,11 +10407,15 @@ def solicitar_usuario_fase2():
     FASE 2 — El usuario ejecutó el .bat o abrió el enlace.
     Valida token + usuario_windows, marca como completada y notifica admins.
     """
+    if _rl_golpe([("solic:ip:%s" % (_ip_cliente() or "?"), 15, 3600)]):
+        return _rl_respuesta_429(3600)
     import re as _re
 
     body            = request.get_json(silent=True) or {}
     token           = (body.get("token") or "").strip()
     usuario_windows = (body.get("usuario_windows") or "").strip().upper()
+    if _con_marcado(usuario_windows) or len(usuario_windows) > 300:
+        return jsonify(MSG_CARACTERES), 400
 
     if not token:
         return jsonify({"error": "Token no proporcionado"}), 400
@@ -10398,9 +10617,10 @@ def admin_aprobar_solicitud(sol_id):
     if existing:
         return jsonify({"error": f"Ya existe un usuario con el username '{username}'"}), 409
 
-    # Generar contraseña temporal legible: Princess + 4 dígitos
-    import random as _rnd
-    password_temp = "Princess" + str(_rnd.randint(1000, 9999))
+    # (v12.33.35) Contraseña temporal aleatoria criptográfica (12 caracteres,
+    # sin caracteres ambiguos). Antes: "Princess" + 4 dígitos (9000 opciones).
+    _alfabeto = "ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz23456789"
+    password_temp = "".join(secrets.choice(_alfabeto) for _ in range(12))
 
     nombre_c = f"{sol['nombre']} {sol['apellidos']}"
     db = get_db()
@@ -10769,6 +10989,8 @@ def create_usuario():
     password = (data.get("password") or "").strip()
     email    = (data.get("email")    or "").strip()
     email2   = (data.get("email2")   or "").strip()
+    if _con_marcado(username, nombre, email, email2):
+        return jsonify(MSG_CARACTERES), 400
     if not username or not nombre or not password:
         return jsonify({"error": "username, nombre y contraseña son obligatorios"}), 400
     # (2026-07-31) El email NO es obligatorio: un admin puede dejarlo vacío
@@ -10890,6 +11112,8 @@ def update_usuario(uid):
     # Construir UPDATE dinámico solo con campos enviados
     fields, args = [], []
     if "nombre" in data:
+        if _con_marcado(data["nombre"]):
+            return jsonify(MSG_CARACTERES), 400
         fields.append("nombre=%s"); args.append(data["nombre"].strip())
     if "email" in data:
         # (2026-07-31) Se permite vaciarlo a propósito — es la forma de que
@@ -19656,6 +19880,10 @@ def aprobar_expediente(eid):
     pasar tiempo suficiente para que algo cambie (adjunto borrado,
     departamento u hotel corregidos, proveedor reasignado...).
     """
+    # (v12.33.34) Solo admin y compras resuelven expedientes de techo; el rol
+    # «hotel» no (antes cualquier usuario logueado podía hacerlo por API).
+    if session.get("rol") not in ("admin", "compras"):
+        return jsonify({"error": "Sin permiso para resolver expedientes de techo"}), 403
     data = request.get_json(silent=True) or {}
     exp = row_to_dict(query("SELECT * FROM expediente_exceso WHERE id=%s", (eid,), one=True))
     if not exp:
@@ -19741,6 +19969,8 @@ def denegar_expediente(eid):
     fecha de resolución no es un campo manual, se toma de
     fecha_resolucion/creado_en automáticamente.
     """
+    if session.get("rol") not in ("admin", "compras"):
+        return jsonify({"error": "Sin permiso para resolver expedientes de techo"}), 403
     data = request.get_json(silent=True) or {}
     nota = (data.get("nota_historial") or data.get("observaciones") or "").strip()
     if not nota:
@@ -23368,6 +23598,11 @@ def decidir_departamento_pdf(pid):
 @app.route("/api/pedidos/<int:pid>/adjuntos", methods=["GET"])
 @login_required
 def get_adjuntos(pid):
+    _ped = query("SELECT hotel_id FROM pedidos WHERE id=%s", (pid,), one=True)
+    if not _ped:
+        return jsonify({"ok": False, "error": "Pedido no encontrado"}), 404
+    if not _hotel_accesible(_ped["hotel_id"]):
+        return _sin_acceso_pedido()
     rows = query(
         "SELECT id, tipo, nombre, mime_type, es_correo, creado_en FROM pedido_adjuntos WHERE pedido_id=%s ORDER BY tipo, creado_en",
         (pid,)
@@ -23382,6 +23617,8 @@ def upload_adjunto(pid):
     pedido = query("SELECT id, hotel_id FROM pedidos WHERE id=%s", (pid,), one=True)
     if not pedido:
         return jsonify({"ok": False, "error": "Pedido no encontrado"}), 404
+    if not _hotel_accesible(pedido["hotel_id"]):
+        return _sin_acceso_pedido()
 
     tipo = request.form.get("tipo", "")
     if tipo not in TIPOS_ADJUNTO_VALIDOS:
@@ -23591,7 +23828,7 @@ def upload_adjunto(pid):
     cur = execute(
         "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id, datos_thumb, thumb_mime_type) "
         "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-        (pid, tipo, archivo.filename, mime, psycopg2.Binary(datos), es_correo, uid,
+        (pid, tipo, _RE_MARCADO.sub("_", archivo.filename)[:255], mime, psycopg2.Binary(datos), es_correo, uid,
          psycopg2.Binary(thumb_datos) if thumb_datos else None, thumb_mime)
     )
     adjunto_id = cur.fetchone()["id"]
@@ -24611,6 +24848,9 @@ def _servir_adjunto_response(aid: int):
 @app.route("/api/adjuntos/<int:aid>", methods=["GET"])
 @login_required
 def download_adjunto(aid):
+    _hid = _adjunto_hotel_id(aid)
+    if _hid is not None and not _hotel_accesible(_hid):
+        return _sin_acceso_pedido()
     resp = _servir_adjunto_response(aid)
     if resp is None:
         return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
@@ -24676,6 +24916,8 @@ def download_adjunto_thumb(aid):
     )
     if not row:
         return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
+    if not _hotel_accesible(_adjunto_hotel_id(aid)):
+        return _sin_acceso_pedido()
 
     etag = f'"{aid}-thumb"'
     if request.headers.get("If-None-Match") == etag:
@@ -24731,6 +24973,8 @@ def delete_adjunto(aid):
     row = query("SELECT id, storage_path FROM pedido_adjuntos WHERE id=%s", (aid,), one=True)
     if not row:
         return jsonify({"ok": False, "error": "Adjunto no encontrado"}), 404
+    if not _hotel_accesible(_adjunto_hotel_id(aid)):
+        return _sin_acceso_pedido()
     execute("DELETE FROM pedido_adjuntos WHERE id=%s", (aid,))
     db.commit()
     # Borrar la fila primero: si el borrado en Storage falla, no queremos

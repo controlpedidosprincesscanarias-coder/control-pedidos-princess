@@ -1,3 +1,35 @@
+# v12.33.35 — 22 octubre 2026
+
+🔒 Seguridad: límite de intentos, contraseñas temporales aleatorias y dependencias al día
+
+**Origen**: segunda entrega de la auditoría del 22 de octubre (la primera fue la v12.33.34). Probado con Postgres real.
+
+- **Límite de intentos de acceso**: `/api/login` bloquea 15 minutos tras 8 fallos de la misma cuenta desde la misma IP (y tras 30 fallos de la cuenta desde cualquier IP, por si se rota la IP). El código de verificación por email permite 5 fallos en 10 minutos y, al pasarse, **invalida el código**: hay que volver a entrar con contraseña. Respuesta 429 con `Retry-After`. Un acierto reinicia el contador.
+- **Restablecer contraseña**: máximo 3 solicitudes por hora y usuario y 20 por IP (se sigue respondiendo con el mismo mensaje genérico, sin enviar más correos); el cambio con token también limita fallos por IP.
+- **Solicitudes de acceso públicas**: máximo 15 por hora y por IP.
+- **Contraseña temporal de las altas aprobadas**: 12 caracteres aleatorios criptográficos (antes `Princess` + 4 dígitos).
+- **`/api/bridge/login`**: mismo límite de intentos y, si se define la variable `BRIDGE_USUARIOS`, solo esas cuentas pueden usarlo (salta la verificación por email, así que una contraseña robada de cualquier usuario valía aquí). Sin la variable, comportamiento anterior más un aviso en el log.
+- **Arranque en base vacía**: `_auto_migrate` creaba `emails_sistema_pendientes` después de los `ALTER` que la usan; ahora se crea antes. Comprobado con `init_db.py` + dos arranques seguidos en una base nueva.
+- **Dependencias** (0 vulnerabilidades conocidas según `pip-audit`): Pillow 13.0.0, pypdf 6.21.2, cryptography 50.0.2, certifi 2026.10.19, urllib3 2.8.0, werkzeug 3.1.9. Probado en un entorno limpio: lectura de PDF (pypdf y pdfplumber), miniaturas con Pillow y todas las pruebas de la v12.33.34.
+- Los datos de entrada del login y del restablecimiento se convierten a texto antes de procesarlos (un JSON con números o listas ya no provoca error 500).
+
+El límite vive en memoria del proceso (la app usa 1 worker), así que se reinicia con cada despliegue. No cambia ninguna tabla. **Acción recomendada**: definir `BRIDGE_USUARIOS` en Render con la cuenta que usa main_agenda.
+
+# v12.33.34 — 22 octubre 2026
+
+🔒 Seguridad: correcciones de la auditoría del 22 de octubre
+
+**Origen**: auditoría completa de las tres aplicaciones (informe «Auditoría de las tres aplicaciones Princess»). Esta versión corrige lo que afectaba a Control Pedidos, probado con Postgres real y navegador.
+
+- **XSS almacenado sin login (crítico)**: el panel de solicitudes de acceso pintaba nombre, apellidos, correo y hoteles sin escapar, y el formulario público los aceptaba tal cual. Ahora se escapan al pintar (también usuarios, nombres de adjunto, observaciones, historial y notas, unos 80 puntos de `index.html`) y el servidor rechaza `<`, `>` y `"` en esos datos y en los nombres de usuario. Los nombres de archivo adjunto se sanean al guardar.
+- **Adjuntos por hotel**: listar, descargar, miniatura, subir y borrar adjuntos exige ahora que el pedido sea de un hotel del usuario (rol hotel). Admin y compras siguen viéndolos todos. El enlace público por token del correo al proveedor no cambia.
+- **Aprobar/denegar excesos de techo**: solo admin y compras. Antes cualquier usuario con sesión podía.
+- **Cabeceras y cookie**: `X-Frame-Options`, `Content-Security-Policy: frame-ancestors`, `nosniff`, `Referrer-Policy`, `Strict-Transport-Security`; cookie de sesión `Secure` y `SameSite=Lax` (en local sin HTTPS, `COOKIE_SECURE=0`). Límite global de petición de 80 MB.
+- **Log**: el enlace de restablecimiento de contraseña ya no se escribe en el log.
+- **Correos**: las observaciones del pedido se escapan al incrustarlas en el HTML de los avisos.
+
+No cambia ninguna tabla ni variable obligatoria. Pendiente (otra versión): límite de intentos de login y contraseñas temporales aleatorias.
+
 # v12.33.33 — 21 octubre 2026
 
 ✍️ El envío a V.º B.º desde Activo Operacional pasa el pedido a PENDIENTE DE FIRMA DIRECCION HOTEL
