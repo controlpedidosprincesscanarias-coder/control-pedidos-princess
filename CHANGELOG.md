@@ -1,3 +1,15 @@
+# v12.33.37 — 23 octubre 2026
+
+🔒 Seguridad: la sesión del puente de main_agenda solo sirve para el puente
+
+**Origen**: auditoría de main_agenda (anexo de la auditoría del 22 de octubre). Probado con Postgres real; las pruebas de las versiones anteriores siguen pasando.
+
+- `/api/bridge/login` sigue saltándose el código por email (nadie puede escribirlo en un proceso desatendido), pero la sesión que abre ya no es una sesión completa: solo atiende `/api/bridge/*`, `/api/login*`, `/api/logout`, `/api/version` y `/ping`. Todo lo demás (`/api/pedidos`, `/api/usuarios`, administración…) devuelve 403. Antes, una contraseña robada usada en ese endpoint daba acceso a toda la API, incluida la de un administrador.
+- main_agenda solo llama a `/api/bridge/alertas`, `/api/bridge/notificaciones`, `/api/bridge/existe`, `/api/bridge/solicitar-alta` y `/api/solicitar-usuario/directo` (esta última no necesita sesión), y el chat va por su propio servicio, así que no cambia nada para quien lo usa.
+- **`BRIDGE_USUARIOS` ya no se recomienda.** Cada equipo entra con la cuenta de su usuario, así que una lista de cuentas permitidas no encaja. La variable sigue funcionando si se define, pero se quita el aviso del log. **No hace falta definirla.**
+
+No cambia ninguna tabla ni variable obligatoria.
+
 # v12.33.36 — 23 octubre 2026
 
 🔒 Seguridad: cambio obligatorio de la contraseña temporal y un secreto por canal

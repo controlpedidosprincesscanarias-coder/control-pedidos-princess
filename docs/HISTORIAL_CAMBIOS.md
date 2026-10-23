@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-23 — [Control Pedidos] Seguridad: sesión del puente limitada (v12.33.37)
+
+**Origen:** hallazgo CP-10 de la auditoría de main_agenda (anexo de la auditoría de octubre).
+
+**Cambios:**
+- `_completar_login` marca `session["via_bridge"] = True` cuando `metodo == "bridge"`.
+- `@app.before_request _limitar_sesion_puente`: con esa marca, en rutas `/api/` solo pasan `/api/bridge/*`, `/api/login*`, `/api/logout`, `/api/version` y `/ping`; el resto devuelve 403 y deja un aviso en el log.
+- `bridge_login`: se elimina el aviso por no definir `BRIDGE_USUARIOS` (la variable opcional se mantiene). Corrige la recomendación de la v12.33.35.
+
+**Verificación:** `t_v37` (Postgres 16 + Flask), con una cuenta de compras y una de administrador: tras `bridge/login`, `/api/bridge/alertas` y `/api/bridge/notificaciones` → 200; `/api/me`, `/api/pedidos`, `/api/usuarios`, `/api/maestros`, `/api/admin/solicitudes-acceso`, `/api/config-avisos/resolver` y `POST /api/cambiar-password` → 403; `logout` → 200 y después 401; el login normal no queda limitado y, tras una sesión de puente, entrar con `/api/login` en el mismo cliente quita la marca; `/ping` y `/` siguen respondiendo. `t_v34`, `t_v35` y `t_v36` siguen en TODO OK (en `t_v36` la comprobación de `bridge/login` ahora exige 403 en `/api/pedidos` y 200 en las alertas).
+
 ## 2026-10-23 — [Control Pedidos] Seguridad: cambio obligatorio de contraseña temporal y secretos por canal (v12.33.36)
 
 **Origen:** pendientes de la v12.33.35, «cambio forzado de la contraseña temporal» (CP-04) y hallazgo X-01 (un solo `DALI_SSO_SECRET` para tres canales).

@@ -4069,6 +4069,25 @@ def _exigir_cambio_password():
     return jsonify({"error": "Debes cambiar tu contraseña temporal antes de continuar.",
                     "debe_cambiar_password": True}), 403
 
+# ── (v12.33.37) Sesiones abiertas por el puente de main_agenda ────────────────
+# /api/bridge/login se salta la verificación por email (es una cuenta sin persona
+# delante), así que la sesión que crea solo sirve para lo que main_agenda usa:
+# alertas y notificaciones. Con una contraseña robada, ese login ya no abre la API
+# entera (pedidos, usuarios, administración). El chat va por otro servicio.
+_RUTAS_SESION_PUENTE = ("/api/bridge/", "/api/login", "/api/login/", "/api/logout", "/api/version", "/ping")
+
+@app.before_request
+def _limitar_sesion_puente():
+    if not session.get("via_bridge"):
+        return None
+    ruta = request.path
+    if not ruta.startswith("/api/"):
+        return None
+    if any(ruta == r or (r.endswith("/") and ruta.startswith(r)) for r in _RUTAS_SESION_PUENTE):
+        return None
+    log.warning("PUENTE — sesión de '%s' rechazada en %s", session.get("username"), ruta)
+    return jsonify({"error": "Esta sesión solo sirve para el puente de main_agenda."}), 403
+
 def _validar_password_nueva(nueva, actual, username):
     if len(nueva) < 8:
         return "La contraseña debe tener al menos 8 caracteres."
@@ -9426,6 +9445,8 @@ def _completar_login(user, verificado=False, metodo=None):
     session["nombre"]     = user["nombre"]
     session["rol"]        = user["rol"]
     session["login_date"] = hoy.isoformat()
+    if metodo == "bridge":
+        session["via_bridge"] = True    # (v12.33.37) sesión limitada a /api/bridge/*
     hoteles_ids = []
     if user["rol"] == "hotel":
         rows = query("SELECT hotel_id FROM usuario_hoteles WHERE usuario_id=%s", (user["id"],))
@@ -9620,17 +9641,16 @@ def bridge_login():
     if espera:
         return _rl_respuesta_429(espera)
 
-    # (v12.33.35) Este endpoint se salta la verificación por email, así que
-    # cualquier contraseña robada de CUALQUIER usuario valdría aquí. Si se
-    # define BRIDGE_USUARIOS (lista de usernames separados por coma) solo
-    # esas cuentas pueden usarlo; sin la variable se mantiene el
-    # comportamiento anterior (y se avisa en el log).
+    # (v12.33.35) Opcional: si se define BRIDGE_USUARIOS (lista de usernames
+    # separados por coma) solo esas cuentas pueden usar este endpoint. No se
+    # recomienda definirla mientras cada equipo use su propia cuenta.
     permitidos = {u.strip().lower() for u in os.environ.get("BRIDGE_USUARIOS", "").split(",") if u.strip()}
     if permitidos and username not in permitidos:
         _rl_registrar(reglas)
         return jsonify({"error": "Usuario o contraseña incorrectos"}), 401
-    if not permitidos:
-        log.warning("BRIDGE-LOGIN sin BRIDGE_USUARIOS definido: cualquier cuenta puede saltarse la verificación por email")
+    # (v12.33.37) Sin BRIDGE_USUARIOS es lo normal: cada equipo entra con su propia
+    # cuenta. El riesgo de saltarse la verificación por email lo acota
+    # _limitar_sesion_puente (la sesión solo sirve para /api/bridge/*).
 
     user = query(
         "SELECT * FROM usuarios WHERE username=%s AND activo=1",
