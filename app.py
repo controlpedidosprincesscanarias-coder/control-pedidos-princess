@@ -9894,6 +9894,13 @@ def detectar_usuario_windows():
     return jsonify({"usuario_windows": None})
 
 
+# (v12.33.38) Ventana en la que una segunda solicitud del mismo correo se
+# considera repetida (no crea otra solicitud ni otro correo) y segundos de
+# espera entre dos "forzar envío de Fase 2" de la misma solicitud.
+SOLICITUD_VENTANA_DUPLICADA_MIN = 10
+FASE2_REENVIO_ESPERA_S = 60
+
+
 # ─── FASE 1: recibir datos básicos, guardar en BD, notificar admin ────────────
 
 @app.route("/api/solicitar-usuario", methods=["POST"])
@@ -9947,8 +9954,30 @@ def solicitar_usuario_fase1():
     token     = _sec.token_urlsafe(32)
     expira_en = datetime.utcnow() + timedelta(hours=72)
 
+    # (v12.33.38) Idempotencia: una segunda petición del MISMO correo mientras
+    # ya hay una solicitud abierta reciente (doble clic, reintento del
+    # navegador, formulario reabierto y reenviado) NO crea otra solicitud ni
+    # encola otro correo de verificación — devuelve la ya existente. El
+    # advisory lock serializa dos peticiones simultáneas del mismo correo
+    # (con varios hilos gthread, sin él ambas podrían pasar la comprobación).
     db = get_db()
     with db.cursor() as cur:
+        cur.execute("SELECT pg_advisory_xact_lock(hashtext(%s))",
+                    ("solic_f1:" + email_sol.lower(),))
+        cur.execute("""
+            SELECT id FROM solicitudes_acceso
+             WHERE LOWER(email) = LOWER(%s)
+               AND estado IN ('fase1_pendiente', 'fase2_pendiente')
+               AND creado_en > NOW() - INTERVAL '%s minutes'
+             ORDER BY id DESC LIMIT 1
+        """ % ("%s", SOLICITUD_VENTANA_DUPLICADA_MIN), (email_sol,))
+        previa = cur.fetchone()
+        if previa:
+            db.commit()
+            log.info("[SOL_FASE1] Solicitud repetida de %s ignorada (ya existe #%s)",
+                     email_sol, previa["id"])
+            return jsonify({"ok": True, "sol_id": previa["id"], "encolado": True,
+                            "duplicada": True})
         cur.execute("""
             INSERT INTO solicitudes_acceso
                 (nombre, apellidos, email, hoteles, movil, estado, ip_solicitante,
@@ -10273,6 +10302,7 @@ def admin_listar_solicitudes():
         FROM solicitudes_acceso s
         LEFT JOIN emails_sistema_pendientes e
                ON e.solicitud_acceso_id = s.id AND e.evento_codigo = 'solicitud_acceso_fase2'
+              AND e.descartado_en IS NULL
         ORDER BY s.creado_en DESC
         LIMIT 200
     """)
@@ -10446,6 +10476,41 @@ def admin_enviar_fase2(sol_id):
     if sol["estado"] not in ("fase1_pendiente", "fase2_pendiente"):
         return jsonify({"error": f"La solicitud ya está en estado '{sol['estado']}' — no se puede reenviar."}), 409
 
+    # (v12.33.38) Espera mínima entre envíos de la misma solicitud. El token
+    # se regenera en cada envío, así que "token_expira - 72 h" es el momento
+    # del último envío/regeneración; el correo de la cola cuenta igual. Sin
+    # esto, un doble clic (o forzar el envío justo cuando el automático ya
+    # salió) mandaba dos correos con enlaces distintos y el primero quedaba
+    # invalidado por el segundo.
+    ult = query(
+        """SELECT GREATEST(
+                    EXTRACT(EPOCH FROM (s.token_expira - INTERVAL '72 hours')),
+                    COALESCE((SELECT EXTRACT(EPOCH FROM MAX(e.enviado_en))
+                                FROM emails_sistema_pendientes e
+                               WHERE e.solicitud_acceso_id = s.id
+                                 AND e.evento_codigo = 'solicitud_acceso_fase2'
+                                 AND e.enviado = TRUE), 0)
+                  ) AS t_ult,
+                  EXTRACT(EPOCH FROM NOW()) AS t_ahora,
+                  EXISTS (SELECT 1 FROM emails_sistema_pendientes e
+                           WHERE e.solicitud_acceso_id = s.id
+                             AND e.evento_codigo = 'solicitud_acceso_fase2'
+                             AND e.enviado = FALSE AND e.descartado_en IS NULL
+                             AND e.en_proceso_desde > NOW() - INTERVAL '2 minutes') AS enviando
+             FROM solicitudes_acceso s WHERE s.id = %s""",
+        (sol_id,), one=True)
+    if ult:
+        if ult["enviando"]:
+            return jsonify({"error": "El correo de verificación se está enviando ahora mismo desde otra sesión. Espera un minuto y revisa el estado antes de reenviar.",
+                            "retry_after": FASE2_REENVIO_ESPERA_S}), 429
+        t_ult = float(ult["t_ult"] or 0)
+        resta = int(FASE2_REENVIO_ESPERA_S - (float(ult["t_ahora"]) - t_ult))
+        if t_ult and resta > 0:
+            resp = jsonify({"error": f"Ya se envió un correo de verificación hace unos segundos. Espera {resta} s antes de reenviar.",
+                            "retry_after": resta})
+            resp.headers["Retry-After"] = str(resta)
+            return resp, 429
+
     # Siempre se regenera el token al reenviar manualmente, para refrescar
     # la caducidad de 72h (por ejemplo si el enlace original había expirado).
     import secrets as _sec
@@ -10458,6 +10523,16 @@ def admin_enviar_fase2(sol_id):
             SET token=%(t)s, token_expira=%(e)s, estado='fase2_pendiente'
             WHERE id=%(id)s
         """, {"t": token, "e": expira_en, "id": sol_id})
+        # (v12.33.38) El correo automático que siga en la cola llevaría el
+        # token ANTERIOR (ya invalidado por el de arriba) y además sería un
+        # segundo correo para la misma persona: se cancela. El envío manual
+        # que devuelve este endpoint lo sustituye.
+        cur.execute("""
+            UPDATE emails_sistema_pendientes SET descartado_en = NOW()
+             WHERE solicitud_acceso_id = %s
+               AND evento_codigo = 'solicitud_acceso_fase2'
+               AND enviado = FALSE AND descartado_en IS NULL
+        """, (sol_id,))
     db.commit()
     sol = query("SELECT * FROM solicitudes_acceso WHERE id=%s", (sol_id,), one=True)
 

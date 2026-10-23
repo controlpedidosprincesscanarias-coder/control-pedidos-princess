@@ -1,3 +1,17 @@
+# v12.33.38 — 23 octubre 2026
+
+🐛 Solicitud de acceso: ya no se envían dos correos de verificación y los botones esperan con cuenta atrás
+
+**Origen**: aviso de Víctor — al probar una solicitud de acceso llegaron dos correos idénticos de "Verificación de acceso". Probado con Postgres real y con navegador; las pruebas de las versiones anteriores siguen pasando.
+
+- **Causa**: nada impedía que la misma solicitud saliera dos veces. Por un lado, el correo de verificación sale solo en cuanto un administrador abre la aplicación, y a la vez el botón "Enviar/reenviar Fase 2" del panel permitía forzar el envío otra vez sin avisar de que ya estaba saliendo. Por otro, el formulario público se podía reenviar al instante (doble clic, o cerrarlo y volver a abrirlo) y cada envío creaba una solicitud y un correo nuevos. Además, el reenvío manual cambia el enlace, así que el enlace del primer correo quedaba muerto sin que nadie lo supiera.
+- **Formulario público**: tras enviar, el botón queda bloqueado 60 segundos con una cuenta atrás visible ("Espera 58 s…"), también si se cierra y se vuelve a abrir el formulario o se recarga la página. Si el envío falla, la espera es de 5 segundos. El doble clic solo manda una petición.
+- **Servidor**: una segunda solicitud con el mismo correo en menos de 10 minutos no crea otra solicitud ni otro correo; devuelve la que ya existe y la pantalla avisa de que ya estaba registrada. Funciona también con peticiones simultáneas.
+- **Panel de administración**: "Enviar/reenviar Fase 2" queda bloqueado 60 segundos con cuenta atrás y el servidor rechaza (429) un segundo envío en ese plazo o mientras otra sesión lo está enviando. Al forzar el envío se cancela el correo automático que siguiera en cola, para que el usuario reciba uno solo y con el enlace vigente. El aviso de confirmación lo explica.
+- El listado de solicitudes ya no muestra como "En cola" un correo cancelado.
+
+No cambia ninguna tabla ni variable.
+
 # v12.33.37 — 23 octubre 2026
 
 🔒 Seguridad: la sesión del puente de main_agenda solo sirve para el puente

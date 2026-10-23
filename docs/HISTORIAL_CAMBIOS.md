@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-23 — [Control Pedidos] Solicitud de acceso: sin correos duplicados y con cuenta atrás (v12.33.38)
+
+**Origen:** aviso de Víctor, dos correos idénticos de "Verificación de acceso" en una sola solicitud de prueba.
+
+**Cambios:**
+- `solicitar_usuario_fase1`: `pg_advisory_xact_lock` por correo + comprobación de solicitud abierta del mismo correo en los últimos `SOLICITUD_VENTANA_DUPLICADA_MIN` (10) minutos; si existe devuelve `{"duplicada": true, "sol_id": …}` sin insertar ni encolar nada.
+- `admin_enviar_fase2`: espera `FASE2_REENVIO_ESPERA_S` (60 s) calculada desde `token_expira - 72 h` y desde `emails_sistema_pendientes.enviado_en`; 429 con `retry_after` si no ha pasado o si la fila de la cola está reservada (`en_proceso_desde` < 2 min). Al regenerar el token marca `descartado_en` la fila de cola `solicitud_acceso_fase2` pendiente (llevaba el token anterior).
+- `admin_listar_solicitudes`: el LEFT JOIN ignora filas descartadas.
+- `templates/index.html`: helper genérico de cuenta atrás (`_cdIniciar/_cdRestante/_cdPintar`, atributos `data-cd-key`/`data-cd-texto`, persistido en `localStorage` con try/catch) aplicado al botón del formulario público (60 s tras enviar, 5 s tras error, guarda contra doble clic) y al botón "Enviar/reenviar Fase 2" del panel; aviso `sol-f1-dup` cuando el servidor devuelve `duplicada`.
+- No hay cambios de esquema ni de variables.
+
 ## 2026-10-23 — [Control Pedidos] Seguridad: sesión del puente limitada (v12.33.37)
 
 **Origen:** hallazgo CP-10 de la auditoría de main_agenda (anexo de la auditoría de octubre).

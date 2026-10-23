@@ -1153,7 +1153,8 @@ tbody tr:last-child{border-bottom:none}
            style="display:none;color:#ff6b6b;font-size:13px;margin-bottom:12px;
                   background:rgba(255,107,107,.1);border-radius:6px;padding:9px 12px;"></div>
 
-      <button id="sol-btn-fase1" class="login-btn" onclick="sol_enviarFase1(this)" style="width:100%;">
+      <button id="sol-btn-fase1" class="login-btn" onclick="sol_enviarFase1(this)" style="width:100%;"
+              data-cd-key="sol-f1" data-cd-texto="Enviar solicitud →">
         Enviar solicitud →
       </button>
     </div>
@@ -1162,6 +1163,10 @@ tbody tr:last-child{border-bottom:none}
     <div id="sol-panel-fase1-ok" style="display:none;padding:28px;text-align:center;">
       <div style="font-size:52px;margin-bottom:16px;">📬</div>
       <h3 style="margin:0 0 10px;color:#c9a84c;font-size:17px;">¡Solicitud recibida!</h3>
+      <p id="sol-f1-dup" style="display:none;color:#c9a84c;font-size:13px;margin:0 0 14px;">
+        Ya teníamos tu solicitud registrada hace un momento, así que no hemos creado otra
+        ni enviado otro correo. Revisa tu bandeja (y spam) en unos minutos.
+      </p>
       <p style="color:rgba(255,255,255,.6);font-size:14px;line-height:1.6;margin:0 0 20px;">
         Tu solicitud ha sido registrada.<br>
         <strong style="color:rgba(255,255,255,.85);">En breve recibirás un correo electrónico</strong>
@@ -1461,7 +1466,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.37
+          V 12.33.38
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -4166,6 +4171,39 @@ window.fetch = async function (...args) {
   return respuesta;
 };
 
+/* (v12.33.38) Cuenta atrás en botones que no deben pulsarse dos veces seguidas.
+   Un botón con data-cd-key="clave" y data-cd-texto="texto normal" se bloquea
+   mientras haya una espera activa para esa clave y muestra "Espera N s…".
+   La espera se guarda también en localStorage (si el navegador lo permite)
+   para que sobreviva a cerrar/reabrir el formulario o recargar la página. */
+const _cdHasta = {};
+function _cdRestante(key) {
+  let t = _cdHasta[key];
+  if (t === undefined) {
+    try { t = parseInt(localStorage.getItem('cd:' + key) || '0', 10) || 0; } catch (_) { t = 0; }
+    _cdHasta[key] = t;
+  }
+  return Math.max(0, Math.ceil((t - Date.now()) / 1000));
+}
+function _cdIniciar(key, seg) {
+  _cdHasta[key] = Date.now() + seg * 1000;
+  try { localStorage.setItem('cd:' + key, String(_cdHasta[key])); } catch (_) {}
+  _cdPintar();
+}
+function _cdPintar() {
+  document.querySelectorAll('[data-cd-key]').forEach(b => {
+    const rest = _cdRestante(b.dataset.cdKey);
+    if (rest > 0) {
+      b.disabled = true; b.dataset.cdActivo = '1';
+      b.textContent = `Espera ${rest} s…`;
+    } else if (b.dataset.cdActivo === '1') {
+      b.disabled = false; b.dataset.cdActivo = '0';
+      b.textContent = b.dataset.cdTexto || b.textContent;
+    }
+  });
+}
+setInterval(_cdPintar, 1000);
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Restablecimiento de contraseña
 ═══════════════════════════════════════════════════════════════════════════ */
@@ -4295,6 +4333,7 @@ function mostrarSolicitudUsuario() {
   _sol_setFaseIndicador(1);
   document.getElementById('sol-panel-fase1').style.display = '';
   document.getElementById('modal-solicitar-usuario').style.display = 'flex';
+  _cdPintar();   // si hay una espera en curso, el botón se abre ya bloqueado con su contador
 }
 
 function cerrarSolicitudUsuario() {
@@ -4325,6 +4364,7 @@ function _sol_setFaseIndicador(fase) {
   if (bp) bp.style.width = fase >= 2 ? '100%' : '0%';
 }
 
+let _solF1EnCurso = false;
 async function sol_enviarFase1(btn) {
   const nombre    = (document.getElementById('sol-nombre').value    || '').trim();
   const apellidos = (document.getElementById('sol-apellidos').value || '').trim();
@@ -4339,20 +4379,29 @@ async function sol_enviarFase1(btn) {
   if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) return mostrarErr('Introduce un correo electrónico válido.');
   if (!movil)     return mostrarErr('El teléfono móvil de empresa es obligatorio.');
   if (!hoteles)   return mostrarErr('Selecciona al menos un hotel.');
+  if (_solF1EnCurso) return;
+  if (_cdRestante('sol-f1') > 0) return mostrarErr(`Espera ${_cdRestante('sol-f1')} s antes de volver a enviar la solicitud.`);
+  _solF1EnCurso = true;
+  let esperaTrasEnvio = 5;
   if (btn) { btn.disabled = true; btn.textContent = 'Enviando…'; }
   try {
     // v12.11.0: el backend encola el email de Fase 2 (emails_sistema_pendientes)
     // para que lo despache el navegador de un admin ya logado, en vez de
     // depender de este navegador (de quien solicita el acceso, sin
     // homologar) — mismo mecanismo que el resto de avisos de sistema.
-    await api('/api/solicitar-usuario', 'POST', { nombre, apellidos, email, movil, hoteles });
+    const r = await api('/api/solicitar-usuario', 'POST', { nombre, apellidos, email, movil, hoteles });
     _sol_resetPaneles();
     document.getElementById('sol-panel-fase1-ok').style.display = '';
+    const dup = document.getElementById('sol-f1-dup');
+    if (dup) dup.style.display = (r && r.duplicada) ? '' : 'none';
     _sol_setFaseIndicador(2);
+    esperaTrasEnvio = 60;   // enviada: no se puede repetir hasta pasado 1 min
   } catch(e) {
     mostrarErr(e.message || 'Error de red. Inténtalo de nuevo.');
   } finally {
+    _solF1EnCurso = false;
     if (btn) { btn.disabled = false; btn.textContent = 'Enviar solicitud →'; }
+    _cdIniciar('sol-f1', esperaTrasEnvio);
   }
 }
 
@@ -4526,6 +4575,7 @@ async function adminCargarSolicitudes() {
         <td style="padding:10px 14px;">${_adminSolBotones(r)}</td>`;
       tbody.appendChild(tr);
     });
+    _cdPintar();
     loading.style.display = 'none'; if (tabla) tabla.style.display = '';
   } catch(e) { loading.textContent = '⚠️ Error al cargar solicitudes.'; }
 }
@@ -4579,7 +4629,7 @@ function _adminSolBotones(r) {
     ${btnBorrar}
   </div>`;
   return `<div style="display:flex;gap:6px;flex-wrap:wrap;">
-    <button class="btn btn-gold btn-sm" onclick="adminEnviarFase2(${r.id})" title="El email de Fase 2 se envía en cuanto un admin abre la app; usa esto para forzar el envío ahora mismo desde tu propio navegador, o si el enlace caducó">🔁 Enviar/reenviar Fase 2</button>
+    <button class="btn btn-gold btn-sm" data-cd-key="f2-${r.id}" data-cd-texto="🔁 Enviar/reenviar Fase 2" onclick="adminEnviarFase2(${r.id})" title="El email de Fase 2 se envía en cuanto un admin abre la app; usa esto para forzar el envío ahora mismo desde tu propio navegador, o si el enlace caducó">🔁 Enviar/reenviar Fase 2</button>
     <button class="btn btn-ghost btn-sm" onclick="adminDescargarBat(${r.id})" title="Descargar el .bat manualmente">💾 Descargar .bat</button>
     <button class="btn btn-danger btn-sm" onclick="adminRechazarSolicitud(${r.id})" title="Rechazar solicitud">✕</button>
     ${btnBorrar}
@@ -4597,7 +4647,9 @@ async function adminBorrarSolicitud(solId) {
 }
 
 async function adminEnviarFase2(solId) {
-  if (!confirm('El email de Fase 2 se envía en cuanto un admin abre la app (puede tardar unos minutos). ¿Forzar el envío ahora mismo desde tu navegador? Se generará un nuevo enlace con caducidad de 72 horas (el anterior quedará invalidado).')) return;
+  if (_cdRestante('f2-' + solId) > 0) return;
+  if (!confirm('El email de Fase 2 se envía solo en cuanto un admin abre la app (puede tardar unos minutos). Si ya se ha enviado, NO hace falta forzarlo: el usuario recibiría un segundo correo y el enlace del primero dejaría de funcionar.\n\n¿Forzar el envío ahora mismo desde tu navegador? Se generará un nuevo enlace de 72 horas y se cancelará el correo automático si aún estaba en cola.')) return;
+  _cdIniciar('f2-' + solId, 60);   // bloquea el botón 60 s aunque falle algo
   try {
     const r = await api(`/api/admin/solicitudes-acceso/${solId}/enviar-fase2`, 'POST');
 
