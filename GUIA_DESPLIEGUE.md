@@ -191,6 +191,8 @@ momento, sin desplegar nada.
    | `SUPABASE_STORAGE_BUCKET` | No | Por defecto `adjuntos-cerrados` si no se define |
    | `DALI_SSO_SECRET` | Solo si integras con DALI | Debe ser idéntica a la del backend de DALI y a la del backend de Activo Operacional (que la usa para leer los compradores de cada hotel, `/api/externo/dali-sap/compradores-hoteles`) |
    | `BRIDGE_USUARIOS` | Recomendada (desde v12.33.35) | Cuentas, separadas por comas, que pueden usar `/api/bridge/login` (el de main_agenda, que se salta la verificación por email). Si no se define, cualquier cuenta puede (como antes) y el log lo avisa. |
+   | `DALI_BRIDGE_SECRET`, `AO_BRIDGE_SECRET` | No (recomendadas, desde v12.33.36) | Secretos propios del puente con Catálogo y con Activo Operacional (el mismo valor en el otro servicio). Mientras no existan, todo sigue firmándose con `DALI_SSO_SECRET`. |
+   | `BRIDGE_ACEPTA_SSO_SECRET` | No | Por defecto `1`: `DALI_SSO_SECRET` sigue valiendo en el puente. Ponlo a `0` cuando Catálogo y Activo Operacional usen ya sus secretos propios. |
    | `COOKIE_SECURE` | No | Por defecto la cookie de sesión es solo HTTPS; `0` únicamente en desarrollo local sin HTTPS |
    | `DALI_FRONTEND_URL` | No | Por defecto el proxy Cloudflare de DALI ya en producción |
    | `PORT` | Sí (solo con `runtime: docker`, desde v12.32.42) | `10000` — con el runtime nativo de Python, Render la fijaba sola; con Docker hay que fijarla a mano (o dejar que `render.yaml` la fije, si despliegas como Blueprint) para que Render sepa a qué puerto interno enrutar (coincide con `EXPOSE 10000` del `Dockerfile`) |

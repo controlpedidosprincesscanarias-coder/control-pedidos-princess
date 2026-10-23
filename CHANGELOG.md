@@ -1,3 +1,17 @@
+# v12.33.36 — 23 octubre 2026
+
+🔒 Seguridad: cambio obligatorio de la contraseña temporal y un secreto por canal
+
+**Origen**: tercera entrega de la auditoría del 22 de octubre. Probado con Postgres real y navegador.
+
+- **Contraseña temporal**: cuando un administrador fija una contraseña (alta aprobada desde una solicitud, alta manual en Usuarios o cambio de contraseña de otro usuario), la persona tiene que elegir una propia al entrar. Hasta entonces la aplicación muestra una pantalla «Elige tu contraseña» y el servidor rechaza el resto de peticiones (403). Mínimo 8 caracteres con letras y números, distinta de la actual y del usuario; 5 intentos fallidos de la actual en 15 minutos y se bloquea. Nuevo `POST /api/cambiar-password`.
+  - No afecta a las cuentas actuales (la marca nace desactivada), ni a quien restablece la contraseña con el enlace del correo, ni al administrador que cambia la suya.
+  - `/api/bridge/login` (main_agenda) no impone el cambio: es una cuenta de servicio sin persona delante.
+  - El correo de bienvenida ya no «recomienda» cambiarla: avisa de que la aplicación lo pedirá.
+- **Un secreto por canal**: el puente servidor a servidor admite ahora `DALI_BRIDGE_SECRET` (Catálogo), `AO_BRIDGE_SECRET` (Activo Operacional, que también puede leer compradores y proveedores) y, mientras `BRIDGE_ACEPTA_SSO_SECRET` valga 1 (por defecto), el `DALI_SSO_SECRET` de siempre. Así no se corta nada al desplegar. Cuando Catálogo (v1.20.51) y Activo Operacional (v1.16.2) usen los suyos, se pone `BRIDGE_ACEPTA_SSO_SECRET=0` y una filtración en un servicio ya no sirve en los otros. El acceso de un clic a Catálogo sigue con `DALI_SSO_SECRET`.
+
+Nueva columna `usuarios.debe_cambiar_password` (se crea sola al arrancar). Variables nuevas, todas opcionales: `DALI_BRIDGE_SECRET`, `AO_BRIDGE_SECRET`, `BRIDGE_ACEPTA_SSO_SECRET`.
+
 # v12.33.35 — 22 octubre 2026
 
 🔒 Seguridad: límite de intentos, contraseñas temporales aleatorias y dependencias al día

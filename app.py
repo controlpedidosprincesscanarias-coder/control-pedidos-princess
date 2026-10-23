@@ -100,6 +100,18 @@ ESTADOS_CERRADOS = ("ENTREGADO", "CANCELADO")
 # contraseña. DALI_FRONTEND_URL es la URL pública del frontend de DALI (el
 # Worker de Cloudflare que hace de proxy, no la de onrender.com directa).
 DALI_SSO_SECRET = os.environ.get("DALI_SSO_SECRET", "")
+# (v12.33.36, auditoría X-01) Secretos propios de cada canal del puente servidor a
+# servidor. Antes el DALI_SSO_SECRET firmaba TODO (acceso de un clic a Catálogo,
+# correos de Catálogo y pedidos de Activo Operacional): filtrado desde cualquiera de
+# los tres servicios, valía para los otros dos.
+#   DALI_BRIDGE_SECRET  → correos y consultas de Catálogo (/api/externo/dali-sap/*)
+#   AO_BRIDGE_SECRET    → Activo Operacional (/api/externo/activo-operacional/* y
+#                         las consultas de solo lectura de compradores y proveedores)
+#   BRIDGE_ACEPTA_SSO_SECRET (por defecto 1) → mientras sea 1, DALI_SSO_SECRET sigue
+#                         valiendo en todos los canales (migración sin cortes);
+#                         ponerlo a 0 cuando Catálogo y Activo Operacional ya usen los suyos.
+DALI_BRIDGE_SECRET = os.environ.get("DALI_BRIDGE_SECRET", "")
+AO_BRIDGE_SECRET = os.environ.get("AO_BRIDGE_SECRET", "")
 DALI_FRONTEND_URL = os.environ.get(
     "DALI_FRONTEND_URL", "https://dali-proxy.centralcompras1-canarias.workers.dev"
 ).rstrip("/")
@@ -2433,6 +2445,13 @@ def _auto_migrate():
             cur.execute(
                 "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS ultima_verificacion_login TIMESTAMPTZ"
             )
+            # (v12.33.36) Contraseña temporal: la fija un administrador (alta aprobada,
+            # alta manual o cambio desde Usuarios) y la conoce más gente que su dueño.
+            # Con esta marca, la app obliga a elegir una propia en el primer acceso.
+            # Por defecto FALSE: las cuentas existentes no se ven afectadas.
+            cur.execute(
+                "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS debe_cambiar_password BOOLEAN NOT NULL DEFAULT FALSE"
+            )
             # Backfill para cuentas ya existentes: se usa ultimo_login como
             # estimación razonable de "la última vez que sabemos que esta
             # persona entró de verdad" — evita forzar una oleada de
@@ -4028,6 +4047,71 @@ def login_required(f):
             return _sesion_desactivada_resp()
         return f(*args, **kwargs)
     return decorated
+
+# ── (v12.33.36) Cambio obligatorio de contraseña temporal ────────────────────
+# Mientras la sesión lleve `debe_cambiar_password`, la API solo deja pasar lo
+# necesario para cambiarla (o salir). El resto responde 403 con la marca, que
+# el navegador convierte en la pantalla de «elige tu contraseña».
+_RUTAS_CON_CAMBIO_PENDIENTE = (
+    "/api/me", "/api/logout", "/api/cambiar-password", "/api/login",
+    "/api/password-reset/", "/api/version", "/ping",
+)
+
+@app.before_request
+def _exigir_cambio_password():
+    if not session.get("debe_cambiar_password"):
+        return None
+    ruta = request.path
+    if not ruta.startswith("/api/"):
+        return None
+    if any(ruta == r or (r.endswith("/") and ruta.startswith(r)) or ruta.startswith(r + "/") for r in _RUTAS_CON_CAMBIO_PENDIENTE):
+        return None
+    return jsonify({"error": "Debes cambiar tu contraseña temporal antes de continuar.",
+                    "debe_cambiar_password": True}), 403
+
+def _validar_password_nueva(nueva, actual, username):
+    if len(nueva) < 8:
+        return "La contraseña debe tener al menos 8 caracteres."
+    if len(nueva) > 128:
+        return "La contraseña es demasiado larga (máximo 128 caracteres)."
+    if nueva == actual:
+        return "La contraseña nueva debe ser distinta de la actual."
+    if nueva.strip().lower() == (username or "").strip().lower():
+        return "La contraseña no puede ser igual que tu nombre de usuario."
+    if nueva.isdigit() or nueva.isalpha():
+        return "Combina letras y números en la contraseña."
+    return None
+
+@app.route("/api/cambiar-password", methods=["POST"])
+@login_required
+def cambiar_password_propia():
+    """Cambio de la contraseña propia (contraseña actual + nueva). Quita la
+    marca de contraseña temporal. Límite: 5 fallos de la actual en 15 min."""
+    body   = request.get_json(silent=True) or {}
+    actual = str(body.get("actual_password") or "")
+    nueva  = str(body.get("nueva_password") or "")
+    uid    = session["user_id"]
+    reglas = [("pwdchg:%s" % uid, 5, 900)]
+    espera = _rl_segundos_bloqueo(reglas)
+    if espera:
+        return _rl_respuesta_429(espera)
+    user = query("SELECT * FROM usuarios WHERE id=%s AND activo=1", (uid,), one=True)
+    if not user:
+        return _sesion_desactivada_resp()
+    if not actual or not _verifica_y_migra_password(user, actual):
+        _rl_registrar(reglas)
+        return jsonify({"error": "La contraseña actual no es correcta."}), 400
+    msg = _validar_password_nueva(nueva, actual, user["username"])
+    if msg:
+        return jsonify({"error": msg}), 400
+    db = get_db()
+    execute("UPDATE usuarios SET password=%s, debe_cambiar_password=FALSE WHERE id=%s",
+            (generate_password_hash(nueva), uid))
+    db.commit()
+    _rl_limpiar([reglas[0][0]])
+    session.pop("debe_cambiar_password", None)
+    _registrar_traza(uid, "password_cambiada", "propia")
+    return jsonify({"ok": True})
 
 # ── (v12.33.34, auditoría 22-oct-2026) Control de acceso por hotel/rol ───────
 # Antes, los endpoints de adjuntos solo exigían estar logueado: un usuario del
@@ -9347,6 +9431,11 @@ def _completar_login(user, verificado=False, metodo=None):
         rows = query("SELECT hotel_id FROM usuario_hoteles WHERE usuario_id=%s", (user["id"],))
         hoteles_ids = [r["hotel_id"] for r in rows]
     session["hoteles_ids"] = hoteles_ids
+    # (v12.33.36) Cambio obligatorio de contraseña temporal. El puente de main_agenda
+    # (cuenta de servicio, sin persona delante) queda fuera: no podría contestar.
+    debe_cambiar = bool(user.get("debe_cambiar_password")) and metodo != "bridge"
+    if debe_cambiar:
+        session["debe_cambiar_password"] = True
 
     db = get_db()
     if verificado:
@@ -9358,7 +9447,8 @@ def _completar_login(user, verificado=False, metodo=None):
     _registrar_traza(user["id"], "conexion", metodo or ("login_verificado" if verificado else "login"))
 
     return jsonify({"ok": True, "id": user["id"], "username": user["username"],
-                    "nombre": user["nombre"], "rol": user["rol"], "hoteles_ids": hoteles_ids})
+                    "nombre": user["nombre"], "rol": user["rol"], "hoteles_ids": hoteles_ids,
+                    "debe_cambiar_password": debe_cambiar})
 
 
 def _generar_token_sso_dali(payload: dict, ttl_segundos: int = 100) -> str:
@@ -9761,7 +9851,7 @@ def cambiar_password_con_token():
         return jsonify({"error": "El enlace no es válido o ha caducado"}), 400
 
     db = get_db()
-    execute("UPDATE usuarios SET password=%s WHERE id=%s", (generate_password_hash(nueva), row["usuario_id"]))
+    execute("UPDATE usuarios SET password=%s, debe_cambiar_password=FALSE WHERE id=%s", (generate_password_hash(nueva), row["usuario_id"]))
     execute("UPDATE password_reset_tokens SET usado=1 WHERE token=%s", (token,))
     db.commit()
     return jsonify({"ok": True, "msg": "Contraseña actualizada correctamente"})
@@ -10630,7 +10720,7 @@ def admin_aprobar_solicitud(sol_id):
     # valor sin hashear (password_temp) se sigue usando tal cual para el
     # email de bienvenida y la respuesta JSON de este endpoint, más abajo.
     cur = execute(
-        "INSERT INTO usuarios (username, nombre, email, password, movil, rol, activo) VALUES (%s,%s,%s,%s,%s,'compras',1) RETURNING id",
+        "INSERT INTO usuarios (username, nombre, email, password, movil, rol, activo, debe_cambiar_password) VALUES (%s,%s,%s,%s,%s,'compras',1,TRUE) RETURNING id",
         (username, nombre_c, sol["email"], generate_password_hash(password_temp), sol.get("movil") or None)
     )
     new_uid = cur.fetchone()["id"]
@@ -10733,7 +10823,7 @@ def admin_aprobar_solicitud(sol_id):
                     font-weight:700;font-size:14px;">Acceder al sistema →</a>
         </div>
         <p style="margin:0;font-size:12px;color:#aaa;line-height:1.5;">
-          Por seguridad, te recomendamos cambiar la contraseña en tu primer acceso.<br>
+          Por seguridad, al entrar por primera vez la aplicación te pedirá elegir una contraseña propia.<br>
           Si tienes cualquier problema contacta con el departamento de compras.
         </p>
       </div>
@@ -10750,7 +10840,7 @@ def admin_aprobar_solicitud(sol_id):
         f"Contraseña temp.: {password_temp}\n"
         f"Hoteles         : {hoteles_lista}\n\n"
         f"Accede en: {app_url}\n\n"
-        f"Te recomendamos cambiar la contraseña en tu primer acceso.\n\n"
+        f"Al entrar por primera vez la aplicación te pedirá elegir una contraseña propia.\n\n"
         f"Control Pedidos Princess Canarias"
     )
 
@@ -10868,7 +10958,8 @@ def me():
         return jsonify({"logged": False, "cuenta_desactivada": True})
     return jsonify({"logged": True, "id": session["user_id"], "username": session["username"],
                     "nombre": session["nombre"], "rol": session["rol"],
-                    "hoteles_ids": session.get("hoteles_ids", [])})
+                    "hoteles_ids": session.get("hoteles_ids", []),
+                    "debe_cambiar_password": bool(session.get("debe_cambiar_password"))})
 
 # ── API Maestros ───────────────────────────────────────────────────────────────
 
@@ -11006,7 +11097,7 @@ def create_usuario():
     if rol not in ("admin", "user", "hotel", "compras"):
         rol = "user"
     cur = execute(
-        "INSERT INTO usuarios (username, nombre, email, email2, movil, password, rol, activo, telegram_chat_id) VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s) RETURNING id",
+        "INSERT INTO usuarios (username, nombre, email, email2, movil, password, rol, activo, telegram_chat_id, debe_cambiar_password) VALUES (%s,%s,%s,%s,%s,%s,%s,1,%s,TRUE) RETURNING id",
         (username, nombre, email, email2 or None, data.get("movil",""), generate_password_hash(password), rol,
          (data.get("telegram_chat_id") or "").strip() or None)
     )
@@ -11141,6 +11232,9 @@ def update_usuario(uid):
         fields.append("activo=%s"); args.append(nuevo_activo)
     if "password" in data and data["password"].strip():
         fields.append("password=%s"); args.append(generate_password_hash(data["password"].strip()))
+        if uid != current_user_id():
+            # (v12.33.36) La fija un administrador: su dueño elige una propia al entrar.
+            fields.append("debe_cambiar_password=TRUE")
     if "telegram_chat_id" in data:
         fields.append("telegram_chat_id=%s"); args.append((data["telegram_chat_id"] or "").strip() or None)
     if not fields:
@@ -26987,8 +27081,24 @@ def api_eliminar_notificacion_contacto(cid):
 # pero también acota cuánto tiempo es reutilizable una firma capturada).
 _DALI_BRIDGE_MARGEN_SEGUNDOS = 300  # 5 minutos
 
+def _secretos_puente_ruta() -> list:
+    """Secretos admitidos para firmar la petición actual, según su canal."""
+    ruta = request.path
+    secretos = []
+    if ruta.startswith("/api/externo/activo-operacional/"):
+        secretos.append(AO_BRIDGE_SECRET)
+    elif ruta.startswith("/api/externo/dali-sap/"):
+        secretos.append(DALI_BRIDGE_SECRET)
+        # Activo Operacional lee compradores y proveedores por aquí (solo lectura).
+        if request.method == "GET":
+            secretos.append(AO_BRIDGE_SECRET)
+    if os.environ.get("BRIDGE_ACEPTA_SSO_SECRET", "1") != "0":
+        secretos.append(DALI_SSO_SECRET)
+    return [x for x in secretos if x]
+
 def _dali_bridge_firma_valida(cuerpo_crudo: bytes) -> bool:
-    if not DALI_SSO_SECRET:
+    secretos = _secretos_puente_ruta()
+    if not secretos:
         return False
     timestamp = request.headers.get("X-Dali-Timestamp", "")
     firma_recibida = request.headers.get("X-Dali-Signature", "")
@@ -27002,8 +27112,11 @@ def _dali_bridge_firma_valida(cuerpo_crudo: bytes) -> bool:
     if abs(ahora - ts) > _DALI_BRIDGE_MARGEN_SEGUNDOS:
         return False
     mensaje = f"{timestamp}.".encode() + cuerpo_crudo
-    firma_esperada = hmac.new(DALI_SSO_SECRET.encode(), mensaje, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(firma_recibida, firma_esperada)
+    ok = False
+    for secreto in secretos:   # sin cortocircuito: tiempo constante respecto a cuál acierta
+        esperada = hmac.new(secreto.encode(), mensaje, hashlib.sha256).hexdigest()
+        ok = hmac.compare_digest(firma_recibida, esperada) or ok
+    return ok
 
 
 @app.route("/api/externo/dali-sap/emails-pendientes", methods=["POST"])

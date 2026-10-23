@@ -1461,7 +1461,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.35
+          V 12.33.36
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3910,6 +3910,56 @@ function _volverLoginPaso1() {
   if (_confirmacionReenvioTimeout) { clearTimeout(_confirmacionReenvioTimeout); _confirmacionReenvioTimeout = null; }
 }
 
+/* ── (v12.33.36) Cambio obligatorio de la contraseña temporal ──────────────
+   Si el servidor marca la sesión con debe_cambiar_password (alta aprobada, alta
+   manual o contraseña fijada por un administrador), se tapa la aplicación con
+   esta pantalla hasta que la persona elige una contraseña propia. El servidor
+   también bloquea el resto de la API mientras tanto. */
+function _forzarCambioPassword() {
+  return new Promise((resolve) => {
+    if (document.getElementById('cp-force-pass')) return;
+    const ov = document.createElement('div');
+    ov.id = 'cp-force-pass';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:100000;background:rgba(15,32,68,.96);display:flex;align-items:center;justify-content:center;padding:16px;font-family:inherit;';
+    ov.innerHTML = `
+      <div role="dialog" aria-modal="true" aria-labelledby="cp-fp-titulo" style="background:#fff;border-radius:12px;max-width:420px;width:100%;padding:28px;box-shadow:0 10px 40px rgba(0,0,0,.4);">
+        <h2 id="cp-fp-titulo" style="margin:0 0 6px;font-size:20px;color:#0f2044;">Elige tu contraseña</h2>
+        <p style="margin:0 0 18px;font-size:13px;color:#555;line-height:1.5;">Estás usando una contraseña temporal. Por seguridad, elige una propia para continuar (mínimo 8 caracteres, con letras y números).</p>
+        <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">Contraseña temporal actual</label>
+        <input id="cp-fp-actual" type="password" autocomplete="current-password" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #ccd;border-radius:6px;margin-bottom:12px;">
+        <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">Contraseña nueva</label>
+        <input id="cp-fp-nueva" type="password" autocomplete="new-password" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #ccd;border-radius:6px;margin-bottom:12px;">
+        <label style="display:block;font-size:12px;color:#666;margin-bottom:4px;">Repite la contraseña nueva</label>
+        <input id="cp-fp-repite" type="password" autocomplete="new-password" style="width:100%;box-sizing:border-box;padding:10px;border:1px solid #ccd;border-radius:6px;margin-bottom:12px;">
+        <div id="cp-fp-error" style="display:none;color:#b00020;font-size:13px;margin-bottom:12px;"></div>
+        <button id="cp-fp-ok" type="button" style="width:100%;padding:12px;background:#0f2044;color:#c9a84c;border:0;border-radius:7px;font-weight:700;font-size:14px;cursor:pointer;">Guardar y continuar</button>
+        <button id="cp-fp-salir" type="button" style="width:100%;margin-top:8px;padding:8px;background:none;border:0;color:#666;font-size:12px;cursor:pointer;">Cerrar sesión</button>
+      </div>`;
+    document.body.appendChild(ov);
+    const $ = (id) => document.getElementById(id);
+    const error = (t) => { const e = $('cp-fp-error'); e.textContent = t; e.style.display = 'block'; };
+    $('cp-fp-actual').focus();
+    $('cp-fp-salir').onclick = async () => { await api('/api/logout','POST'); location.reload(); };
+    const guardar = async () => {
+      const actual = $('cp-fp-actual').value, nueva = $('cp-fp-nueva').value, repite = $('cp-fp-repite').value;
+      $('cp-fp-error').style.display = 'none';
+      if (!actual || !nueva) return error('Rellena los campos.');
+      if (nueva !== repite) return error('Las contraseñas nuevas no coinciden.');
+      const btn = $('cp-fp-ok'); btn.disabled = true;
+      try {
+        const r = await fetch('/api/cambiar-password', { method:'POST', headers:{'Content-Type':'application/json'}, credentials:'same-origin',
+                                body: JSON.stringify({ actual_password: actual, nueva_password: nueva }) });
+        const d = await r.json().catch(() => ({}));
+        if (!r.ok || d.error) { error(d.error || 'No se pudo cambiar la contraseña.'); btn.disabled = false; return; }
+        ov.remove();
+        resolve(true);
+      } catch (_) { error('Error de conexión.'); btn.disabled = false; }
+    };
+    $('cp-fp-ok').onclick = guardar;
+    ov.addEventListener('keydown', (e) => { if (e.key === 'Enter') guardar(); });
+  });
+}
+
 async function _entrarEnApp(r) {
   G.user = r.nombre; G.nombre = r.nombre; G.rol = r.rol; G.userId = r.id;
   G.hotelesIds = r.hoteles_ids || [];
@@ -3918,6 +3968,7 @@ async function _entrarEnApp(r) {
   document.getElementById('sb-avatar').textContent = r.nombre.charAt(0).toUpperCase();
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='flex';
+  if (r.debe_cambiar_password) await _forzarCambioPassword();   // (v12.33.36)
   if (G.rol !== 'admin') document.getElementById('btn-delete-pedido').style.display='none';
   // Actualizar aspecto visual del sidebar según rol (todos los items son siempre visibles)
   _applySidebarRoleStyles();
@@ -12070,6 +12121,7 @@ function calcDias(s) {
     document.getElementById('sb-avatar').textContent = d.nombre.charAt(0).toUpperCase();
     document.getElementById('login-screen').style.display='none';
     document.getElementById('app').style.display='flex';
+    if (d.debe_cambiar_password) await _forzarCambioPassword();   // (v12.33.36)
     if (G.rol !== 'admin') document.getElementById('btn-delete-pedido').style.display='none';
     _applySidebarRoleStyles();
     const btnNuevoPedido = document.getElementById('btn-nuevo-pedido');

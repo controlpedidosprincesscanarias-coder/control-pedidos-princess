@@ -49,6 +49,24 @@
 
 ---
 
+## 2026-10-23 — [Control Pedidos] Seguridad: cambio obligatorio de contraseña temporal y secretos por canal (v12.33.36)
+
+**Origen:** pendientes de la v12.33.35, «cambio forzado de la contraseña temporal» (CP-04) y hallazgo X-01 (un solo `DALI_SSO_SECRET` para tres canales).
+
+**Cambios:**
+- **Columna.** `_auto_migrate`: `usuarios.debe_cambiar_password BOOLEAN NOT NULL DEFAULT FALSE` junto a `ultima_verificacion_login`.
+- **Marca.** `admin_aprobar_solicitud`, `create_usuario` y `update_usuario` (solo si el administrador cambia la contraseña de OTRO usuario) ponen la columna a TRUE. `cambiar_password_con_token` y el nuevo endpoint la ponen a FALSE.
+- **Sesión.** `_completar_login` guarda `session["debe_cambiar_password"]` (salvo `metodo="bridge"`) y lo devuelve en la respuesta; `/api/me` también lo informa.
+- **Bloqueo.** `@app.before_request _exigir_cambio_password`: con la marca en sesión, solo pasan `/api/me`, `/api/logout`, `/api/cambiar-password`, `/api/login*`, `/api/password-reset/*`, `/api/version` y `/ping`; el resto devuelve 403 con `debe_cambiar_password`.
+- **Endpoint.** `POST /api/cambiar-password` (`login_required`): comprueba la actual con `_verifica_y_migra_password`, valida la nueva con `_validar_password_nueva` (8–128 caracteres, letras y números, distinta de la actual y del usuario), límite de 5 fallos/15 min con el limitador de la v12.33.35, traza `password_cambiada`.
+- **Pantalla.** `templates/index.html`: `_forzarCambioPassword()` (superposición con contraseña actual, nueva y repetición) llamada desde `_entrarEnApp()` y desde el arranque con sesión; botón para cerrar sesión.
+- **X-01.** `_secretos_puente_ruta()` y `_dali_bridge_firma_valida()`: según la ruta (`/api/externo/activo-operacional/*` o `/api/externo/dali-sap/*`, y método para la lectura de AO) se admiten `AO_BRIDGE_SECRET` o `DALI_BRIDGE_SECRET`, más `DALI_SSO_SECRET` si `BRIDGE_ACEPTA_SSO_SECRET != "0"`. La comparación recorre todos los secretos sin cortocircuito.
+- Correo de bienvenida (HTML y texto) y `GUIA_DESPLIEGUE.md` (variables).
+
+**Verificación:** `t_v36` (Postgres 16 + Flask + Chromium), 42 comprobaciones: alta manual y aprobada marcadas; con la marca `/api/pedidos`, `/api/maestros` y `/api/usuarios` → 403 y `/api/me` → 200; actual errónea, nueva corta, igual a la actual, solo números, solo letras o igual al usuario → 400 y sigue marcada; cambio correcto → 200, marca fuera y la API vuelve; la temporal deja de entrar; 6.º intento con la actual errónea → 429; el administrador que fija la clave de otro lo marca y la suya no; restablecer por enlace quita la marca; `bridge/login` no queda bloqueado; por canal: el secreto de Catálogo no vale en Activo Operacional, el de Activo Operacional no vale para encolar correos, y con `BRIDGE_ACEPTA_SSO_SECRET=0` el `DALI_SSO_SECRET` deja de valer; en el navegador aparece la pantalla, avisa si no coinciden, desaparece al guardar y no reaparece al recargar. `t_v34` y `t_v35` siguen en TODO OK; `init_db.py` + dos arranques en base vacía correctos.
+
+**Pendiente:** retirar el `DALI_SSO_SECRET` de los servicios que ya no lo necesitan y poner `BRIDGE_ACEPTA_SSO_SECRET=0` cuando Catálogo y Activo Operacional estén desplegados con los suyos; un tiempo máximo de vida para la contraseña temporal (hoy no caduca).
+
 ## 2026-10-22 — [Control Pedidos] Seguridad: límite de intentos, contraseñas temporales y dependencias (v12.33.35)
 
 **Origen:** segunda parte de la auditoría de Control Pedidos. Hallazgos CP-04, CP-05, CP-08, CP-09 (parte) y vulnerabilidades de dependencias.
