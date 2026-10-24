@@ -626,6 +626,12 @@ def _auto_migrate():
             except Exception as e:
                 log.warning(f"No se pudo preparar pedidos_eliminados.hotel_id: {e}")
 
+            # ── (v12.33.43) Fecha de alta del pedido eliminado: para no volver a dar su Nº de orden ──
+            try:
+                cur.execute("ALTER TABLE pedidos_eliminados ADD COLUMN IF NOT EXISTS pedido_creado_en TIMESTAMPTZ")
+            except Exception as e:
+                log.warning(f"No se pudo preparar pedidos_eliminados.pedido_creado_en: {e}")
+
             # ── Corrección retroactiva: altas automáticas desde SAP con
             # estado mal calculado (bug de v12.32.11, corregido en v12.32.13)
             # ────────────────────────────────────────────────────────────
@@ -9089,15 +9095,35 @@ def alerta_enviar_telegram(pedido_id):
 
 
 
+# (v12.33.43) El Nº de orden de un pedido ELIMINADO no se vuelve a dar. Antes se calculaba
+# como el mayor Nº de los pedidos que quedan + 1: al borrar el último pedido del año, el
+# siguiente recibía su mismo número (visto el 24/10/2026: dos «Nº 1006» en Pedidos
+# Eliminados). Ahora cuenta también pedidos_eliminados (por el año de creación del pedido,
+# o el de su borrado en los registros anteriores a esta versión). Además, un candado de
+# transacción (pg_advisory_xact_lock) impide que dos altas simultáneas reciban el mismo Nº:
+# se suelta al hacer commit o rollback de la petición.
+_SQL_MAX_NORDEN_ANIO = """
+    SELECT GREATEST(
+        (SELECT COALESCE(MAX(norden), 0) FROM pedidos WHERE EXTRACT(YEAR FROM creado_en) = %s),
+        (SELECT COALESCE(MAX(norden), 0) FROM pedidos_eliminados
+          WHERE EXTRACT(YEAR FROM COALESCE(pedido_creado_en, eliminado_en)) = %s)
+    ) AS mx
+"""
+_CANDADO_NORDEN = 724113  # clave fija del candado de numeración
+
+
+def _max_norden_anio(cur, year):
+    """Mayor Nº de orden usado en el año (pedidos vivos y eliminados). Toma el candado.
+    La columna pedidos_eliminados.pedido_creado_en la crea _auto_migrate() al arrancar."""
+    cur.execute("SELECT pg_advisory_xact_lock(%s)", (_CANDADO_NORDEN,))
+    cur.execute(_SQL_MAX_NORDEN_ANIO, (year, year))
+    return cur.fetchone()["mx"] or 0
+
+
 def _next_norden(db):
     year = datetime.now().year
     with db.cursor() as cur:
-        cur.execute(
-            "SELECT COALESCE(MAX(norden), 0) as mx FROM pedidos WHERE EXTRACT(YEAR FROM creado_en) = %s",
-            (year,)
-        )
-        row = cur.fetchone()
-    return (row["mx"] or 0) + 1
+        return _max_norden_anio(cur, year) + 1
 
 # ── Rutas estáticas ────────────────────────────────────────────────────────────
 
@@ -20257,8 +20283,9 @@ def _guardar_y_borrar_pedido(pedido: dict, pid: int, motivo: str, uid, nombre: s
             proveedor_nombre, proveedor_email, estado,
             fecha_solicitud, pedido_num, presupuesto_num,
             entrada_albaran_num, observaciones, creado_por_nombre,
-            motivo_eliminacion, eliminado_por_id, eliminado_por_nombre, hotel_id
-        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+            motivo_eliminacion, eliminado_por_id, eliminado_por_nombre, hotel_id,
+            pedido_creado_en
+        ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
     """, (
         pid,
         pedido.get("norden"),
@@ -20277,6 +20304,7 @@ def _guardar_y_borrar_pedido(pedido: dict, pid: int, motivo: str, uid, nombre: s
         uid,
         nombre,
         pedido.get("hotel_id"),
+        pedido.get("creado_en"),
     ))
 
     # ── 3. Eliminar el pedido (CASCADE borra adjuntos e historial) ───────────
@@ -21438,11 +21466,7 @@ def importar_excel():
         # 1. Obtener norden base en UNA sola query
         year = datetime.now().year
         with db.cursor() as cur_n:
-            cur_n.execute(
-                "SELECT COALESCE(MAX(norden), 0) as mx FROM pedidos WHERE EXTRACT(YEAR FROM creado_en) = %s",
-                (year,)
-            )
-            base_norden = (cur_n.fetchone()["mx"] or 0) + 1
+            base_norden = _max_norden_anio(cur_n, year) + 1  # (v12.33.43) también los eliminados
 
         # 2. Procesar todas las filas en memoria (sin queries)
         for i, row in enumerate(ws.iter_rows(min_row=2), start=2):

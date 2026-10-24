@@ -1,3 +1,17 @@
+# v12.33.43 — 24 octubre 2026
+
+🔢 El Nº de orden de un pedido eliminado ya no se vuelve a dar
+
+**Origen**: Víctor vio dos «Nº 1006» en Pedidos Eliminados. El Nº de orden se calculaba como el mayor de los pedidos que **quedan** + 1: al eliminar el último pedido del año (a mano a las 15:20), el siguiente pedido (15:21) recibió su mismo número. Pasaba con cualquier alta: a mano, desde el listado SAP, la importación por Excel y Activo Operacional.
+
+- **Ahora el número tiene en cuenta también los pedidos eliminados del año.** Un Nº que se ha usado una vez no se repite, aunque el pedido se borre.
+- `pedidos_eliminados` guarda la fecha de alta del pedido (columna nueva `pedido_creado_en`, la crea la app sola al arrancar) para contarlo en su año. Los eliminados de antes de esta versión cuentan por el año en que se borraron.
+- **Dos altas a la vez ya no pueden recibir el mismo número**: el cálculo se hace con un candado en la base de datos hasta que se guarda el pedido.
+- Los Nº ya repetidos (los dos 1006 del registro de eliminados) no se cambian.
+- Efecto visible: si se elimina el último pedido, el siguiente salta ese número (p. ej. del 1006 eliminado se pasa al 1007).
+
+Sin variables nuevas. Columna nueva automática: `pedidos_eliminados.pedido_creado_en`.
+
 # v12.33.42 — 24 octubre 2026
 
 🧹 Activo Operacional puede retirar sus pedidos de prueba

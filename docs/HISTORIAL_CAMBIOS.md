@@ -49,6 +49,24 @@
 
 ---
 
+## 2026-10-24 — [Control Pedidos] El Nº de orden de un pedido eliminado no se reutiliza (v12.33.43)
+
+**Petición de Víctor:** «¿Puedes revisarlo en la aplicación?» — en Pedidos Eliminados había dos «Nº 1006» (Maspalomas, eliminado a mano a las 15:20, y Guayarmina, creado a las 15:21 desde Activo Operacional).
+
+**Causa:** `_next_norden()` = `MAX(norden)` de `pedidos` del año + 1; el pedido eliminado ya no está en `pedidos`, así que su número quedaba libre. Igual en la importación por Excel (`base_norden`).
+
+**Cambios:**
+- `_max_norden_anio(cur, year)`: `GREATEST` de `pedidos` (año de `creado_en`) y `pedidos_eliminados` (año de `COALESCE(pedido_creado_en, eliminado_en)`), tras `pg_advisory_xact_lock(724113)` (se suelta en el commit/rollback de la petición). Lo usan `_next_norden()` (alta manual, SAP, Activo Operacional, copias del V.º B.º) y la importación por Excel.
+- `_auto_migrate()`: `ALTER TABLE pedidos_eliminados ADD COLUMN IF NOT EXISTS pedido_creado_en TIMESTAMPTZ`. `_guardar_y_borrar_pedido()` la rellena con `pedido.creado_en`.
+
+**Verificación:** `t_v43` (Postgres 16 + Flask, 10 comprobaciones): alta → Nº 4, se elimina, la siguiente → Nº 5 (antes 4); un eliminado antiguo sin fecha de alta borrado este año cuenta; uno de otro año no; 4 altas simultáneas → 4 números distintos; `_next_norden` coincide. No probado: despliegue real en Render.
+
+**Límite conocido:** los eliminados anteriores a esta versión no tienen fecha de alta y cuentan por el año en que se borraron; si alguno de 2025 con un Nº alto se borró en 2026, la numeración de 2026 saltaría por encima de él (salto, nunca repetición).
+
+**Norma 5:** no aplica a `GUIA_DESPLIEGUE.md` ni a `PENDIENTES.md` (sin variables nuevas; la columna `pedidos_eliminados.pedido_creado_en` la crea `_auto_migrate()`). Restauración: si `restore_agent.py` (en el PC, fuera de este repo) copia `pedidos_eliminados` con una lista fija de columnas, la columna nueva queda vacía al restaurar, que equivale a un registro anterior a esta versión; no rompe nada.
+
+**Documentos revisados:** `README.md` (versión), `CHANGELOG.md`; `GUIA_DESPLIEGUE.md`, `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+
 ## 2026-10-24 — [Control Pedidos] Borrado de pedidos de prueba de Activo Operacional (v12.33.42)
 
 **Petición de Víctor:** «Necesito poder eliminar los pedidos que estamos realizando de prueba en material operacional y poner contador a cero.» Elegido: los pedidos de Control de Pedidos vinculados van a «Pedidos Eliminados», con un botón en Activo Operacional.
