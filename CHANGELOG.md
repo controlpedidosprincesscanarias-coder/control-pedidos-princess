@@ -1,3 +1,19 @@
+# v12.33.42 — 24 octubre 2026
+
+🧹 Activo Operacional puede retirar sus pedidos de prueba
+
+**Origen**: petición de Víctor — «necesito poder eliminar los pedidos que estamos realizando de prueba en material operacional y poner contador a cero». Si Activo Operacional vuelve a empezar en el Nº 1 y aquí siguen los pedidos `AO-1`, `AO-2`…, el pedido real nuevo chocaría con la referencia del de prueba (índice único `ux_pedidos_ref_activo_operacional`).
+
+- **Ruta nueva** `POST /api/externo/activo-operacional/pedidos/eliminar` (firmada con `AO_BRIDGE_SECRET`, firma de un solo uso). Cuerpo: `{refs: ["AO-12", …] (máx. 200), motivo, usuario_email, usuario_nombre}`. Para cada referencia se toman el pedido `AO-<nº>` y sus copias del V.º B.º dividido (`AO-<nº>/<k>`).
+- Cada uno sigue **el mismo camino que «Eliminar pedido»**: fila en `pedidos_eliminados` (motivo «Pedido de prueba de Activo Operacional (AO-…) — desde Activo Operacional», usuario de Activo Operacional) y borrado de `pedidos`. Todo en una transacción: o se borran todos o ninguno.
+- Respuesta `{ok, eliminados:[{ref,id,norden,estado}], no_encontradas}`. Un fallo interno devuelve la referencia de log, como el resto.
+- `delete_pedido` pasa a usar la función común `_guardar_y_borrar_pedido()`; para el usuario no cambia nada.
+- **Importante**: «Pedidos Eliminados» es un registro; un pedido borrado no se puede restaurar desde la app (solo con una copia de seguridad anterior).
+
+**Documentación**: README con secciones nuevas «Seguridad» (secretos por canal, rotación) y «Copias de seguridad y restauración», y la tabla de variables de entorno al día. `render.yaml` declara ya `AO_BRIDGE_SECRET`, `DALI_BRIDGE_SECRET`, `BRIDGE_ACEPTA_SSO_SECRET`, `SUPABASE_URL` y `SUPABASE_SERVICE_ROLE_KEY` (solo documentación: los valores de Render no cambian).
+
+No cambia ninguna tabla ni variable de entorno. Desplegar **antes** que Activo Operacional v1.18.0.
+
 # v12.33.41 — 24 octubre 2026
 
 🔒 Seguridad: una petición firmada del puente ya no se puede reenviar

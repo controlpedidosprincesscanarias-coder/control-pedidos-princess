@@ -49,6 +49,21 @@
 
 ---
 
+## 2026-10-24 — [Control Pedidos] Borrado de pedidos de prueba de Activo Operacional (v12.33.42)
+
+**Petición de Víctor:** «Necesito poder eliminar los pedidos que estamos realizando de prueba en material operacional y poner contador a cero.» Elegido: los pedidos de Control de Pedidos vinculados van a «Pedidos Eliminados», con un botón en Activo Operacional.
+
+**Cambios:**
+- `_guardar_y_borrar_pedido(pedido, pid, motivo, uid, nombre)`: `INSERT pedidos_eliminados` + `DELETE pedidos`, sin `commit`. Lo usan `delete_pedido` y la ruta nueva.
+- `api_externo_ao_eliminar_pedidos` → `POST /api/externo/activo-operacional/pedidos/eliminar`: firma `AO_BRIDGE_SECRET` (`_dali_bridge_firma_valida`, un solo uso), `refs` con `^AO-\d{1,9}$` (máx. 200), busca `ref = r OR ref LIKE r || '/%'` con `FOR UPDATE`, borra y hace un único `commit`; devuelve `eliminados` y `no_encontradas`.
+- README: secciones «Seguridad» y «Copias de seguridad y restauración»; tabla de variables completa. `render.yaml`: variables del puente declaradas (`sync: false`).
+
+**Verificación:** con Postgres 16 + Flask real (puerto 4301) y Activo Operacional v1.18.0 en local, `pedidosPrueba.test.mjs` (16 comprobaciones): borra `AO-175` y su copia `AO-175/2`, las dos quedan en `pedidos_eliminados` con el motivo, la referencia queda libre y repetir el borrado desde Activo Operacional da 404 (ya no existe). `python -W error -c "import ast; ast.parse(open('app.py').read())"` sin avisos. No probado: despliegue real en Render.
+
+**Norma 5:** no aplica (sin tablas ni variables nuevas; las variables que ahora declara `render.yaml` ya existían en producción desde v12.33.36).
+
+**Documentos revisados:** `README.md` (versión, variables, seguridad, copias), `CHANGELOG.md`, `render.yaml`; `GUIA_DESPLIEGUE.md`, `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+
 ## 2026-10-24 — [Control Pedidos] Las peticiones firmadas del puente no se pueden reenviar (v12.33.41)
 
 **Origen:** hallazgo N-2 de la revisión completa: dentro de la ventana de 5 minutos una firma capturada se podía repetir.

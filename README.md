@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.33.41** (ver `CHANGELOG.md` y
+> Versión actual: **v12.33.42** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -529,13 +529,95 @@ firmados/escaneados, la app funciona igual sin Docker en local.
 
 ### Variables de entorno
 
+Se definen en Render → `control-pedidos-princess` → Environment. Cambiar
+`render.yaml` **no** actualiza el valor de un servicio ya creado.
+
 | Variable | Obligatoria | Descripción |
 |---|---|---|
-| `DATABASE_URL` | Sí | Cadena de conexión PostgreSQL (Supabase) |
-| `SECRET_KEY` | Sí | Clave de sesión Flask — debe coincidir con la del servicio de Chat si se usa |
-| `RESEND_API_KEY` | No | Envío de emails desde backend (opcional) |
-| `EMAIL_FROM` | No | Remitente de emails del sistema |
-| `EMAILS_INTERNOS` | No | Lista de emails internos separados por coma |
+| `DATABASE_URL` | Sí | Cadena de conexión PostgreSQL (Supabase). |
+| `SECRET_KEY` | Sí | Clave de sesión Flask. Cambiarla cierra todas las sesiones abiertas. |
+| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` | Sí, para adjuntos | URL del proyecto (`https://xxxx.supabase.co`) y clave `service_role` para el almacenamiento de adjuntos de pedidos cerrados. Solo en el servidor. |
+| `SUPABASE_STORAGE_BUCKET` | No | Bucket de adjuntos (por defecto `adjuntos-cerrados`). |
+| `DALI_SSO_SECRET` | Sí | Acceso de un clic a Catálogo Asignaciones (mismo valor que en Catálogo). Con `BRIDGE_ACEPTA_SSO_SECRET=0` ya **no** sirve para el puente. |
+| `DALI_BRIDGE_SECRET` | Sí (con `BRIDGE_ACEPTA_SSO_SECRET=0`) | Firma de las llamadas de Catálogo Asignaciones (`/api/externo/dali-sap/*`). Mismo valor que `DALI_BRIDGE_SECRET` en Catálogo. |
+| `AO_BRIDGE_SECRET` | Sí (con `BRIDGE_ACEPTA_SSO_SECRET=0`) | Firma de las llamadas de Activo Operacional (`/api/externo/activo-operacional/*`: crear pedidos, V.º B.º, **borrar pedidos de prueba**). Mismo valor que `AO_BRIDGE_SECRET` en Activo Operacional. |
+| `BRIDGE_ACEPTA_SSO_SECRET` | No | `1` (por defecto) = el puente acepta también `DALI_SSO_SECRET`; `0` = cada canal solo acepta su secreto propio (lo recomendado, ya activo en producción). |
+| `DALI_FRONTEND_URL` | No | URL pública del frontend de Catálogo (Worker de Cloudflare). |
+| `APP_URL` | No | URL pública de esta app para los enlaces de los correos. |
+| `BRIDGE_USUARIOS` | No | Lista de usuarios que pueden entrar por `/api/bridge/login` (Organizador). Vacía = sin restricción adicional. |
+| `IP_PROXIES_CONFIABLES` | No | Nº de proxies delante de la app (por defecto `1`, Render; `2` si también pasa por Cloudflare). |
+| `COOKIE_SECURE` | No | `0` solo en desarrollo local sin HTTPS. |
+| `DB_POOL_MAXCONN` | No | Conexiones máximas del pool (por defecto 15). |
+| `TELEGRAM_BOT_TOKEN` | No | Avisos por Telegram. |
+
+---
+
+## Seguridad
+
+Resumen de cómo se protege la aplicación y qué hacer si algo se filtra.
+
+**Acceso de usuarios**
+- Contraseñas con hash (desde v12.29.37); nunca se guardan en claro.
+- Sesión de servidor que **caduca al cambiar el día** (hora Canarias) y
+  cookie `Secure`/`HttpOnly` (ver «Sesión y autenticación»).
+- Código de 6 dígitos por email tras 15 días sin entrar y cada 6 meses.
+- Límite de intentos en `/api/login`, en el código de verificación y en
+  `/api/bridge/login`, por cuenta y por IP. La IP se toma del proxy de
+  confianza (`IP_PROXIES_CONFIABLES`), no de lo que mande el navegador.
+- Los errores internos responden «Error interno del servidor (ref. xxxxxx)»;
+  el detalle queda en el log de Render con esa referencia.
+
+**Puente con las otras apps** (servidor a servidor)
+- Cada petición va firmada con HMAC-SHA256 (`X-Dali-Timestamp` +
+  `X-Dali-Signature` sobre `«timestamp».«cuerpo»`), caduca a los 5 minutos
+  y, en las que modifican datos (`POST`), **cada firma solo vale una vez**.
+- Un secreto por canal: `AO_BRIDGE_SECRET` (Activo Operacional),
+  `DALI_BRIDGE_SECRET` (Catálogo) y `DALI_SSO_SECRET` (solo el acceso de un
+  clic). Con `BRIDGE_ACEPTA_SSO_SECRET=0` una filtración en un servicio no
+  sirve en los otros.
+
+**Si se filtra un secreto** (rotación)
+| Secreto | Dónde cambiarlo a la vez | Efecto |
+|---|---|---|
+| `AO_BRIDGE_SECRET` | aquí y en Activo Operacional | ninguno visible si se cambia en los dos casi a la vez |
+| `DALI_BRIDGE_SECRET` | aquí y en Catálogo Asignaciones | ídem |
+| `DALI_SSO_SECRET` | aquí y en Catálogo Asignaciones | el acceso de un clic falla hasta que los dos coincidan |
+| `SECRET_KEY` | solo aquí | todos los usuarios vuelven a iniciar sesión |
+| `SUPABASE_SERVICE_ROLE_KEY` | Supabase → Settings → API → *Roll*; después en **todos** los servicios que usen ese proyecto | acceso total a la base: rotarla siempre que haya salido de Render |
+| Contraseña de `DATABASE_URL` | Supabase → Database → *Reset password*; después aquí y en los scripts del PC que la usen (copia y restauración) | la app no conecta hasta actualizarla |
+
+Tras cambiar una variable en Render se redespliega solo. Nunca se pegan
+secretos en correos, chats ni capturas; si ha pasado, se rotan.
+
+**Borrado de pedidos de prueba desde Activo Operacional (v12.33.42)**
+`POST /api/externo/activo-operacional/pedidos/eliminar` solo acepta
+referencias `AO-<nº>` (máx. 200) firmadas con `AO_BRIDGE_SECRET`. Cada
+pedido (y sus copias `AO-<nº>/<k>` del V.º B.º dividido) pasa por el mismo
+camino que «Eliminar pedido»: queda una fila en `pedidos_eliminados` con el
+motivo y el usuario de Activo Operacional, y se borra de `pedidos`. **No se
+puede restaurar** desde la app: «Pedidos Eliminados» es un registro.
+
+---
+
+## Copias de seguridad y restauración
+
+- **Copia diaria**: `backup_pedidos.py` (en el PC de Central, tarea
+  programada L-V a las 17:00) vuelca los datos y adjuntos a la carpeta de
+  red.
+- **Restaurar**: panel web → «Restaurar backup» encola la petición
+  (`restore_queue`) y el agente local `restore_agent.py` la ejecuta (Render
+  no ve la carpeta de red). Paso a paso en `INSTRUCCIONES_RESTAURACION.md`.
+- **Supabase**: el plan gratuito no guarda copias descargables; la copia
+  diaria de arriba es la que vale. Antes de una migración grande o de una
+  limpieza masiva, hacer además un volcado manual:
+  `pg_dump "$DATABASE_URL" -Fc -f cp_AAAA-MM-DD.dump` (se restaura con
+  `pg_restore --clean --no-owner -d "$DATABASE_URL" cp_AAAA-MM-DD.dump`).
+- **Simulacro recomendado cada trimestre**: restaurar la última copia en
+  una base de pruebas (no en producción), arrancar la app contra ella y
+  comprobar que el nº de pedidos y algunos adjuntos coinciden. Anotar
+  la fecha del simulacro en `docs/HISTORIAL_CAMBIOS.md`.
+- Los pedidos borrados (a mano o desde Activo Operacional) **no** vuelven
+  con «Pedidos Eliminados»; solo restaurando una copia anterior al borrado.
 
 ---
 

@@ -55,6 +55,17 @@ services:
         generateValue: true  # Render genera un valor aleatorio seguro automáticamente
       - key: DALI_SSO_SECRET
         sync: false          # Mismo valor que DALI_SSO_SECRET en dali-backend — acceso de un clic al catálogo DALI
+      # (v12.33.36 / v12.33.42) Secretos propios de cada canal del puente. Ver README → Seguridad.
+      - key: AO_BRIDGE_SECRET
+        sync: false          # Mismo valor que AO_BRIDGE_SECRET en activo-operacional-api
+      - key: DALI_BRIDGE_SECRET
+        sync: false          # Mismo valor que DALI_BRIDGE_SECRET en el backend de Catálogo Asignaciones
+      - key: BRIDGE_ACEPTA_SSO_SECRET
+        value: "0"           # 0 = cada canal solo acepta su secreto (DALI_SSO_SECRET queda para el acceso de un clic)
+      - key: SUPABASE_URL
+        sync: false          # https://xxxx.supabase.co — almacenamiento de adjuntos
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false          # Solo en el servidor; rotarla si sale de Render
       - key: DALI_FRONTEND_URL
         sync: false          # URL pública del frontend de DALI (el Worker de Cloudflare). Por defecto: dali-proxy.centralcompras1-canarias.workers.dev
       - key: PORT

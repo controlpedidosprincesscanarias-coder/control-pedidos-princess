@@ -20241,7 +20241,15 @@ def delete_pedido(pid):
         return jsonify({"error": "Pedido no encontrado"}), 404
 
     admin_nombre = session.get("nombre", session.get("username", "Desconocido"))
+    _guardar_y_borrar_pedido(pedido, pid, motivo, uid, admin_nombre)
+    db.commit()
+    return jsonify({"ok": True, "norden": pedido.get("norden")})
 
+
+def _guardar_y_borrar_pedido(pedido: dict, pid: int, motivo: str, uid, nombre: str) -> None:
+    """(v12.33.42) Lo que hace «Eliminar pedido»: deja el registro en pedidos_eliminados
+    y borra el pedido (CASCADE borra adjuntos e historial). No hace commit. Lo usan
+    delete_pedido() y el puente de Activo Operacional para sus pedidos de prueba."""
     # ── 2. Guardar registro histórico en pedidos_eliminados ──────────────────
     execute("""
         INSERT INTO pedidos_eliminados (
@@ -20267,14 +20275,12 @@ def delete_pedido(pid):
         pedido.get("creado_por_nombre"),
         motivo,
         uid,
-        admin_nombre,
+        nombre,
         pedido.get("hotel_id"),
     ))
 
     # ── 3. Eliminar el pedido (CASCADE borra adjuntos e historial) ───────────
     execute("DELETE FROM pedidos WHERE id=%s", (pid,))
-    db.commit()
-    return jsonify({"ok": True, "norden": pedido.get("norden")})
 
 # ── Registro de pedidos eliminados ────────────────────────────────────────────
 
@@ -28099,6 +28105,81 @@ def api_externo_ao_departamentos_hotel():
             direccion.extend(emails)
     return jsonify({"ok": True, "hotel": {"codigo": hotel["codigo"], "nombre": hotel["nombre"]},
                     "departamentos": departamentos, "direccion": direccion})
+
+
+@app.route("/api/externo/activo-operacional/pedidos/eliminar", methods=["POST"])
+def api_externo_ao_eliminar_pedidos():
+    """
+    POST /api/externo/activo-operacional/pedidos/eliminar — (v12.33.42)
+    Activo Operacional borra sus pedidos de prueba y quiere ponerse el contador a
+    cero. A petición de Víctor: «necesito poder eliminar los pedidos que estamos
+    realizando de prueba en material operacional y poner contador a cero», y que
+    los pedidos creados aquí desde ellos vayan a «Eliminados».
+
+    Body JSON: { refs: ["AO-12", …] (máx. 200), motivo?, usuario_email?, usuario_nombre? }
+
+    Por cada ref se eliminan el pedido con esa referencia y sus copias del V.º B.º
+    dividido («AO-12/2», «AO-12/3»…), igual que «Eliminar pedido»: quedan en
+    Pedidos Eliminados con el motivo y el pedido se borra. Así la referencia queda
+    libre y el nuevo AO-12 de Activo Operacional no choca con el de prueba.
+    Solo acepta referencias con forma AO-<nº>. Firma HMAC con AO_BRIDGE_SECRET.
+    Respuesta: { ok, eliminados: [{ref, id, norden, estado}], no_encontradas: [ref] }
+    """
+    cuerpo_crudo = request.get_data()
+    if not _dali_bridge_firma_valida(cuerpo_crudo):
+        return jsonify({"ok": False, "error": "Firma inválida o caducada."}), 401
+    datos = request.get_json(silent=True) or {}
+    refs = []
+    for r in (datos.get("refs") or [])[:200]:
+        r = str(r or "").strip()
+        if not re.match(r"^AO-\d{1,9}$", r):
+            return jsonify({"ok": False, "error": f"Referencia no válida: {r[:30]}"}), 400
+        if r not in refs:
+            refs.append(r)
+    if not refs:
+        return jsonify({"ok": False, "error": "No llega ninguna referencia."}), 400
+    usuario_email = (datos.get("usuario_email") or "").strip()
+    usuario_nombre = (datos.get("usuario_nombre") or "").strip()[:120] or "Activo Operacional"
+    motivo = (datos.get("motivo") or "").strip()[:500] or "Pedido de prueba de Activo Operacional"
+    eliminados, no_encontradas = [], []
+    try:
+        uid = None
+        if usuario_email:
+            u = query(
+                "SELECT id, nombre FROM usuarios WHERE LOWER(TRIM(email))=LOWER(%s) OR LOWER(TRIM(email2))=LOWER(%s) ORDER BY activo DESC, id LIMIT 1",
+                (usuario_email, usuario_email), one=True
+            )
+            if u:
+                uid, usuario_nombre = u["id"], (u["nombre"] or usuario_nombre)
+        db = get_db()
+        for ref in refs:
+            ids = query(
+                "SELECT id FROM pedidos WHERE ref_activo_operacional=%s OR ref_activo_operacional LIKE %s ORDER BY id FOR UPDATE",
+                (ref, ref + "/%"),
+            ) or []
+            if not ids:
+                no_encontradas.append(ref)
+                continue
+            for fila in ids:
+                pid = fila["id"]
+                pedido = row_to_dict(query(f"{PEDIDO_SELECT} WHERE p.id=%s", (pid,), one=True))
+                if not pedido:
+                    continue
+                ref_pedido = pedido.get("ref_activo_operacional") or ref
+                _guardar_y_borrar_pedido(pedido, pid, f"{motivo} ({ref_pedido}) — desde Activo Operacional", uid, usuario_nombre)
+                eliminados.append({"ref": ref_pedido, "id": pid, "norden": pedido.get("norden"), "estado": pedido.get("estado")})
+        db.commit()
+    except Exception as exc:
+        try:
+            get_db().rollback()
+        except Exception:
+            pass
+        ref_error = secrets.token_hex(4)
+        log.error("[AO-BRIDGE] Error eliminando pedidos de prueba %s (ref. %s): %s", refs, ref_error, exc)
+        return jsonify({"ok": False, "error": f"No se pudieron eliminar (ref. {ref_error})."}), 500
+    log.info("[AO-BRIDGE] Pedidos de prueba eliminados por %s: %s · no encontradas: %s",
+             usuario_nombre, ", ".join(f"{e['ref']}→Nº {e['norden']}" for e in eliminados) or "—", ", ".join(no_encontradas) or "—")
+    return jsonify({"ok": True, "eliminados": eliminados, "no_encontradas": no_encontradas})
 
 
 # (2026-08-19) Nº máximo de intentos de envío de una fila de
