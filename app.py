@@ -27225,6 +27225,40 @@ def _secretos_puente_ruta() -> list:
         secretos.append(DALI_SSO_SECRET)
     return [x for x in secretos if x]
 
+# (v12.33.41, hallazgo N-2) Protección frente a reenvíos. Dentro de la ventana de
+# 5 minutos, quien capturara una petición firmada podía repetirla tal cual (crear
+# otro pedido, encolar otro correo). Ahora, en las peticiones que modifican datos,
+# cada firma válida solo se acepta una vez: se recuerda hasta que el reloj ya no
+# la dejaría pasar de todos modos (la ventana vale hacia atrás y hacia delante, de
+# ahí el doble de margen). Solo se recuerdan las firmas VÁLIDAS, así que mandar
+# basura no llena la memoria. Las lecturas (GET) quedan fuera: AO y Catálogo
+# consultan con cuerpo vacío y dos consultas en el mismo segundo tienen la misma
+# firma sin que eso sea un reenvío. La memoria es la del proceso (hoy un solo
+# worker de gunicorn, ver render.yaml/Dockerfile): con varios workers cada uno
+# tendría la suya y el reenvío solo se frenaría si cae en el mismo.
+_BRIDGE_FIRMAS_USADAS = {}   # firma -> instante (monotonic) hasta el que se recuerda
+_BRIDGE_FIRMAS_LOCK = threading.Lock()
+_BRIDGE_FIRMAS_TTL = 2 * _DALI_BRIDGE_MARGEN_SEGUNDOS + 60
+_BRIDGE_FIRMAS_MAX = 20000
+
+def _bridge_firma_ya_usada(firma: str) -> bool:
+    """True si esta firma ya se aceptó antes; si no, la registra y devuelve False."""
+    import time
+    ahora = time.monotonic()
+    with _BRIDGE_FIRMAS_LOCK:
+        if len(_BRIDGE_FIRMAS_USADAS) > 500:
+            for f in [f for f, hasta in _BRIDGE_FIRMAS_USADAS.items() if hasta <= ahora]:
+                del _BRIDGE_FIRMAS_USADAS[f]
+        hasta = _BRIDGE_FIRMAS_USADAS.get(firma)
+        if hasta is not None and hasta > ahora:
+            return True
+        if len(_BRIDGE_FIRMAS_USADAS) >= _BRIDGE_FIRMAS_MAX:
+            # Tope de seguridad (no se alcanza con el uso real: unas decenas al día).
+            for f in sorted(_BRIDGE_FIRMAS_USADAS, key=_BRIDGE_FIRMAS_USADAS.get)[: _BRIDGE_FIRMAS_MAX // 2]:
+                del _BRIDGE_FIRMAS_USADAS[f]
+        _BRIDGE_FIRMAS_USADAS[firma] = ahora + _BRIDGE_FIRMAS_TTL
+        return False
+
 def _dali_bridge_firma_valida(cuerpo_crudo: bytes) -> bool:
     secretos = _secretos_puente_ruta()
     if not secretos:
@@ -27245,6 +27279,9 @@ def _dali_bridge_firma_valida(cuerpo_crudo: bytes) -> bool:
     for secreto in secretos:   # sin cortocircuito: tiempo constante respecto a cuál acierta
         esperada = hmac.new(secreto.encode(), mensaje, hashlib.sha256).hexdigest()
         ok = hmac.compare_digest(firma_recibida, esperada) or ok
+    if ok and request.method not in ("GET", "HEAD", "OPTIONS") and _bridge_firma_ya_usada(firma_recibida):
+        logging.warning("[PUENTE] Firma repetida rechazada en %s (posible reenvío).", request.path)
+        return False
     return ok
 
 

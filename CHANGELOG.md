@@ -1,3 +1,14 @@
+# v12.33.41 — 24 octubre 2026
+
+🔒 Seguridad: una petición firmada del puente ya no se puede reenviar
+
+**Origen**: hallazgo N-2 de la revisión completa («Auditoría completa Princess»). Las peticiones que Activo Operacional y Catálogo mandan a Control de Pedidos van firmadas y caducan a los 5 minutos, pero dentro de ese margen quien capturara una podía repetirla tal cual (crear otro pedido, encolar otro correo).
+
+- **Reenvío (N-2)**: en las peticiones que modifican datos (`POST`), cada firma válida solo se acepta una vez; la segunda vez responde 401 y queda un aviso en el registro. Se recuerda en memoria el tiempo que el reloj aún la dejaría pasar (11 minutos). Un cliente que reintenta firma de nuevo con otra marca de tiempo y sigue funcionando; las consultas (`GET`) no se ven afectadas.
+- Límite conocido: la memoria es la del proceso. Hoy la app corre con un solo worker (Render), así que cubre todo; con varios workers cada uno recordaría las suyas.
+
+No cambia ninguna tabla ni variable de entorno.
+
 # v12.33.40 — 24 octubre 2026
 
 🔒 Seguridad: la IP del cliente ya no se puede falsificar y los errores internos no enseñan su texto

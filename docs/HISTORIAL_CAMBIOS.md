@@ -49,6 +49,18 @@
 
 ---
 
+## 2026-10-24 — [Control Pedidos] Las peticiones firmadas del puente no se pueden reenviar (v12.33.41)
+
+**Origen:** hallazgo N-2 de la revisión completa: dentro de la ventana de 5 minutos una firma capturada se podía repetir.
+
+**Cambios:**
+- `_bridge_firma_ya_usada()` + `_BRIDGE_FIRMAS_USADAS` (diccionario en memoria con candado, TTL = 2 × margen + 60 s, tope 20.000): `_dali_bridge_firma_valida()` registra cada firma válida de las peticiones que no son `GET`/`HEAD`/`OPTIONS` y rechaza (401 + `logging.warning`) la segunda vez. Solo se guardan firmas válidas, y las lecturas quedan fuera porque AO y Catálogo consultan con cuerpo vacío y dos llamadas del mismo segundo comparten firma sin ser un reenvío.
+- Sin tablas ni variables nuevas. Límite: memoria por proceso (un worker en Render).
+
+**Verificación:** `t_v41` (Postgres 16 + Flask, 12 comprobaciones): la misma petición dos veces → 200 y 401 (un solo correo encolado); otra petición en el mismo segundo y la misma con otra marca de tiempo → 200; firma con secreto equivocado y caducada → 401; `GET` repetido con la misma firma → pasa; `POST` de AO reenviado → 401; purga de entradas caducadas. `t_v35`, `t_v37`, `t_v38`, `t_v39` y `t_v40` siguen en verde (20, 33, 18, 41 y 9 comprobaciones). No probado: despliegue real en Render ni varios workers.
+
+**Documentos revisados:** `README.md` (versión), `CHANGELOG.md`; `GUIA_DESPLIEGUE.md` (sin variables nuevas), `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+
 ## 2026-10-24 — [Control Pedidos] IP del cliente fiable y errores internos sin detalle (v12.33.40)
 
 **Origen:** revisión completa de las actualizaciones (N-1, CP-09 residual, N-4).
