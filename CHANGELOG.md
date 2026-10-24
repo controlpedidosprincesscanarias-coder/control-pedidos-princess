@@ -1,3 +1,14 @@
+# v12.33.44 — 24 octubre 2026
+
+📎 V.º B.º desde Activo Operacional: cada pedido con su presupuesto, y aviso de proveedores por crear
+
+**Origen**: Víctor revisó los criterios de la v12.33.39 (un pedido por proveedor al enviar a V.º B.º): el original con el proveedor de mayor importe y sin rellenar el importe, **OK**; las copias con el mismo pedido original, la misma fecha de solicitud y la misma fecha de envío a V.º B.º, cada una con su documento filtrado por sus referencias, **OK** (ya era así); y dos cambios:
+
+- **Presupuesto adjunto** («adjuntar cada presupuesto y Nº presupuesto a su correspondiente pedido en el apartado presupuesto»): el PDF original de cada presupuesto recibido del proveedor se adjunta ahora en el apartado **Nº Presupuesto** de su pedido (junto al Nº y la fecha, que ya se rellenaban). Al reenviar, un PDF que ya está no se vuelve a adjuntar; una versión nueva del presupuesto sí.
+- **Proveedor sin ficha** («sí, pero notificarlo para crearlo»): el pedido se sigue creando sin proveedor y, además, se manda un correo interno a los compradores del hotel (o, si no hay, a quien hizo el envío) con el proveedor que falta y el enlace al pedido: crear el proveedor en Proveedores y elegirlo en el pedido. Sale por la cola de correos de sistema (evento `ao_proveedor_sin_ficha`).
+
+Necesita Activo Operacional v1.18.1 para recibir los PDF; con una versión anterior todo funciona como antes. Incluye la v12.33.43 (Nº de orden de un pedido eliminado no se reutiliza). Sin tablas ni variables nuevas.
+
 # v12.33.43 — 24 octubre 2026
 
 🔢 El Nº de orden de un pedido eliminado ya no se vuelve a dar

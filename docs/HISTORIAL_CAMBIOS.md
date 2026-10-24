@@ -49,6 +49,20 @@
 
 ---
 
+## 2026-10-24 — [Control Pedidos] V.º B.º dividido: presupuesto adjunto en cada pedido y aviso de proveedor sin ficha (v12.33.44)
+
+**Petición de Víctor** (sobre los criterios por defecto de la v12.33.39): original con el proveedor de mayor importe — OK; las copias mantienen pedido original, fecha de solicitud y fecha de envío a V.º B.º, cada una con su documento filtrado por sus referencias — OK (ya era así); importe sin rellenar — OK; «adjuntar cada presupuesto y Nº presupuesto a su correspondiente pedido en el apartado presupuesto»; proveedor sin ficha: «sí, pero notificarlo para crearlo».
+
+**Cambios:**
+- `_ao_vb_dividir()`: acepta `documentos[].presupuestos[].{nombre, pdf_base64}` (PDF, ≤ 5 MB, 400 si no lo es) y los inserta como `pedido_adjuntos.tipo='presupuesto_doc'` en el pedido de su proveedor, salvo si ya hay uno con el mismo contenido (`md5(datos)`). La respuesta añade `pedidos[].presupuestos_adjuntos` y `aviso_sin_ficha`.
+- `_avisar_proveedores_sin_ficha_ao()` (nuevo): tras el commit, encola un correo de sistema (`ao_proveedor_sin_ficha`) a los compradores del hotel (`_get_compradores_cc` + email2) o, si no hay, al usuario del envío, con cada proveedor sin ficha y el enlace a su pedido.
+
+**Verificación:** `t_v44` (Postgres 16 + Flask, 14 comprobaciones): dos documentos (proveedor con ficha y sin ella) → 2 pedidos con las mismas fechas, cada uno con su presupuesto (y no el del otro), su documento de V.º B.º, Nº y fecha de presupuesto; correo encolado a los compradores con el Nº del pedido; reenvío sin duplicar el PDF y añadiendo el documento nuevo; versión nueva del presupuesto sí se añade; un «presupuesto» que no es PDF → 400. Contrato con Activo Operacional v1.18.1 (`divisionPorProveedor.test.mjs` con `CP_TEST_URL`): 5/5. `t_v43` sigue en verde. No probado: despliegue real en Render.
+
+**Norma 5:** no aplica (sin tablas, columnas ni variables nuevas).
+
+**Documentos revisados:** `README.md` (versión), `CHANGELOG.md`; `GUIA_DESPLIEGUE.md`, `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+
 ## 2026-10-24 — [Control Pedidos] El Nº de orden de un pedido eliminado no se reutiliza (v12.33.43)
 
 **Petición de Víctor:** «¿Puedes revisarlo en la aplicación?» — en Pedidos Eliminados había dos «Nº 1006» (Maspalomas, eliminado a mano a las 15:20, y Guayarmina, creado a las 15:21 desde Activo Operacional).

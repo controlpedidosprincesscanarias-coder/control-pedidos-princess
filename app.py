@@ -27923,8 +27923,12 @@ def _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usua
     mismo estado que tendría el original (PENDIENTE DE FIRMA DIRECCION HOTEL).
 
     No se rellena `importe` (es el techo de gasto: base imponible sujeta a
-    familia/techo) ni se adjunta el presupuesto original del proveedor; el
-    total queda anotado en el historial de cada pedido.
+    familia/techo); el total queda anotado en el historial de cada pedido.
+    (v12.33.44) Sí se adjunta el PDF original de cada presupuesto del
+    proveedor (`presupuestos[].pdf_base64`) como «presupuesto_doc», sin
+    repetirlo al reenviar; y si el proveedor no tiene ficha, se avisa por
+    correo a los compradores del hotel para crearlo
+    (_avisar_proveedores_sin_ficha_ao).
 
     Reenvío: cada documento vuelve a su pedido (por el proveedor, sea por ficha
     o por el nombre que mandó Activo Operacional); se actualiza la fecha y se
@@ -27949,12 +27953,29 @@ def _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usua
             total = float(meta.get("total"))
         except (TypeError, ValueError):
             total = 0.0
+        # (v12.33.44) PDF original de cada presupuesto del proveedor → apartado «Nº Presupuesto»
+        pdfs_pres = []
+        for pr in pres:
+            b64 = pr.get("pdf_base64")
+            if not b64:
+                continue
+            try:
+                datos_pdf = base64.b64decode(b64, validate=True)
+            except Exception:
+                return jsonify({"ok": False, "error": "Un presupuesto no es un PDF válido."}), 400
+            if not datos_pdf.startswith(b"%PDF"):
+                return jsonify({"ok": False, "error": "Un presupuesto no es un PDF válido."}), 400
+            if len(datos_pdf) > MAX_BYTES_DOCUMENTO:
+                return jsonify({"ok": False, "error": f"Un presupuesto supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB."}), 400
+            num = str(pr.get("numero") or "").strip()[:80]
+            pdfs_pres.append(((str(pr.get("nombre") or "").strip()[:200] or f"Presupuesto {num or proveedor}.pdf"), datos_pdf))
         docs.append({
             "idx": i, "nombre": nombre_pdf, "pdf": pdf, "proveedor": proveedor,
             "norm": _normalizar_nombre_proveedor(proveedor),
             "presupuesto_num": (", ".join(numeros))[:200] or None,
             "fecha_presupuesto": fechas[0] if fechas else None,
             "total": total,
+            "pdfs_presupuesto": pdfs_pres,
         })
     docs.sort(key=lambda d: (-d["total"], d["idx"]))   # el de mayor importe se queda el pedido original
 
@@ -28037,6 +28058,20 @@ def _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usua
                 "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id) "
                 "VALUES (%s,%s,%s,%s,%s,%s,%s)",
                 (m["id"], "vb_eml", d["nombre"], "application/pdf", psycopg2.Binary(d["pdf"]), False, uid))
+            # (v12.33.44) Víctor: «adjuntar cada presupuesto y Nº presupuesto a su correspondiente pedido
+            # en el apartado presupuesto». Al reenviar, el mismo PDF no se vuelve a adjuntar.
+            presupuestos_adjuntos = 0
+            for nombre_pres, pdf_pres in d["pdfs_presupuesto"]:
+                ya = query("SELECT 1 FROM pedido_adjuntos WHERE pedido_id=%s AND tipo='presupuesto_doc' "
+                           "AND datos IS NOT NULL AND md5(datos)=%s LIMIT 1",
+                           (m["id"], hashlib.md5(pdf_pres).hexdigest()), one=True)
+                if ya:
+                    continue
+                execute(
+                    "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id) "
+                    "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                    (m["id"], "presupuesto_doc", nombre_pres, "application/pdf", psycopg2.Binary(pdf_pres), False, uid))
+                presupuestos_adjuntos += 1
             estado_antes = m["estado"]
             estado_nuevo = estado_antes
             estado_motivo = None
@@ -28055,6 +28090,7 @@ def _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usua
             resultado.append({
                 "documento": d["idx"], "id": m["id"], "norden": m["norden"], "ref": m["ref_activo_operacional"],
                 "proveedor": d["proveedor"], "proveedor_en_ficha": bool(ficha or m.get("proveedor_id")),
+                "presupuestos_adjuntos": presupuestos_adjuntos,
                 "creado": creado, "estado_antes": estado_antes, "estado": estado_nuevo,
                 "estado_cambiado": estado_nuevo != estado_antes, "estado_motivo": estado_motivo,
             })
@@ -28074,12 +28110,56 @@ def _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usua
             _notificar_cambio_estado(get_db(), pid, nuevo, antes, usuario_nombre=nombre, usuario_id=uid)
         except Exception as exc:
             log.error("[AO-BRIDGE] V.º B.º de %s: pedido %s cambiado, pero falló el aviso: %s", ref, pid, exc)
+    sin_ficha = [r for r in resultado if not r["proveedor_en_ficha"]]
+    aviso_sin_ficha = None
+    if sin_ficha:
+        try:
+            aviso_sin_ficha = _avisar_proveedores_sin_ficha_ao(original, sin_ficha, usuario_email)
+        except Exception as exc:
+            log.error("[AO-BRIDGE] V.º B.º de %s: no se pudo avisar de los proveedores sin ficha: %s", ref, exc)
     resultado.sort(key=lambda r: r["documento"])
     log.info("[AO-BRIDGE] V.º B.º dividido de %s: %d documento(s) → %s; %d creado(s); %d sin documento; por %s",
              ref, len(resultado), ", ".join(str(r["norden"]) for r in resultado),
              sum(1 for r in resultado if r["creado"]), len(huerfanos), nombre)
     return jsonify({"ok": True, "dividido": True, "pedidos": resultado, "huerfanos": huerfanos,
-                    "documentos": len(resultado), "norden": original["norden"], "id": original["id"]})
+                    "documentos": len(resultado), "norden": original["norden"], "id": original["id"],
+                    "aviso_sin_ficha": aviso_sin_ficha})
+
+
+def _avisar_proveedores_sin_ficha_ao(original: dict, sin_ficha: list, usuario_email: str = "") -> dict:
+    """
+    (v12.33.44) Víctor: un proveedor sin ficha crea el pedido sin proveedor, «pero
+    notificarlo para crearlo». Un correo interno (cola de correos de sistema) a los
+    compradores del hotel — y, si no hay, a quien hizo el envío — con cada proveedor
+    que falta, el pedido que lo espera y el paso a seguir. Devuelve {destinatarios, proveedores}.
+    """
+    h = query("SELECT codigo, nombre FROM hoteles WHERE id=%s", (original.get("hotel_id"),), one=True) or {}
+    destinos = []
+    for c in (_get_compradores_cc(h.get("codigo") or "") or []):
+        for e in _emails_usuario(c):
+            if e and e.lower() not in [x.lower() for x in destinos]:
+                destinos.append(e)
+    if not destinos and usuario_email:
+        destinos = [usuario_email]
+    if not destinos:
+        log.warning("[AO-BRIDGE] Proveedores sin ficha (%s) y nadie a quien avisar", ", ".join(r["proveedor"] for r in sin_ficha))
+        return {"destinatarios": [], "proveedores": [r["proveedor"] for r in sin_ficha]}
+    filas = "".join(
+        f"<li><strong>{_html_escape(r['proveedor'])}</strong> — pedido <a href=\"{_enlace_pedido_app(r['id'])}\">Nº {r['norden']}</a></li>"
+        for r in sin_ficha)
+    html = _email_html_simple("", [
+        f"Al enviar a V.º B.º de Dirección el pedido del Activo Operacional <strong>{_html_escape(original.get('ref_activo_operacional') or '')}</strong> "
+        f"({_html_escape(h.get('nombre') or '')}), estos proveedores <strong>no tienen ficha en Control de Pedidos</strong> "
+        "y su pedido se ha creado sin proveedor:",
+        f"<ul>{filas}</ul>",
+        "Para completarlo: <strong>Proveedores → Nuevo proveedor</strong> (con su correo) y, después, abrir cada pedido y elegir el proveedor.",
+    ], titulo="Control de Pedidos", subtitulo="Proveedor por crear")
+    asunto = (f"Crear proveedor en Control de Pedidos: {', '.join(r['proveedor'] for r in sin_ficha)}")[:180]
+    _encolar_email_sistema("ao_proveedor_sin_ficha", [", ".join(destinos)], asunto, html,
+                           pedido_id=sin_ficha[0]["id"])
+    log.info("[AO-BRIDGE] Aviso de proveedor sin ficha (%s) encolado para %s",
+             ", ".join(r["proveedor"] for r in sin_ficha), ", ".join(destinos))
+    return {"destinatarios": destinos, "proveedores": [r["proveedor"] for r in sin_ficha]}
 
 
 # (v12.33.33) Estado al que pasa el pedido al enviarlo a V.º B.º desde Activo
