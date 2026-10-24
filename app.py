@@ -2845,6 +2845,15 @@ def _auto_migrate():
                 "ON pedidos(ref_activo_operacional) WHERE ref_activo_operacional IS NOT NULL"
             )
 
+            # ── (v12.33.39) Un pedido por proveedor al enviar a V.º B.º ─────
+            # Nombre del proveedor tal como llega de Activo Operacional, para
+            # reconocer a qué pedido del grupo (AO-<n>, AO-<n>/1, AO-<n>/2…)
+            # corresponde cada documento si se reenvía, aunque ese proveedor
+            # no tenga ficha en Control de Pedidos. Ver _ao_vb_dividir().
+            cur.execute(
+                "ALTER TABLE pedidos ADD COLUMN IF NOT EXISTS proveedor_ao TEXT"
+            )
+
             # ── Backfill: motivo de Telegram bloqueado, de JSON crudo a texto
             #    legible (v12.32.09, 2026-09-04) ─────────────────────────────
             # A petición de Víctor: antes de este cambio, telegram_bloqueado_motivo
@@ -27733,6 +27742,7 @@ def api_externo_ao_visto_bueno():
     if not re.match(r"^\d{4}-\d{2}-\d{2}$", fecha):
         return jsonify({"ok": False, "error": "Fecha no válida (AAAA-MM-DD)."}), 400
     documentos = []
+    docs_meta = []
     for d in (datos.get("documentos") or [])[:30]:
         try:
             pdf = base64.b64decode(d.get("pdf_base64") or "", validate=True)
@@ -27743,8 +27753,11 @@ def api_externo_ao_visto_bueno():
         if len(pdf) > MAX_BYTES_DOCUMENTO:
             return jsonify({"ok": False, "error": f"Un documento supera el límite de {MAX_BYTES_DOCUMENTO // (1024*1024)} MB."}), 400
         documentos.append(((d.get("nombre") or "visto-bueno.pdf").strip()[:200], pdf))
+        docs_meta.append(d)
     if not documentos:
         return jsonify({"ok": False, "error": "No llega ningún documento."}), 400
+    if datos.get("dividir") is True:
+        return _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usuario_email, usuario_nombre)
     try:
         pedido = query("SELECT id, norden, estado FROM pedidos WHERE ref_activo_operacional=%s", (ref,), one=True)
         if not pedido:
@@ -27798,6 +27811,183 @@ def api_externo_ao_visto_bueno():
     return jsonify({"ok": True, "id": pedido["id"], "norden": pedido["norden"], "documentos": len(documentos),
                     "estado_antes": estado_antes, "estado": estado_nuevo,
                     "estado_cambiado": estado_nuevo != estado_antes, "estado_motivo": estado_motivo})
+
+
+def _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usuario_email, usuario_nombre):
+    """
+    (v12.33.39) Envío a V.º B.º con `dividir: true`: un pedido de Control de
+    Pedidos POR PROVEEDOR. A petición de Víctor: «cuando pulsemos enviar para
+    visto bueno a dirección ... mantendríamos el ya creado y se realizarían 3
+    copias más con la misma info hasta ahora pero con la diferencia que ya
+    tenemos nombre de proveedor ... y en cada una colocaremos el presupuesto
+    correspondiente enviado para firma».
+
+    Cada documento trae { nombre, pdf_base64, proveedor, presupuestos:[{numero,
+    fecha}], total }. El pedido AO-<n> ya creado se queda con el proveedor de
+    mayor importe y por cada uno de los demás se crea una copia (ref AO-<n>/1,
+    AO-<n>/2…) con el mismo hotel, departamento, fecha de solicitud,
+    observaciones y PDF de la solicitud, con su proveedor, el nº y la fecha de
+    su presupuesto, la fecha de envío para V.º B.º, su documento (vb_eml) y el
+    mismo estado que tendría el original (PENDIENTE DE FIRMA DIRECCION HOTEL).
+
+    No se rellena `importe` (es el techo de gasto: base imponible sujeta a
+    familia/techo) ni se adjunta el presupuesto original del proveedor; el
+    total queda anotado en el historial de cada pedido.
+
+    Reenvío: cada documento vuelve a su pedido (por el proveedor, sea por ficha
+    o por el nombre que mandó Activo Operacional); se actualiza la fecha y se
+    añade el documento nuevo. Un proveedor que no estaba pasa a una copia nueva
+    (o al original si aún no tenía proveedor). Nunca se borra ni se toca un
+    pedido cuyo proveedor ya no viene: se devuelve en `huerfanos` para avisar.
+
+    Todo en una sola transacción: o se hace todo o no se hace nada.
+    """
+    db = get_db()
+    if "/" in ref:
+        return jsonify({"ok": False, "error": "La referencia del pedido no es válida."}), 400
+    docs = []
+    for i, ((nombre_pdf, pdf), meta) in enumerate(zip(documentos, docs_meta)):
+        proveedor = (meta.get("proveedor") or "").strip()[:200]
+        if not proveedor:
+            return jsonify({"ok": False, "error": "Falta el proveedor de un documento."}), 400
+        pres = [p for p in (meta.get("presupuestos") or []) if isinstance(p, dict)][:10]
+        numeros = [str(p.get("numero")).strip() for p in pres if str(p.get("numero") or "").strip()]
+        fechas = [str(p.get("fecha")).strip()[:10] for p in pres if re.match(r"^\d{4}-\d{2}-\d{2}", str(p.get("fecha") or ""))]
+        try:
+            total = float(meta.get("total"))
+        except (TypeError, ValueError):
+            total = 0.0
+        docs.append({
+            "idx": i, "nombre": nombre_pdf, "pdf": pdf, "proveedor": proveedor,
+            "norm": _normalizar_nombre_proveedor(proveedor),
+            "presupuesto_num": (", ".join(numeros))[:200] or None,
+            "fecha_presupuesto": fechas[0] if fechas else None,
+            "total": total,
+        })
+    docs.sort(key=lambda d: (-d["total"], d["idx"]))   # el de mayor importe se queda el pedido original
+
+    try:
+        original = query("SELECT * FROM pedidos WHERE ref_activo_operacional=%s FOR UPDATE", (ref,), one=True)
+        if not original:
+            db.rollback()
+            return jsonify({"ok": False, "error": f"No hay ningún pedido en Control de Pedidos vinculado a {ref}."}), 404
+        usuario = None
+        if usuario_email:
+            usuario = query(
+                "SELECT id, nombre FROM usuarios WHERE LOWER(TRIM(email))=LOWER(%s) OR LOWER(TRIM(email2))=LOWER(%s) ORDER BY activo DESC, id LIMIT 1",
+                (usuario_email, usuario_email), one=True
+            )
+        uid = usuario["id"] if usuario else None
+        nombre = (usuario["nombre"] if usuario else None) or usuario_nombre
+
+        patron = ref.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "/%"
+        miembros = [dict(original)] + [dict(r) for r in (query(
+            "SELECT * FROM pedidos WHERE ref_activo_operacional LIKE %s ORDER BY id FOR UPDATE", (patron,)) or [])]
+        sufijos = [int(m["ref_activo_operacional"].rsplit("/", 1)[1]) for m in miembros[1:]
+                   if m["ref_activo_operacional"].rsplit("/", 1)[1].isdigit()]
+        siguiente = max(sufijos or [0]) + 1
+
+        cat = {}
+        for p in rows_to_list(query("SELECT id, nombre FROM proveedores WHERE activo=1 ORDER BY id")) or []:
+            cat.setdefault(_normalizar_nombre_proveedor(p["nombre"]), p)
+
+        usados = set()
+        asignaciones = []   # (doc, miembro|None, proveedor_ficha|None)
+        for d in docs:
+            ficha = cat.get(d["norm"]) if d["norm"] else None
+            elegido = next((m for m in miembros if m["id"] not in usados and m.get("proveedor_ao")
+                            and _normalizar_nombre_proveedor(m["proveedor_ao"]) == d["norm"]), None)
+            if not elegido and ficha:
+                elegido = next((m for m in miembros if m["id"] not in usados and m.get("proveedor_id") == ficha["id"]), None)
+            if not elegido and original["id"] not in usados and not original.get("proveedor_id") and not original.get("proveedor_ao"):
+                elegido = miembros[0]
+            if elegido:
+                usados.add(elegido["id"])
+            asignaciones.append((d, elegido, ficha))
+
+        resultado = []
+        a_notificar = []
+        for d, m, ficha in asignaciones:
+            creado = False
+            if m is None:
+                nuevo_ref = f"{ref}/{siguiente}"
+                siguiente += 1
+                norden = _next_norden(db)
+                cur = execute("""
+                    INSERT INTO pedidos (
+                        norden, hotel_id, departamento_id, fecha_solicitud, estado, observaciones,
+                        creado_por_id, modificado_por_id, creado_por_nombre, modificado_por_nombre,
+                        ref_activo_operacional
+                    ) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                    RETURNING id
+                """, (norden, original["hotel_id"], original["departamento_id"], original["fecha_solicitud"],
+                      "PENDIENTE COTIZACIÓN", original["observaciones"],
+                      original["creado_por_id"], uid, original["creado_por_nombre"], nombre, nuevo_ref))
+                nuevo_id = cur.fetchone()["id"]
+                execute(
+                    "INSERT INTO historial_estados (pedido_id,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s)",
+                    (nuevo_id, "PENDIENTE COTIZACIÓN", uid, nombre,
+                     f"Pedido creado al dividir el pedido {ref} por proveedores al enviarlo a V.º B.º (Control de Pedidos Nº {original['norden']})"))
+                execute(
+                    "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id) "
+                    "SELECT %s, tipo, nombre, mime_type, datos, es_correo, subido_por_id FROM pedido_adjuntos "
+                    "WHERE pedido_id=%s AND tipo='solicitud_doc'", (nuevo_id, original["id"]))
+                m = {"id": nuevo_id, "norden": norden, "estado": "PENDIENTE COTIZACIÓN", "ref_activo_operacional": nuevo_ref}
+                creado = True
+            execute(
+                "UPDATE pedidos SET proveedor_id=COALESCE(proveedor_id, %s), proveedor_ao=%s, "
+                "presupuesto_num=COALESCE(%s, presupuesto_num), fecha_presupuesto=COALESCE(%s, fecha_presupuesto), "
+                "fecha_envio_visto_bueno=%s, modificado_por_id=COALESCE(%s, modificado_por_id), "
+                "modificado_por_nombre=%s, modificado_en=NOW() WHERE id=%s",
+                (ficha["id"] if ficha else None, d["proveedor"], d["presupuesto_num"], d["fecha_presupuesto"],
+                 fecha, uid, nombre, m["id"]))
+            execute(
+                "INSERT INTO pedido_adjuntos (pedido_id, tipo, nombre, mime_type, datos, es_correo, subido_por_id) "
+                "VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                (m["id"], "vb_eml", d["nombre"], "application/pdf", psycopg2.Binary(d["pdf"]), False, uid))
+            estado_antes = m["estado"]
+            estado_nuevo = estado_antes
+            estado_motivo = None
+            if cambiar_estado:
+                if estado_antes in _AO_VB_ESTADOS_PREVIOS:
+                    estado_nuevo = _AO_VB_ESTADO_FIRMA
+                    execute("UPDATE pedidos SET estado=%s WHERE id=%s", (estado_nuevo, m["id"]))
+                elif estado_antes != _AO_VB_ESTADO_FIRMA:
+                    estado_motivo = f"el pedido está en «{estado_antes}»: no se cambia a «{_AO_VB_ESTADO_FIRMA}»"
+            detalle = f"{d['proveedor']}" + (f" · presupuesto {d['presupuesto_num']}" if d["presupuesto_num"] else " · sin presupuesto (precio del catálogo)") + f" · total {d['total']:.2f} €"
+            execute(
+                "INSERT INTO historial_estados (pedido_id,estado_antes,estado_nuevo,usuario_id,usuario_nombre,nota) VALUES (%s,%s,%s,%s,%s,%s)",
+                (m["id"], estado_antes, estado_nuevo, uid, nombre, f"{nota} · {detalle}"[:1500]))
+            if estado_nuevo != estado_antes:
+                a_notificar.append((m["id"], estado_nuevo, estado_antes))
+            resultado.append({
+                "documento": d["idx"], "id": m["id"], "norden": m["norden"], "ref": m["ref_activo_operacional"],
+                "proveedor": d["proveedor"], "proveedor_en_ficha": bool(ficha or m.get("proveedor_id")),
+                "creado": creado, "estado_antes": estado_antes, "estado": estado_nuevo,
+                "estado_cambiado": estado_nuevo != estado_antes, "estado_motivo": estado_motivo,
+            })
+        huerfanos = [{"id": m["id"], "norden": m["norden"], "ref": m["ref_activo_operacional"],
+                      "proveedor": m.get("proveedor_ao") or None}
+                     for m in miembros if m["id"] not in usados]
+        db.commit()
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        log.error("[AO-BRIDGE] Error dividiendo el V.º B.º de %s: %s", ref, exc)
+        return jsonify({"ok": False, "error": str(exc)}), 500
+    for pid, nuevo, antes in a_notificar:
+        try:
+            _notificar_cambio_estado(get_db(), pid, nuevo, antes, usuario_nombre=nombre, usuario_id=uid)
+        except Exception as exc:
+            log.error("[AO-BRIDGE] V.º B.º de %s: pedido %s cambiado, pero falló el aviso: %s", ref, pid, exc)
+    resultado.sort(key=lambda r: r["documento"])
+    log.info("[AO-BRIDGE] V.º B.º dividido de %s: %d documento(s) → %s; %d creado(s); %d sin documento; por %s",
+             ref, len(resultado), ", ".join(str(r["norden"]) for r in resultado),
+             sum(1 for r in resultado if r["creado"]), len(huerfanos), nombre)
+    return jsonify({"ok": True, "dividido": True, "pedidos": resultado, "huerfanos": huerfanos,
+                    "documentos": len(resultado), "norden": original["norden"], "id": original["id"]})
 
 
 # (v12.33.33) Estado al que pasa el pedido al enviarlo a V.º B.º desde Activo

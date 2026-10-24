@@ -1,3 +1,18 @@
+# v12.33.39 — 24 octubre 2026
+
+🧾 Al enviar a V.º B.º desde Activo Operacional, un pedido por proveedor
+
+**Origen**: petición de Víctor — si una propuesta de pedido de un hotel acaba repartida en 4 presupuestos de proveedores distintos y los 4 se envían a firma, lo lógico para tener buena trazabilidad es que en Control de Pedidos haya 4 pedidos, no uno. Probado con Postgres real; las pruebas de las versiones anteriores siguen pasando.
+
+- **Qué hace**: cuando Activo Operacional (v1.17.0 o posterior) envía a V.º B.º, el pedido que ya existía (`AO-<n>`) se queda con el proveedor de **mayor importe** y se crea una **copia por cada uno de los demás** (`AO-<n>/1`, `AO-<n>/2`…). Cada copia lleva el mismo hotel, departamento, fecha de solicitud, observaciones y el PDF de la solicitud, con **su proveedor**, el **nº y la fecha de su presupuesto**, la fecha de envío para V.º B.º, **su documento de V.º B.º** y el mismo estado que el original (PENDIENTE DE FIRMA DIRECCION HOTEL, con los avisos de siempre). Cada copia tiene su propio Nº de orden y en su historial queda de qué pedido sale.
+- **Proveedor**: se busca en las fichas de Control de Pedidos por nombre (sin acentos, mayúsculas ni «SL/SA…»). Si no tiene ficha, el pedido se crea igualmente sin proveedor y el nombre que mandó Activo Operacional queda guardado para reconocerlo si se reenvía; en Activo Operacional aparece el aviso.
+- **Importe**: no se rellena (es el techo de gasto); el total de cada proveedor queda en la nota del historial.
+- **Si se reenvía**: cada documento vuelve a su pedido (se actualiza la fecha y se añade el documento nuevo; los anteriores se conservan). Un proveedor nuevo crea otra copia. Un pedido cuyo proveedor ya no viene **no se borra ni se toca**: se avisa a Activo Operacional (`huerfanos`).
+- **Todo o nada**: se hace en una sola transacción; si algo falla no queda ningún pedido a medias.
+- **Compatibilidad**: solo ocurre cuando Activo Operacional manda `dividir: true`. Una versión anterior de Activo Operacional sigue funcionando como hasta ahora (un único pedido con todos los documentos). **Desplegar primero esta versión y después la 1.17.0 de Activo Operacional.**
+
+Nueva columna `pedidos.proveedor_ao` (se crea sola al arrancar). No hay variables nuevas.
+
 # v12.33.38 — 23 octubre 2026
 
 🐛 Solicitud de acceso: ya no se envían dos correos de verificación y los botones esperan con cuenta atrás

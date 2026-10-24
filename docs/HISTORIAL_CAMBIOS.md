@@ -49,6 +49,20 @@
 
 ---
 
+## 2026-10-24 — [Control Pedidos] Un pedido por proveedor al enviar a V.º B.º desde Activo Operacional (v12.33.39)
+
+**Origen:** petición de Víctor: «cuando pulsemos enviar para visto bueno a dirección ... mantendríamos el ya creado y se realizarían 3 copias más con la misma info hasta ahora pero con la diferencia que ya tenemos nombre de proveedor ... y en cada una colocaremos el presupuesto correspondiente enviado para firma».
+
+**Cambios:**
+- `_auto_migrate` y `models.py`: columna `pedidos.proveedor_ao TEXT` (nombre del proveedor tal como lo manda Activo Operacional).
+- `api_externo_ao_visto_bueno`: lee también `proveedor`, `presupuestos` y `total` de cada documento; con `dividir: true` delega en la nueva `_ao_vb_dividir()`; sin él, todo igual que en la v12.33.33.
+- `_ao_vb_dividir`: bloquea (`FOR UPDATE`) el original y su grupo (`AO-<n>/%`); ordena los documentos por importe; empareja cada documento con un pedido del grupo (1.º por `proveedor_ao`, 2.º por ficha de proveedor, 3.º el original si aún no tiene proveedor) o crea una copia (`_next_norden`, solicitud_doc copiado, historial); rellena `proveedor_id` (si hay ficha), `proveedor_ao`, `presupuesto_num` (varios separados por coma), `fecha_presupuesto`, `fecha_envio_visto_bueno`, adjunta el documento (`vb_eml`) y aplica la misma transición de estado; devuelve `pedidos[]` (id, Nº, ref, creado, estado) y `huerfanos[]`. Todo en una transacción; los avisos de cambio de estado salen después del `commit`.
+- No se rellena `importe` ni se adjunta el presupuesto original del proveedor (decisión por defecto, pendiente de confirmar con Víctor).
+
+**Verificación:** `t_v39` (Postgres 16 + Flask, firma HMAC real): firma incorrecta → 401; ref con `/` → 400; ref inexistente → 404; 4 proveedores → 4 pedidos (original con el de mayor importe, 3 copias, Nº de orden distintos, estado, hotel/departamento/fecha/observaciones copiados, 1 solicitud_doc y 1 vb_eml cada uno, importe sin tocar); proveedor con ficha, sin ficha y sin presupuesto; reenvío idéntico → mismos pedidos y 2 vb_eml; reenvío con orden/importes distintos, proveedor nuevo y uno que desaparece (huérfano intacto); un solo proveedor → sin copias; modo antiguo (sin `dividir`) intacto; fallo simulado a mitad → 500 sin cambios. `t_v37` y `t_v38` siguen en OK.
+
+**Documentos revisados:** `README.md` (versión), `GUIA_DESPLIEGUE.md`, `PENDIENTES.md`, `INSTRUCCIONES_RESTAURACION.md` — no aplica más allá de lo anotado (sin variables nuevas).
+
 ## 2026-10-23 — [Control Pedidos] Solicitud de acceso: sin correos duplicados y con cuenta atrás (v12.33.38)
 
 **Origen:** aviso de Víctor, dos correos idénticos de "Verificación de acceso" en una sola solicitud de prueba.
