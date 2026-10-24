@@ -1466,7 +1466,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.44
+          V 12.33.45
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -4283,9 +4283,27 @@ async function enviarSolicitudReset() {
     const sp = new URLSearchParams(window.location.search);
     const id = parseInt(sp.get('proveedor') || '', 10);
     if (id > 0) { window._proveedorEnlace = id; window.history.replaceState({}, '', window.location.pathname); }
+    // (v12.33.45) ?nuevo_proveedor=<nombre>: Activo Operacional, para crear un proveedor que no tiene ficha
+    const nuevo = (sp.get('nuevo_proveedor') || '').trim().slice(0, 200);
+    if (nuevo) { window._proveedorNuevoEnlace = nuevo; window.history.replaceState({}, '', window.location.pathname); }
   } catch (_) {}
 })();
 async function _abrirProveedorEnlace() {
+  // (v12.33.45) Nuevo proveedor desde Activo Operacional: Proveedores → «Nuevo proveedor» con el nombre puesto.
+  const nuevo = window._proveedorNuevoEnlace; window._proveedorNuevoEnlace = null;
+  if (nuevo) {
+    try {
+      showView('proveedores', document.querySelector('[data-view="proveedores"]'));
+      if (G.rol !== 'admin') {
+        toast(`Activo Operacional necesita el proveedor «${nuevo}», pero solo un administrador puede crearlo.`, 'error', 8000);
+        return;
+      }
+      openNuevoProveedorModal();
+      setVal('pv-nombre-input', nuevo);
+      toast('Completa los datos (código SAP y correo de contacto), guarda y vuelve a Activo Operacional → «Volver a comprobar».', 'info', 9000);
+    } catch (e) { toast('No se pudo abrir «Nuevo proveedor».', 'error'); }
+    return;
+  }
   const id = window._proveedorEnlace; window._proveedorEnlace = null;
   if (!id) return;
   try {

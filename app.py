@@ -27926,9 +27926,9 @@ def _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usua
     familia/techo); el total queda anotado en el historial de cada pedido.
     (v12.33.44) Sí se adjunta el PDF original de cada presupuesto del
     proveedor (`presupuestos[].pdf_base64`) como «presupuesto_doc», sin
-    repetirlo al reenviar; y si el proveedor no tiene ficha, se avisa por
-    correo a los compradores del hotel para crearlo
-    (_avisar_proveedores_sin_ficha_ao).
+    repetirlo al reenviar. (v12.33.45) Un proveedor sin ficha se avisa en la
+    pantalla de Activo Operacional antes de enviar, con un enlace que abre
+    aquí «Nuevo proveedor» (?nuevo_proveedor=<nombre>); no se manda correo.
 
     Reenvío: cada documento vuelve a su pedido (por el proveedor, sea por ficha
     o por el nombre que mandó Activo Operacional); se actualiza la fecha y se
@@ -28110,56 +28110,13 @@ def _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usua
             _notificar_cambio_estado(get_db(), pid, nuevo, antes, usuario_nombre=nombre, usuario_id=uid)
         except Exception as exc:
             log.error("[AO-BRIDGE] V.º B.º de %s: pedido %s cambiado, pero falló el aviso: %s", ref, pid, exc)
-    sin_ficha = [r for r in resultado if not r["proveedor_en_ficha"]]
-    aviso_sin_ficha = None
-    if sin_ficha:
-        try:
-            aviso_sin_ficha = _avisar_proveedores_sin_ficha_ao(original, sin_ficha, usuario_email)
-        except Exception as exc:
-            log.error("[AO-BRIDGE] V.º B.º de %s: no se pudo avisar de los proveedores sin ficha: %s", ref, exc)
     resultado.sort(key=lambda r: r["documento"])
     log.info("[AO-BRIDGE] V.º B.º dividido de %s: %d documento(s) → %s; %d creado(s); %d sin documento; por %s",
              ref, len(resultado), ", ".join(str(r["norden"]) for r in resultado),
              sum(1 for r in resultado if r["creado"]), len(huerfanos), nombre)
     return jsonify({"ok": True, "dividido": True, "pedidos": resultado, "huerfanos": huerfanos,
-                    "documentos": len(resultado), "norden": original["norden"], "id": original["id"],
-                    "aviso_sin_ficha": aviso_sin_ficha})
+                    "documentos": len(resultado), "norden": original["norden"], "id": original["id"]})
 
-
-def _avisar_proveedores_sin_ficha_ao(original: dict, sin_ficha: list, usuario_email: str = "") -> dict:
-    """
-    (v12.33.44) Víctor: un proveedor sin ficha crea el pedido sin proveedor, «pero
-    notificarlo para crearlo». Un correo interno (cola de correos de sistema) a los
-    compradores del hotel — y, si no hay, a quien hizo el envío — con cada proveedor
-    que falta, el pedido que lo espera y el paso a seguir. Devuelve {destinatarios, proveedores}.
-    """
-    h = query("SELECT codigo, nombre FROM hoteles WHERE id=%s", (original.get("hotel_id"),), one=True) or {}
-    destinos = []
-    for c in (_get_compradores_cc(h.get("codigo") or "") or []):
-        for e in _emails_usuario(c):
-            if e and e.lower() not in [x.lower() for x in destinos]:
-                destinos.append(e)
-    if not destinos and usuario_email:
-        destinos = [usuario_email]
-    if not destinos:
-        log.warning("[AO-BRIDGE] Proveedores sin ficha (%s) y nadie a quien avisar", ", ".join(r["proveedor"] for r in sin_ficha))
-        return {"destinatarios": [], "proveedores": [r["proveedor"] for r in sin_ficha]}
-    filas = "".join(
-        f"<li><strong>{_html_escape(r['proveedor'])}</strong> — pedido <a href=\"{_enlace_pedido_app(r['id'])}\">Nº {r['norden']}</a></li>"
-        for r in sin_ficha)
-    html = _email_html_simple("", [
-        f"Al enviar a V.º B.º de Dirección el pedido del Activo Operacional <strong>{_html_escape(original.get('ref_activo_operacional') or '')}</strong> "
-        f"({_html_escape(h.get('nombre') or '')}), estos proveedores <strong>no tienen ficha en Control de Pedidos</strong> "
-        "y su pedido se ha creado sin proveedor:",
-        f"<ul>{filas}</ul>",
-        "Para completarlo: <strong>Proveedores → Nuevo proveedor</strong> (con su correo) y, después, abrir cada pedido y elegir el proveedor.",
-    ], titulo="Control de Pedidos", subtitulo="Proveedor por crear")
-    asunto = (f"Crear proveedor en Control de Pedidos: {', '.join(r['proveedor'] for r in sin_ficha)}")[:180]
-    _encolar_email_sistema("ao_proveedor_sin_ficha", [", ".join(destinos)], asunto, html,
-                           pedido_id=sin_ficha[0]["id"])
-    log.info("[AO-BRIDGE] Aviso de proveedor sin ficha (%s) encolado para %s",
-             ", ".join(r["proveedor"] for r in sin_ficha), ", ".join(destinos))
-    return {"destinatarios": destinos, "proveedores": [r["proveedor"] for r in sin_ficha]}
 
 
 # (v12.33.33) Estado al que pasa el pedido al enviarlo a V.º B.º desde Activo

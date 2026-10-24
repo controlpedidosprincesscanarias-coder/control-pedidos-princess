@@ -49,6 +49,18 @@
 
 ---
 
+## 2026-10-24 — [Control Pedidos] Proveedor sin ficha: enlace a «Nuevo proveedor» en lugar de correo (v12.33.45)
+
+**Petición de Víctor:** «Mejor, ¿por qué no se da un aviso en pantalla para que se cree el proveedor para poder crear el nuevo pedido? Con un enlace de apertura directa del apartado Proveedores en Control de Pedidos; enviar el correo no lo veo funcional.»
+
+**Cambios:** fuera `_avisar_proveedores_sin_ficha_ao()` y `aviso_sin_ficha` de la respuesta de `_ao_vb_dividir()`. `templates/index.html`: `_enlaceProveedorInit` lee `?nuevo_proveedor=<nombre>` (máx. 200) y `_abrirProveedorEnlace` abre Proveedores, `openNuevoProveedorModal()` y rellena `pv-nombre-input` (si no es admin, toast de que solo un administrador puede crearlo). El aviso y el bloqueo del envío están en Activo Operacional v1.18.2.
+
+**Verificación:** `t_v44` (14 comprobaciones; la del correo cambia a «no se encola ningún correo»); `vistoBueno.test.mjs` de Activo Operacional contra este Flask: TODO OK (36), incluidos aviso con enlace `?nuevo_proveedor=`, envío bloqueado con 409 y, tras crear los proveedores con otra escritura del nombre («CASA DELFIN, S.A.» frente a «CASA DELFIN SA»), «Volver a comprobar» ya no avisa. Los bloques `<script>` de `index.html` siguen compilando igual que antes. No probado: el enlace en un navegador con la app desplegada.
+
+**Norma 5:** no aplica (sin tablas ni variables nuevas).
+
+**Documentos revisados:** `README.md` (versión), `CHANGELOG.md`; `GUIA_DESPLIEGUE.md`, `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+
 ## 2026-10-24 — [Control Pedidos] V.º B.º dividido: presupuesto adjunto en cada pedido y aviso de proveedor sin ficha (v12.33.44)
 
 **Petición de Víctor** (sobre los criterios por defecto de la v12.33.39): original con el proveedor de mayor importe — OK; las copias mantienen pedido original, fecha de solicitud y fecha de envío a V.º B.º, cada una con su documento filtrado por sus referencias — OK (ya era así); importe sin rellenar — OK; «adjuntar cada presupuesto y Nº presupuesto a su correspondiente pedido en el apartado presupuesto»; proveedor sin ficha: «sí, pero notificarlo para crearlo».

@@ -1,3 +1,13 @@
+# v12.33.45 — 24 octubre 2026
+
+🔗 Proveedor sin ficha: aviso en pantalla con enlace directo, en vez de correo
+
+**Origen**: Víctor sobre la v12.33.44: «¿por qué no se da un aviso en pantalla para que se cree el proveedor para poder crear el nuevo pedido? Con un enlace de apertura directa del apartado Proveedores en Control de Pedidos; enviar el correo no lo veo funcional».
+
+- **Se quita el correo** a los compradores de la v12.33.44 (evento `ao_proveedor_sin_ficha`).
+- **Enlace nuevo `/?nuevo_proveedor=<nombre>`**: abre Proveedores → «Nuevo proveedor» con el nombre ya escrito (tras iniciar sesión si hace falta). Solo un administrador puede crear proveedores: a otro usuario se le dice. Lo usa Activo Operacional v1.18.2, que avisa en la pantalla de V.º B.º antes de enviar.
+- Lo demás de la v12.33.44 sigue igual (PDF de cada presupuesto en su pedido). Sin tablas ni variables nuevas.
+
 # v12.33.44 — 24 octubre 2026
 
 📎 V.º B.º desde Activo Operacional: cada pedido con su presupuesto, y aviso de proveedores por crear
