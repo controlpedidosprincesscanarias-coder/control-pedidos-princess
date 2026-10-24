@@ -193,6 +193,7 @@ momento, sin desplegar nada.
    | `BRIDGE_USUARIOS` | No (no recomendada desde v12.33.37) | Cuentas, separadas por comas, que pueden usar `/api/bridge/login`. No encaja mientras cada equipo de main_agenda entre con su propia cuenta: desde la v12.33.37 la sesión del puente ya solo sirve para `/api/bridge/*`. |
    | `DALI_BRIDGE_SECRET`, `AO_BRIDGE_SECRET` | No (recomendadas, desde v12.33.36) | Secretos propios del puente con Catálogo y con Activo Operacional (el mismo valor en el otro servicio). Mientras no existan, todo sigue firmándose con `DALI_SSO_SECRET`. |
    | `BRIDGE_ACEPTA_SSO_SECRET` | No | Por defecto `1`: `DALI_SSO_SECRET` sigue valiendo en el puente. Ponlo a `0` cuando Catálogo y Activo Operacional usen ya sus secretos propios. |
+   | `IP_PROXIES_CONFIABLES` | No (desde v12.33.40) | Cuántos proxies de confianza hay delante de la app, para saber la IP real del cliente en `X-Forwarded-For`. Por defecto `1` (Render). Pon `2` si además usas Cloudflare delante; `0` ignora la cabecera. |
    | `COOKIE_SECURE` | No | Por defecto la cookie de sesión es solo HTTPS; `0` únicamente en desarrollo local sin HTTPS |
    | `DALI_FRONTEND_URL` | No | Por defecto el proxy Cloudflare de DALI ya en producción |
    | `PORT` | Sí (solo con `runtime: docker`, desde v12.32.42) | `10000` — con el runtime nativo de Python, Render la fijaba sola; con Docker hay que fijarla a mano (o dejar que `render.yaml` la fije, si despliegas como Blueprint) para que Render sepa a qué puerto interno enrutar (coincide con `EXPOSE 10000` del `Dockerfile`) |

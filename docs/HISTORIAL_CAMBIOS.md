@@ -49,6 +49,19 @@
 
 ---
 
+## 2026-10-24 — [Control Pedidos] IP del cliente fiable y errores internos sin detalle (v12.33.40)
+
+**Origen:** revisión completa de las actualizaciones (N-1, CP-09 residual, N-4).
+
+**Cambios:**
+- `_ip_cliente()`: ya no toma el primer valor de `X-Forwarded-For` (lo controla el cliente); toma el N-ésimo por la derecha, con N = `IP_PROXIES_CONFIABLES` (por defecto 1; 0 usa `remote_addr`; si la cabecera trae menos valores, el primero). El límite por IP del login (`_RL_*`) y la IP de trazabilidad de las solicitudes de acceso dependen de ella.
+- Nuevo `_error_interno(exc, contexto)`: referencia aleatoria de 6 hex, log con traceback y texto genérico al cliente. Sustituye a `str(exc)`/`str(e)` en 32 respuestas 500 de `api_*`; `server_error` y `unhandled_exception` ya no devuelven el texto de excepciones que no sean HTTP (las HTTP conservan el suyo). Se dejan los 400 con mensaje pensado para el usuario.
+- Cadena de documentación con `\\` escapada (sin `SyntaxWarning`).
+
+**Verificación:** `t_v40` (Postgres 16 + Flask): 1 y 2 proxies, cabecera corta, 0 y valor no numérico; 12 intentos con la cabecera cambiando → 8×401 y bloqueo desde el 9.º (antes 30); otra IP real entra; un fallo forzado de `query()` no devuelve su texto. `t_v35`, `t_v37`, `t_v38`, `t_v39` siguen en OK.
+
+**Documentos revisados:** `README.md` (versión), `GUIA_DESPLIEGUE.md` (variable nueva en la tabla), `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+
 ## 2026-10-24 — [Control Pedidos] Un pedido por proveedor al enviar a V.º B.º desde Activo Operacional (v12.33.39)
 
 **Origen:** petición de Víctor: «cuando pulsemos enviar para visto bueno a dirección ... mantendríamos el ya creado y se realizarían 3 copias más con la misma info hasta ahora pero con la diferencia que ya tenemos nombre de proveedor ... y en cada una colocaremos el presupuesto correspondiente enviado para firma».

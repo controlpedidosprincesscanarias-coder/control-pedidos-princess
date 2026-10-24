@@ -3885,13 +3885,24 @@ _ACTIVO_CACHE = {}          # uid -> (expira_monotonic, activo_bool)
 _ACTIVO_TTL = 20            # segundos; con 1 worker se invalida al instante al cambiar
 
 def _ip_cliente():
-    """IP de origen. Detrás del proxy de Render llega en X-Forwarded-For
-    (primer elemento = cliente); si no hay cabecera, la del socket."""
-    xff = (request.headers.get("X-Forwarded-For") or "").strip()
-    if xff:
-        primera = xff.split(",")[0].strip()
-        if primera:
-            return primera[:64]
+    """IP de origen. Detrás del proxy de Render llega en X-Forwarded-For.
+
+    (v12.33.40) Antes se tomaba el PRIMER valor de la cabecera, que escribe a su
+    gusto quien hace la petición: bastaba cambiarlo en cada intento para esquivar
+    el límite por IP del login. Cada proxy de confianza AÑADE por la derecha la
+    IP de quien le habló, así que el valor fiable es el de la derecha. Cuántos
+    proxies hay delante lo dice IP_PROXIES_CONFIABLES (por defecto 1: Render;
+    2 si además hay Cloudflare delante; 0 ignora la cabecera y usa la del
+    socket). Si la cabecera trae menos valores de los esperados, se usa el
+    primero."""
+    try:
+        saltos = int(os.environ.get("IP_PROXIES_CONFIABLES", "1"))
+    except ValueError:
+        saltos = 1
+    if saltos > 0:
+        partes = [p.strip() for p in (request.headers.get("X-Forwarded-For") or "").split(",") if p.strip()]
+        if partes:
+            return (partes[-saltos] if len(partes) >= saltos else partes[0])[:64]
     return (request.remote_addr or "")[:64] or None
 
 # ── Límite de intentos (v12.33.35) ────────────────────────────────────────────
@@ -17733,7 +17744,7 @@ def exportar_proveedores():
         return send_file(buf, as_attachment=True, download_name=filename,
                          mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": _error_interno(e)}), 500
 
 
 def _parse_excel_proveedores(archivo):
@@ -17940,7 +17951,7 @@ def importar_proveedores():
     except Exception as e:
         import traceback
         log.error(f"importar_proveedores error: {traceback.format_exc()}")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": _error_interno(e)}), 500
 
 @app.route("/api/proveedores/importar/reset", methods=["POST"])
 @login_required
@@ -18026,7 +18037,7 @@ def importar_proveedores_reset():
     except Exception as e:
         import traceback
         log.error(f"importar_proveedores_reset error: {traceback.format_exc()}")
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": _error_interno(e)}), 500
 
 
 # ── Validación techo de gastos ─────────────────────────────────────────────────
@@ -21136,7 +21147,7 @@ def exportar_backup_previo():
                          mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                          as_attachment=True, download_name=filename)
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": _error_interno(e)}), 500
 
 
 @app.route("/api/importar/reset", methods=["POST"])
@@ -21322,7 +21333,7 @@ def reset_e_importar():
         return jsonify({"ok": True, "insertados": insertados, "errores": errores})
 
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": _error_interno(e)}), 500
 
 
 # ── API Importar Excel ─────────────────────────────────────────────────────────
@@ -21517,7 +21528,7 @@ def importar_excel():
         return jsonify({"ok": True, "insertados": insertados, "errores": errores})
 
     except Exception as e:
-        return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": _error_interno(e)}), 500
 
 
 # ── API Exportar Excel ─────────────────────────────────────────────────────────
@@ -25192,6 +25203,15 @@ def ping():
 
 # ── Error handlers globales (siempre JSON para rutas /api/) ───────────────────
 
+def _error_interno(exc, contexto: str = "") -> str:
+    """(v12.33.40) Texto para el cliente cuando algo falla por dentro: no se
+    devuelve el mensaje de la excepción (puede llevar rutas, SQL o datos). Se
+    deja en el log con una referencia corta que también ve quien reclama."""
+    ref = secrets.token_hex(3)
+    log.error("[ERR %s] %s%s: %s", ref, contexto, " " if contexto else "", exc, exc_info=exc if isinstance(exc, BaseException) else None)
+    return f"Error interno del servidor (ref. {ref})"
+
+
 @app.errorhandler(404)
 def not_found(e):
     if request.path.startswith("/api/"):
@@ -25201,8 +25221,8 @@ def not_found(e):
 @app.errorhandler(500)
 def server_error(e):
     if request.path.startswith("/api/"):
-        return jsonify({"ok": False, "error": f"Error interno del servidor: {str(e)}"}), 500
-    return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": "Error interno del servidor"}), 500
+    return jsonify({"ok": False, "error": "Error interno del servidor"}), 500
 
 @app.errorhandler(Exception)
 def unhandled_exception(e):
@@ -25215,9 +25235,14 @@ def unhandled_exception(e):
         return jsonify({"ok": False, "error": "Ese Nº de pedido ya está registrado en otro pedido de este hotel. "
                                               "No se ha guardado nada: revisa que no sea un pedido dado de alta dos veces."}), 409
     app.logger.error("Excepción no capturada:\n" + traceback.format_exc())
+    # Las HTTPException (405, 413…) llevan un texto genérico de Werkzeug; el resto no se enseña.
+    from werkzeug.exceptions import HTTPException as _HTTPExc
+    texto = f"Error inesperado: {e}" if isinstance(e, _HTTPExc) else f"Error inesperado (ref. {secrets.token_hex(3)})"
+    if not isinstance(e, _HTTPExc):
+        app.logger.error("Referencia del error anterior: %s", texto)
     if request.path.startswith("/api/"):
-        return jsonify({"ok": False, "error": f"Error inesperado: {str(e)}"}), 500
-    return jsonify({"ok": False, "error": str(e)}), 500
+        return jsonify({"ok": False, "error": texto}), 500
+    return jsonify({"ok": False, "error": texto}), 500
 
 # ── Health Monitoring — validación de integridad operativa ────────────────────
 # _validar_integridad_operativa() detecta configuraciones incompletas que
@@ -26672,7 +26697,7 @@ def api_get_config_alertas():
             grupos.setdefault(r["grupo"], []).append(r)
         return jsonify({"ok": True, "config": rows, "grupos": grupos})
     except Exception as exc:
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/config-alertas", methods=["PUT"])
@@ -26701,7 +26726,7 @@ def api_save_config_alertas():
         return jsonify({"ok": True, "actualizadas": len(data), "silencio_descartados": descartados})
     except Exception as exc:
         log.error("[CONFIG] Error guardando config: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/silencio-total", methods=["GET"])
@@ -26773,7 +26798,7 @@ def api_get_config_avisos():
         })
     except Exception as exc:
         log.error("[CONFIG-AVISOS] Error GET: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/config-avisos", methods=["PUT"])
@@ -26837,7 +26862,7 @@ def api_save_config_avisos():
         return jsonify({"ok": True, "actualizados": len(cambios)})
     except Exception as exc:
         log.error("[CONFIG-AVISOS] Error PUT: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/config-avisos/resolver", methods=["GET"])
@@ -26919,7 +26944,7 @@ def api_get_departamentos_email():
         })
     except Exception as exc:
         log.error("[DEPTO-EMAIL] Error GET: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/departamentos-email", methods=["PUT"])
@@ -26973,7 +26998,7 @@ def api_save_departamentos_email():
         return jsonify({"ok": True, "actualizados": actualizados})
     except Exception as exc:
         log.error("[DEPTO-EMAIL] Error PUT: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 # ── API Admin: contactos adicionales de notificación (2026-08-28) ──────────
@@ -27050,7 +27075,7 @@ def api_get_notificaciones_contactos():
         })
     except Exception as exc:
         log.error("[NOTIF-CONTACTOS] Error GET: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/notificaciones-contactos", methods=["POST"])
@@ -27075,7 +27100,7 @@ def api_crear_notificacion_contacto():
         return jsonify({"ok": True, "id": cid}), 201
     except Exception as exc:
         log.error("[NOTIF-CONTACTOS] Error POST: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/notificaciones-contactos/<int:cid>", methods=["PUT"])
@@ -27130,7 +27155,7 @@ def api_actualizar_notificacion_contacto(cid):
         return jsonify({"ok": True, "reglas_guardadas": n_reglas})
     except Exception as exc:
         log.error("[NOTIF-CONTACTOS] Error PUT %s: %s", cid, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/notificaciones-contactos/<int:cid>", methods=["DELETE"])
@@ -27145,7 +27170,7 @@ def api_eliminar_notificacion_contacto(cid):
         return jsonify({"ok": True})
     except Exception as exc:
         log.error("[NOTIF-CONTACTOS] Error DELETE %s: %s", cid, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 # ─────────────────────────────────────────────────────────────────────────
@@ -27272,7 +27297,7 @@ def api_externo_dali_encolar_email():
         return jsonify({"ok": True, "id": nuevo_id})
     except Exception as exc:
         log.error("[DALI-BRIDGE] Error encolando email de DALI: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/externo/dali-sap/proveedores", methods=["GET"])
@@ -27399,7 +27424,7 @@ def api_externo_dali_proveedores():
         return jsonify({"ok": True, "proveedores": salida})
     except Exception as exc:
         log.error("[DALI-BRIDGE] Error listando proveedores para DALI: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/externo/dali-sap/compradores", methods=["GET"])
@@ -27457,7 +27482,7 @@ def api_externo_dali_compradores():
         return jsonify({"ok": True, "compradores": salida})
     except Exception as exc:
         log.error("[DALI-BRIDGE] Error listando compradores para DALI: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/externo/dali-sap/compradores-hoteles", methods=["GET"])
@@ -27517,7 +27542,7 @@ def api_externo_compradores_hoteles():
         return jsonify({"ok": True, "hoteles": salida})
     except Exception as exc:
         log.error("[DALI-BRIDGE] Error listando compradores por hotel: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/externo/activo-operacional/pedidos", methods=["POST"])
@@ -27685,7 +27710,7 @@ def api_externo_ao_crear_pedido():
         except Exception:
             pass
         log.error("[AO-BRIDGE] Error creando pedido desde Activo Operacional (%s): %s", ref, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
     try:
         enviar_emails_estado(db, pedido_id, estado, usuario_nombre=nombre, usuario_id=uid)
@@ -27799,7 +27824,7 @@ def api_externo_ao_visto_bueno():
         except Exception:
             pass
         log.error("[AO-BRIDGE] Error registrando el V.º B.º de %s: %s", ref, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
     if estado_nuevo != estado_antes:
         # Los correos y avisos de siempre del cambio de estado (no bloquean la respuesta).
         try:
@@ -27976,7 +28001,7 @@ def _ao_vb_dividir(ref, fecha, documentos, docs_meta, nota, cambiar_estado, usua
         except Exception:
             pass
         log.error("[AO-BRIDGE] Error dividiendo el V.º B.º de %s: %s", ref, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
     for pid, nuevo, antes in a_notificar:
         try:
             _notificar_cambio_estado(get_db(), pid, nuevo, antes, usuario_nombre=nombre, usuario_id=uid)
@@ -28023,7 +28048,7 @@ def api_externo_ao_departamentos_hotel():
         )) or []
     except Exception as exc:
         log.error("[AO-BRIDGE] Error leyendo los correos de departamento de %s: %s", codigo, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
     def _norm(t):
         t = unicodedata.normalize("NFD", str(t or "")).encode("ascii", "ignore").decode().upper()
@@ -28167,7 +28192,7 @@ def api_emails_sistema_pendientes():
                 log.error("[EMAILS-SISTEMA] Error listando/reservando pendientes tras reintentar: %s", exc2)
                 return jsonify({"ok": False, "error": str(exc2)}), 500
         log.error("[EMAILS-SISTEMA] Error listando/reservando pendientes: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/emails-sistema-pendientes/<int:email_id>", methods=["GET"])
@@ -28293,7 +28318,7 @@ def api_emails_sistema_atascados():
         return jsonify({"ok": True, "atascados": rows})
     except Exception as exc:
         log.error("[EMAILS-SISTEMA] Error listando atascados: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/emails-sistema-pendientes/<int:email_id>/descartar", methods=["POST"])
@@ -28318,7 +28343,7 @@ def api_descartar_email_sistema(email_id):
         return jsonify({"ok": True})
     except Exception as exc:
         log.error("[EMAILS-SISTEMA] Error descartando id=%s: %s", email_id, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/emails-sistema-pendientes/<int:email_id>/reactivar", methods=["POST"])
@@ -28355,7 +28380,7 @@ def api_reactivar_email_sistema(email_id):
         return jsonify({"ok": True})
     except Exception as exc:
         log.error("[EMAILS-SISTEMA] Error reactivando id=%s: %s", email_id, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/emails-sistema-pendientes/<int:email_id>/marcar-enviado", methods=["POST"])
@@ -28413,7 +28438,7 @@ def api_marcar_email_sistema_enviado(email_id):
         return jsonify({"ok": True})
     except Exception as exc:
         log.error("[EMAILS-SISTEMA] Error marcando enviado id=%s: %s", email_id, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/emails-sistema-pendientes/<int:email_id>/marcar-enviado-no-confirmado", methods=["POST"])
@@ -28451,7 +28476,7 @@ def api_marcar_email_sistema_enviado_no_confirmado(email_id):
         return jsonify({"ok": True})
     except Exception as exc:
         log.error("[EMAILS-SISTEMA] Error marcando enviado-no-confirmado id=%s: %s", email_id, exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/techo-dedup-reset", methods=["POST"])
@@ -28478,7 +28503,7 @@ def techo_dedup_reset():
                         "mensaje": f"{deleted} registros de deduplicacion eliminados. Ahora puedes lanzar test-techo-mensual."})
     except Exception as exc:
         log.error("[TECHO-DEDUP-RESET] Error: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/reset-alertas-hoy", methods=["POST"])
@@ -28505,7 +28530,7 @@ def reset_alertas_hoy():
                         "mensaje": f"{deleted} registros de dedup de pedidos eliminados. Ahora puedes lanzar test-scheduler."})
     except Exception as exc:
         log.error("[ALERTAS-RESET] Error: %s", exc)
-        return jsonify({"ok": False, "error": str(exc)}), 500
+        return jsonify({"ok": False, "error": _error_interno(exc)}), 500
 
 
 @app.route("/api/admin/integridad", methods=["GET"])
@@ -28826,7 +28851,7 @@ def backup_restaurar():
     Esta ruta NO restaura nada directamente (Render no tiene acceso a la
     carpeta de red local). En su lugar, registra una petición en la tabla
     `restore_queue`. Un agente local (restore_agent.py), ejecutado en el PC
-    con acceso a \\shtabaiba\... y a Supabase, sondea esta tabla cada minuto,
+    con acceso a \\\\shtabaiba\\... y a Supabase, sondea esta tabla cada minuto,
     procesa la petición pendiente más antigua y marca el resultado.
 
     POST /api/admin/backup/restaurar

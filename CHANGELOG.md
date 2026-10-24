@@ -1,3 +1,16 @@
+# v12.33.40 — 24 octubre 2026
+
+🔒 Seguridad: la IP del cliente ya no se puede falsificar y los errores internos no enseñan su texto
+
+**Origen**: revisión completa de las actualizaciones (documento «Auditoría completa Princess», hallazgos N-1, CP-09 y N-4). Probado con Postgres real; las pruebas de las versiones anteriores siguen pasando.
+
+- **IP del cliente (N-1)**: la aplicación tomaba el *primer* valor de `X-Forwarded-For`, que escribe quien hace la petición. Cambiándolo en cada intento se esquivaba el límite por IP del login (reproducido: 40 intentos seguidos solo paraban en el 31, por el tope de la cuenta, y además cualquiera podía bloquear la cuenta de otro). Ahora se toma el valor que añade el proxy de confianza, por la derecha. **Variable nueva `IP_PROXIES_CONFIABLES`** (opcional, por defecto `1` = solo Render). Si delante de Render hay también Cloudflare, ponla a `2`; `0` ignora la cabecera. Con `1` detrás de Cloudflare todos los usuarios compartirían la IP del proxy: el límite por IP seguiría funcionando pero contaría a todos juntos, así que en ese caso conviene `2`.
+- **Errores internos (CP-09)**: 34 respuestas de error 500 devolvían el texto de la excepción (rutas, SQL, datos). Ahora devuelven «Error interno del servidor (ref. xxxxxx)» y la excepción completa queda en el log con esa misma referencia, para buscarla en Render. Los avisos de validación pensados para el usuario (400) no cambian.
+- **Aviso de compilación (N-4)**: una cadena con `\\` ya no provoca `SyntaxWarning` al arrancar.
+- **Limpieza pendiente de hacer a mano**: borrar de la raíz del repositorio `Manual_Usuario_COMPRADOR_Control_Pedidos.docx` y `.pdf`; son idénticos a los de `docs/`.
+
+No cambia ninguna tabla. Variable nueva, opcional: `IP_PROXIES_CONFIABLES`.
+
 # v12.33.39 — 24 octubre 2026
 
 🧾 Al enviar a V.º B.º desde Activo Operacional, un pedido por proveedor
