@@ -1,3 +1,18 @@
+# v12.33.46 — 26 octubre 2026
+
+🔕 Los avisos diarios de pedidos ya no se repiten cada minuto
+
+**Origen**: Víctor: el popup «[ALERTA URGENTE] Pedido SAP 40861 · GY — Enviado al proveedor — CASA DELFIN» «me repite los avisos diarios cada pocos minutos; lo normal es que solo se envíen una vez el día que toca y, si ese día main_agenda está cerrado, se elimina».
+
+**Causa**: el job de alertas (cada 60 s, laborables 07:00–16:59) apunta en `whatsapp_log` que el pedido ya se avisó hoy, pero solo con los resultados de **Telegram**. En un hotel con destinatarios de popup y ninguno de Telegram (GY), no quedaba nada apuntado y en cada pasada se volvía a encolar el mismo popup. Era el mismo fallo que ya se corrigió en familia repetida y techo mensual; quedaba en las alertas de pedidos y en el techo urgente a admins sin Telegram.
+
+- **Alertas de pedidos** (lógica estándar y por plazo de entrega): se apunta siempre una fila `solo-popup` cuando sale algún popup, y `sin-destinatarios` si no sale nada. Un aviso al día como máximo, y el ciclo de reenvío de Config Alertas se respeta también para los popups.
+- **Techo urgente a admins**: el admin sin Telegram también queda apuntado.
+- **Red de seguridad**: el mismo popup (usuario, tipo, título y texto iguales) no se encola dos veces el mismo día, venga de donde venga.
+- **Caducan al acabar el día**: las alertas de pedidos, techo, familia repetida y supervisión que no se hayan entregado el mismo día se descartan, en vez de salir otro día. El Organizador, además, ya descartaba lo acumulado mientras estaba cerrado.
+
+Sin tablas ni variables nuevas; no hace falta tocar el Organizador.
+
 # v12.33.45 — 24 octubre 2026
 
 🔗 Proveedor sin ficha: aviso en pantalla con enlace directo, en vez de correo

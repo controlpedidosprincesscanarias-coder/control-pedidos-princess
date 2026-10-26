@@ -5908,6 +5908,25 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
     try:
         db = get_db()
         cur = db.cursor()
+        # (v12.33.46) Red de seguridad: el mismo aviso (usuario, tipo,
+        # título y texto idénticos) no se encola dos veces el mismo día
+        # (hora de Canarias), venga de donde venga. Los jobs de alertas
+        # corren cada 60 s; si algún día otro camino olvida registrar su
+        # dedup, como mucho sale un popup al día en vez de uno por minuto.
+        if retraso_segundos <= 0 and not tipo.startswith("solicitud_acceso"):
+            cur.execute(
+                """SELECT 1 FROM bridge_notificaciones
+                   WHERE usuario=%s AND tipo=%s AND titulo=%s AND mensaje=%s
+                     AND pedido_id IS NOT DISTINCT FROM %s
+                     AND (creado_en AT TIME ZONE 'Atlantic/Canary')::date =
+                         (NOW() AT TIME ZONE 'Atlantic/Canary')::date
+                   LIMIT 1""",
+                (usuario.lower(), tipo, titulo, mensaje, pedido_id)
+            )
+            if cur.fetchone() is not None:
+                log.info("[BRIDGE-DEDUP] Popup repetido hoy, no se encola: %s / %s / %s",
+                         usuario, tipo, titulo)
+                return
         if retraso_segundos > 0 and pedido_id is not None:
             # ¿Ya hay un aviso del mismo tipo para este pedido/usuario sin
             # leer? Si lo hay —esté ya visible o todavía en espera—, se
@@ -5947,7 +5966,7 @@ def _encolar_bridge_notificacion(usuario: str, tipo: str, titulo: str, mensaje: 
         log.warning("bridge_notif: no se pudo encolar para %s — %s", usuario, exc)
 
 
-def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
+def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str, info: dict = None) -> list:
     """
     Envía alerta automática (Telegram + popup) a los destinatarios configurados
     para el hotel del pedido — evento 'alerta_pedido_hotel' en Administrador →
@@ -6041,6 +6060,8 @@ def _enviar_telegram_compradores(pedido: dict, dias: int, nivel: str) -> list:
             resultados.append({"username": username, "chat_id": chat_id, **res})
 
     # ── Popup (bridge agenda) — lista propia, independiente de Telegram ──────
+    if info is not None:
+        info["popups"] = len(destinatarios_popup)
     for dest in destinatarios_popup:
         _encolar_bridge_notificacion(
             usuario=dest.get("username", "?"),
@@ -6852,6 +6873,32 @@ def _debe_usar_logica_plazo(pedido: dict) -> bool:
     return activado and bool(pedido.get("plazo_entrega_dias") or pedido.get("fecha_entrega_especifica"))
 
 
+def _log_alerta_solo_popup(db, pedido_id, resultados, info_envio, mensaje):
+    """
+    (v12.33.46) FIX popups de alerta repetidos cada minuto.
+
+    El dedup diario del job (_ya_notificado_hoy → whatsapp_log tipo
+    'telegram_auto') solo se escribía con los resultados de TELEGRAM. Si el
+    hotel del pedido tiene destinatarios de popup pero ninguno de Telegram
+    (caso real: Pedido SAP 40861 · GY), no quedaba ninguna fila, el pedido
+    seguía como "no notificado hoy" y el job (cada 60 s) volvía a encolar
+    el mismo popup en cada pasada. Mismo fallo que ya se corrigió en
+    familia repetida y techo mensual (registro "solo-popup").
+
+    Se registra siempre una fila 'solo-popup' cuando ha salido algún popup
+    (enviado=1, cuenta como aviso entregado para el ciclo de reenvío), y una
+    con enviado=0 si no ha salido nada en absoluto (sin destinatarios), que
+    basta para frenar el reintento el resto del día.
+    """
+    n_popups = int((info_envio or {}).get("popups") or 0)
+    if n_popups > 0:
+        _log_whatsapp(db, pedido_id, "telegram_auto", "solo-popup",
+                      f"{mensaje} (popup a {n_popups})", True, None)
+    elif not resultados:
+        _log_whatsapp(db, pedido_id, "telegram_auto", "sin-destinatarios",
+                      mensaje, False, "Sin destinatarios configurados")
+
+
 def _job_alertas_diarias():
     """
     Job automático: calcula alertas por fecha y envía Telegram
@@ -6995,7 +7042,8 @@ def _job_alertas_diarias_inner():
             debe_enviar = True
             log.info("[SCHEDULER-PLAZO] Pedido %s — %s (%s)", p["id"], nivel, motivo)
 
-            resultados = _enviar_telegram_compradores(p, dias, nivel)
+            info_envio = {}
+            resultados = _enviar_telegram_compradores(p, dias, nivel, info_envio)
             try:
                 db = get_db()
                 for r in resultados:
@@ -7006,6 +7054,8 @@ def _job_alertas_diarias_inner():
                         r.get("ok", False) or r.get("permanente", False),
                         r.get("error"),
                     )
+                _log_alerta_solo_popup(db, p["id"], resultados, info_envio,
+                                       f"Alerta plazo entrega {nivel} — {motivo}")
                 db.commit()
             except Exception as exc:
                 log.error("[SCHEDULER] Error guardando log (plazo) pedido %s: %s", p["id"], exc)
@@ -7116,7 +7166,8 @@ def _job_alertas_diarias_inner():
             continue
         # ────────────────────────────────────────────────────────────────────
 
-        resultados = _enviar_telegram_compradores(p, dias, nivel)
+        info_envio = {}
+        resultados = _enviar_telegram_compradores(p, dias, nivel, info_envio)
 
         # Registrar en whatsapp_log
         try:
@@ -7129,6 +7180,8 @@ def _job_alertas_diarias_inner():
                     r.get("ok", False) or r.get("permanente", False),
                     r.get("error"),
                 )
+            _log_alerta_solo_popup(db, p["id"], resultados, info_envio,
+                                   f"Alerta automática {nivel} — {dias}d sin respuesta")
             db.commit()
         except Exception as exc:
             log.error("[SCHEDULER] Error guardando log pedido %s: %s", p["id"], exc)
@@ -7748,6 +7801,15 @@ def _job_techo_urgente_admins_inner() -> None:
                     f"{username}|{hotel_codigo}",
                     f"Techo URGENTE admin — {acumulado:,.2f} € — {mes_txt}",
                     ok, res.get("error")
+                )
+            else:
+                # (v12.33.46) Admin sin Telegram: sin esta fila el dedup
+                # diario no se cumplía y el popup se repetía cada minuto.
+                _log_techo_urgente_admin(
+                    hotel_codigo,
+                    f"solo-popup|{username}|{hotel_codigo}",
+                    f"Techo URGENTE admin (solo popup) — {acumulado:,.2f} € — {mes_txt}",
+                    True, None
                 )
             # ── Encolar en bridge agenda para este admin ─────────────────────
             _encolar_bridge_notificacion(
@@ -21071,6 +21133,24 @@ def bridge_notificaciones_usuario():
     """
     usuario  = session.get("username", "").lower()
     rol      = session.get("rol", "")
+
+    # (v12.33.46) Los avisos DIARIOS (alertas de pedidos, techo, familia
+    # repetida y su copia a admins) solo valen el día en que se generan: si
+    # ese día el Organizador (main_agenda) estuvo cerrado, se descartan en
+    # vez de entregarse otro día. Se marcan como leídos sin devolverlos.
+    try:
+        db = get_db()
+        db.cursor().execute(
+            """UPDATE bridge_notificaciones SET leido = TRUE
+               WHERE usuario = %s AND leido = FALSE
+                 AND tipo IN ('alerta_auto','techo','familia_repetida','supervision')
+                 AND (creado_en AT TIME ZONE 'Atlantic/Canary')::date <
+                     (NOW() AT TIME ZONE 'Atlantic/Canary')::date""",
+            (usuario,)
+        )
+        db.commit()
+    except Exception as exc:
+        log.warning("bridge_notif: no se pudieron caducar avisos de días anteriores — %s", exc)
 
     try:
         rows = rows_to_list(query(

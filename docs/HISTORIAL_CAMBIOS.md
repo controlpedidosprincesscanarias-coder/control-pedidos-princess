@@ -49,6 +49,17 @@
 
 ---
 
+## 2026-10-26 — [Control Pedidos] Los avisos diarios de pedidos ya no se repiten cada minuto (v12.33.46)
+
+- **Petición**: el popup de alerta urgente del Pedido SAP 40861 (GY, Casa Delfín, 77 días) salía cada pocos minutos. Debe salir una vez el día que toca y, si ese día el Organizador está cerrado, perderse.
+- **Causa**: `_job_alertas_diarias_inner` solo escribía el dedup `telegram_auto` con los resultados de Telegram. Si el hotel tiene destinatarios de popup y ninguno de Telegram, no se escribía nada y se encolaba un popup nuevo en cada pasada (cada 60 s). Lo mismo pasaba en `_job_techo_urgente_admins_inner` con un admin sin `telegram_chat_id`.
+- **Corrección**:
+  - `_log_alerta_solo_popup()` apunta `solo-popup` (enviado=1) o `sin-destinatarios` (enviado=0) en los dos caminos del job. `_enviar_telegram_compradores(..., info)` devuelve cuántos popups ha encolado.
+  - En el techo urgente se apunta `solo-popup|usuario|hotel`.
+  - `_encolar_bridge_notificacion` no encola un popup idéntico ya encolado hoy (hora de Canarias); se excluye `solicitud_acceso*`.
+  - `GET /api/bridge/notificaciones` marca como leídos, sin devolverlos, los `alerta_auto`/`techo`/`familia_repetida`/`supervision` de días anteriores.
+- Prueba: `t_v46.py` (5 pasadas del job → 1 popup; dedup; caducidad).
+
 ## 2026-10-24 — [Control Pedidos] Proveedor sin ficha: enlace a «Nuevo proveedor» en lugar de correo (v12.33.45)
 
 **Petición de Víctor:** «Mejor, ¿por qué no se da un aviso en pantalla para que se cree el proveedor para poder crear el nuevo pedido? Con un enlace de apertura directa del apartado Proveedores en Control de Pedidos; enviar el correo no lo veo funcional.»
