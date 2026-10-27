@@ -49,6 +49,20 @@
 
 ---
 
+## 2026-10-27 20:15 — [Control Pedidos] Cargar listados SAP con solo dos PDF: Pedidos detallado + Albaranes con su pedido (v12.33.48)
+
+- **Petición**: automatizar pedidos y albaranes con dos listados en lugar de cuatro: el Listado de Pedidos detallado y el documento «COMPRA» de albaranes en bloque (un albarán por página, con «Pedido/s»). Regla de Víctor para las líneas: si coinciden el nº de pedido y la descripción, se dan por buenas aunque el código cambie.
+- **Hallazgo**: el documento COMPRA es el mismo formato que la confirmación de un albarán suelto (`_extraer_albaran_confirmacion_individual`), pero con muchos albaranes; un albarán que no cabe sigue en la página siguiente repitiendo la cabecera («Página 2 de 1»). En los PDF reales de GY los códigos de artículo del albarán y del pedido no coinciden en 249 líneas (el pedido usa otro código interno), pero la descripción sí; y `_cruce_lineas_sap_hotel` no usaba `pedido_num_sap_confirmado`.
+- **Corrección**:
+  - `_detectar_tipo_listado_sap`: tipo `albaranes_pedido` (comprobado el primero; si no, se tomaba por Pedidos detallado). `_ORDEN_CARGA_LISTADOS_SAP` lo procesa antes que los listados antiguos de albaranes.
+  - `_extraer_albaranes_con_pedido` (pdfplumber, agrupa por «Código», total: «Total (con Dtos.)» con decimales → «Total:» → suma de líneas) e `_importar_albaranes_con_pedido` (sustituye las líneas de cada albarán en `sap_albaranes_lineas` con `pedido_num_sap_confirmado` y hace upsert de la cabecera en `sap_albaranes_cab`; en albaranes de varios pedidos reparte cada línea por código/descripción y, si no puede, la deja sin pedido).
+  - `_clave_desc_sap`, `_clave_cod_sap`, `_casar_linea_con_pedido_sap`: casado por código (sin ceros a la izquierda), descripción exacta o descripción que empieza por la otra (≥ 12 caracteres); solo si sale un único código del pedido.
+  - `_cruce_lineas_sap_hotel`: primero asigna las líneas con pedido confirmado (con el código del pedido); lo recibido que falte se busca como antes entre las líneas sin pedido. Motivos nuevos para revisar: línea que no casa, albaranes que suman más de lo recibido, albaranes de un pedido sin nada recibido en SAP. Solo las asignaciones por proveedor+artículo entran en el desempate por fecha.
+  - `_cargar_listados_sap_logica`: varios PDF del mismo tipo; aviso «sin fecha» por albarán sin cabecera. `_importar_albaranes_listado` ya no pisa albaranes con pedido. `/api/sap/cargar-listados` y la pantalla: hasta 10 PDF (`_MAX_PDF_CARGA_SAP`) y texto nuevo del modal.
+- **Verificación** (Postgres local, PDF reales de GY): 33 creados, 31 aplicados, 0 para revisar, 2 sin recepción; base de entradas = recibido en SAP al céntimo en los 33; segunda pasada sin cambios. `t_v48.py`: 11 comprobaciones (casado por código/descripción/partida/ambigua, reparto de albarán con dos pedidos, el listado antiguo no pisa un albarán con pedido, listado de pedidos desactualizado → revisar y se aplica al actualizarlo). No probado: la pantalla en un navegador con la app desplegada.
+- **Norma 5**: no aplica (sin tablas ni variables nuevas).
+- **Documentos revisados**: `README.md` (versión y apartado «Cargar listados SAP»), `CHANGELOG.md`; `GUIA_DESPLIEGUE.md`, `PENDIENTES.md` e `INSTRUCCIONES_RESTAURACION.md` — no aplica.
+
 ## 2026-10-26 — [Control Pedidos] Los avisos diarios de pedidos ya no se repiten cada minuto (v12.33.46)
 
 - **Petición**: el popup de alerta urgente del Pedido SAP 40861 (GY, Casa Delfín, 77 días) salía cada pocos minutos. Debe salir una vez el día que toca y, si ese día el Organizador está cerrado, perderse.

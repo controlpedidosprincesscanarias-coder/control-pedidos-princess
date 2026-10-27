@@ -13976,6 +13976,14 @@ def _importar_albaranes_listado(hotel_id: int, pdf_bytes: bytes) -> dict:
             "(Proveedor → Albarán → Familia → Subfamilia → Artículo)?"
         )
 
+    # (v12.33.48) Un albarán ya guardado CON su pedido (documento COMPRA o confirmación de albarán suelto) no se
+    # sustituye por su versión sin pedido de este listado: antes, volver a subir el listado detallado borraba esa
+    # asociación.
+    _confirmados = {r["albaran_id"] for r in rows_to_list(query(
+        "SELECT DISTINCT albaran_id FROM sap_albaranes_lineas WHERE hotel_id=%s AND albaran_id IS NOT NULL "
+        "AND COALESCE(pedido_num_sap_confirmado, '') <> ''", (hotel_id,)))}
+    filas = [f for f in filas if f.get("albaran_id") not in _confirmados]
+
     periodo_desde = datos.get("periodo_desde")
     periodo_hasta = datos.get("periodo_hasta")
     periodo_reconocido = bool(periodo_desde and periodo_hasta)
@@ -16505,12 +16513,19 @@ _TIPOS_LISTADO_SAP = {
     "pedidos_detallado":   "Listado de Pedidos (detallado)",
     "albaranes_detallado": "Listado de Albaranes (detallado)",
     "albaranes_resumido":  "Listado de Albaranes (resumido por albaranes)",
+    # (v12.33.48) Albaranes «COMPRA» en bloque: un albarán por página con su campo «Pedido/s». Junto con el
+    # Listado de Pedidos DETALLADO basta para toda la automatización (sustituye a los otros tres).
+    "albaranes_pedido":    "Albaranes con su pedido (documento COMPRA)",
 }
-_ORDEN_CARGA_LISTADOS_SAP = ["pedidos_resumido", "pedidos_detallado", "albaranes_resumido", "albaranes_detallado"]
+# (v12.33.48) Los albaranes con pedido van ANTES que los listados antiguos de albaranes: así un albarán ya
+# asociado a su pedido nunca se pisa con la versión sin pedido del listado detallado.
+_ORDEN_CARGA_LISTADOS_SAP = ["pedidos_resumido", "pedidos_detallado", "albaranes_pedido", "albaranes_resumido",
+                             "albaranes_detallado"]
+_MAX_PDF_CARGA_SAP = 10   # (v12.33.48) antes 4 (uno por tipo); ahora se admiten varios PDF del mismo tipo
 
 
 def _detectar_tipo_listado_sap(pdf_bytes: bytes):
-    """Reconoce cuál de los cuatro listados de SAP es un PDF mirando solo el texto de sus dos primeras
+    """Reconoce cuál de los listados de SAP es un PDF mirando solo el texto de sus dos primeras
     páginas (con o sin cabecera de página). Devuelve la clave de _TIPOS_LISTADO_SAP o None."""
     from pypdf import PdfReader
     import io
@@ -16519,6 +16534,10 @@ def _detectar_tipo_listado_sap(pdf_bytes: bytes):
         texto = "\n".join((pg.extract_text() or "") for pg in lector.pages[:2])
     except Exception:
         return None
+    # (v12.33.48) Va el primero: el documento COMPRA también trae «NNNNNNNN - Pedido dd/mm/aaaa» y «Artículo»,
+    # y sin esta comprobación se tomaría por un Listado de Pedidos detallado.
+    if re.search(r'Albar[aá]n\s*Proveedor', texto) and re.search(r'Pedido/s', texto):
+        return "albaranes_pedido"
     if re.search(r'Proveedor:\s*\d+\s*-', texto) and "Albarán:" in texto:
         return "albaranes_detallado"
     if re.search(r'(?m)^\s*\d{6,}\s+Albar[aá]n:\s*\d+', texto):
@@ -16586,6 +16605,225 @@ def _guardar_albaranes_resumido(hotel_id: int, filas: list) -> int:
     return len(datos)
 
 
+# ═══════════════════════════════════════════════════════════════════════════
+# (v12.33.48) ALBARANES CON SU PEDIDO — documento «COMPRA» de SAP exportado en bloque
+# ---------------------------------------------------------------------------
+# Víctor: «creo que con solo estos dos tipos de listados ya tendríamos toda la automatización» (Listado de
+# Pedidos DETALLADO + este documento). Es el mismo formato que la confirmación de un albarán suelto
+# (_extraer_albaran_confirmacion_individual), pero con MUCHOS albaranes en un PDF: uno por página (si no cabe,
+# sigue en la página siguiente repitiendo la misma cabecera, p. ej. «Página 2 de 1»). Trae lo que antes
+# exigía tres listados: las líneas (Albaranes detallado), fecha, almacén y total (Albaranes resumido) y, sobre
+# todo, el campo «Pedido/s», que dice directamente a qué pedido pertenece el albarán — sin adivinarlo por
+# proveedor y artículo.
+#
+# Regla de casado de líneas (Víctor, 27/10/2026): «los códigos pueden venir cambiados por varias causas, pero si
+# coincide número de pedido y descripción se pueden dar por buenos». Ver _casar_linea_con_pedido_sap().
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _clave_desc_sap(desc) -> str:
+    """Descripción comparable entre el pedido y el albarán: mayúsculas, sin acentos y SOLO letras y cifras. El
+    documento COMPRA parte las descripciones en varias líneas por la mitad de una palabra («PARIS\\nIAM»,
+    «ARCORO\\nC»); quitando espacios y signos ambas versiones quedan iguales."""
+    s = unicodedata.normalize("NFKD", str(desc or "").upper())
+    s = "".join(c for c in s if not unicodedata.combining(c))
+    return re.sub(r'[^A-Z0-9]', '', s)
+
+
+def _clave_cod_sap(cod) -> str:
+    """Código de artículo comparable: sin espacios ni ceros a la izquierda (0618017 = 618017)."""
+    s = re.sub(r'\s+', '', str(cod or "")).upper()
+    return s.lstrip("0") or s
+
+
+def _casar_linea_con_pedido_sap(cod, desc, lineas_pedido: list):
+    """Busca, entre las líneas de UN pedido del Listado de Pedidos detallado (dicts con codigo_articulo y
+    descripcion), la que corresponde a una línea de albarán. Por orden: mismo código; misma descripción; una
+    descripción que empieza por la otra (descripciones cortadas, mínimo 12 caracteres). Solo vale si el
+    resultado es UN único código del pedido. Devuelve (codigo_del_pedido, None) o (None, «motivo»)."""
+    def unico(cods):
+        cods = {c for c in cods if c}
+        return next(iter(cods)) if len(cods) == 1 else (None if not cods else "AMBIGUO")
+    ck, dk = _clave_cod_sap(cod), _clave_desc_sap(desc)
+    if ck:
+        r = unico(l["codigo_articulo"] for l in lineas_pedido if _clave_cod_sap(l.get("codigo_articulo")) == ck)
+        if r and r != "AMBIGUO":
+            return r, None
+    if dk:
+        r = unico(l["codigo_articulo"] for l in lineas_pedido if _clave_desc_sap(l.get("descripcion")) == dk)
+        if r == "AMBIGUO":
+            return None, "la descripción coincide con varias referencias del pedido"
+        if r:
+            return r, None
+        if len(dk) >= 12:
+            r = unico(l["codigo_articulo"] for l in lineas_pedido
+                      if (lambda o: len(o) >= 12 and (o.startswith(dk) or dk.startswith(o)))(_clave_desc_sap(l.get("descripcion"))))
+            if r == "AMBIGUO":
+                return None, "la descripción coincide con varias referencias del pedido"
+            if r:
+                return r, None
+    return None, "no está en el pedido ni por código ni por descripción"
+
+
+def _extraer_albaranes_con_pedido(pdf_bytes: bytes) -> list:
+    """Lee el PDF «COMPRA» con varios albaranes. Devuelve una lista (en el orden del PDF) de dicts:
+    {albaran_id, albaran_ref, proveedor_codigo, proveedor_nombre, pedidos_num_sap:[...], fecha_albaran
+    (YYYY-MM-DD HH:MM:SS|None), fecha_entrega (ídem), almacen, base_imponible, lineas:[{codigo_articulo,
+    descripcion, unidad, cantidad_txt, precio_txt, descuento_pct_txt, importe_txt}]}. Un albarán que sigue en la
+    página siguiente (misma «Código») se junta en uno solo."""
+    import pdfplumber, io
+
+    def _fecha_iso(t):
+        m = re.match(r'(\d{2})/(\d{2})/(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?', (t or "").strip())
+        if not m:
+            return None
+        d, mo, y, h, mi, se = m.groups()
+        return f"{y}-{mo}-{d} {int(h or 0):02d}:{mi or '00'}:{se or '00'}"
+
+    albaranes, actual = [], None
+    try:
+        with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
+            for i_pagina, pagina in enumerate(pdf.pages):
+                try:
+                    texto = pagina.extract_text() or ""
+                except Exception:
+                    texto = ""
+                try:
+                    tablas = pagina.extract_tables()
+                except Exception as exc_pag:
+                    log.warning("[ALBARANES-PEDIDO] Página %s ilegible, se omite: %s", i_pagina + 1, exc_pag)
+                    tablas = []
+                meta, lineas = {}, []
+                for tabla in tablas:
+                    if not tabla:
+                        continue
+                    if (tabla[0][0] or "").strip() == "Tipo":
+                        for fila in tabla[1:]:
+                            if not fila or (fila[0] or "").strip() != "Artículo" or len(fila) < 10:
+                                continue
+                            lineas.append({
+                                "codigo_articulo": re.sub(r'\s+', '', fila[1] or "") or None,
+                                "descripcion": re.sub(r'\s+', ' ', fila[2] or "").strip() or None,
+                                "unidad": (fila[3] or "").strip() or None,
+                                # Las cifras pueden partirse en dos líneas dentro de la celda: se quitan los espacios.
+                                "cantidad_txt": re.sub(r'\s+', '', fila[4] or "") or None,
+                                "precio_txt": re.sub(r'\s+', '', fila[6] or "") or None,
+                                "descuento_pct_txt": re.sub(r'\s+', '', fila[7] or "") or None,
+                                "importe_txt": re.sub(r'\s+', '', fila[9] or "") or None,
+                            })
+                        continue
+                    for fila in tabla:
+                        if fila and len(fila) >= 2 and (fila[0] or "").strip():
+                            meta[(fila[0] or "").strip()] = (fila[1] or "").strip()
+                codigo = re.sub(r'\s+', '', meta.get("Código") or "")
+                if codigo and (actual is None or actual["albaran_id"] != codigo):
+                    prov = meta.get("Proveedor") or ""
+                    partes = prov.split(" - ", 1)
+                    actual = {
+                        "albaran_id": codigo,
+                        "albaran_ref": meta.get("Albarán Proveedor") or None,
+                        "proveedor_codigo": partes[0].strip() or None if partes else None,
+                        "proveedor_nombre": (partes[1].strip() if len(partes) > 1 else prov.strip()) or None,
+                        "pedidos_num_sap": _PATRON_PEDIDO_EN_CONFIRMACION_ALBARAN.findall(meta.get("Pedido/s") or ""),
+                        "fecha_albaran": _fecha_iso(meta.get("Fecha Albarán")),
+                        "fecha_entrega": _fecha_iso(meta.get("Fecha Entrega")),
+                        "almacen": meta.get("Almacén Destino") or None,
+                        "lineas": [], "_texto": "",
+                    }
+                    albaranes.append(actual)
+                if actual is not None:
+                    actual["lineas"].extend(lineas)
+                    actual["_texto"] += texto + "\n"
+                elif lineas:
+                    log.warning("[ALBARANES-PEDIDO] Página %s con líneas pero sin cabecera de albarán: se omite", i_pagina + 1)
+                pagina.flush_cache()
+                pdf.pages[i_pagina] = None   # misma liberación de memoria que el resto de lectores (v12.32.29)
+    except Exception as exc:
+        log.error("[ALBARANES-PEDIDO] Error leyendo el PDF: %s", exc)
+        raise RuntimeError(f"No se pudo leer el PDF: {exc}")
+
+    for a in albaranes:
+        texto = a.pop("_texto")
+        def _num_tras(etiqueta_re):
+            m = re.search(etiqueta_re + r'\s*(-?[\d.]+,\d+)', texto)
+            return _parse_importe_es(m.group(1)) if m else None
+        # «Total (con Dtos.)» (base imponible ya con descuentos) solo si trae decimales — SAP a veces lo imprime
+        # redondeado («835» por 834,96) —; si no, «Total:»; y si tampoco, la suma de las líneas.
+        total = _num_tras(r'Total\s*\(con\s*Dtos\.?\)\s*:')
+        if total is None:
+            total = _num_tras(r'Total\s*:')
+        if total is None:
+            total = sum(_parse_importe_es(l.get("importe_txt")) for l in a["lineas"])
+        a["base_imponible"] = round(total, 2)
+    return albaranes
+
+
+def _importar_albaranes_con_pedido(hotel_id: int, pdf_bytes: bytes) -> dict:
+    """Guarda los albaranes del PDF «COMPRA» (ver _extraer_albaranes_con_pedido): sus líneas en
+    sap_albaranes_lineas con `pedido_num_sap_confirmado` (el pedido que dice SAP) y su cabecera (fecha, almacén,
+    total) en sap_albaranes_cab. Cada albarán SUSTITUYE a cualquier versión guardada antes (de este mismo PDF o
+    del listado detallado antiguo). Albarán con varios pedidos: cada línea se asigna al pedido cuya línea
+    coincide (código o descripción); si no se puede decidir, la línea queda sin pedido y la resuelve el cruce
+    por proveedor y artículo de siempre. Albarán sin pedido («Pedido/s» vacío): igual, sin pedido."""
+    albaranes = [a for a in _extraer_albaranes_con_pedido(pdf_bytes) if a["albaran_id"]]
+    if not albaranes:
+        raise RuntimeError("No se ha reconocido ningún albarán en el PDF — ¿es el documento «COMPRA» de SAP "
+                           "(un albarán por página, con los campos «Código», «Albarán Proveedor» y «Pedido/s»)?")
+
+    # Líneas de los pedidos citados por albaranes de VARIOS pedidos (para repartir sus líneas).
+    multi = {_normalizar_pedido_num(n) for a in albaranes if len(a["pedidos_num_sap"]) > 1 for n in a["pedidos_num_sap"]}
+    lineas_ped = {}
+    if multi:
+        for l in rows_to_list(query("SELECT pedido_num_sap, codigo_articulo, descripcion FROM sap_pedidos_lineas WHERE hotel_id=%s",
+                                    (hotel_id,))):
+            k = _normalizar_pedido_num(l["pedido_num_sap"])
+            if k in multi:
+                lineas_ped.setdefault(k, []).append(l)
+
+    filas_lin, filas_cab = [], []
+    sin_pedido, multi_pedido, lineas_sin_asignar = [], 0, 0
+    for a in albaranes:
+        peds = a["pedidos_num_sap"]
+        if not peds:
+            sin_pedido.append(a["albaran_id"])
+        elif len(peds) > 1:
+            multi_pedido += 1
+        for ln in a["lineas"]:
+            if len(peds) == 1:
+                ped = peds[0]
+            elif len(peds) > 1:
+                elegidos = [p for p in peds
+                            if _casar_linea_con_pedido_sap(ln["codigo_articulo"], ln["descripcion"],
+                                                           lineas_ped.get(_normalizar_pedido_num(p), []))[0]]
+                ped = elegidos[0] if len(elegidos) == 1 else None
+                if ped is None:
+                    lineas_sin_asignar += 1
+            else:
+                ped = None
+            filas_lin.append((hotel_id, a["proveedor_codigo"], a["proveedor_nombre"], a["albaran_id"], a["albaran_ref"],
+                              ln["codigo_articulo"], ln["descripcion"], ln["unidad"], ln["cantidad_txt"], ln["precio_txt"],
+                              ln["descuento_pct_txt"], ln["importe_txt"], ped))
+        filas_cab.append({"albaran_id": a["albaran_id"], "albaran_ref": a["albaran_ref"], "proveedor_nombre": a["proveedor_nombre"],
+                          "fecha_hora": a["fecha_albaran"], "almacen": a["almacen"], "importe_txt": _fmt_importe_es(a["base_imponible"])})
+
+    ids = sorted({a["albaran_id"] for a in albaranes})
+    execute("DELETE FROM sap_albaranes_lineas WHERE hotel_id=%s AND albaran_id = ANY(%s)", (hotel_id, ids))
+    if filas_lin:
+        with get_db().cursor() as cur:
+            execute_values(
+                cur,
+                """INSERT INTO sap_albaranes_lineas
+                       (hotel_id, proveedor_codigo, proveedor_nombre, albaran_id, albaran_ref, codigo_articulo, descripcion,
+                        unidad, cantidad_txt, precio_txt, descuento_pct_txt, importe_txt, pedido_num_sap_confirmado)
+                   VALUES %s""", filas_lin, page_size=1000)
+    _guardar_albaranes_resumido(hotel_id, filas_cab)   # hace commit (también de lo anterior)
+    fechas = sorted(a["fecha_albaran"][:10] for a in albaranes if a["fecha_albaran"])
+    return {
+        "albaranes": len(albaranes), "lineas": len(filas_lin), "sin_pedido": sin_pedido, "varios_pedidos": multi_pedido,
+        "lineas_sin_asignar": lineas_sin_asignar,
+        "desde": fechas[0] if fechas else None, "hasta": fechas[-1] if fechas else None,
+    }
+
+
 def _clave_prov_sap(nombre) -> str:
     """Clave de comparación de proveedores entre listados de SAP (solo letras y cifras, sin acentos)."""
     import unicodedata
@@ -16649,6 +16887,7 @@ def _cruce_lineas_sap_hotel(hotel_id: int, solo_detalle: bool = False) -> dict:
     for l in rows_to_list(query(
             """SELECT pedido_num_sap, codigo_articulo, descripcion, cantidad_pedida_txt, cantidad_recibida_txt
                FROM sap_pedidos_lineas WHERE hotel_id=%s ORDER BY id""", (hotel_id,))):
+        l["codigo_articulo"] = l["codigo_articulo"] or ""
         lineas_sap[_normalizar_pedido_num(l["pedido_num_sap"])].append(l)
     recibido = {}      # pedido_num normalizado → {codigo: cantidad recibida}
     for num, lst in lineas_sap.items():
@@ -16663,13 +16902,22 @@ def _cruce_lineas_sap_hotel(hotel_id: int, solo_detalle: bool = False) -> dict:
             por_codigo[cod2].append(n2)
 
     # ── Albaranes: líneas por proveedor/albarán/código y cabeceras (fecha) ─────────────────────────
+    # (v12.33.48) Las líneas cuyo albarán dice a qué pedido pertenece (documento COMPRA, campo «Pedido/s»:
+    # `pedido_num_sap_confirmado`) se asignan DIRECTAMENTE a ese pedido (ver más abajo) y NO entran en la búsqueda
+    # por proveedor + código, que queda solo para los albaranes sin pedido.
     alb = defaultdict(lambda: defaultdict(lambda: defaultdict(lambda: [0.0, 0.0])))   # prov → aid → codigo → [qty, importe]
+    conf = defaultdict(lambda: defaultdict(list))   # pedido_num normalizado → aid → [(código, descripción, qty, importe)]
     ref_alb = {}
     for l in rows_to_list(query(
-            "SELECT proveedor_nombre, albaran_id, albaran_ref, codigo_articulo, cantidad_txt, importe_txt "
-            "FROM sap_albaranes_lineas WHERE hotel_id=%s", (hotel_id,))):
+            "SELECT proveedor_nombre, albaran_id, albaran_ref, codigo_articulo, descripcion, cantidad_txt, importe_txt, "
+            "pedido_num_sap_confirmado FROM sap_albaranes_lineas WHERE hotel_id=%s ORDER BY id", (hotel_id,))):
         q = _parse_importe_es(l["cantidad_txt"])
         if q <= tol:
+            continue
+        ref_alb[l["albaran_id"]] = l["albaran_ref"]
+        if (l.get("pedido_num_sap_confirmado") or "").strip():
+            conf[_normalizar_pedido_num(l["pedido_num_sap_confirmado"])][l["albaran_id"]].append(
+                (l["codigo_articulo"], l["descripcion"], q, _parse_importe_es(l["importe_txt"])))
             continue
         celda = alb[_clave_prov_sap(l["proveedor_nombre"])][l["albaran_id"]][l["codigo_articulo"]]
         celda[0] += q
@@ -16694,9 +16942,18 @@ def _cruce_lineas_sap_hotel(hotel_id: int, solo_detalle: bool = False) -> dict:
         base_item = {"pedido_id": c["id"], "norden": c["norden"], "pedido_num": c["pedido_num"], "proveedor": c["proveedor"],
                      "estado_actual": c["estado"], "estado_sap": (sap or {}).get("estado_sap")}
         r = recibido.get(num)
+        conf_p = conf.get(num) or {}
         if not sap or num not in lineas_sap:
             if sap and _parse_importe_es(sap.get("importe_recibido_txt")) > 0:
                 revisar.append({**base_item, "motivos": ["SAP tiene recibido, pero falta el Listado de Pedidos DETALLADO de este pedido"]})
+            elif conf_p:
+                revisar.append({**base_item, "motivos": [f"Hay {len(conf_p)} albarán(es) de este pedido, pero falta el Listado de "
+                                                         "Pedidos DETALLADO que lo incluya"]})
+            continue
+        if not r and conf_p:
+            revisar.append({**base_item, "motivos": [
+                f"Hay {len(conf_p)} albarán(es) de este pedido ({', '.join(sorted(conf_p)[:4])}), pero en el Listado de Pedidos "
+                "detallado no consta nada recibido: ¿es un listado de pedidos anterior a esos albaranes? Cárgalo actualizado"]})
             continue
         if not r:
             if (sap.get("estado_sap") or "").strip().lower() == "cerrado" and c["estado"] != "ENTREGADO":
@@ -16704,22 +16961,48 @@ def _cruce_lineas_sap_hotel(hotel_id: int, solo_detalle: bool = False) -> dict:
             else:
                 sin_recepcion += 1
             continue
+        asignado = defaultdict(dict)       # aid → {codigo: (cantidad, importe)}
+        faltan, ambiguos, no_casan, excesos = [], [], [], []
+
+        def _sumar(aid, cod, q, imp):
+            q0, i0 = asignado[aid].get(cod, (0.0, 0.0))
+            asignado[aid][cod] = (q0 + q, i0 + imp)
+
+        # (v12.33.48) 1) Albaranes que SAP asocia a ESTE pedido: cada línea se casa con la referencia del pedido por
+        # código o, si el código viene cambiado, por descripción («si coincide número de pedido y descripción se
+        # pueden dar por buenos»). Se guardan con el código del PEDIDO (el de sus líneas en la app).
+        q_conf = defaultdict(float)
+        for aid, lst in conf_p.items():
+            for cod_a, desc_a, q, imp in lst:
+                cod_p, motivo = _casar_linea_con_pedido_sap(cod_a, desc_a, lineas_sap[num])
+                if cod_p is None:
+                    no_casan.append(f"albarán {aid}: «{desc_a or '—'}» ({cod_a or 'sin código'}) {motivo}")
+                    continue
+                _sumar(aid, cod_p, q, imp)
+                q_conf[cod_p] += q
+        for cod_p, q in q_conf.items():
+            if q > r.get(cod_p, 0.0) + tol:
+                excesos.append(cod_p)
+
+        # 2) Lo recibido que aún no cubren esos albaranes: búsqueda de siempre entre los albaranes SIN pedido del
+        # mismo proveedor (listado de albaranes detallado antiguo o albaranes con «Pedido/s» vacío).
         prov_key = prov_de.get(num) or _clave_prov_sap(c["proveedor"])
         albs = albaranes_de(prov_key)
-        asignado = defaultdict(dict)       # aid → {codigo: (cantidad, importe)}
-        faltan, ambiguos = [], []
-        for cod, q_rec in r.items():
+        fb = set()                          # (aid, código) asignados por esta búsqueda (pueden disputarse con otro pedido)
+        for cod, q_tot in r.items():
+            q_rec = q_tot - q_conf.get(cod, 0.0)
+            if q_rec <= tol:
+                continue
             cand = [(aid, d[cod][0], d[cod][1]) for aid, d in albs.items() if cod in d]
             otros = [n2 for n2 in por_codigo.get(cod, ()) if n2 != num and _mismo_prov_sap(prov_key, prov_de.get(n2, ""))]
             total = sum(x[1] for x in cand)
+            elegidos = []
             if not cand:
                 faltan.append((cod, q_rec, 0.0))
             elif not otros and abs(total - q_rec) < tol:
-                for aid, q, imp in cand:
-                    asignado[aid][cod] = (q, imp)
+                elegidos = cand
             elif not otros and total < q_rec - tol:
-                for aid, q, imp in cand:
-                    asignado[aid][cod] = (q, imp)
+                elegidos = cand
                 faltan.append((cod, q_rec, total))
             else:
                 # Más albarán que recibido en este pedido, o referencia compartida con otro pedido: solo vale
@@ -16728,18 +17011,19 @@ def _cruce_lineas_sap_hotel(hotel_id: int, solo_detalle: bool = False) -> dict:
                 sols = [sub for k in range(1, min(4, len(pool)) + 1) for sub in itertools.combinations(pool, k)
                         if abs(sum(x[1] for x in sub) - q_rec) < tol]
                 if len(sols) == 1:
-                    for aid, q, imp in sols[0]:
-                        asignado[aid][cod] = (q, imp)
+                    elegidos = list(sols[0])
                 elif not sols and total < q_rec - tol:
-                    for aid, q, imp in cand:
-                        asignado[aid][cod] = (q, imp)
+                    elegidos = cand
                     faltan.append((cod, q_rec, total))
                 else:
                     ambiguos.append((cod, q_rec, total))
-        for aid, d in asignado.items():
-            for cod in d:
-                reclamado[(aid, cod)].append(num)
-        plan[num] = {"base": base_item, "sap": sap, "asignado": asignado, "faltan": faltan, "ambiguos": ambiguos}
+            for aid, q, imp in elegidos:
+                _sumar(aid, cod, q, imp)
+                fb.add((aid, cod))
+        for aid, cod in fb:
+            reclamado[(aid, cod)].append(num)
+        plan[num] = {"base": base_item, "sap": sap, "asignado": asignado, "faltan": faltan, "ambiguos": ambiguos,
+                     "no_casan": no_casan, "excesos": excesos}
 
     # ── Mismo reparto (albarán, referencia) reclamado por dos pedidos: desempata la FECHA ────────────────
     # Un albarán no puede ser anterior al pedido que lo origina. Si de los pedidos en conflicto solo uno es
@@ -16785,6 +17069,13 @@ def _cruce_lineas_sap_hotel(hotel_id: int, solo_detalle: bool = False) -> dict:
         if ambiguos:
             motivos.append(f"{len(ambiguos)} referencia(s) con más de una combinación posible o compartidas con otro pedido "
                            f"({', '.join(x[0] for x in ambiguos[:4])}{'…' if len(ambiguos) > 4 else ''})")
+        if pl.get("no_casan"):
+            motivos.append(f"{len(pl['no_casan'])} línea(s) de albaranes de este pedido no casan con ninguna referencia del pedido: "
+                           + "; ".join(pl["no_casan"][:3]) + ("…" if len(pl["no_casan"]) > 3 else ""))
+        if pl.get("excesos"):
+            motivos.append(f"Los albaranes de este pedido suman más de lo recibido en SAP en {len(pl['excesos'])} referencia(s) "
+                           f"({', '.join(pl['excesos'][:4])}{'…' if len(pl['excesos']) > 4 else ''}) — ¿Listado de Pedidos detallado "
+                           "anterior a los albaranes? Cárgalo actualizado")
         if any((e["albaran_id"], cod) in dobles for e in entradas for cod in e["lineas"]):
             motivos.append("Las mismas líneas de albarán podrían corresponder también a otro pedido del proveedor")
         if not entradas and not motivos:
@@ -16879,28 +17170,34 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
     líneas y aplica lo seguro. `archivos` = [(nombre, bytes)]. Devuelve el resumen para la pantalla."""
     res = {"ok": True, "archivos": [], "avisos": [], "creados": [], "no_creados": [], "aplicados": [],
            "revisar": [], "resumen": {}}
+    # (v12.33.48) Se admiten VARIOS PDF del mismo tipo (p. ej. dos tandas de albaranes de meses distintos): se
+    # procesan todos, en el orden de _ORDEN_CARGA_LISTADOS_SAP y, dentro de cada tipo, en el orden en que llegan.
     por_tipo = {}
     for nombre, datos in archivos:
         tipo = _detectar_tipo_listado_sap(datos)
         if not tipo:
             res["archivos"].append({"nombre": nombre, "tipo": None, "error": "No se reconoce como ningún listado de SAP"})
             continue
-        if tipo in por_tipo:
-            res["archivos"].append({"nombre": nombre, "tipo": tipo, "tipo_texto": _TIPOS_LISTADO_SAP[tipo],
-                                    "error": "Ya hay otro PDF de este mismo tipo en la carga: se ignora"})
-            continue
-        por_tipo[tipo] = (nombre, datos)
+        por_tipo.setdefault(tipo, []).append((nombre, datos))
     if not por_tipo and archivos:
-        raise RuntimeError("Ningún PDF se reconoce como listado de SAP (pedidos resumido/detallado o albaranes resumido/detallado).")
+        raise RuntimeError("Ningún PDF se reconoce como listado de SAP (Listado de Pedidos detallado, albaranes «COMPRA» con su "
+                           "pedido, o los antiguos pedidos resumido / albaranes resumido y detallado).")
 
-    for tipo in _ORDEN_CARGA_LISTADOS_SAP:
-        if tipo not in por_tipo:
-            continue
-        nombre, datos = por_tipo[tipo]
+    for tipo, nombre, datos in [(t, n, d) for t in _ORDEN_CARGA_LISTADOS_SAP for (n, d) in por_tipo.get(t, [])]:
         info = {"nombre": nombre, "tipo": tipo, "tipo_texto": _TIPOS_LISTADO_SAP[tipo]}
         _csl_paso(f"leer y guardar «{_TIPOS_LISTADO_SAP[tipo]}» ({nombre})")
         try:
-            if tipo == "pedidos_resumido":
+            if tipo == "albaranes_pedido":
+                r = _importar_albaranes_con_pedido(hotel_id, datos)
+                info["detalle"] = f"{r['albaranes']} albaranes, {r['lineas']} líneas"
+                if r["desde"]:
+                    info["detalle"] += f" ({r['desde'][8:10]}/{r['desde'][5:7]}/{r['desde'][:4]} – " \
+                                       f"{r['hasta'][8:10]}/{r['hasta'][5:7]}/{r['hasta'][:4]})"
+                if r["sin_pedido"]:
+                    info["detalle"] += f"; {len(r['sin_pedido'])} sin pedido en SAP (se cruzan por proveedor y artículo)"
+                if r["lineas_sin_asignar"]:
+                    info["detalle"] += f"; {r['lineas_sin_asignar']} línea(s) de albaranes con varios pedidos sin repartir"
+            elif tipo == "pedidos_resumido":
                 r = _comparar_listado_pdf_logica(hotel_id, datos, escribir_base_ultima_entrada=False)
                 info["detalle"] = f"{r['total_pdf']} pedidos leídos"
             elif tipo == "pedidos_detallado":
@@ -17004,13 +17301,19 @@ def _cargar_listados_sap_logica(hotel_id: int, archivos: list, usuario_id) -> di
     hay_pedidos_det = "pedidos_detallado" in por_tipo or bool(query("SELECT 1 FROM sap_pedidos_lineas WHERE hotel_id=%s LIMIT 1", (hotel_id,), one=True))
     hay_albaranes = bool(query("SELECT 1 FROM sap_albaranes_lineas WHERE hotel_id=%s LIMIT 1", (hotel_id,), one=True))
     if not hay_pedidos_det or not hay_albaranes:
-        res["avisos"].append("Para cruzar pedidos y albaranes hacen falta el Listado de Pedidos DETALLADO y el Listado de Albaranes DETALLADO "
-                             "(y, para la fecha, el de Albaranes RESUMIDO). No se ha cruzado nada.")
+        res["avisos"].append("Para cruzar pedidos y albaranes hacen falta el Listado de Pedidos DETALLADO y los albaranes "
+                             "(documento «COMPRA» con su pedido). No se ha cruzado nada.")
         cruce = {"seguros": [], "revisar": [], "sin_recepcion": 0, "evaluados": 0}
     else:
         cruce = _cruce_lineas_sap_hotel(hotel_id)
-        if not query("SELECT 1 FROM sap_albaranes_cab WHERE hotel_id=%s LIMIT 1", (hotel_id,), one=True):
-            res["avisos"].append("Falta el Listado de Albaranes RESUMIDO: sin él no hay fecha de albarán y todo queda para revisar.")
+        # (v12.33.48) Los albaranes «COMPRA» ya traen su fecha; solo los del listado detallado antiguo la necesitan
+        # del Listado de Albaranes RESUMIDO.
+        _sin_fecha = query("""SELECT COUNT(DISTINCT l.albaran_id) AS n FROM sap_albaranes_lineas l
+                              LEFT JOIN sap_albaranes_cab c ON c.hotel_id = l.hotel_id AND c.albaran_id = l.albaran_id
+                              WHERE l.hotel_id=%s AND c.id IS NULL""", (hotel_id,), one=True)
+        if _sin_fecha and _sin_fecha["n"]:
+            res["avisos"].append(f"{_sin_fecha['n']} albarán(es) guardados no tienen fecha (vienen del listado de albaranes detallado "
+                                 "antiguo): carga los albaranes «COMPRA» que los incluyan. Los pedidos afectados quedan para revisar.")
     db = get_db()
     _csl_paso("aplicar estados, albaranes y bases a los pedidos")
     for it in cruce["seguros"]:
@@ -17081,7 +17384,7 @@ def _ejecutar_carga_listados_sap_bg(job_id, hotel_id, archivos, usuario_id):
 @app.route("/api/sap/cargar-listados", methods=["POST"])
 @login_required
 def cargar_listados_sap():
-    """Carga unificada de listados SAP (v12.32.97). form-data: hotel_id + files (1 a 4 PDF). → 202 {job_id}.
+    """Carga unificada de listados SAP (v12.32.97). form-data: hotel_id + files (1 a _MAX_PDF_CARGA_SAP PDF; v12.33.48). → 202 {job_id}.
     Solo admin. El resultado se consulta con GET /api/sap/cargar-listados/<job_id>."""
     if session.get("rol") != "admin":
         return jsonify({"error": "Acceso restringido a administradores"}), 403
@@ -17096,8 +17399,8 @@ def cargar_listados_sap():
     ficheros = [f for f in request.files.getlist("files") if f and f.filename]
     if not ficheros:
         return jsonify({"error": "No se ha adjuntado ningún PDF"}), 400
-    if len(ficheros) > 4:
-        return jsonify({"error": "Como máximo 4 PDF (pedidos resumido y detallado, albaranes resumido y detallado)"}), 400
+    if len(ficheros) > _MAX_PDF_CARGA_SAP:
+        return jsonify({"error": f"Como máximo {_MAX_PDF_CARGA_SAP} PDF a la vez"}), 400
     archivos = []
     for f in ficheros:
         if not f.filename.lower().endswith(".pdf"):

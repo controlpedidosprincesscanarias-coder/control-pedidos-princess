@@ -1,3 +1,19 @@
+# v12.33.48 — 27 octubre 2026
+
+📥 Cargar listados SAP con solo dos PDF: Pedidos detallado + Albaranes con su pedido
+
+**Origen**: Víctor: «actualmente para la automatización de pedidos y albaranes utilizamos 4 listados, resumidos y detallados de pedidos y albaranes… creo que con solo estos dos tipos de listados ya tendríamos toda la automatización», con el Listado de Pedidos detallado y un PDF nuevo de albaranes (documento «COMPRA», un albarán por página con su campo «Pedido/s»). Sobre el casado de líneas: «los códigos pueden venir cambiados por varias causas, pero si coincide número de pedido y descripción se pueden dar por buenos».
+
+- **Tipo nuevo de PDF reconocido**: «Albaranes con su pedido (documento COMPRA)». Trae las líneas, la fecha, el almacén y el total de cada albarán, y el pedido al que pertenece. Sustituye a los listados de Albaranes resumido y detallado; el de Pedidos resumido tampoco hace falta (el alta, los artículos, el departamento y el estado salen del detallado, como ya se hacía desde la v12.32.31).
+- **Cada albarán va directo a su pedido**: sus líneas se casan con las del pedido por código y, si el código viene cambiado, por descripción (sin acentos, espacios ni signos, porque SAP parte las descripciones por la mitad de una palabra). Se guarda con el código del pedido. Ya no hay que adivinar el pedido por proveedor y artículo ni desempatar combinaciones.
+- **Solo se aplica lo que cuadra**: queda «Para revisar», sin tocar nada, si una línea no casa con ninguna referencia del pedido, si los albaranes suman más de lo recibido en SAP o si hay albaranes de un pedido que en el listado de pedidos aún no tiene nada recibido (listado de pedidos anterior a los albaranes).
+- **Albaranes sin pedido en SAP** («Pedido/s» vacío) y líneas de albaranes de varios pedidos que no se pueden repartir: se cruzan por proveedor y artículo, como antes.
+- **Varios PDF del mismo tipo en una carga** (p. ej. dos tandas de albaranes), hasta 10 PDF. Antes, uno por tipo y como máximo 4.
+- **Un albarán con pedido ya no se pierde** al volver a subir el listado de albaranes detallado antiguo (antes lo sustituía por la versión sin pedido). Los albaranes confirmados a mano (albarán suelto) también se usan ahora en el cruce directo.
+- Aviso «sin fecha»: ahora cuenta solo los albaranes guardados sin cabecera (los del listado detallado antiguo), en vez de exigir siempre el Listado de Albaranes resumido.
+
+Prueba con los PDF reales de GY (Casa Delfín, 33 pedidos, 69 albaranes): 33 pedidos creados, 31 aplicados solos (25 Entregado, 6 Entrega parcial), 0 para revisar, 2 sin nada recibido; la base de las entradas coincide al céntimo con lo recibido en SAP en los 33; 249 líneas casadas por descripción porque el código del albarán no coincidía con el del pedido. Sin tablas ni variables nuevas.
+
 # v12.33.46 — 26 octubre 2026
 
 🔕 Los avisos diarios de pedidos ya no se repiten cada minuto

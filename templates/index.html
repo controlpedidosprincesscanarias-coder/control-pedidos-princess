@@ -1466,7 +1466,7 @@ tbody tr:last-child{border-bottom:none}
             <circle cx="5" cy="5" r="4" stroke="rgba(201,168,76,.7)" stroke-width="1.2" fill="none"/>
             <path d="M5 2.5v2.8l1.5 1.5" stroke="rgba(201,168,76,.9)" stroke-width="1.1" stroke-linecap="round"/>
           </svg>
-          V 12.33.46
+          V 12.33.48
         </span>
         <div class="sb-firma">© Princess Hotels & Resort<br>Central Compras Princess Canarias</div>
       </div>
@@ -3054,13 +3054,16 @@ tbody tr:last-child{border-bottom:none}
            cruza por líneas pedidos y albaranes y aplica SOLO lo seguro; el resto queda «Para revisar». Sin correos. -->
       <div id="csl-form">
         <div style="font-size:.85rem;color:var(--text-secondary);margin-bottom:12px">
-          Elige el hotel y suelta los PDF que exporta SAP (hasta 4; con o sin cabecera):
-          <b>Pedidos resumido</b>, <b>Pedidos detallado</b>, <b>Albaranes detallado</b> y
-          <b>Albaranes resumido</b> (el que trae la fecha). La app reconoce cada uno sola, crea los pedidos que falten y
-          registra estado, nº de albarán, fecha y base imponible <b>solo cuando el cruce es seguro</b>. Lo demás queda en
+          Elige el hotel y suelta <b>dos tipos de PDF</b> de SAP (puedes poner varios de cada uno, hasta 10):
+          <b>Listado de Pedidos detallado</b> y <b>Albaranes</b> (el documento «COMPRA», un albarán por página con su
+          pedido). Cada albarán se asigna directamente al pedido que indica SAP: las líneas se casan por código o, si
+          el código viene cambiado, por descripción. La app reconoce cada PDF sola, crea los pedidos que falten y
+          registra estado, nº de albarán, fecha y base imponible <b>solo cuando todo cuadra</b>. Lo demás queda en
           «Para revisar». Alimentación, bebidas y limpieza se ignoran (solo proveedores «Sujeto a seguimiento»).
           Todo lo cargado se guarda: en la próxima carga se usa también lo de meses anteriores, así que un albarán de
           un mes puede cerrar un pedido de otro.
+          <span style="color:#999">Los listados antiguos (pedidos resumido, albaranes resumido y detallado) se siguen
+          aceptando, pero ya no hacen falta.</span>
         </div>
         <div class="form-grid" style="grid-template-columns:1fr 2fr;gap:14px;align-items:end">
           <div class="form-group">
@@ -9795,7 +9798,7 @@ async function cslCargar() {
   const fs = Array.from(document.getElementById('csl-files').files || []);
   if (!hotelId) { toast('Selecciona un hotel', 'error'); return; }
   if (!fs.length) { toast('Selecciona al menos un PDF de SAP', 'error'); return; }
-  if (fs.length > 4) { toast('Máximo 4 PDF a la vez', 'error'); return; }
+  if (fs.length > 10) { toast('Máximo 10 PDF a la vez', 'error'); return; }
   document.getElementById('csl-form').style.display = 'none';
   document.getElementById('csl-loading').style.display = '';
   document.getElementById('csl-resultado').style.display = 'none';

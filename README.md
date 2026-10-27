@@ -6,7 +6,7 @@ alta y seguimiento de pedidos por hotel, control de proveedores, alertas
 de plazos, techo de gastos mensual con expedientes de autorización, y
 administración de usuarios y familias de artículos.
 
-> Versión actual: **v12.33.46** (ver `CHANGELOG.md` y
+> Versión actual: **v12.33.48** (ver `CHANGELOG.md` y
 > `docs/HISTORIAL_CAMBIOS.md` para el detalle de cada cambio).
 
 ---
@@ -134,6 +134,19 @@ confundirse entre sí, ver más abajo):
   `proveedor_hoteles_sin_servicio`, migración automática); al adjuntar el PDF del pedido oficial se guardan también sus líneas (código, ref. proveedor, descripción, cantidad, precio e importe; v12.32.75) y el menú "🔎 Buscar artículo" permite buscar por hotel y referencia/código/descripción para ver nº de pedido, cantidad y estado (v12.32.76); el Excel que exporta la ficha de proveedores (v12.32.74) incluye CODIGO DALI, los hoteles de cada contacto, el servicio por hotel y el rutómetro; el puente
   devuelve `hoteles_sin_servicio`/`hoteles_con_servicio` y DALI oculta
   los artículos del proveedor a los hoteles desmarcados.
+- **Cargar listados SAP** (admin, botón "📥 Cargar listados SAP"; desde
+  v12.33.48 con **dos tipos de PDF**): el **Listado de Pedidos detallado** y
+  los **albaranes** (documento «COMPRA» de SAP, un albarán por página con su
+  campo «Pedido/s»). Se pueden subir varios PDF de cada tipo (hasta 10). La
+  app reconoce cada uno, da de alta los pedidos que falten (proveedores
+  «Sujeto a seguimiento»), copia sus artículos y departamento, y asigna cada
+  albarán **directamente al pedido que indica SAP**: las líneas se casan por
+  código o, si el código viene cambiado, por descripción. Solo aplica
+  (entradas con nº, fecha y base imponible, y estado) cuando todo cuadra con
+  lo recibido en SAP; lo demás queda «Para revisar». Los albaranes sin pedido
+  en SAP se cruzan por proveedor y artículo, como antes. Los listados
+  antiguos (pedidos resumido, albaranes resumido y detallado) se siguen
+  aceptando, pero ya no hacen falta.
 - **Comparar Pedidos + Albaranes (SAP)** (admin, botón "📄 Comparar
   listado PDF" — base desde 2026-08-06, ampliada desde entonces) — la
   herramienta admite subir hasta dos PDF que exporta SAP para un hotel:
