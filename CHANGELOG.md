@@ -1,3 +1,31 @@
+# v12.33.50 — 28 octubre 2026
+
+📄 Pedido sin PDF: copia del pedido en PDF generada a partir de SAP y, si son pocas líneas, también en el correo
+
+**Origen**: Víctor recibió la reclamación del Pedido Nº 16756 (La Palma, Enviado al proveedor) sin ningún documento: «¿será porque no tenía pedido cargado y es uno creado automáticamente? En este caso, ¿se podría intentar crear un documento PDF basado en la información leída en los listados de pedidos detallados y adjuntarlo? En caso de que fueran pocas líneas, también se podría incluir en el cuerpo del correo directamente».
+
+- **Copia del pedido en PDF**: si el pedido no tiene el PDF oficial subido pero sí líneas (las del Listado de Pedidos detallado de SAP), el botón «Descargar pedido» descarga una copia generada en el momento con los datos actuales. La copia lleva Nº de pedido, fecha, proveedor, hotel, departamento, almacén, observaciones y las líneas con código, Ref. Prov., descripción, unidad, cantidad, precio e importe, más el total en base imponible.
+  - El enlace se descarga sin iniciar sesión, solo vale para ese pedido y caduca a los 180 días. No se guarda nada en la base de datos.
+  - Como EmailJS (plan Free) no admite adjuntos, va como botón de descarga, igual que el PDF oficial.
+- **Pocas líneas (hasta 15) también en el cuerpo** de la reclamación al proveedor, cuando no hay PDF oficial.
+- La copia generada sale en todos los correos que ya llevaban el botón del PDF oficial: el cambio de estado al proveedor y el aviso interno.
+- Con el PDF oficial subido, todo sigue como antes. Sin PDF y sin líneas, el correo sale como hasta ahora, sin documento.
+- **Dependencia nueva**: `reportlab==4.4.10` en `requirements.txt` (Render la instala en el deploy). Sin tablas ni variables nuevas.
+- Incluye la v12.33.49.
+
+# v12.33.49 — 28 octubre 2026
+
+✉️ Reclamación automática al proveedor: referencias pendientes en la entrega parcial y botón para descargar el pedido
+
+**Origen**: Víctor: «necesito que los avisos automáticos a los proveedores indiquen, si es entrega parcial, las referencias y cantidades aún no entregadas. Si es enviado al proveedor, botón con la descarga del pedido».
+
+- **Enviado al proveedor**: botón **«Descargar pedido»** con el PDF subido en Nº Pedido (DALI/SAP). Es el mismo enlace temporal que ya lleva el correo de cambio de estado: se descarga sin iniciar sesión. Si el pedido no tiene PDF (p. ej. un alta automática desde los listados de SAP), el correo lleva en su lugar las referencias y cantidades del pedido.
+- **Entrega parcial**: lleva siempre las referencias. Con el detalle de todas las entradas se manda la tabla «Referencias pendientes de entregar» (pedido, recibido y pendiente), como hasta ahora. Si falta el detalle de alguna entrada, en vez de no mandar nada (antes la tabla desaparecía) se mandan las referencias del pedido y se pide al proveedor que confirme cuáles y cuántas quedan.
+- **Corregido**: la reclamación automática (y la manual desde Alertas) no leía las entradas ni el total del pedido. Por eso no salía el bloque «Entregas parciales registradas» ni el «Total Pedido», y la comprobación de entradas sin detalle no se hacía.
+- El enlace de descarga ya no reutiliza uno que caduque en menos de 30 días.
+
+Sin tablas ni variables nuevas.
+
 # v12.33.48 — 27 octubre 2026
 
 📥 Cargar listados SAP con solo dos PDF: Pedidos detallado + Albaranes con su pedido

@@ -49,6 +49,28 @@
 
 ---
 
+## 2026-10-28 — [Control Pedidos] Copia del pedido en PDF para pedidos sin PDF oficial (v12.33.50)
+
+- **Petición**: la reclamación del Pedido Nº 16756 llegó sin documento. Víctor pide generar un PDF con lo leído del Listado de Pedidos detallado y, si son pocas líneas, ponerlas en el cuerpo del correo.
+- **Corrección**:
+  - `_generar_pdf_pedido()` (reportlab) crea la copia a partir de `pedidos` + `pedido_lineas`.
+  - Ruta pública `/descargas/pedido/<token>`: token itsdangerous firmado con SECRET_KEY, sal `pedido-pdf-generado`, 180 días, sin tabla.
+  - `_enlaces_descarga_pedido_doc()` añade ese enlace (`generado=True`) cuando no hay PDF subido y sí hay líneas.
+  - En `_email_template_enviado_proveedor`, sin PDF oficial y con hasta `_MAX_LINEAS_EN_CUERPO`=15 líneas, también van en el cuerpo.
+- `requirements.txt`: `reportlab==4.4.10`.
+- Prueba: `t_v50.py` (1 línea → botón + cuerpo; 32 líneas → solo botón, PDF de 2 páginas; PDF oficial → como antes; token alterado → 404).
+
+## 2026-10-28 — [Control Pedidos] Reclamación al proveedor: referencias pendientes y botón de descarga del pedido (v12.33.49)
+
+- **Petición**: en los avisos automáticos al proveedor, si es entrega parcial, indicar las referencias y cantidades aún no entregadas; si es enviado al proveedor, un botón con la descarga del pedido.
+- **Hallazgo**: `_JOB_PEDIDO_SQL` y `PEDIDO_SELECT_ALERTA` no traían `entrada_albaran_num` ni `total_pedido`. La reclamación (automática y manual) salía sin el bloque de entregas ni el total, y `_datos_pendientes` no veía las entradas sin detalle.
+- **Corrección**:
+  - Se añaden las dos columnas a las dos consultas.
+  - `_html_botones_descarga_pedido()` (reutiliza `_enlaces_descarga_pedido_doc`) va en `_email_template_enviado_proveedor`; sin PDF, va `_html_referencias_pedido()`.
+  - En `_email_template_entrega_parcial`, si no hay tabla de pendientes fiable, se ponen las referencias del pedido y se pide confirmación.
+  - `_obtener_o_crear_token_adjunto` solo reutiliza tokens con más de 30 días de vigencia.
+- Prueba: `t_v49.py` con los pedidos de GY cargados desde los listados SAP reales.
+
 ## 2026-10-27 20:15 — [Control Pedidos] Cargar listados SAP con solo dos PDF: Pedidos detallado + Albaranes con su pedido (v12.33.48)
 
 - **Petición**: automatizar pedidos y albaranes con dos listados en lugar de cuatro: el Listado de Pedidos detallado y el documento «COMPRA» de albaranes en bloque (un albarán por página, con «Pedido/s»). Regla de Víctor para las líneas: si coinciden el nº de pedido y la descripción, se dan por buenas aunque el código cambie.

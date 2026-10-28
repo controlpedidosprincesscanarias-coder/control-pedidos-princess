@@ -4364,7 +4364,8 @@ def _obtener_o_crear_token_adjunto(adjunto_id: int, dias_validez: int = 180) -> 
     uno nuevo después para otro envío del mismo adjunto.
     """
     fila = row_to_dict(query(
-        "SELECT token FROM adjunto_descarga_tokens WHERE adjunto_id=%s AND expira_en > NOW() "
+        "SELECT token FROM adjunto_descarga_tokens WHERE adjunto_id=%s "
+        "AND expira_en > NOW() + INTERVAL '30 days' "   # (v12.33.49) que no caduque a los pocos días de enviarlo
         "ORDER BY creado_en DESC LIMIT 1",
         (adjunto_id,), one=True
     ))
@@ -4424,7 +4425,151 @@ def _enlaces_descarga_pedido_doc(pedido_id: int) -> list:
         token = _obtener_o_crear_token_adjunto(f["id"])
         if token:
             enlaces.append({"nombre": f["nombre"], "url": f"{app_url}/descargas/adjunto/{token}"})
+    # (v12.33.50) Sin PDF subido pero con líneas (p. ej. alta automática desde el Listado de Pedidos
+    # detallado de SAP): enlace a una copia del pedido en PDF generada en el momento de la descarga.
+    if not enlaces and _pedido_tiene_lineas(pedido_id):
+        num = (row_to_dict(query("SELECT pedido_num FROM pedidos WHERE id=%s", (pedido_id,), one=True)) or {}).get("pedido_num")
+        enlaces.append({"nombre": _nombre_pdf_pedido_generado(num, pedido_id), "generado": True,
+                        "url": f"{app_url}/descargas/pedido/{_token_pdf_pedido(pedido_id)}"})
     return enlaces
+
+
+# ── (v12.33.50) Copia del pedido en PDF generada a partir de sus líneas ───────
+# A petición de Víctor: los pedidos dados de alta solos desde el Listado de Pedidos detallado de SAP no
+# tienen el PDF oficial subido, así que el correo al proveedor salía sin documento. Se genera una copia del
+# pedido (cabecera + líneas con precio e importe) con reportlab, en el momento de descargarla: siempre con
+# los datos actuales y sin guardar nada en la base de datos. El enlace es un token firmado con SECRET_KEY
+# (itsdangerous, sin tabla): solo da acceso a la copia de ESE pedido y caduca a los 180 días.
+_SAL_TOKEN_PDF_PEDIDO = "pedido-pdf-generado"
+_DIAS_TOKEN_PDF_PEDIDO = 180
+
+
+def _token_pdf_pedido(pedido_id: int) -> str:
+    from itsdangerous import URLSafeTimedSerializer
+    return URLSafeTimedSerializer(SECRET_KEY, salt=_SAL_TOKEN_PDF_PEDIDO).dumps(int(pedido_id))
+
+
+def _pedido_de_token_pdf(token: str):
+    from itsdangerous import URLSafeTimedSerializer, BadSignature
+    try:
+        return int(URLSafeTimedSerializer(SECRET_KEY, salt=_SAL_TOKEN_PDF_PEDIDO).loads(
+            token, max_age=_DIAS_TOKEN_PDF_PEDIDO * 86400))
+    except (BadSignature, ValueError, TypeError):
+        return None
+
+
+def _pedido_tiene_lineas(pedido_id) -> bool:
+    try:
+        return bool(pedido_id) and query("SELECT 1 FROM pedido_lineas WHERE pedido_id=%s LIMIT 1",
+                                         (pedido_id,), one=True) is not None
+    except Exception:
+        return False
+
+
+def _nombre_pdf_pedido_generado(pedido_num, pedido_id) -> str:
+    return f"Pedido_{re.sub(r'[^0-9A-Za-z_-]', '', str(pedido_num or '')) or pedido_id}.pdf"
+
+
+def _generar_pdf_pedido(pedido_id: int):
+    """Devuelve (nombre, bytes) de la copia en PDF del pedido, o None si no existe o no tiene líneas."""
+    import io
+    from reportlab.lib.pagesizes import A4
+    from reportlab.lib import colors
+    from reportlab.lib.units import mm
+    from reportlab.lib.styles import ParagraphStyle
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Table, TableStyle, Spacer
+
+    p = row_to_dict(query(
+        """SELECT p.id, p.pedido_num, p.norden, p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
+                  p.total_pedido, h.nombre AS hotel_nombre, d.nombre AS departamento_nombre,
+                  pr.nombre AS proveedor_nombre
+             FROM pedidos p
+             LEFT JOIN hoteles h ON h.id = p.hotel_id
+             LEFT JOIN departamentos d ON d.id = p.departamento_id
+             LEFT JOIN proveedores pr ON pr.id = p.proveedor_id
+            WHERE p.id=%s""", (pedido_id,), one=True))
+    if not p:
+        return None
+    lineas = rows_to_list(query(
+        "SELECT codigo, ref_proveedor, descripcion, unidad, cantidad, precio, importe, almacen "
+        "FROM pedido_lineas WHERE pedido_id=%s ORDER BY orden", (pedido_id,)))
+    if not lineas:
+        return None
+
+    def esc(x):
+        return _html_escape(str(x if x is not None else ""))
+
+    def fecha(f):
+        if not f:
+            return "—"
+        if hasattr(f, "strftime"):
+            return f.strftime("%d/%m/%Y")
+        partes = str(f)[:10].split("-")
+        return "/".join(reversed(partes)) if len(partes) == 3 else str(f)[:10]
+
+    def num(x, dec):
+        if x is None:
+            return ""
+        t = f"{float(x):,.{dec}f}".replace(",", "@").replace(".", ",").replace("@", ".")
+        return t
+
+    granate = colors.HexColor("#8B0000")
+    st_txt = ParagraphStyle("t", fontName="Helvetica", fontSize=9, leading=11)
+    st_cel = ParagraphStyle("c", fontName="Helvetica", fontSize=8, leading=9.5)
+    st_tit = ParagraphStyle("h", fontName="Helvetica-Bold", fontSize=15, leading=18, textColor=granate)
+    st_sub = ParagraphStyle("s", fontName="Helvetica", fontSize=9, leading=11, textColor=colors.HexColor("#555555"))
+    st_nota = ParagraphStyle("n", fontName="Helvetica-Oblique", fontSize=7.5, leading=9, textColor=colors.HexColor("#666666"))
+
+    buf = io.BytesIO()
+    doc = SimpleDocTemplate(buf, pagesize=A4, leftMargin=14 * mm, rightMargin=14 * mm,
+                            topMargin=14 * mm, bottomMargin=14 * mm,
+                            title=f"Pedido {p.get('pedido_num') or ''}", author="Princess Hotels & Resorts")
+    hist = [Paragraph("Princess Hotels &amp; Resorts", st_tit),
+            Paragraph("Dpto. Central de Compras Princess en Canarias", st_sub), Spacer(1, 5 * mm),
+            Paragraph(f"<b>PEDIDO DE COMPRA Nº {esc(p.get('pedido_num') or '—')}</b>",
+                      ParagraphStyle("p", parent=st_txt, fontSize=12, leading=15)), Spacer(1, 3 * mm)]
+    almacenes = sorted({l["almacen"] for l in lineas if l.get("almacen")})
+    obs = _obs_para_proveedor(p.get("observaciones"))
+    cab = [("Fecha del pedido", fecha(p.get("fecha_tramitacion") or p.get("fecha_solicitud"))),
+           ("Proveedor", p.get("proveedor_nombre") or "—"),
+           ("Hotel", p.get("hotel_nombre") or "—"),
+           ("Departamento", p.get("departamento_nombre") or "—")]
+    if almacenes:
+        cab.append(("Almacén", ", ".join(almacenes)))
+    if obs:
+        cab.append(("Observaciones", obs))
+    t = Table([[Paragraph(f"<b>{esc(k)}</b>", st_txt), Paragraph(esc(v), st_txt)] for k, v in cab],
+              colWidths=[38 * mm, 144 * mm])
+    t.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"), ("BOTTOMPADDING", (0, 0), (-1, -1), 2),
+                           ("TOPPADDING", (0, 0), (-1, -1), 2), ("LEFTPADDING", (0, 0), (-1, -1), 0)]))
+    hist += [t, Spacer(1, 5 * mm)]
+
+    filas = [[Paragraph(f"<b>{h}</b>", st_cel) for h in
+              ("Código", "Ref. Prov.", "Descripción", "Ud.", "Cantidad", "Precio", "Importe")]]
+    suma = 0.0
+    for l in lineas:
+        suma += float(l.get("importe") or 0)
+        filas.append([Paragraph(esc(l.get("codigo") or "—"), st_cel), Paragraph(esc(l.get("ref_proveedor") or "—"), st_cel),
+                      Paragraph(esc(l.get("descripcion") or ""), st_cel), Paragraph(esc(l.get("unidad") or ""), st_cel),
+                      num(l.get("cantidad"), 2), num(l.get("precio"), 4) if l.get("precio") is not None else "",
+                      num(l.get("importe"), 2) if l.get("importe") is not None else ""])
+    total = p.get("total_pedido") if p.get("total_pedido") is not None else (suma or None)
+    if total is not None:
+        filas.append(["", "", Paragraph("<b>TOTAL (base imponible, sin IGIC)</b>", st_cel), "", "", "",
+                      Paragraph(f"<b>{num(total, 2)} €</b>", st_cel)])
+    tl = Table(filas, colWidths=[20 * mm, 22 * mm, 72 * mm, 16 * mm, 17 * mm, 17 * mm, 18 * mm], repeatRows=1)
+    estilo = [("GRID", (0, 0), (-1, len(lineas)), 0.4, colors.HexColor("#999999")),
+              ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#EEEEEE")),
+              ("VALIGN", (0, 0), (-1, -1), "TOP"), ("FONT", (0, 1), (-1, -1), "Helvetica", 8),
+              ("ALIGN", (4, 1), (6, -1), "RIGHT")]
+    if total is not None:
+        estilo += [("SPAN", (2, -1), (5, -1)), ("LINEABOVE", (0, -1), (-1, -1), 0.8, colors.black)]
+    tl.setStyle(TableStyle(estilo))
+    hist += [tl, Spacer(1, 6 * mm), Paragraph(
+        "Copia del pedido generada por el sistema de Control de Pedidos de Princess Hotels &amp; Resorts a "
+        "partir de los datos del pedido registrado en SAP. Los importes son base imponible (sin IGIC).", st_nota)]
+    doc.build(hist)
+    return _nombre_pdf_pedido_generado(p.get("pedido_num"), pedido_id), buf.getvalue()
 
 
 def _resolver_firmante_cambio_estado(usuario_id, es_automatico: bool, compradores_hotel: list):
@@ -6626,6 +6771,7 @@ _JOB_PEDIDO_SQL = """
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
            p.plazo_entrega_dias, p.fecha_entrega_especifica, p.hotel_id, p.proveedor_id,
            p.sujeto_techo, p.familia_id, p.importe,
+           p.entrada_albaran_num, p.total_pedido,   -- (v12.33.49) entregas y total en la reclamación al proveedor
            fam.nombre as familia_nombre,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
@@ -8427,6 +8573,72 @@ def _email_html_simple(nombre: str, parrafos: list, boton: dict = None,
 
 # ── Plantillas de email por tipo de alerta (v9.5) ─────────────────────────────
 
+_MAX_LINEAS_EN_CUERPO = 15   # (v12.33.50) hasta aquí, las líneas del pedido también van en el cuerpo del correo
+
+
+def _num_lineas_pedido(pedido_id) -> int:
+    try:
+        r = query("SELECT COUNT(*) AS n FROM pedido_lineas WHERE pedido_id=%s", (pedido_id,), one=True)
+        return int((r or {}).get("n") or 0)
+    except Exception:
+        return 0
+
+
+def _tiene_pdf_pedido_subido(pedido_id) -> bool:
+    try:
+        return any(not e.get("generado") for e in _enlaces_descarga_pedido_doc(pedido_id))
+    except Exception:
+        return False
+
+
+def _html_botones_descarga_pedido(pedido_id) -> str:
+    """(v12.33.49) Botones «Descargar» del PDF del pedido (apartado Nº Pedido DALI/SAP) para la reclamación
+    al proveedor — mismo enlace temporal que ya lleva el correo de «Enviado al proveedor»
+    (_enlaces_descarga_pedido_doc, /descargas/adjunto/<token>). '' si el pedido no tiene PDF. Nunca lanza."""
+    try:
+        enlaces = _enlaces_descarga_pedido_doc(pedido_id) if pedido_id else []
+    except Exception as exc:
+        log.warning("[RECLAMACION] Enlace de descarga del pedido %s: %s", pedido_id, exc)
+        enlaces = []
+    if not enlaces:
+        return ""
+    botones = "".join(
+        f'<p style="margin:6px 0"><a href="{_html_escape(e["url"])}" '
+        f'style="display:inline-block;background:#1a3c6e;color:#fff;text-decoration:none;'
+        f'padding:9px 18px;border-radius:5px;font-size:13px;font-weight:700">'
+        f'📄 Descargar pedido — {_html_escape(e["nombre"])}</a></p>'
+        for e in enlaces)
+    if any(e.get("generado") for e in enlaces):
+        botones += ('<p style="margin:4px 0 0;font-size:11.5px;color:#666">Copia del pedido generada a partir de los '
+                    'datos registrados en SAP.</p>')
+    return (f'<div style="margin:18px 0">{botones}'
+            '<p style="margin:4px 0 0;font-size:11.5px;color:#666">El enlace de descarga caduca en unos meses.</p></div>')
+
+
+def _html_referencias_pedido(pedido_id, titulo: str, nota: str = "") -> str:
+    """(v12.33.49) Tabla «Referencias del pedido» (código, Ref. Prov., descripción, cantidad — sin precios)
+    a partir de pedido_lineas. '' si el pedido no tiene líneas. Nunca lanza."""
+    try:
+        lineas = rows_to_list(query(
+            "SELECT codigo, ref_proveedor, descripcion, unidad, cantidad FROM pedido_lineas "
+            "WHERE pedido_id=%s ORDER BY orden", (pedido_id,))) if pedido_id else []
+    except Exception as exc:
+        log.warning("[RECLAMACION] Referencias del pedido %s: %s", pedido_id, exc)
+        lineas = []
+    if not lineas:
+        return ""
+    filas = "".join(
+        f'<tr><td>{_html_escape(str(l["codigo"] or "—"))}</td><td>{_html_escape(str(l["ref_proveedor"] or "—"))}</td>'
+        f'<td>{_html_escape(str(l["descripcion"] or ""))}</td>'
+        f'<td align="right">{_fmt_cant_email(l["cantidad"] or 0)} {_html_escape(str(l["unidad"] or ""))}</td></tr>'
+        for l in lineas)
+    return (f'<p style="margin:16px 0 6px"><b>{titulo}</b> ({len(lineas)}):</p>'
+            '<table border="1" cellpadding="6" style="border-collapse:collapse;font-family:sans-serif;font-size:13px">'
+            '<tr style="background:#f0f0f0"><th>Código</th><th>Ref. Prov.</th><th>Descripción</th><th>Cantidad</th></tr>'
+            + filas + '</table>'
+            + (f'<p style="margin:6px 0 0;font-size:12.5px;color:#7a4b00">{nota}</p>' if nota else ''))
+
+
 def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, comprador_email: str = "",
                                        comprador_nombre: str = "", comprador_movil: str = "") -> tuple:
     """Pedido enviado al proveedor sin acuse de recibo tras varios días."""
@@ -8438,6 +8650,14 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
     # disponible) e indicar siempre que se trata de base imponible (sin IGIC).
     _tp_ep = pedido.get("total_pedido")
     _fila_tp_ep = f'<br><strong>Total Pedido:</strong> {_fmt_importe_es(_tp_ep)} €' if _tp_ep is not None else ''
+    # (v12.33.49) A petición de Víctor: botón para descargar el pedido. Si el pedido no tiene PDF subido
+    # (p. ej. alta automática desde los listados de SAP), se incluyen sus referencias y cantidades.
+    _bloque_doc_ep = _html_botones_descarga_pedido(pedido.get("id"))
+    # (v12.33.50) Sin PDF oficial (copia generada o sin documento) y con pocas líneas: además van en el cuerpo.
+    if not _tiene_pdf_pedido_subido(pedido.get("id")):
+        _n_lin_ep = _num_lineas_pedido(pedido.get("id"))
+        if 0 < _n_lin_ep <= _MAX_LINEAS_EN_CUERPO:
+            _bloque_doc_ep += _html_referencias_pedido(pedido.get("id"), "Referencias del pedido")
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
       {_email_header_html("Princess Hotels &amp; Resorts", "Dpto. Central de Compras Princess en Canarias",
@@ -8457,6 +8677,7 @@ def _email_template_enviado_proveedor(pedido: dict, dias: int, urgente: bool, co
           <strong>Días transcurridos:</strong> <span style="color:{'#dc2626' if urgente else '#b45309'};font-weight:bold">{dias} días</span>{_fila_tp_ep}{('<br><strong>Observaciones:</strong> ' + _html_escape(pedido['observaciones'])) if pedido.get('observaciones') else ''}
         </p>
         {_nota_base_imponible_html() if _tp_ep is not None else ''}
+        {_bloque_doc_ep}
         <p>Le rogamos que nos confirme el estado actual del pedido y la fecha estimada de entrega
            a la mayor brevedad posible.</p>
         {'<p style="color:#dc2626;font-weight:bold;border:1px solid #fca5a5;background:#fee2e2;padding:10px;border-radius:4px">⚠️ ATENCIÓN: Esta es una solicitud urgente. Por favor, responda en el día de hoy.</p>' if urgente else ''}
@@ -8557,6 +8778,13 @@ def _email_template_entrega_parcial(pedido: dict, dias: int, comprador_email: st
     _resumen_ent_pp = _resumen_entregas(pedido)
     _bloque_ent_pp = _html_bloque_entregas(_resumen_ent_pp, pedido.get("estado"))
     _bloque_pend_pp = _html_bloque_pendientes(pedido)   # (v12.32.86) referencias y cantidades que faltan
+    # (v12.33.49) A petición de Víctor, la reclamación de una entrega parcial indica SIEMPRE las referencias:
+    # si no se puede calcular con seguridad lo que falta (entradas sin detalle de referencias), se envían las
+    # referencias del pedido y se pide al proveedor que confirme cuáles y cuántas quedan por entregar.
+    if "Referencias pendientes de entregar" not in _bloque_pend_pp:
+        _bloque_pend_pp += _html_referencias_pedido(
+            pedido.get("id"), "Referencias del pedido",
+            "Les rogamos nos indiquen qué referencias y cantidades de este pedido quedan pendientes de entregar.")
     body = f"""
     <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border-radius:8px;overflow:hidden;border:1px solid #e0e0e0;">
       {_email_header_html("Princess Hotels &amp; Resorts", "Dpto. Central de Compras Princess en Canarias",
@@ -8942,6 +9170,7 @@ PEDIDO_SELECT_ALERTA = """
            p.fecha_tramitacion, p.fecha_solicitud, p.observaciones,
            p.proveedor_id, p.hotel_id,
            p.sujeto_techo, p.familia_id, p.importe,
+           p.entrada_albaran_num, p.total_pedido,   -- (v12.33.49) entregas y total en la reclamación al proveedor
            fam.nombre as familia_nombre,
            h.codigo as hotel_codigo, h.nombre as hotel_nombre,
            d.nombre as departamento_nombre,
@@ -25510,6 +25739,26 @@ def descargar_adjunto_publico(token):
     if resp is None:
         return "El documento ya no está disponible.", 404
     return resp
+
+
+@app.route("/descargas/pedido/<token>", methods=["GET"])
+def descargar_pedido_generado_publico(token):
+    """(v12.33.50) Descarga pública (SIN login) de la copia en PDF de un pedido sin PDF oficial subido —
+    ver _generar_pdf_pedido / _token_pdf_pedido. El token solo vale para ese pedido y caduca a los 180 días."""
+    pid = _pedido_de_token_pdf(token)
+    if not pid:
+        return ("Este enlace de descarga no es válido o ha caducado. "
+                "Póngase en contacto con Princess Hotels & Resorts para solicitar el documento de nuevo."), 404
+    try:
+        r = _generar_pdf_pedido(pid)
+    except Exception as exc:
+        log.exception("[PDF-PEDIDO] No se pudo generar el PDF del pedido %s: %s", pid, exc)
+        return "No se ha podido generar el documento. Inténtelo de nuevo más tarde.", 500
+    if not r:
+        return "El documento ya no está disponible.", 404
+    nombre, datos = r
+    return Response(datos, mimetype="application/pdf",
+                    headers={"Content-Disposition": f'inline; filename="{nombre}"', "Cache-Control": "no-store"})
 
 
 @app.route("/api/adjuntos/<int:aid>/thumb", methods=["GET"])

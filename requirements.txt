@@ -18,6 +18,9 @@ pytz==2026.3.post1
 Pillow==13.0.0
 requests==2.34.2
 pypdf==6.21.2
+# (v12.33.50) reportlab: copia del pedido en PDF (pedidos sin PDF oficial subido, p. ej. altas
+# automáticas desde los listados de SAP) para el botón «Descargar pedido» del correo al proveedor.
+reportlab==4.4.10
 # (2026-09-04, v12.32.16) pdfplumber: para leer el Listado de Pedidos
 # DETALLADO de SAP como tabla real (pypdf desordena las columnas en este
 # formato — ver comentario junto a _extraer_listado_detallado_completo() en
